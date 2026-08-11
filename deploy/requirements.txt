@@ -1,0 +1,2 @@
+# deploy/upload-release.py — Cloudflare R2 is S3-compatible.
+boto3>=1.34

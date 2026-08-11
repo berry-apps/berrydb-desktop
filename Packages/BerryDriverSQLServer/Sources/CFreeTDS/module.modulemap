@@ -1,0 +1,5 @@
+module CFreeTDS {
+    header "shim.h"
+    link "sybdb"
+    export *
+}

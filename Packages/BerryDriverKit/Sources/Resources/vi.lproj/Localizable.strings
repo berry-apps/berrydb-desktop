@@ -1,0 +1,11 @@
+/* Vietnamese for driver-layer error wrappers (UD-06). */
+
+"Connection failed: %@" = "Kết nối thất bại: %@";
+"Connection lost: %@" = "Mất kết nối: %@";
+"Query failed (%@): %@" = "Lỗi truy vấn (%1$@): %2$@";
+"Query failed: %@" = "Lỗi truy vấn: %@";
+"Query cancelled" = "Đã hủy truy vấn";
+"Not connected" = "Chưa kết nối";
+"Unsupported: %@" = "Không hỗ trợ: %@";
+
+"The SSH host key for %@:%lld has changed. This could be a man-in-the-middle attack. The connection was refused." = "Khóa host SSH của %1$@:%2$lld đã thay đổi. Đây có thể là tấn công xen giữa (man-in-the-middle). Kết nối đã bị từ chối.";

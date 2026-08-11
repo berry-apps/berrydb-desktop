@@ -1,0 +1,22 @@
+[
+  {
+    "version": "1.0.0",
+    "build": "202608111324",
+    "file": "BerryDB-1.0.0.dmg",
+    "path": "dist/BerryDB-1.0.0.dmg",
+    "length": 28342164,
+    "edSignature": "jyqYschCmxZMJ8zV5Nx5jAcLkQBoP61Ev+XJe25z3p4K1VWCkptEOAsGcdYIhU/qpS6RJJ0UIU8A8YepQT+2Ag==",
+    "minimumSystemVersion": "14.0",
+    "pubDate": "Tue, 11 Aug 2026 06:32:19 +0000"
+  },
+  {
+    "version": "0.1.0",
+    "build": "202607172312",
+    "file": "BerryDB-0.1.0.zip",
+    "path": "dist/BerryDB-0.1.0.zip",
+    "length": 12689453,
+    "edSignature": "JqhHudCAxEj7wD4PvH2DyG8S4l6dIJ8eAMTBKU4JL0xXCJXBtgSUVp0MXcWo02UgFtUGw2w0TcfpYQSo8WzjDg==",
+    "minimumSystemVersion": "14.0",
+    "pubDate": "Fri, 17 Jul 2026 16:20:26 +0000"
+  }
+]

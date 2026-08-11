@@ -1,0 +1,714 @@
+/* Base language (UD-06). Keep keys identical to the source literals. */
+
+"New Connection…" = "New Connection…";
+"Open SQLite File…" = "Open SQLite File…";
+"Go to Table…" = "Go to Table…";
+"Go to table or collection…" = "Go to table or collection…";
+"No matches" = "No matches";
+"Quick Info…" = "Quick Info…";
+"Size" = "Size";
+"Engine" = "Engine";
+"Comment" = "Comment";
+"Stats not available" = "Stats not available";
+"Stop" = "Stop";
+"Disconnect" = "Disconnect";
+"Connections" = "Connections";
+"No connections yet — press ＋" = "No connections yet — press ＋";
+"Tables (%lld)" = "Tables (%lld)";
+"Views (%lld)" = "Views (%lld)";
+"Functions (%lld)" = "Functions (%lld)";
+"Procedures (%lld)" = "Procedures (%lld)";
+"Triggers (%lld)" = "Triggers (%lld)";
+"Filter tables" = "Filter tables";
+"Clear" = "Clear";
+"Connect" = "Connect";
+"Edit…" = "Edit…";
+"Duplicate" = "Duplicate";
+"copy" = "copy";
+"Refresh Schema" = "Refresh Schema";
+"Open" = "Open";
+"Copy Name" = "Copy Name";
+"Copy Qualified Name" = "Copy Qualified Name";
+"Show DDL" = "Show DDL";
+"Copy" = "Copy";
+"Delete" = "Delete";
+"Connection Error" = "Connection Error";
+"Select a table" = "Select a table";
+"Data will appear here" = "Data will appear here";
+"No connection" = "No connection";
+"Create a connection (⇧⌘N) or open a SQLite file (⌘O)" = "Create a connection (⇧⌘N) or open a SQLite file (⌘O)";
+"Connecting…" = "Connecting…";
+"Loading…" = "Loading…";
+"%lld rows" = "%lld rows";
+"Cancelled — kept %lld received rows" = "Cancelled — kept %lld received rows";
+"Connection successful" = "Connection successful";
+
+/* Connection sheet */
+"Type" = "Type";
+"Connection name" = "Connection name";
+"Group (optional)" = "Group (optional)";
+"e.g. Production, Staging" = "e.g. Production, Staging";
+"New connection" = "New connection";
+"Production environment (warn on writes)" = "Production environment (warn on writes)";
+"Log queries to history" = "Log queries to history";
+"File" = "File";
+"File path" = "File path";
+"Choose…" = "Choose…";
+"Server" = "Server";
+"Connection URI" = "Connection URI";
+"Parse" = "Parse";
+"Not a valid MongoDB URI — must start with “mongodb://”." = "Not a valid MongoDB URI — must start with “mongodb://”.";
+"“mongodb+srv://” isn't supported yet — DNS SRV lookup isn't implemented. Paste a single mongodb://host:port URI instead." = "“mongodb+srv://” isn't supported yet — DNS SRV lookup isn't implemented. Paste a single mongodb://host:port URI instead.";
+"No host found in this URI." = "No host found in this URI.";
+"Could not parse this URI." = "Could not parse this URI.";
+"Host" = "Host";
+"Port" = "Port";
+"Username" = "Username";
+"Password" = "Password";
+"(keep saved password)" = "(keep saved password)";
+"Database" = "Database";
+"Additional hosts (comma-separated host:port, optional)" = "Additional hosts (comma-separated host:port, optional)";
+"Replica Set name (optional)" = "Replica Set name (optional)";
+"Test Connection" = "Test Connection";
+"SSH tunnel" = "SSH tunnel";
+"Ping" = "Ping";
+"Cancel" = "Cancel";
+"Save Connection" = "Save Connection";
+"Update" = "Update";
+
+/* TLS & SSH (KN-03/KN-04) */
+"TLS" = "TLS";
+"Off" = "Off";
+"Prefer (no verify)" = "Prefer (no verify)";
+"Require (no verify)" = "Require (no verify)";
+"Verify CA (skip hostname)" = "Verify CA (skip hostname)";
+"Verify certificate" = "Verify certificate";
+"CA certificate (optional)" = "CA certificate (optional)";
+"Leave empty to use the system trust store, or pick a PEM file for a self-signed or private-CA server." = "Leave empty to use the system trust store, or pick a PEM file for a self-signed or private-CA server.";
+"SSH Tunnel" = "SSH Tunnel";
+"Connect through SSH tunnel" = "Connect through SSH tunnel";
+"SSH host" = "SSH host";
+"SSH port" = "SSH port";
+"SSH username" = "SSH username";
+"SSH password" = "SSH password";
+"Private key (optional)" = "Private key (optional)";
+"Key passphrase" = "Key passphrase";
+
+/* SQL editor (M2) */
+"Untitled" = "Untitled";
+"New SQL Tab" = "New SQL Tab";
+"Run" = "Run";
+"Run All" = "Run All";
+"Query failed" = "Query failed";
+"No results yet" = "No results yet";
+"No limit" = "No limit";
+"Automatic row limit" = "Automatic row limit";
+"⌘↩ runs the statement at the cursor" = "⌘↩ runs the statement at the cursor";
+"Close Tab" = "Close Tab";
+"Split Editor" = "Split Editor";
+"Split Right" = "Split Right";
+"Split Down" = "Split Down";
+"Pick a table from the sidebar, or open an SQL tab (⌘T)" = "Pick a table from the sidebar, or open an SQL tab (⌘T)";
+"%lld affected" = "%lld affected";
+
+/* History viewer (ED-06) */
+"History" = "History";
+"Search history" = "Search history";
+"Search saved queries" = "Search saved queries";
+"Copy error" = "Copy error";
+"No history yet" = "No history yet";
+"Executed statements appear here" = "Executed statements appear here";
+"Clear All" = "Clear All";
+"Close" = "Close";
+"Insert into new SQL tab" = "Insert into new SQL tab";
+
+/* Grid editing (M3, DL-03/04/05) */
+"%lld pending change(s)" = "%lld pending change(s)";
+"Discard" = "Discard";
+"Review & Apply…" = "Review & Apply…";
+"Read-only: table has no primary key" = "Read-only: table has no primary key";
+"SQL Preview" = "SQL Preview";
+"Runs in a transaction — any failure rolls back" = "Runs in a transaction — any failure rolls back";
+"Apply" = "Apply";
+"Set NULL" = "Set NULL";
+"Delete %lld row(s)" = "Delete %lld row(s)";
+"Paste Rows" = "Paste Rows";
+
+/* Copy-as & export (DL-07, XN-01/02) */
+"Copy as CSV" = "Copy as CSV";
+"Copy as JSON" = "Copy as JSON";
+"Copy as Markdown" = "Copy as Markdown";
+"Copy as SQL INSERT" = "Copy as SQL INSERT";
+"Export…" = "Export…";
+"Save for Replay" = "Save for Replay";
+"Save this run for later comparison" = "Save this run for later comparison";
+"was" = "was";
+"faster" = "faster";
+"slower" = "slower";
+"Format:" = "Format:";
+"Encoding:" = "Encoding:";
+"Include header row" = "Include header row";
+"CSV (comma)" = "CSV (comma)";
+"TSV (tab)" = "TSV (tab)";
+"JSON array" = "JSON array";
+"NDJSON" = "NDJSON";
+"Reload" = "Reload";
+"Exported %lld rows" = "Exported %lld rows";
+
+/* Insert row & filter (DL-02/04) */
+"Add Row" = "Add Row";
+"filter…" = "filter…";
+"Filter rows" = "Filter rows";
+"Add condition" = "Add condition";
+"Apply Filter" = "Apply Filter";
+"value" = "value";
+"contains" = "contains";
+"starts with" = "starts with";
+"is null" = "is null";
+"is not null" = "is not null";
+
+/* DangerGuard alerts (07 §6) */
+"Run Statement" = "Run Statement";
+"UPDATE without WHERE — every row will be modified." = "UPDATE without WHERE — every row will be modified.";
+"DELETE without WHERE — every row will be deleted." = "DELETE without WHERE — every row will be deleted.";
+"Write statement on a PRODUCTION connection." = "Write statement on a PRODUCTION connection.";
+"DROP on a PRODUCTION connection." = "DROP on a PRODUCTION connection.";
+"TRUNCATE on a PRODUCTION connection." = "TRUNCATE on a PRODUCTION connection.";
+"Type “%@” to confirm.\n\n%@" = "Type “%1$@” to confirm.\n\n%2$@";
+
+/* Cell viewer & EXPLAIN (DL-06, ED-09) */
+"View Cell…" = "View Cell…";
+"Text" = "Text";
+"JSON" = "JSON";
+"Hex" = "Hex";
+"Image" = "Image";
+"Stage Change" = "Stage Change";
+"Explain" = "Explain";
+
+/* SQL formatting & saved queries (ED-08, ED-07) */
+"Name this query to save it" = "Name this query to save it";
+"Save SQL" = "Save SQL";
+"Format" = "Format";
+"Saved Queries" = "Saved Queries";
+"Save Query…" = "Save Query…";
+"Save Current SQL" = "Save Current SQL";
+"Name" = "Name";
+"Folder (optional)" = "Folder (optional)";
+"Global (all connections)" = "Global (all connections)";
+"No saved queries yet" = "No saved queries yet";
+"Save" = "Save";
+"Open in Editor" = "Open in Editor";
+"Delete" = "Delete";
+
+/* FK jump (DL-08) */
+"Jump to %@" = "Jump to %@";
+
+/* Manual transactions (ED-11) */
+"Auto-commit" = "Auto-commit";
+"In transaction" = "In transaction";
+"Commit" = "Commit";
+"Rollback" = "Rollback";
+
+/* Table designer (CT-01/02/03) */
+"New Table…" = "New Table…";
+"New Table" = "New Table";
+"table_name" = "table_name";
+"Columns" = "Columns";
+"name" = "name";
+"type" = "type";
+"default" = "default";
+"Null" = "Null";
+"Allow NULL" = "Allow NULL";
+"PK" = "PK";
+"Primary key" = "Primary key";
+"Indexes" = "Indexes";
+"No indexes" = "No indexes";
+"index_name" = "index_name";
+"columns (comma-separated)" = "columns (comma-separated)";
+"Unique" = "Unique";
+"Foreign Keys" = "Foreign Keys";
+"No foreign keys" = "No foreign keys";
+"column" = "column";
+"ref table" = "ref table";
+"ref column" = "ref column";
+"ON DELETE" = "ON DELETE";
+"ON UPDATE" = "ON UPDATE";
+"Create Table" = "Create Table";
+
+/* SQL export (XN-03) */
+"Export SQL…" = "Export SQL…";
+"Export SQL" = "Export SQL";
+"Rows per INSERT" = "Rows per INSERT";
+"Include CREATE TABLE" = "Include CREATE TABLE";
+"Schema not available" = "Schema not available";
+
+/* License & commercialization (M5) */
+"License" = "License";
+"BerryDB License" = "BerryDB License";
+"Unlicensed" = "Unlicensed";
+"Trial · %lldd" = "Trial · %lldd";
+"Renew" = "Renew";
+"Fallback" = "Fallback";
+"Credit" = "Credit";
+"Not activated" = "Not activated";
+"Free trial" = "Free trial";
+"%@ plan" = "%@ plan";
+"AI credit" = "AI credit";
+"Renewal needed" = "Renewal needed";
+"Fallback mode" = "Fallback mode";
+"Start a free trial or enter a license key to unlock everything." = "Start a free trial or enter a license key to unlock everything.";
+"%lld days left in your trial." = "%lld days left in your trial.";
+"Active — %lld days remaining." = "Active — %lld days remaining.";
+"Pay-as-you-go — top up any time below." = "Pay-as-you-go — top up any time below.";
+"Expired %lld days ago. You're in the grace period — renew soon." = "Expired %lld days ago. You're in the grace period — renew soon.";
+"Running local-only features of %@. AI is off." = "Running local-only features of %@. AI is off.";
+"Activate" = "Activate";
+"License key" = "License key";
+"Email" = "Email";
+"Start Free Trial" = "Start Free Trial";
+"You're subscribed to the Pro plan." = "You're subscribed to the Pro plan.";
+"Add AI credit" = "Add AI credit";
+"BerryDB is free to use. You only pay for the AI you actually use, billed at cost plus a small margin — BerryDB hosts and manages the AI infrastructure for you." = "BerryDB is free to use. You only pay for the AI you actually use, billed at cost plus a small margin — BerryDB hosts and manages the AI infrastructure for you.";
+"Custom amount" = "Custom amount";
+"Opening checkout…" = "Opening checkout…";
+"Sign Out" = "Sign Out";
+"Done" = "Done";
+"License key not found" = "License key not found";
+"This license is already active on the maximum number of devices" = "This license is already active on the maximum number of devices";
+"This license has expired" = "This license has expired";
+"Sign in required" = "Sign in required";
+"Could not reach the license server" = "Could not reach the license server";
+"This device has already used its free trial with a different account. Sign in with that account, or use a license key." = "This device has already used its free trial with a different account. Sign in with that account, or use a license key.";
+"This license could not be read — it may be corrupted. Try activating again with your key or restoring by email." = "This license could not be read — it may be corrupted. Try activating again with your key or restoring by email.";
+"This license was signed with a key this app doesn't recognize — it may have been issued for a different environment. Try activating again, or contact support if this keeps happening." = "This license was signed with a key this app doesn't recognize — it may have been issued for a different environment. Try activating again, or contact support if this keeps happening.";
+
+/* CSV import (XN-05) */
+"Import CSV…" = "Import CSV…";
+"Import CSV" = "Import CSV";
+"Choose File…" = "Choose File…";
+"Delimiter" = "Delimiter";
+"First row is header" = "First row is header";
+"Target table" = "Target table";
+"Select…" = "Select…";
+"%lld data rows" = "%lld data rows";
+"Column mapping" = "Column mapping";
+"Pick a target table to map columns" = "Pick a target table to map columns";
+"(skip)" = "(skip)";
+"Preview" = "Preview";
+"Column %lld" = "Column %lld";
+"Import" = "Import";
+"Imported %lld rows" = "Imported %lld rows";
+"Import failed at line %lld: %@" = "Import failed at line %lld: %@";
+
+/* Process list (TI-01) */
+"Processes" = "Processes";
+"No active processes" = "No active processes";
+"Running server sessions appear here" = "Running server sessions appear here";
+"PID" = "PID";
+"User" = "User";
+"DB" = "DB";
+"State" = "State";
+"Query" = "Query";
+"Sec" = "Sec";
+"Kill" = "Kill";
+"%lld processes" = "%lld processes";
+"Cannot terminate this session" = "Cannot terminate this session";
+
+/* AI assistant (AI-01/07/08, docs/architecture/09) */
+"AI Assistant" = "AI Assistant";
+"No connection" = "No connection";
+"Connect to a database to use the AI assistant." = "Connect to a database to use the AI assistant.";
+"AI needs a trial or license" = "AI needs a trial or license";
+"BerryDB itself is free — start a free trial to use the AI assistant, billed as pay-as-you-go credit." = "BerryDB itself is free — start a free trial to use the AI assistant, billed as pay-as-you-go credit.";
+"Get started" = "Get started";
+"AI is off for this connection" = "AI is off for this connection";
+"This connection is labelled production, so AI is off by default." = "This connection is labelled production, so AI is off by default.";
+"Turn AI on…" = "Turn AI on…";
+"Turn AI off for this connection" = "Turn AI off for this connection";
+"Before you start" = "Before you start";
+"The assistant sends your schema (table and column names), the database type, and your questions to BerryDB's AI service. Row data is never sent unless you turn on sample rows. Any SQL the assistant proposes runs only after you approve it." = "The assistant sends your schema (table and column names), the database type, and your questions to BerryDB's AI service. Row data is never sent unless you turn on sample rows. Any SQL the assistant proposes runs only after you approve it.";
+"This is a production connection — review every statement carefully." = "This is a production connection — review every statement carefully.";
+"I understand — enable AI" = "I understand — enable AI";
+"Ask about your schema, or ask the assistant to write a query." = "Ask about your schema, or ask the assistant to write a query.";
+"Preparing response…" = "Preparing response…";
+"Running %@…" = "Running %@…";
+"The assistant reached its tool-step limit. Try a more specific request." = "The assistant reached its tool-step limit. Try a more specific request.";
+"The assistant wants to run this SQL" = "The assistant wants to run this SQL";
+"Deny" = "Deny";
+"Run" = "Run";
+"Run anyway" = "Run anyway";
+"Run All Safe" = "Run All Safe";
+"Run this and every other safe statement in this turn without asking again." = "Run this and every other safe statement in this turn without asking again.";
+"Ask the assistant…" = "Ask the assistant…";
+"File a bug report from this conversation." = "File a bug report from this conversation.";
+"Auto-run safe SELECTs" = "Auto-run safe SELECTs";
+"Allow sending sample rows" = "Allow sending sample rows";
+"Explain like I'm…" = "Explain like I'm…";
+"Default" = "Default";
+"a beginner" = "a beginner";
+"an intermediate developer" = "an intermediate developer";
+"an advanced developer" = "an advanced developer";
+"a DBA" = "a DBA";
+"Upgrade" = "Upgrade";
+"Add Credit" = "Add Credit";
+"Open License" = "Open License";
+"Your AI credit balance is empty." = "Your AI credit balance is empty.";
+"Your trial predates email-based usage tracking. Sign out and start a new trial to keep using AI." = "Your trial predates email-based usage tracking. Sign out and start a new trial to keep using AI.";
+"Default model" = "Default model";
+"$%@ credit" = "$%@ credit";
+"$%@ credit · %@" = "$%1$@ credit · %2$@";
+"%@ · %lld/%lld tokens" = "%1$@ · %2$lld/%3$lld tokens";
+"%lld/%lld tokens" = "%1$lld/%2$lld tokens";
+"%lld tokens (unlimited)" = "%lld tokens (unlimited)";
+"%@/%@ tokens" = "%1$@/%2$@ tokens";
+"Used so far: %@ tokens" = "Used so far: %@ tokens";
+"Working…" = "Working…";
+"Worked" = "Worked";
+"Reading schema" = "Reading schema";
+"Drafting SQL" = "Drafting SQL";
+"Drafting query" = "Drafting query";
+"Running SQL" = "Running SQL";
+"Sampling rows" = "Sampling rows";
+"Reading tab" = "Reading tab";
+"Reading tabs" = "Reading tabs";
+"Running statements" = "Running statements";
+"Explaining query" = "Explaining query";
+"Creating tab" = "Creating tab";
+"Analyzing stats" = "Analyzing stats";
+"Querying graph" = "Querying graph";
+"Reviewing migration" = "Reviewing migration";
+"Analyzing impact" = "Analyzing impact";
+"Reading review" = "Reading review";
+"Reading UI state" = "Reading UI state";
+"Querying UI" = "Querying UI";
+"Searching history" = "Searching history";
+"Searching schema" = "Searching schema";
+"Analyzing queries" = "Analyzing queries";
+"Navigating UI" = "Navigating UI";
+"Listing skills" = "Listing skills";
+"Loading skill" = "Loading skill";
+"Reading artifact" = "Reading artifact";
+"Your balance is running low — add more credit soon." = "Your balance is running low — add more credit soon.";
+"Your balance is running low — add more credit to keep using AI." = "Your balance is running low — add more credit to keep using AI.";
+"UPDATE without a WHERE clause" = "UPDATE without a WHERE clause";
+"DELETE without a WHERE clause" = "DELETE without a WHERE clause";
+"Writes to a production database" = "Writes to a production database";
+"DROP on a production database" = "DROP on a production database";
+"TRUNCATE on a production database" = "TRUNCATE on a production database";
+
+/* SSH host key change (07 §4) */
+"SSH host key changed" = "SSH host key changed";
+"Trust New Key & Reconnect" = "Trust New Key & Reconnect";
+"The host key for this server differs from the one you trusted before. Continue only if you expected this — for example, the server was reinstalled. Otherwise the connection may be intercepted." = "The host key for this server differs from the one you trusted before. Continue only if you expected this — for example, the server was reinstalled. Otherwise the connection may be intercepted.";
+"Trusted:" = "Trusted:";
+"New:" = "New:";
+
+/* Insight Panel (DI-09, docs/architecture/11 §7) */
+"Insights" = "Insights";
+"Database Insights" = "Database Insights";
+"Refresh" = "Refresh";
+"No insights" = "No insights";
+"Connect and refresh the schema to analyze it." = "Connect and refresh the schema to analyze it.";
+"Reveal" = "Reveal";
+"Open Fix in Editor" = "Open Fix in Editor";
+"Critical" = "Critical";
+"Warnings" = "Warnings";
+"Suggestions" = "Suggestions";
+"Today's Summary" = "Today's Summary";
+"Schema" = "Schema";
+"Index" = "Index";
+"Performance" = "Performance";
+
+/* Graph Explorer (DI-02/04, docs/architecture/11 §5) */
+"Graph Explorer" = "Graph Explorer";
+"No graph yet" = "No graph yet";
+"Connect and refresh the schema to build the dependency graph." = "Connect and refresh the schema to build the dependency graph.";
+"Select a table" = "Select a table";
+"Pick a table to see its dependencies." = "Pick a table to see its dependencies.";
+"Depends on" = "Depends on";
+"Depended on by" = "Depended on by";
+"Blast radius" = "Blast radius";
+"References no other tables." = "References no other tables.";
+"No table references this one." = "No table references this one.";
+"Changing it affects nothing downstream." = "Changing it affects nothing downstream.";
+"Quantified impact (recent workload)" = "Quantified impact (recent workload)";
+"affected queries" = "affected queries";
+"total calls" = "total calls";
+"No recent queries in history touch this table." = "No recent queries in history touch this table.";
+
+/* Time Machine Timeline (DI-08, docs/feature/07 §1) */
+"Time Machine" = "Time Machine";
+"Schema change history (DI-08)" = "Schema change history (DI-08)";
+"Not enough history yet" = "Not enough history yet";
+"Time Machine needs at least two recorded schema snapshots — keep refreshing the schema as it evolves." = "Time Machine needs at least two recorded schema snapshots — keep refreshing the schema as it evolves.";
+"nodes" = "nodes";
+"First recorded snapshot" = "First recorded snapshot";
+"Nothing earlier to compare against." = "Nothing earlier to compare against.";
+"Select a snapshot" = "Select a snapshot";
+"Pick a date to see what changed." = "Pick a date to see what changed.";
+"No structural changes since the previous snapshot." = "No structural changes since the previous snapshot.";
+"table" = "table";
+"index" = "index";
+
+/* Visualize Result (docs/feature/07 §8, AI SQL Copilot) */
+"Visualize Result" = "Visualize Result";
+"Not enough data to visualize" = "Not enough data to visualize";
+"Run a query with at least two columns and one numeric value." = "Run a query with at least two columns and one numeric value.";
+"X" = "X";
+"Y" = "Y";
+"Chart type" = "Chart type";
+"Bar" = "Bar";
+"Line" = "Line";
+"No numeric values in this column" = "No numeric values in this column";
+"Pick a different Y column." = "Pick a different Y column.";
+
+/* App menu — auto-update (docs/architecture/10 §3) */
+"Check for Updates…" = "Check for Updates…";
+
+/* Toolbar category menus (grouped header) */
+"Library" = "Library";
+"Intelligence" = "Intelligence";
+"More" = "More";
+
+/* Insight Panel — Query Analyzer (DI-06) */
+"Analyzing schema and recent queries…" = "Analyzing schema and recent queries…";
+
+/* Tier Intelligence gating (Q15) */
+"Unlock Intelligence…" = "Unlock Intelligence…";
+
+/* TLS mode caption (07 §4 security hardening) */
+"Encrypted, but the server's certificate isn't checked. Use “Verify certificate” for production." = "Encrypted, but the server's certificate isn't checked. Use “Verify certificate” for production.";
+
+/* Accessibility labels for icon-only controls (M7 a11y pass) */
+"Add" = "Add";
+"Remove" = "Remove";
+"Send" = "Send";
+"AI settings" = "AI settings";
+
+/* Single exec + delete warnings + saved-query files (docs/ui) */
+"Warn Before Deleting Data" = "Warn Before Deleting Data";
+"This DELETE will remove data." = "This DELETE will remove data.";
+"DROP removes the object and its data." = "DROP removes the object and its data.";
+"TRUNCATE removes every row in the table." = "TRUNCATE removes every row in the table.";
+"This run contains %lld data-deleting statement(s). Run them all?" = "This run contains %lld data-deleting statement(s). Run them all?";
+"Deletes data" = "Deletes data";
+"Drops an object" = "Drops an object";
+"Empties a table" = "Empties a table";
+"Contains %lld data-deleting statements" = "Contains %lld data-deleting statements";
+"Rename" = "Rename";
+"⌘R runs every statement in the editor" = "⌘R runs every statement in the editor";
+"⌘R runs every statement in the script" = "⌘R runs every statement in the script";
+"Show Button Labels" = "Show Button Labels";
+"Move to New Window" = "Move to New Window";
+"This tab was closed" = "This tab was closed";
+"This tab can't be detached" = "This tab can't be detached";
+"Show Grid" = "Show Grid";
+"Show Plan Tree" = "Show Plan Tree";
+"Edit Table…" = "Edit Table…";
+"Edit Table" = "Edit Table";
+"Apply Changes" = "Apply Changes";
+"Client certificate (optional)" = "Client certificate (optional)";
+"Client key" = "Client key";
+"Toggle Comment" = "Toggle Comment";
+"Keyboard Shortcuts" = "Keyboard Shortcuts";
+"Press keys…" = "Press keys…";
+"Reset to default" = "Reset to default";
+"Reset All" = "Reset All";
+"Editor keys (⌘↩ run, ⌃Space completion) are fixed." = "Editor keys (⌘↩ run, ⌃Space completion) are fixed.";
+"Local Data" = "Local Data";
+"Deletes all saved queries, connection profiles, and AI chat history stored on this Mac. BerryDB will quit — reopen it to start fresh." = "Deletes all saved queries, connection profiles, and AI chat history stored on this Mac. BerryDB will quit — reopen it to start fresh.";
+"Reset Local Data…" = "Reset Local Data…";
+"Reset local data?" = "Reset local data?";
+"Reset & Quit" = "Reset & Quit";
+"This permanently deletes all saved queries, connection profiles, and AI chat history on this Mac. This cannot be undone." = "This permanently deletes all saved queries, connection profiles, and AI chat history on this Mac. This cannot be undone.";
+
+/* Navicat-style result tabs (docs/ui) */
+"Message" = "Message";
+"Summary" = "Summary";
+"Result %lld" = "Result %lld";
+"Data" = "Data";
+"Info" = "Info";
+"Statements" = "Statements";
+"Succeeded" = "Succeeded";
+"Failed" = "Failed";
+
+/* Working block action status + detail (docs/feature/09) */
+"Running" = "Running";
+"Completed" = "Completed";
+"Denied" = "Denied";
+"Result" = "Result";
+"Click to view, Cmd-click to open in a tab" = "Click to view, Cmd-click to open in a tab";
+"Open in a tab" = "Open in a tab";
+"Result sets" = "Result sets";
+"Rows returned" = "Rows returned";
+"Total time" = "Total time";
+"Rows" = "Rows";
+"Duration" = "Duration";
+"Affected" = "Affected";
+"Running…" = "Running…";
+"%lld row(s) affected" = "%lld row(s) affected";
+"%lld row(s) returned" = "%lld row(s) returned";
+"Waiting for payment…" = "Waiting for payment…";
+"Purchase email" = "Purchase email";
+"Restore Purchase" = "Restore Purchase";
+"Plan" = "Plan";
+"Thinking…" = "Thinking…";
+"Thinking" = "Thinking";
+"Step %lld" = "Step %lld";
+"MCP servers" = "MCP servers";
+"An MCP server wants to run a tool" = "An MCP server wants to run a tool";
+"Trust server" = "Trust server";
+"Sub-agent" = "Sub-agent";
+
+/* Mongo/Qdrant workspace UI (docs/architecture/12 §7) */
+"API Key" = "API Key";
+"View Document…" = "View Document…";
+"Insert…" = "Insert…";
+"Insert Document" = "Insert Document";
+"Invalid JSON" = "Invalid JSON";
+"Pick a collection from the sidebar" = "Pick a collection from the sidebar";
+"Collections (%lld)" = "Collections (%lld)";
+"This updates every document in the collection — there is no filter." = "This updates every document in the collection — there is no filter.";
+"This deletes every document/point in the collection — there is no filter." = "This deletes every document/point in the collection — there is no filter.";
+"This permanently removes the collection and all its documents." = "This permanently removes the collection and all its documents.";
+"This drops an index — queries relying on it may slow down until it's recreated." = "This drops an index — queries relying on it may slow down until it's recreated.";
+"%lld items" = "%lld items";
+"Cancelled — kept %lld received items" = "Cancelled — kept %lld received items";
+"JSON filter, e.g. { \"active\": true }" = "JSON filter, e.g. { \"active\": true }";
+"Query vector JSON, e.g. [0.1, 0.2] — empty browses all points" = "Query vector JSON, e.g. [0.1, 0.2] — empty browses all points";
+"New Collection…" = "New Collection…";
+"New Collection" = "New Collection";
+"Vector Size" = "Vector Size";
+"Distance" = "Distance";
+"Create" = "Create";
+"Name cannot be empty" = "Name cannot be empty";
+"A collection named \"%@\" already exists" = "A collection named \"%@\" already exists";
+"Vector Size must be a positive integer" = "Vector Size must be a positive integer";
+"Filter" = "Filter";
+"Pipeline" = "Pipeline";
+"Search" = "Search";
+"Browse All" = "Browse All";
+"Limit" = "Limit";
+"Score Threshold" = "Score Threshold";
+"optional" = "optional";
+"JSON array of pipeline stages, e.g. [ { \"$match\": {} } ]" = "JSON array of pipeline stages, e.g. [ { \"$match\": {} } ]";
+"Vector JSON array, e.g. [0.1, 0.2, 0.3]" = "Vector JSON array, e.g. [0.1, 0.2, 0.3]";
+"Optional JSON payload filter, e.g. { \"category\": \"docs\" }" = "Optional JSON payload filter, e.g. { \"category\": \"docs\" }";
+"Browses every point in the collection — no vector needed." = "Browses every point in the collection — no vector needed.";
+"collection" = "collection";
+"method" = "method";
+"operator" = "operator";
+
+// AI conversation history sidebar (AI-21, feature/02)
+"Conversation history" = "Conversation history";
+"No saved conversations" = "No saved conversations";
+"Delete conversation" = "Delete conversation";
+"The assistant is replying — wait for it to finish to open another conversation." = "The assistant is replying — wait for it to finish to open another conversation.";
+
+// Qdrant query tab (feature/03)
+"Form" = "Form";
+"Save query" = "Save query";
+"Collection" = "Collection";
+"Collection name" = "Collection name";
+"Select a collection" = "Select a collection";
+"Vector" = "Vector";
+"[0.1, 0.2, …] — empty browses all points" = "[0.1, 0.2, …] — empty browses all points";
+"Top K" = "Top K";
+"Score ≥" = "Score ≥";
+"Payload filter" = "Payload filter";
+"{ \"lang\": \"vi\" } — optional" = "{ \"lang\": \"vi\" } — optional";
+"Switch to JSON for upsert/delete (write) queries." = "Switch to JSON for upsert/delete (write) queries.";
+"New Qdrant Query" = "New Qdrant Query";
+"Delete All Points…" = "Delete All Points…";
+"operation" = "operation";
+
+// Backup / Restore (feature/04)
+"Backup…" = "Backup…";
+"Restore…" = "Restore…";
+"Back Up Database" = "Back Up Database";
+"Dump this connection's schema and data to a .sql file you can re-run to restore." = "Dump this connection's schema and data to a .sql file you can re-run to restore.";
+"Structure (CREATE statements)" = "Structure (CREATE statements)";
+"Data (INSERT statements)" = "Data (INSERT statements)";
+"Back Up…" = "Back Up…";
+"Backed up %lld object(s) to %@." = "Backed up %lld object(s) to %@.";
+"Restore Database" = "Restore Database";
+"Runs every statement in the .sql file against this connection. Existing objects may be overwritten." = "Runs every statement in the .sql file against this connection. Existing objects may be overwritten.";
+"Choose .sql File…" = "Choose .sql File…";
+"Ran %lld statement(s), %lld failed." = "Ran %lld statement(s), %lld failed.";
+"Restore" = "Restore";
+
+// Datasource backup/restore (feature/04 phase C/D)
+"Back up every collection to a folder (manifest + one file per collection) you can restore later." = "Back up every collection to a folder (manifest + one file per collection) you can restore later.";
+"Backed up %lld collection(s) to %@." = "Backed up %lld collection(s) to %@.";
+"Recreates each collection and re-inserts its documents. Existing data may be duplicated or overwritten." = "Recreates each collection and re-inserts its documents. Existing data may be duplicated or overwritten.";
+"Choose Backup Folder…" = "Choose Backup Folder…";
+"Restored %lld document(s) across %lld collection(s)." = "Restored %lld document(s) across %lld collection(s).";
+
+// Backup/Restore tabs + object selection (feature/04)
+"Backup" = "Backup";
+"Structure" = "Structure";
+"Select All" = "Select All";
+"Deselect All" = "Deselect All";
+"Collections" = "Collections";
+
+// Backup manager (feature/04, Navicat-style)
+"New Backup" = "New Backup";
+"Objects" = "Objects";
+"Show in Finder" = "Show in Finder";
+"No backups yet" = "No backups yet";
+"Create one with New Backup." = "Create one with New Backup.";
+"Bundle" = "Bundle";
+"SQL" = "SQL";
+"Restore this backup? Existing objects may be overwritten." = "Restore this backup? Existing objects may be overwritten.";
+"This backup doesn't match the current connection type." = "This backup doesn't match the current connection type.";
+
+// Report draft pre-refinement consent card (Task 4.1)
+"Refine this report with AI?" = "Refine this report with AI?";
+"BerryDB will send this text to the AI service to turn it into a clear report. It's processed transiently for refinement only — nothing is stored on the server until you approve the final report." = "BerryDB will send this text to the AI service to turn it into a clear report. It's processed transiently for refinement only — nothing is stored on the server until you approve the final report.";
+"Refine with AI" = "Refine with AI";
+
+// Report confirmation card (Q17 §7.7) — editable draft + report_ready_token (Task 11)
+"Review this report" = "Review this report";
+"Attach recent conversation for context" = "Attach recent conversation for context";
+"Confirm Report" = "Confirm Report";
+"Report ready to send" = "Report ready to send";
+"Report changed since it was confirmed" = "Report changed since it was confirmed";
+"Dismiss" = "Dismiss";
+
+// Report scope review + submission (Task 12)
+"This summary will be attached:" = "This summary will be attached:";
+"Preparing the conversation summary…" = "Preparing the conversation summary…";
+"Couldn't prepare the conversation summary. Try again, or send the report without it." = "Couldn't prepare the conversation summary. Try again, or send the report without it.";
+"Send Report" = "Send Report";
+"Sending…" = "Sending…";
+"Report sent." = "Report sent.";
+"Your review of this report expired. Please confirm it again." = "Your review of this report expired. Please confirm it again.";
+"This report is no longer ready to send. Please confirm it again." = "This report is no longer ready to send. Please confirm it again.";
+"This report was already sent." = "This report was already sent.";
+"This report is too large to send. Shorten it and try again." = "This report is too large to send. Shorten it and try again.";
+"Couldn't reach the AI service. Try sending again." = "Couldn't reach the AI service. Try sending again.";
+"BerryDB couldn't send this report." = "BerryDB couldn't send this report.";
+"Clarification needed" = "Clarification needed";
+"Your answer" = "Your answer";
+"Answer" = "Answer";
+"Accept" = "Accept";
+"Decline" = "Decline";
+"Update BerryDB to continue using AI." = "Update BerryDB to continue using AI.";
+"The local AI capability set is invalid." = "The local AI capability set is invalid.";
+"An AI capability is not available." = "An AI capability is not available.";
+"AI capability negotiation failed." = "AI capability negotiation failed.";
+"Your response may have been received, so BerryDB will not send it again automatically." = "Your response may have been received, so BerryDB will not send it again automatically.";
+"The result may have been received, so BerryDB stopped safely instead of sending it twice." = "The result may have been received, so BerryDB stopped safely instead of sending it twice.";
+"The AI interaction could not be verified." = "The AI interaction could not be verified.";
+"This AI request expired. Ask the agent to try again." = "This AI request expired. Ask the agent to try again.";
+"The saved AI request could not be restored safely." = "The saved AI request could not be restored safely.";
+
+/* TI-03 Phase D: read-only user-management info (docs/architecture/14) */
+"Access to this table is managed via AWS IAM — manage users and permissions in the AWS Console." = "Access to this table is managed via AWS IAM — manage users and permissions in the AWS Console.";
+"This connection authenticates with an API key — there is no separate database user system to manage." = "This connection authenticates with an API key — there is no separate database user system to manage.";
+
+/* TI-03 Phase C: DataSource-family user management (docs/architecture/14) */
+"New User" = "New User";
+"Roles (optional)" = "Roles (optional)";
+"Command Preview" = "Command Preview";
+"Couldn't load users" = "Couldn't load users";

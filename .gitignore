@@ -1,0 +1,29 @@
+.build/
+.swiftpm/
+DerivedData/
+*.xcworkspace
+xcuserdata/
+.DS_Store
+dist/
+*.env*
+!.env.example
+*.key
+*.pem
+# Release artifacts (scripts/README/entitlements in deploy/ stay tracked;
+# releases.json is the appcast history and IS tracked).
+deploy/last-release.json
+deploy/appcast.xml
+deploy/*.zip
+# Generated from deploy/icon-1024.png by make_app.sh — keep the PNG source tracked.
+deploy/AppIcon.icns
+*.p12
+
+# Python venv + bytecode cache for the release uploader (deploy/README.md)
+deploy/.venv/
+__pycache__/
+*.pyc
+.playwright-mcp/
+*.zip
+.pnpm-store/
+berrydb-admin/
+venv/

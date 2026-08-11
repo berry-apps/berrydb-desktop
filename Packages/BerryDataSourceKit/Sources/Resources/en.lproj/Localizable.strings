@@ -1,0 +1,8 @@
+/* Base language for DataSourceDriver-layer error wrappers (UD-06). */
+
+"Connection failed: %@" = "Connection failed: %@";
+"Connection lost: %@" = "Connection lost: %@";
+"Query failed: %@" = "Query failed: %@";
+"Query cancelled" = "Query cancelled";
+"Not connected" = "Not connected";
+"Unsupported: %@" = "Unsupported: %@";

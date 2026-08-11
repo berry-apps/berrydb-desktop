@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the Developer ID (non-App-Store) build
+  (docs/architecture/08 §6). BerryDB is intentionally NOT sandboxed: it connects
+  to arbitrary DB hosts and opens user-chosen SQLite files, both of which the
+  sandbox would block. Hardened runtime comes from the codesign runtime option
+  in deploy/release.sh; this file stays minimal. (XML comments must not contain
+  a double hyphen, so option flags are described in words here.)
+-->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>

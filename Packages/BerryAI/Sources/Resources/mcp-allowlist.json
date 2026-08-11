@@ -1,0 +1,9 @@
+[
+  {
+    "id": "codebase-memory",
+    "name": "Codebase Memory",
+    "description": "Indexes a local code repository into a knowledge graph — useful when the agent needs to look up code related to the schema.",
+    "launch": { "command": "codebase-memory-mcp", "args": [] },
+    "enabledByDefault": false
+  }
+]

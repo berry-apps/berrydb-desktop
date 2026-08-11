@@ -1,0 +1,11 @@
+/* Base language for driver-layer error wrappers (UD-06). */
+
+"Connection failed: %@" = "Connection failed: %@";
+"Connection lost: %@" = "Connection lost: %@";
+"Query failed (%@): %@" = "Query failed (%1$@): %2$@";
+"Query failed: %@" = "Query failed: %@";
+"Query cancelled" = "Query cancelled";
+"Not connected" = "Not connected";
+"Unsupported: %@" = "Unsupported: %@";
+
+"The SSH host key for %@:%lld has changed. This could be a man-in-the-middle attack. The connection was refused." = "The SSH host key for %1$@:%2$lld has changed. This could be a man-in-the-middle attack. The connection was refused.";

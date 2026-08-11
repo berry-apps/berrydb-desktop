@@ -1,0 +1,714 @@
+/* Vietnamese (UD-06). Every key in en.lproj must exist here too. */
+
+"New Connection…" = "Kết nối mới…";
+"Open SQLite File…" = "Mở file SQLite…";
+"Go to Table…" = "Đi đến bảng…";
+"Go to table or collection…" = "Tìm bảng hoặc collection…";
+"No matches" = "Không có kết quả";
+"Quick Info…" = "Thông tin nhanh…";
+"Size" = "Kích thước";
+"Engine" = "Engine";
+"Comment" = "Ghi chú";
+"Stats not available" = "Không có dữ liệu thống kê";
+"Stop" = "Dừng";
+"Disconnect" = "Ngắt kết nối";
+"Connections" = "Kết nối";
+"No connections yet — press ＋" = "Chưa có kết nối nào — bấm ＋";
+"Tables (%lld)" = "Bảng (%lld)";
+"Views (%lld)" = "View (%lld)";
+"Functions (%lld)" = "Hàm (%lld)";
+"Procedures (%lld)" = "Thủ tục (%lld)";
+"Triggers (%lld)" = "Trigger (%lld)";
+"Filter tables" = "Lọc bảng";
+"Clear" = "Xóa";
+"Connect" = "Kết nối";
+"Edit…" = "Sửa…";
+"Duplicate" = "Nhân bản";
+"copy" = "bản sao";
+"Refresh Schema" = "Tải lại schema";
+"Open" = "Mở";
+"Copy Name" = "Sao chép tên";
+"Copy Qualified Name" = "Sao chép tên đầy đủ";
+"Show DDL" = "Xem DDL";
+"Copy" = "Sao chép";
+"Delete" = "Xóa";
+"Connection Error" = "Lỗi kết nối";
+"Select a table" = "Chọn một bảng";
+"Data will appear here" = "Dữ liệu sẽ hiển thị tại đây";
+"No connection" = "Chưa có kết nối";
+"Create a connection (⇧⌘N) or open a SQLite file (⌘O)" = "Tạo kết nối mới (⇧⌘N) hoặc mở file SQLite (⌘O)";
+"Connecting…" = "Đang kết nối…";
+"Loading…" = "Đang tải…";
+"%lld rows" = "%lld dòng";
+"Cancelled — kept %lld received rows" = "Đã hủy — giữ %lld dòng đã nhận";
+"Connection successful" = "Kết nối thành công";
+
+/* Connection sheet */
+"Type" = "Loại";
+"Connection name" = "Tên kết nối";
+"Group (optional)" = "Nhóm (tùy chọn)";
+"e.g. Production, Staging" = "vd. Production, Staging";
+"New connection" = "Kết nối mới";
+"Production environment (warn on writes)" = "Môi trường production (cảnh báo khi ghi)";
+"Log queries to history" = "Ghi câu lệnh vào lịch sử";
+"File" = "File";
+"File path" = "Đường dẫn file";
+"Choose…" = "Chọn…";
+"Server" = "Máy chủ";
+"Connection URI" = "URI kết nối";
+"Parse" = "Phân tích";
+"Not a valid MongoDB URI — must start with “mongodb://”." = "URI MongoDB không hợp lệ — phải bắt đầu bằng “mongodb://”.";
+"“mongodb+srv://” isn't supported yet — DNS SRV lookup isn't implemented. Paste a single mongodb://host:port URI instead." = "Chưa hỗ trợ “mongodb+srv://” — tra cứu DNS SRV chưa được hiện thực. Hãy dán URI dạng mongodb://host:port đơn thay vào đó.";
+"No host found in this URI." = "Không tìm thấy host trong URI này.";
+"Could not parse this URI." = "Không thể phân tích URI này.";
+"Host" = "Host";
+"Port" = "Port";
+"Username" = "Username";
+"Password" = "Mật khẩu";
+"(keep saved password)" = "(giữ mật khẩu đã lưu)";
+"Database" = "Database";
+"Additional hosts (comma-separated host:port, optional)" = "Host bổ sung (host:port, phân tách bằng dấu phẩy, tùy chọn)";
+"Replica Set name (optional)" = "Tên Replica Set (tùy chọn)";
+"Test Connection" = "Kiểm tra kết nối";
+"SSH tunnel" = "SSH tunnel";
+"Ping" = "Ping";
+"Cancel" = "Hủy";
+"Save Connection" = "Lưu kết nối";
+"Update" = "Cập nhật";
+
+/* TLS & SSH (KN-03/KN-04) */
+"TLS" = "TLS";
+"Off" = "Tắt";
+"Prefer (no verify)" = "Ưu tiên (không xác minh)";
+"Require (no verify)" = "Bắt buộc (không xác minh)";
+"Verify CA (skip hostname)" = "Xác minh CA (bỏ qua hostname)";
+"Verify certificate" = "Xác minh chứng chỉ";
+"CA certificate (optional)" = "Chứng chỉ CA (tùy chọn)";
+"Leave empty to use the system trust store, or pick a PEM file for a self-signed or private-CA server." = "Để trống để dùng kho tin cậy hệ thống, hoặc chọn file PEM cho server dùng chứng chỉ tự ký hoặc CA riêng.";
+"SSH Tunnel" = "SSH Tunnel";
+"Connect through SSH tunnel" = "Kết nối qua SSH tunnel";
+"SSH host" = "SSH host";
+"SSH port" = "SSH port";
+"SSH username" = "SSH username";
+"SSH password" = "Mật khẩu SSH";
+"Private key (optional)" = "Private key (tùy chọn)";
+"Key passphrase" = "Passphrase của key";
+
+/* SQL editor (M2) */
+"Untitled" = "Chưa đặt tên";
+"New SQL Tab" = "Tab SQL mới";
+"Run" = "Chạy";
+"Run All" = "Chạy tất cả";
+"Query failed" = "Truy vấn lỗi";
+"No results yet" = "Chưa có kết quả";
+"No limit" = "Không giới hạn";
+"Automatic row limit" = "Giới hạn số dòng tự động";
+"⌘↩ runs the statement at the cursor" = "⌘↩ chạy statement tại vị trí con trỏ";
+"Close Tab" = "Đóng tab";
+"Split Editor" = "Chia đôi khung";
+"Split Right" = "Chia sang phải";
+"Split Down" = "Chia xuống dưới";
+"Pick a table from the sidebar, or open an SQL tab (⌘T)" = "Chọn bảng ở sidebar, hoặc mở tab SQL (⌘T)";
+"%lld affected" = "%lld dòng bị tác động";
+
+/* History viewer (ED-06) */
+"History" = "Lịch sử";
+"Search history" = "Tìm trong lịch sử";
+"Search saved queries" = "Tìm truy vấn đã lưu";
+"Copy error" = "Sao chép lỗi";
+"No history yet" = "Chưa có lịch sử";
+"Executed statements appear here" = "Câu lệnh đã chạy sẽ hiển thị tại đây";
+"Clear All" = "Xóa tất cả";
+"Close" = "Đóng";
+"Insert into new SQL tab" = "Chèn vào tab SQL mới";
+
+/* Grid editing (M3, DL-03/04/05) */
+"%lld pending change(s)" = "%lld thay đổi chưa áp dụng";
+"Discard" = "Hủy thay đổi";
+"Review & Apply…" = "Xem SQL & Áp dụng…";
+"Read-only: table has no primary key" = "Chỉ đọc: bảng không có primary key";
+"SQL Preview" = "Xem trước SQL";
+"Runs in a transaction — any failure rolls back" = "Chạy trong transaction — lỗi là rollback toàn bộ";
+"Apply" = "Áp dụng";
+"Set NULL" = "Đặt NULL";
+"Delete %lld row(s)" = "Xóa %lld dòng";
+"Paste Rows" = "Dán dòng";
+
+/* Copy-as & export (DL-07, XN-01/02) */
+"Copy as CSV" = "Chép dạng CSV";
+"Copy as JSON" = "Chép dạng JSON";
+"Copy as Markdown" = "Chép dạng Markdown";
+"Copy as SQL INSERT" = "Chép dạng SQL INSERT";
+"Export…" = "Xuất file…";
+"Save for Replay" = "Lưu để so sánh";
+"Save this run for later comparison" = "Lưu lần chạy này để so sánh sau";
+"was" = "trước là";
+"faster" = "nhanh hơn";
+"slower" = "chậm hơn";
+"Format:" = "Định dạng:";
+"Encoding:" = "Bảng mã:";
+"Include header row" = "Kèm dòng tiêu đề";
+"CSV (comma)" = "CSV (dấu phẩy)";
+"TSV (tab)" = "TSV (tab)";
+"JSON array" = "Mảng JSON";
+"NDJSON" = "NDJSON";
+"Reload" = "Tải lại";
+"Exported %lld rows" = "Đã xuất %lld dòng";
+
+/* Insert row & filter (DL-02/04) */
+"Add Row" = "Thêm dòng";
+"filter…" = "điều kiện lọc…";
+"Filter rows" = "Lọc dòng";
+"Add condition" = "Thêm điều kiện";
+"Apply Filter" = "Áp dụng lọc";
+"value" = "giá trị";
+"contains" = "chứa";
+"starts with" = "bắt đầu bằng";
+"is null" = "là null";
+"is not null" = "không null";
+
+/* DangerGuard alerts (07 §6) */
+"Run Statement" = "Chạy câu lệnh";
+"UPDATE without WHERE — every row will be modified." = "UPDATE không có WHERE — TOÀN BỘ dòng sẽ bị sửa.";
+"DELETE without WHERE — every row will be deleted." = "DELETE không có WHERE — TOÀN BỘ dòng sẽ bị xóa.";
+"Write statement on a PRODUCTION connection." = "Lệnh ghi trên kết nối PRODUCTION.";
+"DROP on a PRODUCTION connection." = "DROP trên kết nối PRODUCTION.";
+"TRUNCATE on a PRODUCTION connection." = "TRUNCATE trên kết nối PRODUCTION.";
+"Type “%@” to confirm.\n\n%@" = "Gõ “%1$@” để xác nhận.\n\n%2$@";
+
+/* Cell viewer & EXPLAIN (DL-06, ED-09) */
+"View Cell…" = "Xem cell…";
+"Text" = "Văn bản";
+"JSON" = "JSON";
+"Hex" = "Hex";
+"Image" = "Ảnh";
+"Stage Change" = "Ghi vào thay đổi chờ";
+"Explain" = "Explain";
+
+/* SQL formatting & saved queries (ED-08, ED-07) */
+"Name this query to save it" = "Đặt tên để lưu truy vấn";
+"Save SQL" = "Lưu SQL";
+"Format" = "Định dạng";
+"Saved Queries" = "Truy vấn đã lưu";
+"Save Query…" = "Lưu truy vấn…";
+"Save Current SQL" = "Lưu SQL hiện tại";
+"Name" = "Tên";
+"Folder (optional)" = "Thư mục (tùy chọn)";
+"Global (all connections)" = "Toàn cục (mọi kết nối)";
+"No saved queries yet" = "Chưa có truy vấn nào được lưu";
+"Save" = "Lưu";
+"Open in Editor" = "Mở trong trình soạn thảo";
+"Delete" = "Xóa";
+
+/* FK jump (DL-08) */
+"Jump to %@" = "Nhảy tới %@";
+
+/* Manual transactions (ED-11) */
+"Auto-commit" = "Tự động commit";
+"In transaction" = "Đang trong giao dịch";
+"Commit" = "Commit";
+"Rollback" = "Rollback";
+
+/* Table designer (CT-01/02/03) */
+"New Table…" = "Bảng mới…";
+"New Table" = "Bảng mới";
+"table_name" = "tên_bảng";
+"Columns" = "Cột";
+"name" = "tên";
+"type" = "kiểu";
+"default" = "mặc định";
+"Null" = "Null";
+"Allow NULL" = "Cho phép NULL";
+"PK" = "PK";
+"Primary key" = "Khóa chính";
+"Indexes" = "Index";
+"No indexes" = "Chưa có index";
+"index_name" = "tên_index";
+"columns (comma-separated)" = "cột (phân tách bằng dấu phẩy)";
+"Unique" = "Unique";
+"Foreign Keys" = "Khóa ngoại";
+"No foreign keys" = "Chưa có khóa ngoại";
+"column" = "cột";
+"ref table" = "bảng tham chiếu";
+"ref column" = "cột tham chiếu";
+"ON DELETE" = "ON DELETE";
+"ON UPDATE" = "ON UPDATE";
+"Create Table" = "Tạo bảng";
+
+/* SQL export (XN-03) */
+"Export SQL…" = "Xuất SQL…";
+"Export SQL" = "Xuất SQL";
+"Rows per INSERT" = "Số dòng mỗi INSERT";
+"Include CREATE TABLE" = "Kèm CREATE TABLE";
+"Schema not available" = "Chưa có schema";
+
+/* License & commercialization (M5) */
+"License" = "Giấy phép";
+"BerryDB License" = "Giấy phép BerryDB";
+"Unlicensed" = "Chưa kích hoạt";
+"Trial · %lldd" = "Dùng thử · %lld ngày";
+"Renew" = "Gia hạn";
+"Fallback" = "Dự phòng";
+"Credit" = "Số dư";
+"Not activated" = "Chưa kích hoạt";
+"Free trial" = "Dùng thử miễn phí";
+"%@ plan" = "Gói %@";
+"AI credit" = "Số dư AI";
+"Renewal needed" = "Cần gia hạn";
+"Fallback mode" = "Chế độ dự phòng";
+"Start a free trial or enter a license key to unlock everything." = "Bắt đầu dùng thử miễn phí hoặc nhập license key để mở khóa tất cả.";
+"%lld days left in your trial." = "Còn %lld ngày dùng thử.";
+"Active — %lld days remaining." = "Đang hoạt động — còn %lld ngày.";
+"Pay-as-you-go — top up any time below." = "Trả theo mức dùng — nạp thêm bất cứ lúc nào bên dưới.";
+"Expired %lld days ago. You're in the grace period — renew soon." = "Hết hạn %lld ngày trước. Đang trong thời gian ân hạn — hãy gia hạn sớm.";
+"Running local-only features of %@. AI is off." = "Đang chạy tính năng cục bộ của %@. AI đã tắt.";
+"Activate" = "Kích hoạt";
+"License key" = "License key";
+"Email" = "Email";
+"Start Free Trial" = "Bắt đầu dùng thử";
+"You're subscribed to the Pro plan." = "Bạn đang dùng gói Pro.";
+"Add AI credit" = "Nạp tiền dùng AI";
+"BerryDB is free to use. You only pay for the AI you actually use, billed at cost plus a small margin — BerryDB hosts and manages the AI infrastructure for you." = "BerryDB miễn phí sử dụng. Bạn chỉ trả phí cho lượng AI thực dùng, tính theo giá gốc cộng thêm một khoản nhỏ — BerryDB lo toàn bộ hạ tầng AI.";
+"Custom amount" = "Số tiền tùy chọn";
+"Opening checkout…" = "Đang mở trang thanh toán…";
+"Sign Out" = "Đăng xuất";
+"Done" = "Xong";
+"License key not found" = "Không tìm thấy license key";
+"This license is already active on the maximum number of devices" = "License này đã kích hoạt tối đa số thiết bị cho phép";
+"This license has expired" = "License đã hết hạn";
+"Sign in required" = "Cần đăng nhập";
+"Could not reach the license server" = "Không kết nối được máy chủ license";
+"This device has already used its free trial with a different account. Sign in with that account, or use a license key." = "Máy này đã dùng thử miễn phí với một tài khoản khác. Hãy đăng nhập bằng tài khoản đó, hoặc dùng license key.";
+"This license could not be read — it may be corrupted. Try activating again with your key or restoring by email." = "Không đọc được license này — có thể đã bị hỏng. Hãy thử kích hoạt lại bằng key hoặc khôi phục qua email.";
+"This license was signed with a key this app doesn't recognize — it may have been issued for a different environment. Try activating again, or contact support if this keeps happening." = "License này được ký bằng khóa mà app không nhận ra — có thể đã được cấp cho môi trường khác. Hãy thử kích hoạt lại, hoặc liên hệ hỗ trợ nếu vẫn còn lỗi.";
+
+/* CSV import (XN-05) */
+"Import CSV…" = "Nhập CSV…";
+"Import CSV" = "Nhập CSV";
+"Choose File…" = "Chọn tệp…";
+"Delimiter" = "Ký tự phân tách";
+"First row is header" = "Dòng đầu là tiêu đề";
+"Target table" = "Bảng đích";
+"Select…" = "Chọn…";
+"%lld data rows" = "%lld dòng dữ liệu";
+"Column mapping" = "Ánh xạ cột";
+"Pick a target table to map columns" = "Chọn bảng đích để ánh xạ cột";
+"(skip)" = "(bỏ qua)";
+"Preview" = "Xem trước";
+"Column %lld" = "Cột %lld";
+"Import" = "Nhập";
+"Imported %lld rows" = "Đã nhập %lld dòng";
+"Import failed at line %lld: %@" = "Nhập thất bại tại dòng %lld: %@";
+
+/* Process list (TI-01) */
+"Processes" = "Tiến trình";
+"No active processes" = "Không có tiến trình nào";
+"Running server sessions appear here" = "Các phiên đang chạy trên server hiện ở đây";
+"PID" = "PID";
+"User" = "User";
+"DB" = "DB";
+"State" = "Trạng thái";
+"Query" = "Truy vấn";
+"Sec" = "Giây";
+"Kill" = "Kết thúc";
+"%lld processes" = "%lld tiến trình";
+"Cannot terminate this session" = "Không thể kết thúc phiên này";
+
+/* AI assistant (AI-01/07/08, docs/architecture/09) */
+"AI Assistant" = "Trợ lý AI";
+"No connection" = "Chưa kết nối";
+"Connect to a database to use the AI assistant." = "Kết nối tới một cơ sở dữ liệu để dùng trợ lý AI.";
+"AI needs a trial or license" = "AI cần dùng thử hoặc license";
+"BerryDB itself is free — start a free trial to use the AI assistant, billed as pay-as-you-go credit." = "Bản thân BerryDB miễn phí — hãy bắt đầu dùng thử để dùng trợ lý AI, tính phí theo dạng nạp tiền trả trước.";
+"Get started" = "Bắt đầu";
+"AI is off for this connection" = "AI đang tắt cho kết nối này";
+"This connection is labelled production, so AI is off by default." = "Kết nối này gắn nhãn production nên AI mặc định tắt.";
+"Turn AI on…" = "Bật AI…";
+"Turn AI off for this connection" = "Tắt AI cho kết nối này";
+"Before you start" = "Trước khi bắt đầu";
+"The assistant sends your schema (table and column names), the database type, and your questions to BerryDB's AI service. Row data is never sent unless you turn on sample rows. Any SQL the assistant proposes runs only after you approve it." = "Trợ lý gửi schema (tên bảng và cột), loại cơ sở dữ liệu và câu hỏi của bạn tới dịch vụ AI của BerryDB. Dữ liệu dòng không bao giờ được gửi trừ khi bạn bật gửi dòng mẫu. Mọi câu SQL trợ lý đề xuất chỉ chạy sau khi bạn phê duyệt.";
+"This is a production connection — review every statement carefully." = "Đây là kết nối production — hãy xem kỹ từng câu lệnh.";
+"I understand — enable AI" = "Tôi đã hiểu — bật AI";
+"Ask about your schema, or ask the assistant to write a query." = "Hỏi về schema, hoặc nhờ trợ lý viết truy vấn.";
+"Preparing response…" = "Đang chuẩn bị phản hồi…";
+"Running %@…" = "Đang chạy %@…";
+"The assistant reached its tool-step limit. Try a more specific request." = "Trợ lý đã đạt giới hạn bước dùng công cụ. Hãy thử một yêu cầu cụ thể hơn.";
+"The assistant wants to run this SQL" = "Trợ lý muốn chạy câu SQL này";
+"Deny" = "Từ chối";
+"Run" = "Chạy";
+"Run anyway" = "Vẫn chạy";
+"Run All Safe" = "Chạy tất cả (an toàn)";
+"Run this and every other safe statement in this turn without asking again." = "Chạy câu này và mọi câu an toàn khác trong lượt này, không hỏi lại nữa.";
+"Ask the assistant…" = "Hỏi trợ lý…";
+"File a bug report from this conversation." = "Gửi báo cáo lỗi từ cuộc trò chuyện này.";
+"Auto-run safe SELECTs" = "Tự chạy SELECT an toàn";
+"Allow sending sample rows" = "Cho phép gửi dòng mẫu";
+"Explain like I'm…" = "Giải thích như cho…";
+"Default" = "Mặc định";
+"a beginner" = "người mới bắt đầu";
+"an intermediate developer" = "developer trung cấp";
+"an advanced developer" = "developer nâng cao";
+"a DBA" = "một DBA";
+"Upgrade" = "Nâng gói";
+"Add Credit" = "Nạp tiền";
+"Open License" = "Mở License";
+"Your AI credit balance is empty." = "Số dư AI của bạn đã hết.";
+"Your trial predates email-based usage tracking. Sign out and start a new trial to keep using AI." = "Bản dùng thử của bạn có trước khi hệ thống theo dõi qua email. Hãy đăng xuất và bắt đầu dùng thử mới để tiếp tục dùng AI.";
+"Default model" = "Model mặc định";
+"$%@ credit" = "%@$ số dư";
+"$%@ credit · %@" = "%1$@$ số dư · %2$@";
+"%@ · %lld/%lld tokens" = "%1$@ · %2$lld/%3$lld token";
+"%lld/%lld tokens" = "%1$lld/%2$lld token";
+"%lld tokens (unlimited)" = "%lld token (không giới hạn)";
+"%@/%@ tokens" = "%1$@/%2$@ token";
+"Used so far: %@ tokens" = "Đã dùng: %@ token";
+"Working…" = "Đang xử lý…";
+"Worked" = "Đã xử lý";
+"Reading schema" = "Đang đọc schema";
+"Drafting SQL" = "Đang soạn SQL";
+"Drafting query" = "Đang soạn truy vấn";
+"Running SQL" = "Đang chạy SQL";
+"Sampling rows" = "Đang lấy mẫu dữ liệu";
+"Reading tab" = "Đang đọc tab";
+"Reading tabs" = "Đang đọc các tab";
+"Running statements" = "Đang chạy câu lệnh";
+"Explaining query" = "Đang giải thích truy vấn";
+"Creating tab" = "Đang tạo tab";
+"Analyzing stats" = "Đang phân tích thống kê";
+"Querying graph" = "Đang truy vấn graph";
+"Reviewing migration" = "Đang xem xét migration";
+"Analyzing impact" = "Đang phân tích tác động";
+"Reading review" = "Đang đọc review";
+"Reading UI state" = "Đang đọc trạng thái UI";
+"Querying UI" = "Đang truy vấn UI";
+"Searching history" = "Đang tìm trong lịch sử";
+"Searching schema" = "Đang tìm trong schema";
+"Analyzing queries" = "Đang phân tích truy vấn";
+"Navigating UI" = "Đang điều hướng UI";
+"Listing skills" = "Đang liệt kê skill";
+"Loading skill" = "Đang tải skill";
+"Reading artifact" = "Đang đọc artifact";
+"Your balance is running low — add more credit soon." = "Số dư sắp hết — hãy nạp thêm sớm.";
+"Your balance is running low — add more credit to keep using AI." = "Số dư sắp hết — nạp thêm để tiếp tục dùng AI.";
+"UPDATE without a WHERE clause" = "UPDATE không có mệnh đề WHERE";
+"DELETE without a WHERE clause" = "DELETE không có mệnh đề WHERE";
+"Writes to a production database" = "Ghi vào cơ sở dữ liệu production";
+"DROP on a production database" = "DROP trên cơ sở dữ liệu production";
+"TRUNCATE on a production database" = "TRUNCATE trên cơ sở dữ liệu production";
+
+/* SSH host key change (07 §4) */
+"SSH host key changed" = "Khóa host SSH đã thay đổi";
+"Trust New Key & Reconnect" = "Tin khóa mới & Kết nối lại";
+"The host key for this server differs from the one you trusted before. Continue only if you expected this — for example, the server was reinstalled. Otherwise the connection may be intercepted." = "Khóa host của server này khác với khóa bạn đã tin trước đây. Chỉ tiếp tục nếu bạn dự đoán điều này — ví dụ server vừa được cài lại. Nếu không, kết nối có thể đang bị xen giữa.";
+"Trusted:" = "Đã tin:";
+"New:" = "Mới:";
+
+/* Insight Panel (DI-09, docs/architecture/11 §7) */
+"Insights" = "Phân tích";
+"Database Insights" = "Phân tích cơ sở dữ liệu";
+"Refresh" = "Làm mới";
+"No insights" = "Chưa có phân tích";
+"Connect and refresh the schema to analyze it." = "Kết nối và làm mới schema để phân tích.";
+"Reveal" = "Hiện trong danh sách";
+"Open Fix in Editor" = "Mở cách sửa trong trình soạn";
+"Critical" = "Nghiêm trọng";
+"Warnings" = "Cảnh báo";
+"Suggestions" = "Gợi ý";
+"Today's Summary" = "Tóm tắt hôm nay";
+"Schema" = "Schema";
+"Index" = "Index";
+"Performance" = "Hiệu năng";
+
+/* Graph Explorer (DI-02/04, docs/architecture/11 §5) */
+"Graph Explorer" = "Bản đồ quan hệ";
+"No graph yet" = "Chưa có đồ thị";
+"Connect and refresh the schema to build the dependency graph." = "Kết nối và làm mới schema để dựng đồ thị phụ thuộc.";
+"Select a table" = "Chọn một bảng";
+"Pick a table to see its dependencies." = "Chọn một bảng để xem quan hệ phụ thuộc.";
+"Depends on" = "Phụ thuộc vào";
+"Depended on by" = "Được phụ thuộc bởi";
+"Blast radius" = "Phạm vi ảnh hưởng";
+"References no other tables." = "Không tham chiếu bảng nào khác.";
+"No table references this one." = "Không bảng nào tham chiếu bảng này.";
+"Changing it affects nothing downstream." = "Thay đổi không ảnh hưởng bảng nào phía sau.";
+"Quantified impact (recent workload)" = "Tác động định lượng (workload gần đây)";
+"affected queries" = "query bị ảnh hưởng";
+"total calls" = "tổng lượt gọi";
+"No recent queries in history touch this table." = "Không có query gần đây nào trong lịch sử chạm tới bảng này.";
+
+/* Time Machine Timeline (DI-08, docs/feature/07 §1) */
+"Time Machine" = "Time Machine";
+"Schema change history (DI-08)" = "Lịch sử thay đổi schema (DI-08)";
+"Not enough history yet" = "Chưa đủ lịch sử";
+"Time Machine needs at least two recorded schema snapshots — keep refreshing the schema as it evolves." = "Time Machine cần ít nhất 2 snapshot schema đã ghi lại — tiếp tục refresh schema khi nó thay đổi.";
+"nodes" = "nút";
+"First recorded snapshot" = "Snapshot đầu tiên được ghi lại";
+"Nothing earlier to compare against." = "Không có gì trước đó để so sánh.";
+"Select a snapshot" = "Chọn một snapshot";
+"Pick a date to see what changed." = "Chọn một ngày để xem điều gì đã thay đổi.";
+"No structural changes since the previous snapshot." = "Không có thay đổi cấu trúc nào kể từ snapshot trước.";
+"table" = "bảng";
+"index" = "index";
+
+/* Visualize Result (docs/feature/07 §8, AI SQL Copilot) */
+"Visualize Result" = "Trực quan hóa kết quả";
+"Not enough data to visualize" = "Chưa đủ dữ liệu để trực quan hóa";
+"Run a query with at least two columns and one numeric value." = "Chạy một query có ít nhất 2 cột và 1 giá trị số.";
+"X" = "X";
+"Y" = "Y";
+"Chart type" = "Loại biểu đồ";
+"Bar" = "Cột";
+"Line" = "Đường";
+"No numeric values in this column" = "Không có giá trị số nào trong cột này";
+"Pick a different Y column." = "Chọn cột Y khác.";
+
+/* App menu — auto-update (docs/architecture/10 §3) */
+"Check for Updates…" = "Kiểm tra cập nhật…";
+
+/* Toolbar category menus (grouped header) */
+"Library" = "Thư viện";
+"Intelligence" = "Phân tích";
+"More" = "Thêm";
+
+/* Insight Panel — Query Analyzer (DI-06) */
+"Analyzing schema and recent queries…" = "Đang phân tích schema và truy vấn gần đây…";
+
+/* Tier Intelligence gating (Q15) */
+"Unlock Intelligence…" = "Mở khóa Intelligence…";
+
+/* TLS mode caption (07 §4 security hardening) */
+"Encrypted, but the server's certificate isn't checked. Use “Verify certificate” for production." = "Đã mã hóa nhưng không kiểm tra chứng chỉ máy chủ. Dùng “Xác minh chứng chỉ” cho production.";
+
+/* Accessibility labels for icon-only controls (M7 a11y pass) */
+"Add" = "Thêm";
+"Remove" = "Xóa";
+"Send" = "Gửi";
+"AI settings" = "Cài đặt AI";
+
+/* Single exec + delete warnings + saved-query files (docs/ui) */
+"Warn Before Deleting Data" = "Cảnh báo trước khi xóa dữ liệu";
+"This DELETE will remove data." = "Lệnh DELETE này sẽ xóa dữ liệu.";
+"DROP removes the object and its data." = "DROP xóa đối tượng và toàn bộ dữ liệu của nó.";
+"TRUNCATE removes every row in the table." = "TRUNCATE xóa toàn bộ dòng trong bảng.";
+"This run contains %lld data-deleting statement(s). Run them all?" = "Lượt chạy này có %lld câu lệnh xóa dữ liệu. Chạy tất cả?";
+"Deletes data" = "Xóa dữ liệu";
+"Drops an object" = "Xóa đối tượng (DROP)";
+"Empties a table" = "Làm rỗng bảng (TRUNCATE)";
+"Contains %lld data-deleting statements" = "Có %lld câu lệnh xóa dữ liệu";
+"Rename" = "Đổi tên";
+"⌘R runs every statement in the editor" = "⌘R chạy toàn bộ câu lệnh trong editor";
+"⌘R runs every statement in the script" = "⌘R chạy toàn bộ câu lệnh trong script";
+"Show Button Labels" = "Hiện nhãn nút chức năng";
+"Move to New Window" = "Tách ra cửa sổ riêng";
+"This tab was closed" = "Tab này đã đóng";
+"This tab can't be detached" = "Tab này không tách được";
+"Show Grid" = "Xem dạng bảng";
+"Show Plan Tree" = "Xem cây thực thi";
+"Edit Table…" = "Sửa bảng…";
+"Edit Table" = "Sửa bảng";
+"Apply Changes" = "Áp dụng thay đổi";
+"Client certificate (optional)" = "Chứng chỉ client (tùy chọn)";
+"Client key" = "Khóa client";
+"Toggle Comment" = "Bật/tắt comment";
+"Keyboard Shortcuts" = "Phím tắt";
+"Press keys…" = "Nhấn tổ hợp phím…";
+"Reset to default" = "Về mặc định";
+"Reset All" = "Đặt lại tất cả";
+"Editor keys (⌘↩ run, ⌃Space completion) are fixed." = "Phím trong editor (⌘↩ chạy, ⌃Space gợi ý) là cố định.";
+"Local Data" = "Dữ liệu cục bộ";
+"Deletes all saved queries, connection profiles, and AI chat history stored on this Mac. BerryDB will quit — reopen it to start fresh." = "Xóa toàn bộ query đã lưu, kết nối, và lịch sử chat AI trên máy này. BerryDB sẽ thoát — mở lại để bắt đầu sạch.";
+"Reset Local Data…" = "Xóa dữ liệu cục bộ…";
+"Reset local data?" = "Xóa dữ liệu cục bộ?";
+"Reset & Quit" = "Xóa & Thoát";
+"This permanently deletes all saved queries, connection profiles, and AI chat history on this Mac. This cannot be undone." = "Thao tác này xóa vĩnh viễn toàn bộ query đã lưu, kết nối, và lịch sử chat AI trên máy này. Không thể hoàn tác.";
+
+/* Navicat-style result tabs (docs/ui) */
+"Message" = "Thông báo";
+"Summary" = "Tổng quan";
+"Result %lld" = "Kết quả %lld";
+"Data" = "Dữ liệu";
+"Info" = "Thông tin";
+"Statements" = "Số câu lệnh";
+"Succeeded" = "Thành công";
+"Failed" = "Thất bại";
+
+/* Working block action status + detail (docs/feature/09) */
+"Running" = "Đang chạy";
+"Completed" = "Hoàn tất";
+"Denied" = "Bị từ chối";
+"Result" = "Kết quả";
+"Click to view, Cmd-click to open in a tab" = "Nhấn để xem, Cmd-nhấn để mở trong tab";
+"Open in a tab" = "Mở trong tab";
+"Result sets" = "Số tập kết quả";
+"Rows returned" = "Số dòng trả về";
+"Total time" = "Tổng thời gian";
+"Rows" = "Số dòng";
+"Duration" = "Thời lượng";
+"Affected" = "Bị ảnh hưởng";
+"Running…" = "Đang chạy…";
+"%lld row(s) affected" = "%lld dòng bị ảnh hưởng";
+"%lld row(s) returned" = "%lld dòng trả về";
+"Waiting for payment…" = "Đang chờ thanh toán…";
+"Purchase email" = "Email đã mua";
+"Restore Purchase" = "Khôi phục đã mua";
+"Plan" = "Kế hoạch";
+"Thinking…" = "Đang suy nghĩ…";
+"Thinking" = "Suy nghĩ";
+"Step %lld" = "Bước %lld";
+"MCP servers" = "Máy chủ MCP";
+"An MCP server wants to run a tool" = "Một MCP server muốn chạy một công cụ";
+"Trust server" = "Tin cậy máy chủ này";
+"Sub-agent" = "Tác nhân con";
+
+/* Mongo/Qdrant workspace UI (docs/architecture/12 §7) */
+"API Key" = "API Key";
+"View Document…" = "Xem tài liệu…";
+"Insert…" = "Thêm…";
+"Insert Document" = "Thêm tài liệu";
+"Invalid JSON" = "JSON không hợp lệ";
+"Pick a collection from the sidebar" = "Chọn một collection từ thanh bên";
+"Collections (%lld)" = "Collections (%lld)";
+"This updates every document in the collection — there is no filter." = "Lệnh này cập nhật toàn bộ tài liệu trong collection — không có điều kiện lọc nào.";
+"This deletes every document/point in the collection — there is no filter." = "Lệnh này xoá toàn bộ document/point trong collection — không có điều kiện lọc nào.";
+"This permanently removes the collection and all its documents." = "Thao tác này xóa vĩnh viễn collection và toàn bộ tài liệu bên trong.";
+"This drops an index — queries relying on it may slow down until it's recreated." = "Thao tác này xóa một index — các truy vấn phụ thuộc vào nó có thể chậm lại cho đến khi được tạo lại.";
+"%lld items" = "%lld mục";
+"Cancelled — kept %lld received items" = "Đã huỷ — giữ lại %lld mục đã nhận";
+"JSON filter, e.g. { \"active\": true }" = "Bộ lọc JSON, ví dụ { \"active\": true }";
+"Query vector JSON, e.g. [0.1, 0.2] — empty browses all points" = "Vector truy vấn dạng JSON, ví dụ [0.1, 0.2] — để trống sẽ duyệt tất cả point";
+"New Collection…" = "Collection mới…";
+"New Collection" = "Collection mới";
+"Vector Size" = "Kích thước vector";
+"Distance" = "Khoảng cách";
+"Create" = "Tạo";
+"Name cannot be empty" = "Tên không được để trống";
+"A collection named \"%@\" already exists" = "Đã tồn tại collection tên \"%@\"";
+"Vector Size must be a positive integer" = "Kích thước vector phải là số nguyên dương";
+"Filter" = "Điều kiện lọc";
+"Pipeline" = "Pipeline";
+"Search" = "Tìm kiếm";
+"Browse All" = "Duyệt tất cả";
+"Limit" = "Giới hạn";
+"Score Threshold" = "Ngưỡng điểm";
+"optional" = "tùy chọn";
+"JSON array of pipeline stages, e.g. [ { \"$match\": {} } ]" = "Mảng JSON các stage pipeline, ví dụ [ { \"$match\": {} } ]";
+"Vector JSON array, e.g. [0.1, 0.2, 0.3]" = "Mảng vector dạng JSON, ví dụ [0.1, 0.2, 0.3]";
+"Optional JSON payload filter, e.g. { \"category\": \"docs\" }" = "Bộ lọc payload JSON tùy chọn, ví dụ { \"category\": \"docs\" }";
+"Browses every point in the collection — no vector needed." = "Duyệt toàn bộ point trong collection — không cần vector.";
+"collection" = "collection";
+"method" = "phương thức";
+"operator" = "toán tử";
+
+// AI conversation history sidebar (AI-21, feature/02)
+"Conversation history" = "Lịch sử hội thoại";
+"No saved conversations" = "Chưa có hội thoại nào được lưu";
+"Delete conversation" = "Xóa hội thoại";
+"The assistant is replying — wait for it to finish to open another conversation." = "Trợ lý đang trả lời — đợi xong để mở hội thoại khác.";
+
+// Qdrant query tab (feature/03)
+"Form" = "Form";
+"Save query" = "Lưu truy vấn";
+"Collection" = "Collection";
+"Collection name" = "Tên collection";
+"Select a collection" = "Chọn collection";
+"Vector" = "Vector";
+"[0.1, 0.2, …] — empty browses all points" = "[0.1, 0.2, …] — để trống sẽ duyệt toàn bộ points";
+"Top K" = "Top K";
+"Score ≥" = "Score ≥";
+"Payload filter" = "Payload filter";
+"{ \"lang\": \"vi\" } — optional" = "{ \"lang\": \"vi\" } — tùy chọn";
+"Switch to JSON for upsert/delete (write) queries." = "Chuyển sang JSON cho truy vấn ghi (upsert/delete).";
+"New Qdrant Query" = "Truy vấn Qdrant mới";
+"Delete All Points…" = "Xóa tất cả points…";
+"operation" = "thao tác";
+
+// Backup / Restore (feature/04)
+"Backup…" = "Sao lưu…";
+"Restore…" = "Phục hồi…";
+"Back Up Database" = "Sao lưu cơ sở dữ liệu";
+"Dump this connection's schema and data to a .sql file you can re-run to restore." = "Xuất cấu trúc và dữ liệu của kết nối này ra file .sql có thể chạy lại để phục hồi.";
+"Structure (CREATE statements)" = "Cấu trúc (câu lệnh CREATE)";
+"Data (INSERT statements)" = "Dữ liệu (câu lệnh INSERT)";
+"Back Up…" = "Sao lưu…";
+"Backed up %lld object(s) to %@." = "Đã sao lưu %lld đối tượng vào %@.";
+"Restore Database" = "Phục hồi cơ sở dữ liệu";
+"Runs every statement in the .sql file against this connection. Existing objects may be overwritten." = "Chạy mọi câu lệnh trong file .sql lên kết nối này. Các đối tượng đang tồn tại có thể bị ghi đè.";
+"Choose .sql File…" = "Chọn file .sql…";
+"Ran %lld statement(s), %lld failed." = "Đã chạy %lld câu lệnh, %lld lỗi.";
+"Restore" = "Phục hồi";
+
+// Datasource backup/restore (feature/04 phase C/D)
+"Back up every collection to a folder (manifest + one file per collection) you can restore later." = "Sao lưu mọi collection ra một thư mục (manifest + mỗi collection một file) để phục hồi sau.";
+"Backed up %lld collection(s) to %@." = "Đã sao lưu %lld collection vào %@.";
+"Recreates each collection and re-inserts its documents. Existing data may be duplicated or overwritten." = "Tạo lại từng collection và chèn lại document. Dữ liệu hiện có có thể bị trùng hoặc ghi đè.";
+"Choose Backup Folder…" = "Chọn thư mục sao lưu…";
+"Restored %lld document(s) across %lld collection(s)." = "Đã phục hồi %lld document trong %lld collection.";
+
+// Backup/Restore tabs + object selection (feature/04)
+"Backup" = "Sao lưu";
+"Structure" = "Cấu trúc";
+"Select All" = "Chọn tất cả";
+"Deselect All" = "Bỏ chọn tất cả";
+"Collections" = "Collections";
+
+// Backup manager (feature/04, Navicat-style)
+"New Backup" = "Tạo backup";
+"Objects" = "Đối tượng";
+"Show in Finder" = "Hiện trong Finder";
+"No backups yet" = "Chưa có backup nào";
+"Create one with New Backup." = "Tạo mới bằng nút Tạo backup.";
+"Bundle" = "Bundle";
+"SQL" = "SQL";
+"Restore this backup? Existing objects may be overwritten." = "Phục hồi backup này? Các đối tượng hiện có có thể bị ghi đè.";
+"This backup doesn't match the current connection type." = "Backup này không khớp loại kết nối hiện tại.";
+
+// Report draft pre-refinement consent card (Task 4.1)
+"Refine this report with AI?" = "Nhờ AI chỉnh sửa báo cáo này?";
+"BerryDB will send this text to the AI service to turn it into a clear report. It's processed transiently for refinement only — nothing is stored on the server until you approve the final report." = "BerryDB sẽ gửi nội dung này đến dịch vụ AI để biên soạn thành báo cáo rõ ràng. Nội dung chỉ được xử lý tạm thời để chỉnh sửa — không có gì được lưu trên máy chủ cho đến khi bạn duyệt báo cáo cuối cùng.";
+"Refine with AI" = "Nhờ AI chỉnh sửa";
+
+// Report confirmation card (Q17 §7.7) — editable draft + report_ready_token (Task 11)
+"Review this report" = "Xem lại báo cáo này";
+"Attach recent conversation for context" = "Đính kèm hội thoại gần đây làm ngữ cảnh";
+"Confirm Report" = "Xác nhận báo cáo";
+"Report ready to send" = "Báo cáo đã sẵn sàng để gửi";
+"Report changed since it was confirmed" = "Báo cáo đã thay đổi kể từ khi xác nhận";
+"Dismiss" = "Bỏ qua";
+
+// Report scope review + submission (Task 12)
+"This summary will be attached:" = "Bản tóm tắt sau sẽ được đính kèm:";
+"Preparing the conversation summary…" = "Đang chuẩn bị bản tóm tắt hội thoại…";
+"Couldn't prepare the conversation summary. Try again, or send the report without it." = "Không chuẩn bị được bản tóm tắt hội thoại. Hãy thử lại, hoặc gửi báo cáo mà không kèm tóm tắt.";
+"Send Report" = "Gửi báo cáo";
+"Sending…" = "Đang gửi…";
+"Report sent." = "Đã gửi báo cáo.";
+"Your review of this report expired. Please confirm it again." = "Phiên xem lại báo cáo này đã hết hạn. Vui lòng xác nhận lại.";
+"This report is no longer ready to send. Please confirm it again." = "Báo cáo này không còn sẵn sàng để gửi. Vui lòng xác nhận lại.";
+"This report was already sent." = "Báo cáo này đã được gửi.";
+"This report is too large to send. Shorten it and try again." = "Báo cáo này quá lớn để gửi. Hãy rút gọn rồi thử lại.";
+"Couldn't reach the AI service. Try sending again." = "Không kết nối được dịch vụ AI. Hãy thử gửi lại.";
+"BerryDB couldn't send this report." = "BerryDB không gửi được báo cáo này.";
+"Clarification needed" = "Cần làm rõ";
+"Your answer" = "Câu trả lời của bạn";
+"Answer" = "Trả lời";
+"Accept" = "Chấp nhận";
+"Decline" = "Từ chối";
+"Update BerryDB to continue using AI." = "Cập nhật BerryDB để tiếp tục sử dụng AI.";
+"The local AI capability set is invalid." = "Bộ capability AI cục bộ không hợp lệ.";
+"An AI capability is not available." = "Một capability AI hiện không khả dụng.";
+"AI capability negotiation failed." = "Không thể thương lượng capability AI.";
+"Your response may have been received, so BerryDB will not send it again automatically." = "Phản hồi của bạn có thể đã được nhận, vì vậy BerryDB sẽ không tự động gửi lại.";
+"The result may have been received, so BerryDB stopped safely instead of sending it twice." = "Kết quả có thể đã được nhận, vì vậy BerryDB đã dừng an toàn thay vì gửi hai lần.";
+"The AI interaction could not be verified." = "Không thể xác minh yêu cầu tương tác của AI.";
+"This AI request expired. Ask the agent to try again." = "Yêu cầu AI này đã hết hạn. Hãy yêu cầu agent thử lại.";
+"The saved AI request could not be restored safely." = "Không thể khôi phục yêu cầu AI đã lưu một cách an toàn.";
+
+/* TI-03 Phase D: read-only user-management info (docs/architecture/14) */
+"Access to this table is managed via AWS IAM — manage users and permissions in the AWS Console." = "Quyền truy cập bảng này được quản lý qua AWS IAM — quản lý user và quyền trong AWS Console.";
+"This connection authenticates with an API key — there is no separate database user system to manage." = "Kết nối này xác thực bằng API key — không có hệ thống user riêng trong database để quản lý.";
+
+/* TI-03 Phase C: DataSource-family user management (docs/architecture/14) */
+"New User" = "Tạo user";
+"Roles (optional)" = "Vai trò (tùy chọn)";
+"Command Preview" = "Xem trước lệnh";
+"Couldn't load users" = "Không thể tải danh sách user";
