@@ -107,6 +107,13 @@ public struct AITurn: Identifiable, Sendable, Equatable {
     public enum Role: Sendable { case user, assistant }
     public let id: UUID
     public let role: Role
+    /// The persisted `ai_message` row this turn corresponds to (AI-35) — nil
+    /// until `persistTurn` writes it back, or for a turn that never made it
+    /// to disk (e.g. still streaming). Distinct from `id` above, which stays
+    /// a fresh random UUID minted for SwiftUI identity / `subThreads(for:)`
+    /// keying and is re-minted on every reload; `messageID` is the stable
+    /// link editing/version-navigation need to find "which DB row is this."
+    public var messageID: UUID?
     public var text: String
     /// Optional planner output shown as a collapsible "Plan" block above the
     /// answer (docs/agents/architecture/02 §A). Empty when no planner ran.
@@ -178,10 +185,11 @@ public struct AITurn: Identifiable, Sendable, Equatable {
     public init(
         id: UUID = UUID(), role: Role, text: String, plan: String = "",
         workSteps: [AIWorkStep] = [], hadToolCall: Bool = false, workDuration: TimeInterval? = nil,
-        workStartedAt: Date? = nil, artifactRefs: [ArtifactRef] = []
+        workStartedAt: Date? = nil, artifactRefs: [ArtifactRef] = [], messageID: UUID? = nil
     ) {
         self.id = id
         self.role = role
+        self.messageID = messageID
         self.text = text
         self.plan = plan
         self.work = AIWorkBlock(
@@ -272,6 +280,17 @@ public final class AISession {
     /// dropping what you typed. Runs in order, one at a time.
     public private(set) var queuedMessages: [String] = []
     private var queuedMessageWasDisplayed: [Bool] = []
+    /// Which path each queued message drains through — the backend queue
+    /// (AI-08) only ever knew how to redrive via `runTurn`, so on-device had
+    /// no queue of its own. Kept parallel to `queuedMessages`/
+    /// `queuedMessageWasDisplayed` rather than folding all three into one
+    /// array, matching how those two already track state.
+    private var queuedMessageRunsLocally: [Bool] = []
+    /// The provider from the most recent `sendLocal` call, reused by
+    /// `drainQueuedMessageIfReady` to redrive a locally-queued message —
+    /// `AppleFoundationProvider` is stateless in production; tests inject a
+    /// scripted fake per call.
+    private var lastLocalProvider: (any LocalCompletionProvider)?
     /// Fired synchronously from `beginTurn()`, the instant a new turn's
     /// (empty) assistant bubble is appended — for both a fresh `send()` and
     /// a queued message being drained once the previous turn finishes.
@@ -457,6 +476,15 @@ public final class AISession {
     /// origin/token and resolution status in one value prevents mismatched
     /// ad-hoc pending fields and makes retry behavior atomic.
     private var activeInteraction: ActiveInteraction?
+
+    /// Whether `admitSend` would run a message immediately (true) or queue
+    /// it (false) — the same condition its own guards check, exposed so a
+    /// caller can decide whether a precondition (AI-20: starting a real
+    /// trial before running the turn) is safe to attempt without leaving a
+    /// queued message orphaned if that precondition then fails.
+    public var canRunImmediately: Bool {
+        activeInteraction == nil && pendingReportDraft == nil && !isStreaming
+    }
 
     public var pendingReport: PendingReport? {
         guard case let .report(report) = activeInteraction?.payload else {
@@ -742,6 +770,7 @@ public final class AISession {
         guard activeInteraction == nil, pendingReportDraft == nil else {
             queuedMessages.append(trimmed)
             queuedMessageWasDisplayed.append(false)
+            queuedMessageRunsLocally.append(false)
             return .queued
         }
         // A turn already streaming just queues this one instead of dropping
@@ -752,6 +781,7 @@ public final class AISession {
         guard !isStreaming else {
             queuedMessages.append(trimmed)
             queuedMessageWasDisplayed.append(false)
+            queuedMessageRunsLocally.append(false)
             return .queued
         }
         // Nothing queued ahead of it — show both bubbles right away, it's
@@ -759,6 +789,32 @@ public final class AISession {
         transcript.append(AITurn(role: .user, text: trimmed))
         let (assistant, assistantTurnID) = beginTurn()
         return .run(text: trimmed, assistantIndex: assistant, assistantTurnID: assistantTurnID)
+    }
+
+    /// For when `AIPanelController.prepareSend()` finds nowhere to actually
+    /// route a turn (no real license and on-device isn't usable, or an edit
+    /// attempted without cloud AI). Shows the user's own message like any
+    /// other send, with `reason` filled in directly as the reply — no
+    /// network/local-model call is attempted, there's nothing to run.
+    public func admitBlocked(_ text: String, reason: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        transcript.append(AITurn(role: .user, text: trimmed))
+        transcript.append(AITurn(role: .assistant, text: reason))
+    }
+
+    /// Fails a turn `admitSend` already began (assistant bubble already on
+    /// the transcript, `isStreaming` already true) before any network call
+    /// happened — for a precondition that turned out not to hold (AI-20:
+    /// an auto-trial-start attempt that failed before `runTurn` ever ran).
+    /// `assistantTurnID` guards against a stale call landing on a
+    /// different turn that has since taken the same index.
+    public func failActiveTurn(assistantIndex: Int, assistantTurnID: UUID, reason: String) {
+        isStreaming = false
+        defer { drainQueuedMessageIfReady() }
+        guard transcript.indices.contains(assistantIndex),
+              transcript[assistantIndex].id == assistantTurnID else { return }
+        transcript[assistantIndex].text = reason
     }
 
     /// Runs the async continuation for an admission already decided by
@@ -776,6 +832,72 @@ public final class AISession {
 
     public func send(_ text: String) async {
         await run(admitSend(text))
+    }
+
+    /// Sync half of editing an already-sent message (AI-35) — mirrors
+    /// `admitSend`'s split and must run on the same MainActor call stack as
+    /// the Edit/Send action, for the same reason documented there. Truncates
+    /// `transcript` back to before the edited turn, retargets the thread's
+    /// active tip to the message's ORIGINAL parent (not wherever the current
+    /// leaf happens to be), then hands off to `admitSend` — which reuses the
+    /// entire normal send path unchanged, since `persistTurn` reads
+    /// `activeLeafMessageID` fresh at persist time. No new parameters needed
+    /// on `persistTurn`/`runTurn`/`SendAdmission`. Scoped to plain user
+    /// turns only — `local:interaction` rows (clarify answers, report
+    /// drafts) carry resume-token/capability-host state editing would need
+    /// to reconcile separately, not part of this feature.
+    public func prepareEdit(messageID: UUID, newText: String) -> SendAdmission? {
+        guard !isStreaming, activeInteraction == nil, pendingReportDraft == nil else { return nil }
+        guard let target = try? store.aiMessage(id: messageID), target.role == "user",
+              target.toolCalls != "local:interaction",
+              let turnIndex = transcript.firstIndex(where: { $0.messageID == messageID })
+        else { return nil }
+        for removed in transcript[turnIndex...] {
+            if let childIDs = subThreadIDsByParentTurn.removeValue(forKey: removed.id) {
+                for childID in childIDs { subThreads.removeValue(forKey: childID) }
+            }
+        }
+        transcript.removeSubrange(turnIndex...)
+        guard var thread = try? store.aiThread(id: target.threadID) else { return nil }
+        // The stored rolling summary can describe content no longer on the
+        // active path after this edit — no way to "un-fold" it, so reset
+        // rather than risk contaminated context; buildContext already has a
+        // cursor-is-nil "rebuild from scratch" fallback to land on.
+        thread.summary = ""
+        thread.summaryThroughSeq = nil
+        thread.activeLeafMessageID = target.parentID
+        try? store.saveAIThread(thread)
+        return admitSend(newText)
+    }
+
+    /// Switches to a different version at a fork point (AI-35's `‹ i/N ›`
+    /// nav) — `messageID` names ONE sibling; this resolves that sibling's
+    /// own current tip (it may itself have been edited further since) and
+    /// reloads the transcript for that path.
+    public func selectSibling(messageID: UUID) async {
+        guard !isStreaming, activeInteraction == nil, pendingReportDraft == nil,
+              let id = threadID, let uuid = UUID(uuidString: id)
+        else { return }
+        guard let tip = try? store.resolveTip(threadID: uuid, from: messageID),
+              var thread = try? store.aiThread(id: uuid)
+        else { return }
+        thread.summary = ""
+        thread.summaryThroughSeq = nil
+        thread.activeLeafMessageID = tip
+        try? store.saveAIThread(thread)
+        guard let turns = try? activeTurns(threadID: uuid) else { return }
+        loadThread(id: id, turns: turns)
+    }
+
+    /// Every version of `messageID`'s message (siblings sharing its parent),
+    /// oldest first — a single-element (or empty) result means nothing to
+    /// navigate. The UI shows `‹ i/N ›` only when this has more than one.
+    public func siblings(of messageID: UUID) -> [UUID] {
+        guard let id = threadID, let uuid = UUID(uuidString: id),
+              let message = try? store.aiMessage(id: messageID)
+        else { return [] }
+        let groups = (try? store.siblingGroups(threadID: uuid)) ?? [:]
+        return groups[message.parentID] ?? []
     }
 
     /// Synchronous: resets per-turn error state, appends the empty assistant
@@ -894,6 +1016,7 @@ public final class AISession {
                     assistantMetadata: interactionMarker,
                     assistantArtifactRefs: transcript[assistant].artifactRefs
                 )
+                applyPersistedMessageIDs(persisted, assistant: assistant)
                 if !persisted.isEmpty {
                     let indexer = embeddingIndexer
                     Task { await indexer.index(persisted) }
@@ -960,18 +1083,83 @@ public final class AISession {
         pendingReportDraft = PendingReportDraft(id: thread, text: text)
     }
 
+    /// Cancels one not-yet-sent queued message — the composer's queue strip
+    /// calls this from its per-row remove button. `index` is a position into
+    /// `queuedMessages` (what the strip already enumerates over), removed
+    /// from all three parallel arrays together so a later drain never reads
+    /// a stale `wasDisplayed`/`runsLocally` for a since-shifted message.
+    /// Out-of-bounds is a silent no-op — the row it belonged to is simply
+    /// gone from the UI by the time this would matter.
+    public func removeQueuedMessage(at index: Int) {
+        guard queuedMessages.indices.contains(index) else { return }
+        queuedMessages.remove(at: index)
+        if queuedMessageWasDisplayed.indices.contains(index) {
+            queuedMessageWasDisplayed.remove(at: index)
+        }
+        if queuedMessageRunsLocally.indices.contains(index) {
+            queuedMessageRunsLocally.remove(at: index)
+        }
+    }
+
+    /// Pops the leading run of `queuedMessages` that can merge into one
+    /// turn: consecutive entries sharing the same `runsLocally`
+    /// destination, none of them already displayed on their own
+    /// (`queuedMessageWasDisplayed == false` — true for every entry any
+    /// call site pushes today; see the doc comment on
+    /// `drainQueuedMessageIfReady` for why an already-displayed entry never
+    /// extends a run). Always pops at least 1 entry. Removes the popped
+    /// prefix from all three parallel arrays.
+    private func drainMergeableRun() -> (texts: [String], runsLocally: Bool, firstWasDisplayed: Bool) {
+        let runsLocally = queuedMessageRunsLocally.first ?? false
+        let firstWasDisplayed = queuedMessageWasDisplayed.first ?? true
+        var count = 1
+        if !firstWasDisplayed {
+            while count < queuedMessages.count,
+                  queuedMessageWasDisplayed[count] == false,
+                  queuedMessageRunsLocally[count] == runsLocally {
+                count += 1
+            }
+        }
+        let texts = Array(queuedMessages.prefix(count))
+        queuedMessages.removeFirst(count)
+        queuedMessageWasDisplayed.removeFirst(min(count, queuedMessageWasDisplayed.count))
+        queuedMessageRunsLocally.removeFirst(min(count, queuedMessageRunsLocally.count))
+        return (texts, runsLocally, firstWasDisplayed)
+    }
+
+    /// Drains the front of the queue into one turn. A run of 2+ mergeable
+    /// entries (see `drainMergeableRun`) becomes one numbered bubble and one
+    /// combined turn instead of one turn per message — the wait for the
+    /// Nth queued message used to be the sum of every turn ahead of it.
+    /// `wasDisplayed` (see `drainMergeableRun`) is only meaningful for a
+    /// lone popped entry (an interaction/report completion site that
+    /// already showed this text's bubble itself); a merged run is never
+    /// already displayed, by construction.
     private func drainQueuedMessageIfReady() {
         guard !isStreaming, activeInteraction == nil,
               !queuedMessages.isEmpty else { return }
-        let next = queuedMessages.removeFirst()
-        let wasDisplayed = queuedMessageWasDisplayed.isEmpty
-            ? true : queuedMessageWasDisplayed.removeFirst()
-        if !wasDisplayed {
-            transcript.append(AITurn(role: .user, text: next))
+        let run = drainMergeableRun()
+        let text: String
+        if run.texts.count > 1 {
+            text = run.texts.enumerated()
+                .map { "\($0.offset + 1)) \($0.element)" }
+                .joined(separator: "\n")
+            transcript.append(AITurn(role: .user, text: text))
+        } else {
+            text = run.texts[0]
+            if !run.firstWasDisplayed {
+                transcript.append(AITurn(role: .user, text: text))
+            }
         }
         let (assistant, assistantTurnID) = beginTurn()
-        Task { [weak self] in
-            await self?.runTurn(next, assistant: assistant, assistantTurnID: assistantTurnID)
+        if run.runsLocally, let provider = lastLocalProvider {
+            Task { [weak self] in
+                await self?.runLocalTurn(text, provider: provider, assistant: assistant)
+            }
+        } else {
+            Task { [weak self] in
+                await self?.runTurn(text, assistant: assistant, assistantTurnID: assistantTurnID)
+            }
         }
     }
 
@@ -1015,8 +1203,10 @@ public final class AISession {
         // long-lived thread's full history just to learn it's long (docs/feature/08
         // perf follow-up: the DB read below used to be `aiMessagesAsync(threadID:)`
         // unbounded, re-fetching the entire thread on every single turn).
+        // AI-35: active path only, throughout — an edited-away message must
+        // not leak into the model's own context.
         let probeLimit = AIConversationPolicy.summaryThreshold + 1
-        let probe = (try? await store.aiRecentMessagesAsync(threadID: id, limit: probeLimit)) ?? []
+        let probe = (try? await store.activeAIRecentMessagesAsync(threadID: id, limit: probeLimit)) ?? []
         guard probe.count > AIConversationPolicy.summaryThreshold else {
             return (
                 AITurnContext(
@@ -1026,7 +1216,7 @@ public final class AISession {
                 nil
             )
         }
-        let recentRecords = (try? await store.aiRecentMessagesAsync(
+        let recentRecords = (try? await store.activeAIRecentMessagesAsync(
             threadID: id, limit: AIConversationPolicy.recentWindow
         )) ?? []
         let recent = recentRecords.map { AIContextMessage(role: $0.role, content: $0.content) }
@@ -1040,9 +1230,9 @@ public final class AISession {
         // thread (every fold after the first sets a cursor).
         let sinceCursor: [AIMessageRecord]
         if let cursor {
-            sinceCursor = (try? await store.aiMessagesAsync(threadID: id, sinceSeq: cursor)) ?? []
+            sinceCursor = (try? await store.activeAIMessagesAsync(threadID: id, sinceSeq: cursor)) ?? []
         } else {
-            sinceCursor = ((try? await store.aiMessagesAsync(threadID: id)) ?? [])
+            sinceCursor = ((try? await store.activeAIMessagesAsync(threadID: id)) ?? [])
                 .filter { $0.toolCalls != "local:interaction" }
         }
         let delta = sinceCursor.filter { !recentIDs.contains($0.id) }
@@ -1155,15 +1345,25 @@ public final class AISession {
         assistantArtifactRefs: [ArtifactRef] = []
     ) async -> [AIMessageRecord] {
         guard let id = UUID(uuidString: threadID) else { return [] }
+        guard var thread = try? await store.aiThreadAsync(id: id) else { return [] }
         var seq = (try? await store.aiMessagesAsync(threadID: id).count) ?? 0
         let now = Date()
         var persisted: [AIMessageRecord] = []
+        // AI-35: every write chains onto the thread's current active tip and
+        // advances it, so the message tree never has a gap — this applies
+        // uniformly to normal sends, interaction resolution, and report
+        // turns (every `persistTurn` call site), even though only normal
+        // sends are user-editable today.
+        var cursor = thread.activeLeafMessageID
         if let userText, !userText.isEmpty {
             let user = AIMessageRecord(
                 threadID: id, seq: seq, role: "user",
-                content: userText, toolCalls: userMetadata, createdAt: now
+                content: userText, toolCalls: userMetadata, createdAt: now, parentID: cursor
             )
-            if (try? await store.appendAIMessageAsync(user)) != nil { persisted.append(user) }
+            if (try? await store.appendAIMessageAsync(user)) != nil {
+                persisted.append(user)
+                cursor = user.id
+            }
             seq += 1
         }
         let trimmedAssistant = assistantText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1171,18 +1371,41 @@ public final class AISession {
             let assistant = AIMessageRecord(
                 threadID: id, seq: seq, role: "assistant",
                 content: assistantText, toolCalls: assistantMetadata, createdAt: now,
-                artifactsJSON: Self.encodeArtifactRefs(assistantArtifactRefs)
+                artifactsJSON: Self.encodeArtifactRefs(assistantArtifactRefs), parentID: cursor
             )
-            if (try? await store.appendAIMessageAsync(assistant)) != nil { persisted.append(assistant) }
-        }
-        if var thread = try? await store.aiThreadAsync(id: id) {
-            if thread.title == nil {
-                thread.title = userText.map { String($0.prefix(48)) }
+            if (try? await store.appendAIMessageAsync(assistant)) != nil {
+                persisted.append(assistant)
+                cursor = assistant.id
             }
-            thread.updatedAt = now
-            try? await store.saveAIThreadAsync(thread)
         }
+        if thread.title == nil {
+            thread.title = userText.map { String($0.prefix(48)) }
+        }
+        thread.updatedAt = now
+        thread.activeLeafMessageID = cursor
+        try? await store.saveAIThreadAsync(thread)
         return persisted
+    }
+
+    /// Writes `persistTurn`'s returned records' ids back onto the transcript
+    /// entries they came from (AI-35) — every call site appends the user
+    /// turn immediately before `assistant`'s empty placeholder (`admitSend`/
+    /// `beginTurn` and this file's other turn-starting call sites all follow
+    /// that same shape), so matching by role against those two fixed
+    /// positions is enough; `persistTurn`'s return value used to be handed
+    /// only to the embedding indexer and otherwise discarded, leaving every
+    /// `AITurn` with no stable link back to its DB row.
+    private func applyPersistedMessageIDs(_ persisted: [AIMessageRecord], assistant: Int) {
+        for record in persisted {
+            switch record.role {
+            case "user" where transcript.indices.contains(assistant - 1):
+                transcript[assistant - 1].messageID = record.id
+            case "assistant" where transcript.indices.contains(assistant):
+                transcript[assistant].messageID = record.id
+            default:
+                break
+            }
+        }
     }
 
     /// Tracks round/segment boundaries for one stream of assistant text
@@ -1988,23 +2211,68 @@ public final class AISession {
 
     /// Run one turn entirely on-device via LocalAgentLoop (AI-20). Conversation
     /// ownership remains local and clarification uses the same pending UI.
-    public func sendLocal(_ text: String, provider: any LocalCompletionProvider) async {
-        guard !isStreaming, activeInteraction == nil else { return }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+    ///
+    /// Queues under the same conditions `admitSend` already does for the
+    /// backend path (AI-08), instead of silently no-oping while streaming.
+    /// Outcome of admitting a newly submitted on-device prompt
+    /// (`admitSendLocal`) — mirrors `SendAdmission` for the local path.
+    public enum SendLocalAdmission: Sendable {
+        case ignored
+        case queued
+        case run(text: String, assistantIndex: Int, provider: any LocalCompletionProvider)
+    }
 
-        lastError = nil
-        requiresClientUpdate = false
-        capabilityErrorLocalizationKey = nil
-        let priorTranscript = localPromptTranscript()
+    /// Synchronous half of `sendLocal`, mirroring `admitSend`'s split: decides
+    /// how `text` should be handled and, for the immediate-run case, appends
+    /// the user's bubble *and* the empty assistant bubble (via `beginTurn`)
+    /// to `transcript` right away. Without this split, `sendLocal` was a
+    /// single `async func` whose `transcript.append` only ran once its
+    /// wrapping `Task` got a turn on the MainActor — unlike the backend path,
+    /// the user's own bubble and the "preparing" indicator could lag behind
+    /// Send by however long the MainActor was busy. `AIPanelController.
+    /// prepareSend` must call this directly on the Enter/Send call stack, same
+    /// as `admitSend`.
+    public func admitSendLocal(_ text: String, provider: any LocalCompletionProvider) -> SendLocalAdmission {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .ignored }
+        lastLocalProvider = provider
+        guard activeInteraction == nil, pendingReportDraft == nil, !isStreaming else {
+            queuedMessages.append(trimmed)
+            queuedMessageWasDisplayed.append(false)
+            queuedMessageRunsLocally.append(true)
+            return .queued
+        }
         transcript.append(AITurn(role: .user, text: trimmed))
-        transcript.append(AITurn(role: .assistant, text: ""))
-        let assistant = transcript.count - 1
+        let (assistant, _) = beginTurn()
+        return .run(text: trimmed, assistantIndex: assistant, provider: provider)
+    }
+
+    /// Runs the async continuation for an admission already decided by
+    /// `admitSendLocal` — the other half of the split described there.
+    public func runLocal(_ admission: SendLocalAdmission) async {
+        switch admission {
+        case .ignored, .queued:
+            return
+        case let .run(text, assistantIndex, provider):
+            await runLocalTurn(text, provider: provider, assistant: assistantIndex)
+        }
+    }
+
+    public func sendLocal(_ text: String, provider: any LocalCompletionProvider) async {
+        await runLocal(admitSendLocal(text, provider: provider))
+    }
+
+    /// The async continuation for a local turn whose bubbles are already on
+    /// the transcript (via `beginTurn()`) — mirrors `runTurn`'s role for the
+    /// backend path. Called from `sendLocal` directly for an immediate
+    /// send, and from `drainQueuedMessageIfReady` for a queued one.
+    private func runLocalTurn(_ trimmed: String, provider: any LocalCompletionProvider, assistant: Int) async {
+        let priorTranscript = localPromptTranscript()
         let transcriptCount = transcript.count - 1
-        isStreaming = true
         defer {
             isStreaming = false
             runningTool = nil
+            drainQueuedMessageIfReady()
         }
 
         let tools = executor.toolSpecs
@@ -2017,9 +2285,12 @@ public final class AISession {
                 userText: trimmed, tools: tools,
                 priorTranscript: priorTranscript, resumeAction: nil
             ) { piece in
-                var updated = self.transcript
-                updated[assistant].text += piece
-                self.transcript = updated
+                // Mutate through `transcript`'s own storage, not a `var
+                // updated = self.transcript` copy first — a second live
+                // reference to the same buffer defeats the uniqueness
+                // check, forcing a full COW copy of every turn on every
+                // single token (see the backend `.delta` case's own note).
+                self.transcript[assistant].text += piece
             }
             switch outcome {
             case let .completed(answer):
@@ -2031,6 +2302,7 @@ public final class AISession {
                     threadID: thread, userText: trimmed,
                     assistantText: transcript[assistant].text
                 )
+                applyPersistedMessageIDs(persisted, assistant: assistant)
                 if !persisted.isEmpty {
                     let indexer = embeddingIndexer
                     Task { await indexer.index(persisted) }
@@ -2042,11 +2314,12 @@ public final class AISession {
                 try capabilityHost?.suspendTurn()
                 transcript[assistant].text = clarification.question
                 activeInteraction = pending
-                _ = await persistTurn(
+                let persisted = await persistTurn(
                     threadID: thread, userText: trimmed,
                     assistantText: clarification.question,
                     assistantMetadata: "local:interaction"
                 )
+                applyPersistedMessageIDs(persisted, assistant: assistant)
             }
         } catch {
             capabilityHost?.abandonTurn()
@@ -2080,6 +2353,7 @@ public final class AISession {
         reportSubmissionState = .idle
         queuedMessages = []
         queuedMessageWasDisplayed = []
+        queuedMessageRunsLocally = []
         lastError = nil
         requiresClientUpdate = false
         capabilityErrorLocalizationKey = nil
@@ -2155,27 +2429,34 @@ public final class AISession {
             guard (try store.aiThread(id: uuid)) != nil else {
                 throw AITransportError.badResponse(statusCode: 404, message: "Thread not found")
             }
-            let records = try store.aiMessages(threadID: uuid)
-            let turns = records.compactMap { record -> AITurn? in
-                let text = record.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else { return nil }
-                switch record.role {
-                case "user": return AITurn(role: .user, text: text)
-                case "assistant":
-                    // AI-31: without this, an artifact's bubble link only
-                    // ever lived in the in-memory session — reopening this
-                    // thread from history/after a restart would silently
-                    // drop it even though the artifact itself is still there.
-                    return AITurn(
-                        role: .assistant, text: text,
-                        artifactRefs: Self.decodeArtifactRefs(record.artifactsJSON)
-                    )
-                default: return nil
-                }
-            }
-            loadThread(id: id, turns: turns)
+            loadThread(id: id, turns: try activeTurns(threadID: uuid))
         } catch {
             lastError = Self.describe(error)
+        }
+    }
+
+    /// Reconstructs `AITurn`s for a thread's ACTIVE path (AI-35) — the
+    /// branch-aware replacement for a flat `store.aiMessages` read, shared by
+    /// `openThread` and `selectSibling` so both rebuild the transcript the
+    /// same way.
+    private func activeTurns(threadID uuid: UUID) throws -> [AITurn] {
+        try store.activeAIMessages(threadID: uuid).compactMap { record -> AITurn? in
+            let text = record.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+            switch record.role {
+            case "user": return AITurn(role: .user, text: text, messageID: record.id)
+            case "assistant":
+                // AI-31: without this, an artifact's bubble link only ever
+                // lived in the in-memory session — reopening this thread
+                // from history/after a restart would silently drop it even
+                // though the artifact itself is still there.
+                return AITurn(
+                    role: .assistant, text: text,
+                    artifactRefs: Self.decodeArtifactRefs(record.artifactsJSON),
+                    messageID: record.id
+                )
+            default: return nil
+            }
         }
     }
 
@@ -2528,8 +2809,10 @@ public final class AISession {
     }
 
     private func recentReportContext(attach: Bool) -> [AIContextMessage] {
+        // AI-35: active path only — a report must never attach an
+        // edited-away version of the conversation.
         guard attach, let threadID, let id = UUID(uuidString: threadID),
-              let all = try? store.aiMessages(threadID: id) else { return [] }
+              let all = try? store.activeAIMessages(threadID: id) else { return [] }
         let reportable = all.filter { $0.toolCalls != "local:interaction" }
         let cutoff = max(0, reportable.count - AIConversationPolicy.recentWindow)
         return Array(reportable[cutoff...].map {
@@ -2924,13 +3207,14 @@ public final class AISession {
                 resume: resume,
                 assistantIndex: assistant, assistantTurnID: assistantTurnID
             )
-            _ = await persistTurn(
+            let persistedRecords = await persistTurn(
                 threadID: expectedThreadID, userText: userText,
                 assistantText: transcript[assistant].text,
                 userMetadata: "local:interaction",
                 assistantMetadata: "local:interaction",
                 assistantArtifactRefs: transcript[assistant].artifactRefs
             )
+            applyPersistedMessageIDs(persistedRecords, assistant: assistant)
             if let pendingSummaryFold {
                 let sessionStore = store
                 let sessionTransport = transport
@@ -2998,12 +3282,13 @@ public final class AISession {
             switch outcome {
             case .completed:
                 try capabilityHost?.finishTurn()
-                _ = await persistTurn(
+                let persisted = await persistTurn(
                     threadID: expectedThreadID, userText: displayText,
                     assistantText: transcript[assistant].text,
                     userMetadata: "local:interaction",
                     assistantMetadata: "local:interaction"
                 )
+                applyPersistedMessageIDs(persisted, assistant: assistant)
             case let .clarification(clarification):
                 let next = try prepareLocalInteraction(
                     clarification,
@@ -3013,12 +3298,13 @@ public final class AISession {
                 try capabilityHost?.suspendTurn()
                 transcript[assistant].text = clarification.question
                 activeInteraction = next
-                _ = await persistTurn(
+                let persisted = await persistTurn(
                     threadID: expectedThreadID, userText: displayText,
                     assistantText: clarification.question,
                     userMetadata: "local:interaction",
                     assistantMetadata: "local:interaction"
                 )
+                applyPersistedMessageIDs(persisted, assistant: assistant)
             }
         } catch {
             capabilityHost?.abandonTurn()

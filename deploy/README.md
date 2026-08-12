@@ -54,7 +54,7 @@ của test/`swift run`. Code updater (`App/Sources/AppUpdater.swift`) khóa theo
 ```sh
 python3 -m pip install -r deploy/requirements.txt   # boto3 (một lần)
 
-make release VERSION=0.2.0     # build → sign → notarize → staple → zip → ký Sparkle
+make release 0.2.0             # build → sign → notarize → staple → zip → ký Sparkle
 python3 deploy/upload-release.py   # upload R2 + dựng lại appcast + purge CDN
 ```
 
@@ -62,7 +62,12 @@ python3 deploy/upload-release.py   # upload R2 + dựng lại appcast + purge CD
   Applications, đã notarize + staple) + `deploy/last-release.json`. App bên trong
   được staple riêng để mở offline sau khi kéo ra. Sparkle 2 cập nhật thẳng từ .dmg.
 - `upload-release.py` gộp vào `deploy/releases.json` (lịch sử), dựng `appcast.xml`,
-  upload cả zip lẫn appcast lên R2, rồi purge cache Cloudflare.
+  upload cả zip lẫn appcast lên R2, rồi purge cache Cloudflare. Upload thêm một
+  bản alias cố định `BerryDB-latest.<đuôi file>` (song song, không thay thế bản
+  versioned) — để link tải "luôn là bản mới nhất" trên website mà không phải sửa
+  URL mỗi lần phát hành. Appcast/Sparkle vẫn chỉ đọc các entry versioned; alias
+  không tham gia vào appcast vì chữ ký EdDSA của Sparkle gắn với đúng file
+  versioned, không phải với key cố định này.
 
 ## Checklist bảo mật trước khi phát hành thật
 

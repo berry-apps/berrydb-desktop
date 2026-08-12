@@ -37,9 +37,15 @@ app:
 	scripts/make_app.sh release
 
 # Signed + notarized release zip (needs .env — see deploy/README.md).
-# Usage: make release VERSION=0.2.0
+# Usage: make release 0.2.0 (VERSION=0.2.0 still works too).
 release:
-	bash deploy/release.sh $(VERSION)
+	bash deploy/release.sh $(or $(filter-out $@,$(MAKECMDGOALS)),$(VERSION))
+
+# Swallows the version positional arg above so Make doesn't try to build it
+# as a target too (e.g. "make release 0.2.0" would otherwise also fail with
+# "No rule to make target '0.2.0'").
+%:
+	@:
 
 # Publish the last release to R2 + rebuild the Sparkle appcast + purge CDN.
 upload:

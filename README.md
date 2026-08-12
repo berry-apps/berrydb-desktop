@@ -60,7 +60,7 @@ make run   # rồi ⌘O mở /tmp/demo.sqlite
 ## Release
 
 ```sh
-make release VERSION=0.2.0   # build (release) → ký Developer ID → notarize → staple
+make release 0.2.0           # build (release) → ký Developer ID → notarize → staple
                               # → đóng gói .dmg → ký Sparkle
 make upload                  # đẩy R2 + dựng lại appcast.xml + purge CDN
 ```

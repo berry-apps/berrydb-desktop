@@ -405,20 +405,7 @@ struct AIPanelView: View {
                             .padding(.top, 40)
                     }
                     ForEach(currentTranscript) { turn in
-                        TurnView(
-                            turn: turn,
-                            // Only the last turn can still be streaming; drives the
-                            // "thinking" indicator before the first token arrives.
-                            isStreaming: Self.isTurnStreaming(
-                                sessionIsStreaming: controller.aiSession?.isStreaming == true,
-                                isLastTurn: turn.id == currentTranscript.last?.id
-                            ),
-                            onOpenArtifact: { artifactID in controller.openArtifact?(artifactID) },
-                            onOpenObject: { objectID in controller.openObject?(objectID) },
-                            onOpenTextInTab: { text in controller.openTextInTab?(text) },
-                            onLayoutChange: { controller.noteWorkingBlockLayoutChange() },
-                            mentionCandidates: { query in controller.mentionCandidates?(query) ?? [] }
-                        )
+                        turnView(for: turn, in: currentTranscript)
                         // Nest each turn's sub-agents right under it (06 §6).
                         ForEach(controller.aiSession?.subThreads(for: turn.id) ?? []) { sub in
                             subAgentCard(sub)
@@ -1012,6 +999,7 @@ struct AIPanelView: View {
                     onSelect: acceptMention
                 )
             }
+            editingMessageStrip
             queuedMessagesStrip
             HStack(alignment: .bottom, spacing: 8) {
                 TextField(L("Ask the assistant…"), text: $controller.draft, axis: .vertical)
@@ -1110,6 +1098,29 @@ struct AIPanelView: View {
         .onKeyPress(.return) { acceptHighlightedMention() }
     }
 
+    /// Shown above the composer while editing a past message (AI-35) instead
+    /// of drafting a new one, so it's clear Send will replace that message
+    /// rather than append a new turn.
+    @ViewBuilder
+    private var editingMessageStrip: some View {
+        if controller.editingMessageID != nil {
+            HStack(spacing: 4) {
+                Label(L("Editing message"), systemImage: "pencil")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(L("Cancel")) {
+                    controller.editingMessageID = nil
+                    controller.draft = ""
+                }
+                .buttonStyle(.borderless)
+                .focusEffectDisabled()
+                .font(.caption)
+            }
+            .padding(.horizontal, 4)
+        }
+    }
+
     /// Messages typed while a turn/interaction was in flight — pinned above
     /// the input as a compact list, not as transcript bubbles, so the user
     /// can see something is waiting without it reading like it already sent.
@@ -1117,15 +1128,36 @@ struct AIPanelView: View {
     /// or multi-line prompt doesn't blow up this strip's height.
     @ViewBuilder
     private var queuedMessagesStrip: some View {
-        let previews = controller.queuedMessages.compactMap(Self.queuedMessagePreview)
-        if !previews.isEmpty {
+        let messages = controller.queuedMessages
+        if !messages.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(previews.enumerated()), id: \.offset) { _, preview in
-                    Label(preview, systemImage: "clock")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                // Enumerates `messages` itself (not a `compactMap`'d preview
+                // list) so each row's index always matches what
+                // `removeQueuedMessage(at:)` expects — a preview-only list
+                // would drop indices for any (should-never-happen) blank
+                // queued message and silently misalign the rest.
+                ForEach(Array(messages.enumerated()), id: \.offset) { index, message in
+                    if let preview = Self.queuedMessagePreview(message) {
+                        HStack(spacing: 4) {
+                            Label(preview, systemImage: "clock")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer()
+                            Button {
+                                controller.removeQueuedMessage(at: index)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .focusable(false)
+                            .focusEffectDisabled()
+                            .help(L("Remove from queue"))
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1280,6 +1312,55 @@ struct AIPanelView: View {
         .padding(.horizontal, 10).padding(.vertical, 6)
     }
 
+    // AI-35: plain methods (an explicitly-`TurnView`-typed builder, plus its
+    // helpers) rather than constructing TurnView(...) with all its trailing
+    // closures directly inside the transcript ForEach — inline there, it
+    // pushed the call past what the type checker would resolve in reasonable
+    // time (SwiftUI's "too many arguments/closures in one expression" trap);
+    // a plain function with a concrete return type sidesteps it.
+    private func turnView(for turn: AITurn, in currentTranscript: [AITurn]) -> TurnView {
+        TurnView(
+            turn: turn,
+            // Only the last turn can still be streaming; drives the
+            // "thinking" indicator before the first token arrives.
+            isStreaming: Self.isTurnStreaming(
+                sessionIsStreaming: controller.aiSession?.isStreaming == true,
+                isLastTurn: turn.id == currentTranscript.last?.id
+            ),
+            onOpenArtifact: { artifactID in controller.openArtifact?(artifactID) },
+            onOpenObject: { objectID in controller.openObject?(objectID) },
+            onOpenTextInTab: { text in controller.openTextInTab?(text) },
+            onOpenMermaidInTab: { source in controller.openMermaidInTab?(source) },
+            onLayoutChange: { controller.noteWorkingBlockLayoutChange() },
+            // AI-35: edit reuses the exact composer pre-fill pattern
+            // `/command`/`@mention` autocomplete already use elsewhere in
+            // this file.
+            canEditMessages: controller.aiSession?.isStreaming != true,
+            siblingIDs: siblingIDs(for: turn),
+            onEditMessage: beginEditingMessage,
+            onSelectSibling: selectSibling,
+            mentionCandidates: { query in controller.mentionCandidates?(query) ?? [] }
+        )
+    }
+
+    private func siblingIDs(for turn: AITurn) -> [UUID] {
+        guard let messageID = turn.messageID else { return [] }
+        return controller.aiSession?.siblings(of: messageID) ?? []
+    }
+
+    /// Loads a past message back into the composer for editing — the same
+    /// pre-fill pattern `/command`/`@mention` autocomplete already use.
+    private func beginEditingMessage(_ messageID: UUID) {
+        guard let turn = controller.aiSession?.transcript.first(where: { $0.messageID == messageID }) else { return }
+        controller.editingMessageID = messageID
+        controller.draft = turn.text
+        promptFieldFocused = true
+    }
+
+    private func selectSibling(_ messageID: UUID) {
+        Task { await controller.aiSession?.selectSibling(messageID: messageID) }
+    }
+
     private func send() {
         if isCommandPaletteShowing {
             _ = acceptHighlightedCommand()
@@ -1385,8 +1466,24 @@ struct TurnView: View {
     var onOpenObject: (String) -> Void = { _ in }
     /// docs/feature/09: Cmd-click on a working-block action's payload.
     var onOpenTextInTab: (String) -> Void = { _ in }
+    /// AI-34: opens a mermaid diagram in the answer bubble (or a step's
+    /// narration) as its own zoomable tab.
+    var onOpenMermaidInTab: (String) -> Void = { _ in }
     /// Forwarded from the working block when it expands/collapses.
     var onLayoutChange: () -> Void = {}
+    /// AI-35: false while anything in the session is streaming — editing
+    /// truncates the transcript, which has no defined meaning mid-stream
+    /// (there's no cancellation path for the stream that's still writing to
+    /// the very turns being truncated).
+    var canEditMessages = true
+    /// Every version of this (user) turn's message, oldest first — nav shows
+    /// only when this has more than one entry.
+    var siblingIDs: [UUID] = []
+    /// Opens the composer pre-filled with this message's text, editing it in
+    /// place instead of drafting a new send.
+    var onEditMessage: (UUID) -> Void = { _ in }
+    /// Switches the active version at this turn's fork point.
+    var onSelectSibling: (UUID) -> Void = { _ in }
 
     /// The answer renders as soon as there is any of it — it types out again.
     ///
@@ -1419,14 +1516,36 @@ struct TurnView: View {
         switch turn.role {
         case .user:
             VStack(alignment: .trailing, spacing: 4) {
-                Text(L("You"))
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 4)
+                HStack(spacing: 4) {
+                    Spacer()
+                    if let messageID = turn.messageID, siblingIDs.count > 1,
+                       let index = siblingIDs.firstIndex(of: messageID) {
+                        siblingNav(currentIndex: index, ids: siblingIDs)
+                    }
+                    if canEditMessages, let messageID = turn.messageID {
+                        Button { onEditMessage(messageID) } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(.borderless)
+                        .focusEffectDisabled()
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .help(L("Edit Message"))
+                    }
+                    CopyButton(text: turn.text, help: L("Copy message"))
+                    Text(L("You"))
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 4)
 
-                Text(styledMessageText(turn.text))
-                    .font(.callout)
-                    .textSelection(.enabled)
+                // AI-35: markdown, same as the assistant bubble — pre-process
+                // `@{mention}` spans into markdown link syntax first so
+                // `MarkdownMessageView`'s AttributedString(markdown:) parse
+                // turns them into real links (AI-32 stays working); the
+                // openURL handler below is unchanged, just re-scoped to wrap
+                // this instead of a plain Text.
+                MarkdownMessageView(text: styledMessageMarkdown(turn.text), onOpenMermaidInTab: onOpenMermaidInTab)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .foregroundStyle(.white) // Always white text on accent background for high contrast
@@ -1522,6 +1641,7 @@ struct TurnView: View {
                             workStartedAt: turn.workStartedAt,
                             onOpenArtifact: onOpenArtifact,
                             onOpenTextInTab: onOpenTextInTab,
+                            onOpenMermaidInTab: onOpenMermaidInTab,
                             onLayoutChange: onLayoutChange
                         )
                         .id(turn.id)
@@ -1532,7 +1652,7 @@ struct TurnView: View {
                         // never an empty filled bubble.
                         if isStreaming { TypingIndicator() }
                     } else {
-                        MarkdownMessageView(text: turn.text, isStreaming: isStreaming)
+                        MarkdownMessageView(text: turn.text, isStreaming: isStreaming, onOpenMermaidInTab: onOpenMermaidInTab)
                             .padding(.horizontal, 4)
                             .padding(.vertical, 4)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1659,6 +1779,64 @@ struct TurnView: View {
         }
         return result
     }
+
+    /// Same `@{Name}` resolution as `styledMessageText`, but emits markdown
+    /// link syntax instead of building an `AttributedString` directly — for
+    /// `MarkdownMessageView`, whose `inline(_:)` already turns `[text](url)`
+    /// into a real `.link` run via `AttributedString(markdown:)`. Feeding it
+    /// raw `@{Name}` (rather than pre-resolving it here) would either leak
+    /// the braces as literal text or need its own mention-aware parser — this
+    /// keeps mention resolution in exactly one place (AI-32).
+    func styledMessageMarkdown(_ text: String) -> String {
+        let nsText = text as NSString
+        let matches = Self.mentionRegex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+        guard !matches.isEmpty else { return text }
+
+        var result = ""
+        var cursor = 0
+        for match in matches {
+            let fullRange = match.range
+            let nameRange = match.range(at: 1)
+            if fullRange.location > cursor {
+                result += nsText.substring(with: NSRange(location: cursor, length: fullRange.location - cursor))
+            }
+            let name = nameRange.location == NSNotFound ? "" : nsText.substring(with: nameRange)
+            if let item = resolveMention(name), let url = mentionURL(for: item) {
+                result += "[@\(name)](\(url.absoluteString))"
+            } else {
+                result += nsText.substring(with: fullRange)
+            }
+            cursor = fullRange.location + fullRange.length
+        }
+        if cursor < nsText.length {
+            result += nsText.substring(with: NSRange(location: cursor, length: nsText.length - cursor))
+        }
+        return result
+    }
+
+    /// `‹ i/N ›` version nav for a user turn with more than one edited
+    /// variant at its fork point (AI-35).
+    @ViewBuilder
+    private func siblingNav(currentIndex: Int, ids: [UUID]) -> some View {
+        HStack(spacing: 2) {
+            Button { onSelectSibling(ids[max(0, currentIndex - 1)]) } label: {
+                Image(systemName: "chevron.left")
+            }
+            .disabled(currentIndex == 0)
+
+            Text("\(currentIndex + 1)/\(ids.count)")
+                .monospacedDigit()
+
+            Button { onSelectSibling(ids[min(ids.count - 1, currentIndex + 1)]) } label: {
+                Image(systemName: "chevron.right")
+            }
+            .disabled(currentIndex == ids.count - 1)
+        }
+        .buttonStyle(.borderless)
+        .focusEffectDisabled()
+        .font(.system(size: 9, weight: .medium))
+        .foregroundStyle(.secondary)
+    }
 }
 
 /// One turn's whole "working" activity (docs/feature/09) — one sub-block per
@@ -1697,6 +1875,7 @@ struct TurnWorkSummary: View {
     let workStartedAt: Date?
     var onOpenArtifact: (UUID) -> Void = { _ in }
     var onOpenTextInTab: (String) -> Void = { _ in }
+    var onOpenMermaidInTab: (String) -> Void = { _ in }
     /// Called when this block expands or collapses, so the transcript can
     /// re-anchor its scroll — the height changed but no text did.
     var onLayoutChange: () -> Void = {}
@@ -1707,6 +1886,7 @@ struct TurnWorkSummary: View {
         steps: [AIWorkStep], duration: TimeInterval?, workStartedAt: Date?,
         onOpenArtifact: @escaping (UUID) -> Void = { _ in },
         onOpenTextInTab: @escaping (String) -> Void = { _ in },
+        onOpenMermaidInTab: @escaping (String) -> Void = { _ in },
         onLayoutChange: @escaping () -> Void = {}
     ) {
         self.steps = steps
@@ -1714,6 +1894,7 @@ struct TurnWorkSummary: View {
         self.workStartedAt = workStartedAt
         self.onOpenArtifact = onOpenArtifact
         self.onOpenTextInTab = onOpenTextInTab
+        self.onOpenMermaidInTab = onOpenMermaidInTab
         self.onLayoutChange = onLayoutChange
         _isExpanded = State(initialValue: duration == nil)
     }
@@ -1763,7 +1944,8 @@ struct TurnWorkSummary: View {
                                 // settle once, never flip back.
                                 isStreaming: !isSettled,
                                 onOpenArtifact: onOpenArtifact,
-                                onOpenTextInTab: onOpenTextInTab
+                                onOpenTextInTab: onOpenTextInTab,
+                                onOpenMermaidInTab: onOpenMermaidInTab
                             )
                         }
                     }
@@ -1867,6 +2049,7 @@ struct WorkStepRow: View {
     var isStreaming = false
     var onOpenArtifact: (UUID) -> Void = { _ in }
     var onOpenTextInTab: (String) -> Void = { _ in }
+    var onOpenMermaidInTab: (String) -> Void = { _ in }
 
     /// The button's action, named so a test can exercise the wiring without
     /// driving SwiftUI. `body` calls exactly this.
@@ -1882,11 +2065,11 @@ struct WorkStepRow: View {
             // narration since prose always precedes a round's own note
             // within the stream, not after it.
             if !step.provisionalText.isEmpty {
-                MarkdownMessageView(text: step.provisionalText, isStreaming: isStreaming)
+                MarkdownMessageView(text: step.provisionalText, isStreaming: isStreaming, onOpenMermaidInTab: onOpenMermaidInTab)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if !step.narration.isEmpty {
-                MarkdownMessageView(text: step.narration, isStreaming: isStreaming)
+                MarkdownMessageView(text: step.narration, isStreaming: isStreaming, onOpenMermaidInTab: onOpenMermaidInTab)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             // One row per action, expandable into its inputs/outputs
@@ -2120,35 +2303,44 @@ private enum AIToolDisplay {
 /// and those re-propose the parent's size to the shape underneath, so each dot
 /// grew to fill the panel width and spilled out of its container. Sizing has to
 /// be the OUTERMOST modifier here.
+///
+/// `phase` is a plain 0...1 value from wall-clock time (`PulsingDots`
+/// below), not an `Animation.repeatForever()` — see that type's doc comment.
 struct PulsingDot: View {
-    let isOn: Bool
-    let delay: Double
+    let phase: Double
     let diameter: CGFloat = 6
+
+    private var opacity: Double {
+        0.25 + 0.75 * (0.5 + 0.5 * sin(phase * 2 * .pi))
+    }
 
     var body: some View {
         Circle()
             .fill(Color.secondary)
-            .opacity(isOn ? 1 : 0.25)
-            .animation(
-                .easeInOut(duration: 0.6).repeatForever().delay(delay),
-                value: isOn
-            )
+            .opacity(opacity)
             .frame(width: diameter, height: diameter)
             .fixedSize()
     }
 }
 
+/// `Animation.repeatForever()` can misbehave when its host view is
+/// inserted/removed while an ancestor's own `.animation(value:)` transaction
+/// is active — which happens whenever this row appears or disappears, since
+/// `TurnView` wraps that transition in one. Driving the pulse from
+/// `TimelineView(.animation)` instead (same technique `TurnWorkSummary`'s
+/// elapsed-time label uses) sidesteps it: no `Animation` object here for an
+/// ambient transaction to catch.
 private struct PulsingDots: View {
-    @State private var animating = false
-
     var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<3, id: \.self) { index in
-                PulsingDot(isOn: animating, delay: Double(index) * 0.2)
+        TimelineView(.animation) { context in
+            let phase = context.date.timeIntervalSinceReferenceDate / 0.6
+            HStack(spacing: 5) {
+                ForEach(0..<3, id: \.self) { index in
+                    PulsingDot(phase: phase - Double(index) * (0.2 / 0.6))
+                }
             }
         }
         .fixedSize()
-        .onAppear { animating = true }
     }
 }
 

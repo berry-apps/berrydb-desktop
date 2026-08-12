@@ -9,6 +9,8 @@ struct MarkdownMessageView: View {
     // Whether THIS message is still the one actively streaming — see the
     // `onChange(of: isStreaming)` below for why this matters.
     var isStreaming: Bool = false
+    /// AI-34: opens a mermaid block's diagram as its own zoomable tab.
+    var onOpenMermaidInTab: (String) -> Void = { _ in }
     // Cached so `body` re-evaluating for reasons unrelated to THIS message's
     // text (e.g. another turn streaming in — @Observable invalidates the
     // whole transcript array on every token) doesn't re-run the full parse.
@@ -110,7 +112,7 @@ struct MarkdownMessageView: View {
         case let .code(language, code):
             CodeBlockView(language: language, code: code)
         case let .mermaid(source):
-            MermaidBlock(source: source)
+            MermaidBlock(source: source, onOpenInTab: onOpenMermaidInTab)
         case let .bulletList(items):
             listView(items) { _ in Text("•").foregroundStyle(.secondary) }
         case let .orderedList(startIndex, items):

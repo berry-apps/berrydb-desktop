@@ -118,6 +118,8 @@ public struct DetachedTabWindow: View {
                 collections: viewModel.collections.map(\.name),
                 onApplyWrite: { change in await viewModel.applyDataSourceWriteOutcome(change) }
             )
+        case .mermaidDiagram(let state):
+            MermaidTabView(source: state.source)
         }
     }
 }

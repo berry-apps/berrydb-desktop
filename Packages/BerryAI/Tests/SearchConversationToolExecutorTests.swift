@@ -33,6 +33,26 @@ struct SearchConversationToolExecutorTests {
         try! BerryStore(path: ":memory:")
     }
 
+    /// AI-35: `SearchConversationToolExecutor` now reads the ACTIVE path —
+    /// unlike `AISession.send`'s real flow, these tests seed messages
+    /// directly via `appendAIMessage`, so this chains each one's `parentID`
+    /// and advances the thread's `activeLeafMessageID` the same way
+    /// `persistTurn` does, or every message here would look orphaned.
+    @discardableResult
+    private func appendAndActivate(_ store: BerryStore, threadID: UUID, _ messages: [AIMessageRecord]) -> [AIMessageRecord] {
+        var previous: UUID?
+        var chained: [AIMessageRecord] = []
+        for message in messages {
+            var next = message
+            next.parentID = previous
+            try! store.appendAIMessage(next)
+            previous = next.id
+            chained.append(next)
+        }
+        try! store.setActiveLeafMessage(threadID: threadID, messageID: previous)
+        return chained
+    }
+
     @MainActor
     @Test func returnsEmptyMatchesWhenNoThreadIsActive() async {
         let executor = SearchConversationToolExecutor(store: makeStore(), transport: StubTransport(), currentThreadID: { nil })
@@ -53,15 +73,16 @@ struct SearchConversationToolExecutorTests {
         let store = makeStore()
         let threadID = UUID()
         try! store.saveAIThread(AIThreadRecord(id: threadID, dialect: "postgres", createdAt: Date(), updatedAt: Date()))
-        try! store.appendAIMessage(AIMessageRecord(threadID: threadID, seq: 0, role: "user", content: "what's the users table schema?", createdAt: Date()))
-        try! store.appendAIMessage(AIMessageRecord(threadID: threadID, seq: 1, role: "assistant", content: "It has id, email, created_at.", createdAt: Date()))
-        for seq in 2..<10 {
-            try! store.appendAIMessage(AIMessageRecord(
+        appendAndActivate(store, threadID: threadID, [
+            AIMessageRecord(threadID: threadID, seq: 0, role: "user", content: "what's the users table schema?", createdAt: Date()),
+            AIMessageRecord(threadID: threadID, seq: 1, role: "assistant", content: "It has id, email, created_at.", createdAt: Date()),
+        ] + (2..<10).map { seq in
+            AIMessageRecord(
                 threadID: threadID, seq: seq,
                 role: seq.isMultiple(of: 2) ? "user" : "assistant",
                 content: "recent \(seq)", createdAt: Date()
-            ))
-        }
+            )
+        })
 
         // vec0's embedding column is fixed at 1536 dims (BerryStore's
         // ai_message_embedding table, migration v17) — matches OpenAI's
@@ -89,13 +110,13 @@ struct SearchConversationToolExecutorTests {
         try! store.saveAIThread(AIThreadRecord(
             id: threadID, dialect: "postgres", createdAt: Date(), updatedAt: Date()
         ))
-        for seq in 0..<10 {
-            try! store.appendAIMessage(AIMessageRecord(
+        appendAndActivate(store, threadID: threadID, (0..<10).map { seq in
+            AIMessageRecord(
                 threadID: threadID, seq: seq,
                 role: seq.isMultiple(of: 2) ? "user" : "assistant",
                 content: "message \(seq)", createdAt: Date()
-            ))
-        }
+            )
+        })
 
         var close = Array(repeating: Float(0), count: BerryStore.aiMessageEmbeddingDimension)
         close[0] = 1
@@ -138,15 +159,18 @@ struct SearchConversationToolExecutorTests {
         closest[0] = 1
         var far = Array(repeating: Float(0), count: BerryStore.aiMessageEmbeddingDimension)
         far[0] = -1
-        for seq in 0..<10 {
+        appendAndActivate(store, threadID: threadID, (0..<10).map { seq in
             let interaction = seq == 0
-            try! store.appendAIMessage(AIMessageRecord(
+            return AIMessageRecord(
                 threadID: threadID, seq: seq,
                 role: interaction ? "assistant" : "user",
                 content: interaction ? "secret clarification answer" : "ordinary \(seq)",
                 toolCalls: interaction ? "local:interaction" : nil,
                 createdAt: Date()
-            ))
+            )
+        })
+        for seq in 0..<10 {
+            let interaction = seq == 0
             try! store.saveAIMessageEmbedding(
                 threadID: threadID, seq: seq,
                 vector: interaction ? closest : far

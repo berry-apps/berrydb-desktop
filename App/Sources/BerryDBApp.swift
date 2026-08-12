@@ -42,7 +42,7 @@ struct BerryDBApp: App {
 
     var body: some Scene {
         WindowGroup {
-            WorkspaceView()
+            WorkspaceView(checkForUpdates: { appDelegate.updater.checkForUpdates() })
                 .frame(minWidth: 900, minHeight: 560)
         }
         .windowToolbarStyle(.unifiedCompact) // shorter title bar (ui.md §3)

@@ -1,4 +1,5 @@
 import AppKit
+import BerryAI
 import BerryLicense
 import SwiftUI
 
@@ -46,7 +47,7 @@ struct LicenseView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     statusCard
                     lowBalanceBanner
-                    if !license.status.isEntitled || isTrialOrGrace {
+                    if (!license.status.isEntitled && !isAppleIntelligenceActive) || isTrialOrGrace {
                         activateSection
                     }
                     subscribedPlanBanner
@@ -113,6 +114,13 @@ struct LicenseView: View {
         }
     }
 
+    /// True only when Apple Intelligence access is what's active here — a
+    /// real license/trial always takes precedence in the status display.
+    private var isAppleIntelligenceActive: Bool {
+        guard case .none = license.status else { return false }
+        return AppleIntelligenceAccess.isGranted && AppleFoundationProvider.isAvailable()
+    }
+
     /// An admin-granted comp entitlement (Pro/Intelligence are no longer
     /// sold, TM-10, but remain valid as manually-granted plans) — distinct
     /// from "topup", the plan a device's own token is upgraded to in place
@@ -128,9 +136,15 @@ struct LicenseView: View {
             Image(systemName: "key.fill")
             Text(L("BerryDB License")).font(.headline)
             Spacer()
-            Label(license.status.shortLabel, systemImage: license.status.systemImage)
-                .font(.caption)
-                .foregroundStyle(license.status.tint)
+            if isAppleIntelligenceActive {
+                Label(L("Active"), systemImage: "apple.intelligence")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            } else {
+                Label(license.status.shortLabel, systemImage: license.status.systemImage)
+                    .font(.caption)
+                    .foregroundStyle(license.status.tint)
+            }
         }
         .padding(12)
     }
@@ -149,11 +163,15 @@ struct LicenseView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(license.status.tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+        .background(
+            (isAppleIntelligenceActive ? Color.green : license.status.tint).opacity(0.10),
+            in: RoundedRectangle(cornerRadius: 10)
+        )
     }
 
     private var statusTitle: String {
-        switch license.status {
+        if isAppleIntelligenceActive { return L("Active") }
+        return switch license.status {
         case .none: L("Not activated")
         case .trial: L("Free trial")
         case .active(let plan, _): plan == "topup" ? L("AI credit") : L("\(plan.capitalized) plan")
@@ -164,7 +182,8 @@ struct LicenseView: View {
     }
 
     private var statusDetail: String {
-        switch license.status {
+        if isAppleIntelligenceActive { return L("Free with Apple Intelligence — runs entirely on this Mac, no payment needed.") }
+        return switch license.status {
         case .none: L("Start a free trial or enter a license key to unlock everything.")
         case .trial(let days): L("\(days) days left in your trial.")
         // "topup" (TM-11 gap-fix) has a ~10-year expiry so it keeps
@@ -225,6 +244,23 @@ struct LicenseView: View {
                         }
                     }
                     .disabled(working != nil || !trialEmail.trimmingCharacters(in: .whitespaces).contains("@"))
+                }
+                // Apple Intelligence access is additional, not a replacement
+                // for the real trial above — a Mac that has it still needs a
+                // way to reach cloud AI (a different model, or just because
+                // the user wants it), so this offers the free local option
+                // alongside the real trial rather than hiding it.
+                if AppleFoundationProvider.isAvailable() {
+                    HStack {
+                        Button {
+                            AppleIntelligenceAccess.grant(email: trialEmail.trimmingCharacters(in: .whitespaces))
+                        } label: {
+                            Label(L("Use Free On-Device Instead"), systemImage: "apple.intelligence")
+                        }
+                        .disabled(!trialEmail.trimmingCharacters(in: .whitespaces).contains("@"))
+                        Text(L("This Mac supports Apple Intelligence — skip the trial and run AI on-device for free."))
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -419,6 +455,11 @@ struct LicenseView: View {
             Text(L("Enjoying BerryDB? Support the project."))
                 .font(.caption).foregroundStyle(.secondary)
             Spacer()
+            Button(L("Telegram")) {
+                NSWorkspace.shared.open(URL(string: "https://t.me/berryecosystem")!)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
             Button(L("Donate")) {
                 NSWorkspace.shared.open(URL(string: "https://ko-fi.com/dautay")!)
             }
@@ -431,9 +472,10 @@ struct LicenseView: View {
 
     private var footer: some View {
         HStack {
-            if license.canSignOut {
+            if license.canSignOut || AppleIntelligenceAccess.isGranted {
                 Button(role: .destructive) {
                     license.clear()
+                    AppleIntelligenceAccess.revoke()
                 } label: {
                     Label(L("Sign Out"), systemImage: "rectangle.portrait.and.arrow.right")
                 }

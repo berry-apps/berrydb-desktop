@@ -7,6 +7,29 @@ private func makeStore() -> BerryStore {
     try! BerryStore(path: ":memory:")
 }
 
+/// AI-35: this file's tests seed a thread's messages directly via
+/// `appendAIMessage`, bypassing the real send/persistTurn flow that
+/// maintains the message tree — this chains each message's `parentID` and
+/// advances the thread's `activeLeafMessageID` the same way `persistTurn`
+/// does, so `buildContext`/`openThread`/`recentReportContext` (which now
+/// read the ACTIVE path only, AI-35) see them.
+@discardableResult
+private func seedActiveMessages(
+    _ store: BerryStore, threadID: UUID, _ messages: [AIMessageRecord]
+) throws -> [AIMessageRecord] {
+    var previous: UUID?
+    var chained: [AIMessageRecord] = []
+    for message in messages {
+        var next = message
+        next.parentID = previous
+        try store.appendAIMessage(next)
+        previous = next.id
+        chained.append(next)
+    }
+    try store.setActiveLeafMessage(threadID: threadID, messageID: previous)
+    return chained
+}
+
 /// Polls `condition` with cooperative yields instead of an artificial sleep
 /// — same pattern as the pre-existing embedding-indexer poll below, factored
 /// out because Task 7.1's background summary refresh needs it repeatedly.
@@ -715,7 +738,21 @@ private final class MockTransport: AITransport, @unchecked Sendable {
     /// echo it back, same as the real gateway echoing whatever `thread_id`
     /// came in on the request.
     private var activeThreadID = "thr-mock"
-    private(set) var postedResults: [
+    // AI-35: `AITransport` conformance methods are plain (non-actor-isolated)
+    // async funcs — calling one from `@MainActor`-isolated `AISession` code
+    // doesn't pin its body to the MainActor, and a background fold Task
+    // (`AISession.applySummaryFold`, fire-and-forget alongside the main turn)
+    // can genuinely call back into the SAME `MockTransport` instance while
+    // another call is already in flight. Every mutable property below used
+    // to be a bare `var` with no synchronization — undefined behavior under
+    // concurrent mutation, and the likely source of a `swift test` full-suite
+    // crash (`Index out of range` in `ContiguousArrayBuffer`) that a smaller
+    // test selection never reproduced. One lock, guarding all of it, mirrors
+    // the `embeddingLock`/`_embedInputs` pattern already used for `embed(_:)`
+    // below — that one was already understood to need it; this generalizes
+    // it to every other piece of shared mutable state on this class.
+    private let stateLock = NSLock()
+    private var _postedResults: [
         (
             callID: String,
             dispatchNonce: String,
@@ -723,12 +760,21 @@ private final class MockTransport: AITransport, @unchecked Sendable {
             status: String
         )
     ] = []
-    private(set) var postedResultJSONs: [String?] = []
-    private(set) var receivedTools: [AIToolSpec] = []
-    private(set) var receivedCapabilities: AICapabilityAdvertisement?
-    private(set) var receivedContext: AITurnContext?
-    private(set) var loadThreadCalls: [String] = []
-    private(set) var reportSubmissions: [AIReportSubmission] = []
+    var postedResults: [(callID: String, dispatchNonce: String, capabilitySetDigest: String, status: String)] {
+        stateLock.withLock { _postedResults }
+    }
+    private var _postedResultJSONs: [String?] = []
+    var postedResultJSONs: [String?] { stateLock.withLock { _postedResultJSONs } }
+    private var _receivedTools: [AIToolSpec] = []
+    var receivedTools: [AIToolSpec] { stateLock.withLock { _receivedTools } }
+    private var _receivedCapabilities: AICapabilityAdvertisement?
+    var receivedCapabilities: AICapabilityAdvertisement? { stateLock.withLock { _receivedCapabilities } }
+    private var _receivedContext: AITurnContext?
+    var receivedContext: AITurnContext? { stateLock.withLock { _receivedContext } }
+    private var _loadThreadCalls: [String] = []
+    var loadThreadCalls: [String] { stateLock.withLock { _loadThreadCalls } }
+    private var _reportSubmissions: [AIReportSubmission] = []
+    var reportSubmissions: [AIReportSubmission] { stateLock.withLock { _reportSubmissions } }
     /// Thrown (and removed) by the next `submitReport`, so a scripted
     /// failure-then-success pair exercises the idempotent retry.
     var reportSubmissionErrors: [Error] = []
@@ -736,29 +782,38 @@ private final class MockTransport: AITransport, @unchecked Sendable {
     private let embeddingLock = NSLock()
     private var _embedInputs: [String] = []
     var embedReply: [Float] = []
-    private(set) var summarizeCalls: [(previous: String, messages: [AIContextMessage])] = []
+    private var _summarizeCalls: [(previous: String, messages: [AIContextMessage])] = []
+    var summarizeCalls: [(previous: String, messages: [AIContextMessage])] {
+        stateLock.withLock { _summarizeCalls }
+    }
     var summarizeReply = ""
     var loadThreadReply: [AITurn] = []
     var rankReply: [String] = []
     var rankGate: AsyncGate?
-    private(set) var rankCallCount = 0
+    private var _rankCallCount = 0
+    var rankCallCount: Int { stateLock.withLock { _rankCallCount } }
     var summarizeGate: AsyncGate?
     var responseGate: AsyncGate?
     var responseError: Error?
     var resumePreflightError: Error?
     var resumeError: Error?
     var toolResultErrors: [Error] = []
-    private(set) var toolResultAttempts = 0
+    private var _toolResultAttempts = 0
+    var toolResultAttempts: Int { stateLock.withLock { _toolResultAttempts } }
     var consumeToolResultBeforeError = false
-    private(set) var serverConsumedToolResults = 0
+    private var _serverConsumedToolResults = 0
+    var serverConsumedToolResults: Int { stateLock.withLock { _serverConsumedToolResults } }
     /// Extra events tagged with a (usually sub-agent) thread id, yielded after `before`.
     var childEvents: [(threadID: String, event: AIEvent)] = []
     var childEventsBeforeRoot = false
     var resumeEvents: [AIEvent] = []
     var omitResumeReceipt = false
-    private(set) var messageRequests: [
+    private var _messageRequests: [
         (text: String, resume: AIInteractionResume?, context: AITurnContext?)
     ] = []
+    var messageRequests: [(text: String, resume: AIInteractionResume?, context: AITurnContext?)] {
+        stateLock.withLock { _messageRequests }
+    }
 
     init(before: [AIEvent], after: [AIEvent]) {
         beforeToolResult = before
@@ -766,7 +821,7 @@ private final class MockTransport: AITransport, @unchecked Sendable {
     }
 
     func rankSkills(skills: [SkillRankInput], query: String) async -> [String] {
-        rankCallCount += 1
+        stateLock.withLock { _rankCallCount += 1 }
         if let rankGate { await rankGate.enterAndWait() }
         return rankReply
     }
@@ -795,11 +850,13 @@ private final class MockTransport: AITransport, @unchecked Sendable {
     }
 
     func postMessage(threadID: String, text: String, tools: [AIToolSpec], capabilities: AICapabilityAdvertisement?, context: AITurnContext?, dialect: String, resume: AIInteractionResume?) -> AsyncThrowingStream<AIStreamEvent, Error> {
-        receivedTools = tools
-        receivedCapabilities = capabilities
-        receivedContext = context
+        stateLock.withLock {
+            _receivedTools = tools
+            _receivedCapabilities = capabilities
+            _receivedContext = context
+            _messageRequests.append((text, resume, context))
+        }
         activeThreadID = threadID
-        messageRequests.append((text, resume, context))
         let isResumeRequest = resume != nil
         if isResumeRequest, let resumePreflightError {
             return AsyncThrowingStream { continuation in
@@ -890,36 +947,38 @@ private final class MockTransport: AITransport, @unchecked Sendable {
         threadID: String, callID: String, dispatchNonce: String,
         capabilitySetDigest: String, status: String, resultJSON: String?
     ) async throws {
-        toolResultAttempts += 1
+        stateLock.withLock { _toolResultAttempts += 1 }
         if !toolResultErrors.isEmpty {
             if consumeToolResultBeforeError {
-                serverConsumedToolResults += 1
+                stateLock.withLock { _serverConsumedToolResults += 1 }
             }
             throw toolResultErrors.removeFirst()
         }
-        postedResults.append((
-            callID, dispatchNonce, capabilitySetDigest, status
-        ))
-        postedResultJSONs.append(resultJSON)
+        stateLock.withLock {
+            _postedResults.append((callID, dispatchNonce, capabilitySetDigest, status))
+            _postedResultJSONs.append(resultJSON)
+        }
         for event in afterToolResult { continuation?.yield(AIStreamEvent(threadID: activeThreadID, event: event)) }
         continuation?.finish()
     }
 
-    private(set) var listThreadsCalls = 0
-    private(set) var deleteThreadCalls: [String] = []
+    private var _listThreadsCalls = 0
+    var listThreadsCalls: Int { stateLock.withLock { _listThreadsCalls } }
+    private var _deleteThreadCalls: [String] = []
+    var deleteThreadCalls: [String] { stateLock.withLock { _deleteThreadCalls } }
 
     func listThreads(dialect: String? = nil, limit: Int = 50, beforeUpdatedAt: Int? = nil, beforeID: String? = nil) async -> [AIThreadSummary] {
-        listThreadsCalls += 1
+        stateLock.withLock { _listThreadsCalls += 1 }
         return []
     }
 
     func loadThread(id: String) async throws -> [AITurn] {
-        loadThreadCalls.append(id)
+        stateLock.withLock { _loadThreadCalls.append(id) }
         return loadThreadReply
     }
 
     func submitReport(_ submission: AIReportSubmission) async throws -> AIReportReceipt {
-        reportSubmissions.append(submission)
+        stateLock.withLock { _reportSubmissions.append(submission) }
         if !reportSubmissionErrors.isEmpty {
             throw reportSubmissionErrors.removeFirst()
         }
@@ -943,13 +1002,13 @@ private final class MockTransport: AITransport, @unchecked Sendable {
     }
 
     func summarize(previous: String, messages: [AIContextMessage]) async -> String {
-        summarizeCalls.append((previous, messages))
+        stateLock.withLock { _summarizeCalls.append((previous, messages)) }
         if let summarizeGate { await summarizeGate.enterAndWait() }
         return summarizeReply
     }
 
     func deleteThread(id: String) async throws {
-        deleteThreadCalls.append(id)
+        stateLock.withLock { _deleteThreadCalls.append(id) }
     }
 }
 
@@ -2519,15 +2578,15 @@ private final class VersionedSkillRanker: SkillRanking {
     try store.saveAIThread(AIThreadRecord(
         id: threadID, dialect: "postgres", createdAt: Date(), updatedAt: Date()
     ))
-    for seq in 0...AIConversationPolicy.summaryThreshold {
-        try store.appendAIMessage(AIMessageRecord(
+    try seedActiveMessages(store, threadID: threadID, (0...AIConversationPolicy.summaryThreshold).map { seq in
+        AIMessageRecord(
             threadID: threadID,
             seq: seq,
             role: seq.isMultiple(of: 2) ? "user" : "assistant",
             content: "message \(seq)",
             createdAt: Date()
-        ))
-    }
+        )
+    })
     let session = AISession(
         transport: transport,
         executor: SchemaExecutor(outcome: .ok("{}")),
@@ -2933,6 +2992,341 @@ private final class VersionedSkillRanker: SkillRanking {
     #expect(admittedCount == 2, "the queued message getting its own bubble once drained must also fire onTurnAdmitted")
 }
 
+/// AI-20 follow-up, reported live: a device with Apple-Intelligence-only
+/// access (no real license) whose on-device toggle was off had `prepareSend`
+/// return nil for every send — the message vanished with no bubble and no
+/// error, no matter how many times it was retried. `admitBlocked` is the
+/// fix's building block: whenever `AIPanelController` finds nowhere to
+/// actually route a turn, it must still show the user's own message like
+/// any other send, with a plain-text explanation instead of silence.
+@MainActor
+@Test func admitBlockedShowsBothBubblesWithNoNetworkCall() async {
+    let transport = MockTransport(before: [], after: [])
+    let executor = SchemaExecutor(outcome: .ok("{}"))
+    let session = AISession(transport: transport, executor: executor, dialect: "postgres", schemaDigest: "abc", store: makeStore())
+
+    session.admitBlocked("hello", reason: "On-device AI is off and there is no license.")
+
+    #expect(session.transcript.count == 2)
+    #expect(session.transcript[0].role == .user)
+    #expect(session.transcript[0].text == "hello")
+    #expect(session.transcript[1].role == .assistant)
+    #expect(session.transcript[1].text == "On-device AI is off and there is no license.")
+    #expect(!session.isStreaming)
+}
+
+@MainActor
+@Test func admitBlockedIgnoresWhitespaceOnlyText() async {
+    let transport = MockTransport(before: [], after: [])
+    let executor = SchemaExecutor(outcome: .ok("{}"))
+    let session = AISession(transport: transport, executor: executor, dialect: "postgres", schemaDigest: "abc", store: makeStore())
+
+    session.admitBlocked("   ", reason: "unreachable")
+
+    #expect(session.transcript.isEmpty)
+}
+
+/// AI-20: lets `AIPanelController` check, before committing to a
+/// send, whether `admitSend` would run immediately or queue — needed
+/// because an auto-trial attempt (starting a real trial before actually
+/// running the turn) must not be interleaved with a message that's about
+/// to queue instead of run, which would leave the queued message
+/// orphaned if the trial attempt then failed.
+@MainActor
+@Test func canRunImmediatelyReflectsWhetherATurnIsAlreadyActive() async {
+    let session = AISession(
+        transport: MockTransport(before: [.delta("hi"), .complete(totalTokens: 1)], after: []),
+        executor: SchemaExecutor(outcome: .ok("{}")),
+        dialect: "postgres", schemaDigest: "abc", store: makeStore()
+    )
+    #expect(session.canRunImmediately)
+
+    let task = Task { await session.send("first") }
+    while !session.isStreaming { await Task.yield() }
+    #expect(!session.canRunImmediately)
+
+    await task.value
+    #expect(session.canRunImmediately)
+}
+
+@MainActor
+@Test func failActiveTurnFillsInTheReasonAndDrainsTheQueue() async {
+    let session = AISession(
+        transport: MockTransport(before: [], after: []),
+        executor: SchemaExecutor(outcome: .ok("{}")),
+        dialect: "postgres", schemaDigest: "abc", store: makeStore()
+    )
+    guard case let .run(_, assistantIndex, assistantTurnID) = session.admitSend("hello") else {
+        Issue.record("expected .run for an immediate send")
+        return
+    }
+    // A message queued behind the active turn must still surface once
+    // the turn ends — same as any other way a turn can end.
+    _ = session.admitSend("queued one") // .queued, since the first turn is "active" (isStreaming true)
+
+    session.failActiveTurn(assistantIndex: assistantIndex, assistantTurnID: assistantTurnID, reason: "couldn't start trial")
+
+    #expect(session.transcript[assistantIndex].text == "couldn't start trial")
+    // The queued message auto-drains immediately (synchronously, inside
+    // failActiveTurn's own defer) — isStreaming can already be true again
+    // for ITS turn by the time failActiveTurn returns, same as runTurn's
+    // own defer. Wait for that drained turn to actually finish too.
+    while session.isStreaming { await Task.yield() }
+    #expect(session.transcript.contains { $0.text == "queued one" })
+}
+
+/// Pausable on-device provider — mirrors `PausableExecutor` above, but for
+/// `LocalCompletionProvider.stream(prompt:)` instead of a tool executor, so
+/// a test can hold a local turn open exactly like `PausableExecutor` holds
+/// a tool call open.
+private final class PausableLocalProvider: LocalCompletionProvider, @unchecked Sendable {
+    static func isAvailable() -> Bool { true }
+    let finalText: String
+    private var enteredContinuation: CheckedContinuation<Void, Never>?
+    private var resumeContinuation: CheckedContinuation<Void, Never>?
+    private var hasEntered = false
+    private var shouldResumeImmediately = false
+
+    init(finalText: String) { self.finalText = finalText }
+
+    func complete(prompt: String) async throws -> String {
+        var result = ""
+        for try await delta in stream(prompt: prompt) { result += delta }
+        return result
+    }
+
+    func stream(prompt: String) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                self.hasEntered = true
+                self.enteredContinuation?.resume()
+                self.enteredContinuation = nil
+                if !self.shouldResumeImmediately {
+                    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                        self.resumeContinuation = cont
+                    }
+                }
+                continuation.yield(self.finalText)
+                continuation.finish()
+            }
+        }
+    }
+
+    func waitUntilEntered() async {
+        if hasEntered { return }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            enteredContinuation = cont
+        }
+    }
+
+    func resume() {
+        shouldResumeImmediately = true
+        resumeContinuation?.resume()
+        resumeContinuation = nil
+    }
+}
+
+/// Reported live: "cái tính năng queue mất đi đâu rồi" — sending a second
+/// message while an on-device reply was still streaming silently did
+/// nothing at all (no bubble, no queue indicator), unlike the backend path
+/// (AI-08), which has queued a mid-stream send since it shipped. On-device
+/// was simply never wired into the same queue.
+@MainActor
+@Test func aSecondLocalSendWhileStreamingQueuesInsteadOfVanishing() async {
+    let provider = PausableLocalProvider(finalText: "first reply")
+    let executor = SchemaExecutor(outcome: .ok("{}"))
+    let session = AISession(transport: MockTransport(before: [], after: []), executor: executor, dialect: "postgres", schemaDigest: "abc", store: makeStore())
+
+    let firstTask = Task { await session.sendLocal("first", provider: provider) }
+    await provider.waitUntilEntered()
+
+    await session.sendLocal("second", provider: provider)
+    #expect(session.queuedMessages == ["second"], "must queue, not silently drop, while a local turn is streaming")
+    #expect(session.transcript.count == 2, "only the first turn's own bubbles exist yet — the second is queued, not shown")
+
+    provider.resume()
+    await firstTask.value
+    while session.isStreaming { await Task.yield() } // let the auto-drained "second" turn finish
+
+    #expect(session.transcript.count == 4, "the queued message must get its own bubble once drained, same as the backend queue")
+    #expect(session.transcript[2].text == "second")
+    #expect(session.transcript[3].text == "first reply", "drained locally too, not routed through the backend")
+}
+
+/// Reported live: "queue message đang cộng dồn thời gian" — each queued
+/// message paid for its own full round trip, so the wait for the Nth queued
+/// message was the sum of every turn ahead of it. Queued messages that share
+/// the same destination (local vs backend) now merge into one turn instead.
+@MainActor
+@Test func drainMergesQueuedBackendMessagesIntoOneNumberedTurn() async {
+    let transport = MockTransport(before: [.delta("reply"), .complete(totalTokens: 1)], after: [])
+    let gate = AsyncGate()
+    transport.responseGate = gate
+    let session = AISession(transport: transport, executor: SchemaExecutor(outcome: .ok("{}")), dialect: "postgres", schemaDigest: "abc", store: makeStore())
+
+    let firstTask = Task { await session.send("first") }
+    await gate.waitUntilEntered()
+
+    _ = session.admitSend("second")
+    _ = session.admitSend("third")
+    #expect(session.queuedMessages == ["second", "third"])
+
+    await gate.release()
+    await firstTask.value
+    while session.isStreaming { await Task.yield() }
+
+    #expect(session.transcript.map(\.text) == ["first", "reply", "1) second\n2) third", "reply"])
+    #expect(session.queuedMessages.isEmpty)
+}
+
+@MainActor
+@Test func drainMergesQueuedLocalMessagesIntoOneNumberedTurn() async {
+    let provider = PausableLocalProvider(finalText: "reply")
+    let session = AISession(transport: MockTransport(before: [], after: []), executor: SchemaExecutor(outcome: .ok("{}")), dialect: "postgres", schemaDigest: "abc", store: makeStore())
+
+    let firstTask = Task { await session.runLocal(session.admitSendLocal("first", provider: provider)) }
+    await provider.waitUntilEntered()
+
+    _ = session.admitSendLocal("second", provider: provider)
+    _ = session.admitSendLocal("third", provider: provider)
+    #expect(session.queuedMessages == ["second", "third"])
+
+    provider.resume()
+    await firstTask.value
+    while session.isStreaming { await Task.yield() }
+
+    #expect(session.transcript.map(\.text) == ["first", "reply", "1) second\n2) third", "reply"])
+    #expect(session.queuedMessages.isEmpty)
+}
+
+@MainActor
+@Test func drainOnlyMergesTheLeadingRunThatSharesTheSameDestination() async {
+    let localProvider = PausableLocalProvider(finalText: "local reply")
+    let session = AISession(transport: MockTransport(before: [], after: []), executor: SchemaExecutor(outcome: .ok("{}")), dialect: "postgres", schemaDigest: "abc", store: makeStore())
+
+    let firstTask = Task { await session.runLocal(session.admitSendLocal("first", provider: localProvider)) }
+    await localProvider.waitUntilEntered()
+
+    _ = session.admitSendLocal("second", provider: localProvider)
+    _ = session.admitSendLocal("third", provider: localProvider)
+    _ = session.admitSend("fourth")
+    #expect(session.queuedMessages == ["second", "third", "fourth"])
+
+    localProvider.resume()
+    await firstTask.value
+
+    // The merge for "second"+"third" fires synchronously in the same defer
+    // that closes "first" out — observable immediately, before its own
+    // reply streams, and before "fourth" (a different destination) ever
+    // gets a chance to also drain.
+    #expect(session.transcript.map(\.text) == ["first", "local reply", "1) second\n2) third", ""])
+    #expect(session.queuedMessages == ["fourth"], "the backend-destined item stays queued for its own drain")
+    #expect(session.isStreaming == true)
+}
+
+@MainActor
+@Test func drainOfExactlyOneQueuedMessageStaysUnnumbered() async {
+    let provider = PausableLocalProvider(finalText: "reply")
+    let session = AISession(transport: MockTransport(before: [], after: []), executor: SchemaExecutor(outcome: .ok("{}")), dialect: "postgres", schemaDigest: "abc", store: makeStore())
+
+    let firstTask = Task { await session.runLocal(session.admitSendLocal("first", provider: provider)) }
+    await provider.waitUntilEntered()
+
+    _ = session.admitSendLocal("second", provider: provider)
+
+    provider.resume()
+    await firstTask.value
+    while session.isStreaming { await Task.yield() }
+
+    #expect(session.transcript.map(\.text) == ["first", "reply", "second", "reply"], "a lone queued message is never numbered")
+}
+
+/// Reported live: a queued (not-yet-sent) message should still be
+/// removable before it drains.
+@MainActor
+@Test func removeQueuedMessageDropsItBeforeItEverDrains() async {
+    let provider = PausableLocalProvider(finalText: "reply")
+    let session = AISession(transport: MockTransport(before: [], after: []), executor: SchemaExecutor(outcome: .ok("{}")), dialect: "postgres", schemaDigest: "abc", store: makeStore())
+
+    let firstTask = Task { await session.runLocal(session.admitSendLocal("first", provider: provider)) }
+    await provider.waitUntilEntered()
+
+    _ = session.admitSendLocal("second", provider: provider)
+    _ = session.admitSendLocal("third", provider: provider)
+    #expect(session.queuedMessages == ["second", "third"])
+
+    session.removeQueuedMessage(at: 0)
+    #expect(session.queuedMessages == ["third"], "removing index 0 drops \"second\", leaving \"third\"")
+
+    provider.resume()
+    await firstTask.value
+    while session.isStreaming { await Task.yield() }
+
+    #expect(session.transcript.map(\.text) == ["first", "reply", "third", "reply"], "the removed message never sends")
+}
+
+@MainActor
+@Test func removeQueuedMessageAtOutOfBoundsIndexIsANoop() async {
+    let session = AISession(transport: MockTransport(before: [], after: []), executor: SchemaExecutor(outcome: .ok("{}")), dialect: "postgres", schemaDigest: "abc", store: makeStore())
+    session.removeQueuedMessage(at: 0)
+    session.removeQueuedMessage(at: -1)
+    #expect(session.queuedMessages.isEmpty)
+}
+
+/// Reported live: with Apple Intelligence on, the user's own bubble and the
+/// "preparing" (empty assistant bubble / typing) indicator lagged behind
+/// pressing Send. Root cause: unlike the backend path (`admitSend`, called
+/// synchronously from `AIPanelController.prepareSend()` on the Enter/Send
+/// call stack — see its doc comment), `sendLocal` was a single `async func`
+/// with no synchronous half, so its `transcript.append` only ran once the
+/// wrapping `Task` actually got a turn on the MainActor — which a busy
+/// MainActor can delay arbitrarily. `admitSendLocal` mirrors `admitSend`'s
+/// split to close that gap.
+@MainActor
+@Test func admitSendLocalAppendsBothBubblesSynchronouslyBeforeAnyAwait() async {
+    let provider = PausableLocalProvider(finalText: "reply")
+    let session = AISession(transport: MockTransport(before: [], after: []), executor: SchemaExecutor(outcome: .ok("{}")), dialect: "postgres", schemaDigest: "abc", store: makeStore())
+
+    let admission = session.admitSendLocal("hello", provider: provider)
+
+    // No `await` has happened yet — the user's bubble AND the empty
+    // assistant "preparing" bubble must already be on the transcript.
+    #expect(session.transcript.map(\.text) == ["hello", ""])
+    #expect(session.isStreaming == true)
+
+    let task = Task { await session.runLocal(admission) }
+    await provider.waitUntilEntered()
+    provider.resume()
+    await task.value
+
+    #expect(session.transcript.map(\.text) == ["hello", "reply"])
+}
+
+/// Same synchronous guarantee for the queued case (a local turn is already
+/// streaming): the second message must land in `queuedMessages` immediately,
+/// not only once its own wrapping `Task` runs.
+@MainActor
+@Test func admitSendLocalQueuesSynchronouslyWhileAnotherLocalTurnStreams() async {
+    let provider = PausableLocalProvider(finalText: "first reply")
+    let session = AISession(transport: MockTransport(before: [], after: []), executor: SchemaExecutor(outcome: .ok("{}")), dialect: "postgres", schemaDigest: "abc", store: makeStore())
+
+    let firstTask = Task { await session.runLocal(session.admitSendLocal("first", provider: provider)) }
+    await provider.waitUntilEntered()
+
+    let secondAdmission = session.admitSendLocal("second", provider: provider)
+    #expect(session.queuedMessages == ["second"], "must queue synchronously, before any await")
+    #expect(session.transcript.count == 2, "only the first turn's own bubbles exist yet")
+
+    await session.runLocal(secondAdmission)
+    provider.resume()
+    await firstTask.value
+    while session.isStreaming { await Task.yield() }
+
+    #expect(session.transcript.count == 4)
+    #expect(session.transcript[2].text == "second")
+    #expect(session.transcript[3].text == "first reply")
+}
+
 @MainActor
 @Test func reusesThreadAcrossMessages() async {
     let transport = MockTransport(before: [.complete(totalTokens: 1)], after: [])
@@ -3044,10 +3438,21 @@ private final class VersionedSkillRanker: SkillRanking {
     let threadID = UUID()
     let now = Date()
     try store.saveAIThread(AIThreadRecord(id: threadID, dialect: "postgres", title: "Test", createdAt: now, updatedAt: now))
-    try store.appendAIMessage(AIMessageRecord(threadID: threadID, seq: 0, role: "user", content: "What tables exist?", createdAt: now))
-    try store.appendAIMessage(AIMessageRecord(threadID: threadID, seq: 1, role: "assistant", content: "You have 5 tables.", createdAt: now))
-    try store.appendAIMessage(AIMessageRecord(threadID: threadID, seq: 2, role: "assistant", content: "", toolCalls: "[...]", createdAt: now))
-    try store.appendAIMessage(AIMessageRecord(threadID: threadID, seq: 3, role: "tool", content: "{}", toolCallID: "c1", createdAt: now))
+    // AI-35: openThread reads the ACTIVE path — chain parentID + advance the
+    // thread's leaf the same way persistTurn does, not just flat inserts.
+    var previous: UUID?
+    for message in [
+        AIMessageRecord(threadID: threadID, seq: 0, role: "user", content: "What tables exist?", createdAt: now),
+        AIMessageRecord(threadID: threadID, seq: 1, role: "assistant", content: "You have 5 tables.", createdAt: now),
+        AIMessageRecord(threadID: threadID, seq: 2, role: "assistant", content: "", toolCalls: "[...]", createdAt: now),
+        AIMessageRecord(threadID: threadID, seq: 3, role: "tool", content: "{}", toolCallID: "c1", createdAt: now),
+    ] {
+        var next = message
+        next.parentID = previous
+        try store.appendAIMessage(next)
+        previous = next.id
+    }
+    try store.setActiveLeafMessage(threadID: threadID, messageID: previous)
 
     await session.openThread(threadID.uuidString)
 
@@ -3129,6 +3534,53 @@ private final class VersionedSkillRanker: SkillRanking {
     #expect(Set(transport.embedInputs()) == ["hello", "Hi there!"])
 }
 
+// MARK: - AI-35: edit & version messages
+
+@MainActor
+@Test func editingAMessageForksTheTranscriptAndSiblingSwitchRestoresTheOriginal() async throws {
+    let transport = MockTransport(before: [.delta("Hi there!"), .complete(totalTokens: 3)], after: [])
+    let store = makeStore()
+    let session = AISession(
+        transport: transport, executor: SchemaExecutor(outcome: .ok("{}")),
+        dialect: "postgres", schemaDigest: "d", store: store
+    )
+
+    await session.send("first")
+    await session.send("second")
+    #expect(session.transcript.map(\.text) == ["first", "Hi there!", "second", "Hi there!"])
+    let originalFirstMessageID = try #require(session.transcript[0].messageID)
+    // Two versions don't exist at this fork point yet — nothing to navigate.
+    #expect(session.siblings(of: originalFirstMessageID) == [originalFirstMessageID])
+
+    let admission = try #require(session.prepareEdit(messageID: originalFirstMessageID, newText: "first-edited"))
+    await session.run(admission)
+
+    // The edit forked: "second" and its reply are gone from the ACTIVE
+    // transcript (still on disk, just not on this path) — not deleted.
+    #expect(session.transcript.map(\.text) == ["first-edited", "Hi there!"])
+    let editedFirstMessageID = try #require(session.transcript[0].messageID)
+    #expect(Set(session.siblings(of: editedFirstMessageID)) == Set([originalFirstMessageID, editedFirstMessageID]))
+
+    await session.selectSibling(messageID: originalFirstMessageID)
+
+    // Switching back to the original resolves to ITS OWN tip — the whole
+    // original conversation, "second" included, reappears untouched.
+    #expect(session.transcript.map(\.text) == ["first", "Hi there!", "second", "Hi there!"])
+}
+
+@MainActor
+@Test func prepareEditRefusesForAnUnknownMessageID() async throws {
+    let transport = MockTransport(before: [.delta("Hi there!"), .complete(totalTokens: 3)], after: [])
+    let store = makeStore()
+    let session = AISession(
+        transport: transport, executor: SchemaExecutor(outcome: .ok("{}")),
+        dialect: "postgres", schemaDigest: "d", store: store
+    )
+    await session.send("first")
+
+    #expect(session.prepareEdit(messageID: UUID(), newText: "edited") == nil)
+}
+
 @MainActor
 @Test func ensureThreadNeverCallsTheBackendCreateThreadEndpoint() async {
     let transport = MockTransport(before: [.complete(totalTokens: 0)], after: [])
@@ -3167,13 +3619,13 @@ private final class VersionedSkillRanker: SkillRanking {
     try store.saveAIThread(AIThreadRecord(
         id: threadID, dialect: "postgres", createdAt: Date(), updatedAt: Date()
     ))
-    for seq in 0..<22 {
-        try store.appendAIMessage(AIMessageRecord(
+    try seedActiveMessages(store, threadID: threadID, (0..<22).map { seq in
+        AIMessageRecord(
             threadID: threadID, seq: seq,
             role: seq.isMultiple(of: 2) ? "user" : "assistant",
             content: "message \(seq)", createdAt: Date()
-        ))
-    }
+        )
+    })
     let session = AISession(
         transport: transport, executor: SchemaExecutor(outcome: .ok("{}")),
         dialect: "postgres", schemaDigest: "d", store: store
@@ -3223,15 +3675,15 @@ private final class VersionedSkillRanker: SkillRanking {
     try store.saveAIThread(AIThreadRecord(
         id: threadID, dialect: "postgres", createdAt: Date(), updatedAt: Date()
     ))
-    for seq in 0..<22 {
-        try store.appendAIMessage(AIMessageRecord(
+    try seedActiveMessages(store, threadID: threadID, (0..<22).map { seq in
+        AIMessageRecord(
             threadID: threadID, seq: seq,
             role: seq.isMultiple(of: 2) ? "user" : "assistant",
             content: seq == 4 ? "Which database?" : "message \(seq)",
             toolCalls: seq == 4 ? "local:interaction" : nil,
             createdAt: Date()
-        ))
-    }
+        )
+    })
     let session = AISession(
         transport: transport, executor: SchemaExecutor(outcome: .ok("{}")),
         dialect: "postgres", schemaDigest: "d", store: store
@@ -3255,13 +3707,13 @@ private final class VersionedSkillRanker: SkillRanking {
         id: threadID, dialect: "postgres", summary: "known summary",
         summaryThroughSeq: 11, createdAt: Date(), updatedAt: Date()
     ))
-    for seq in 0..<22 {
-        try store.appendAIMessage(AIMessageRecord(
+    try seedActiveMessages(store, threadID: threadID, (0..<22).map { seq in
+        AIMessageRecord(
             threadID: threadID, seq: seq,
             role: seq.isMultiple(of: 2) ? "user" : "assistant",
             content: "message \(seq)", createdAt: Date()
-        ))
-    }
+        )
+    })
     let session = AISession(
         transport: transport, executor: SchemaExecutor(outcome: .ok("{}")),
         dialect: "postgres", schemaDigest: "d", store: store
@@ -3301,13 +3753,13 @@ private final class VersionedSkillRanker: SkillRanking {
     try store.saveAIThread(AIThreadRecord(
         id: threadID, dialect: "postgres", createdAt: Date(), updatedAt: Date()
     ))
-    for seq in 0..<22 {
-        try store.appendAIMessage(AIMessageRecord(
+    try seedActiveMessages(store, threadID: threadID, (0..<22).map { seq in
+        AIMessageRecord(
             threadID: threadID, seq: seq,
             role: seq.isMultiple(of: 2) ? "user" : "assistant",
             content: "message \(seq)", createdAt: Date()
-        ))
-    }
+        )
+    })
     let session = AISession(
         transport: transport, executor: SchemaExecutor(outcome: .ok("{}")),
         dialect: "postgres", schemaDigest: "d", store: store
@@ -3337,13 +3789,13 @@ private final class VersionedSkillRanker: SkillRanking {
     try store.saveAIThread(AIThreadRecord(
         id: threadID, dialect: "postgres", createdAt: Date(), updatedAt: Date()
     ))
-    for seq in 0..<22 {
-        try store.appendAIMessage(AIMessageRecord(
+    try seedActiveMessages(store, threadID: threadID, (0..<22).map { seq in
+        AIMessageRecord(
             threadID: threadID, seq: seq,
             role: seq.isMultiple(of: 2) ? "user" : "assistant",
             content: "message \(seq)", createdAt: Date()
-        ))
-    }
+        )
+    })
     let session = AISession(
         transport: transport, executor: SchemaExecutor(outcome: .ok("{}")),
         dialect: "postgres", schemaDigest: "d", store: store
@@ -3388,13 +3840,13 @@ private final class VersionedSkillRanker: SkillRanking {
     try store.saveAIThread(AIThreadRecord(
         id: threadID, dialect: "postgres", createdAt: Date(), updatedAt: Date()
     ))
-    for seq in 0..<22 {
-        try store.appendAIMessage(AIMessageRecord(
+    try seedActiveMessages(store, threadID: threadID, (0..<22).map { seq in
+        AIMessageRecord(
             threadID: threadID, seq: seq,
             role: seq.isMultiple(of: 2) ? "user" : "assistant",
             content: "message \(seq)", createdAt: Date()
-        ))
-    }
+        )
+    })
     let session = AISession(
         transport: transport, executor: SchemaExecutor(outcome: .ok("{}")),
         dialect: "postgres", schemaDigest: "d", store: store
@@ -3427,13 +3879,13 @@ private final class VersionedSkillRanker: SkillRanking {
     try store.saveAIThread(AIThreadRecord(
         id: threadID, dialect: "postgres", createdAt: Date(), updatedAt: Date()
     ))
-    for seq in 0..<22 {
-        try store.appendAIMessage(AIMessageRecord(
+    try seedActiveMessages(store, threadID: threadID, (0..<22).map { seq in
+        AIMessageRecord(
             threadID: threadID, seq: seq,
             role: seq.isMultiple(of: 2) ? "user" : "assistant",
             content: "message \(seq)", createdAt: Date()
-        ))
-    }
+        )
+    })
 
     do {
         let session = AISession(
@@ -3470,13 +3922,13 @@ private final class VersionedSkillRanker: SkillRanking {
     ))
     // Cursor is nil (never folded), so the whole foldable prefix becomes the
     // unsummarized tail — far more than fits under the hard cap.
-    for seq in 0..<200 {
-        try store.appendAIMessage(AIMessageRecord(
+    try seedActiveMessages(store, threadID: threadID, (0..<200).map { seq in
+        AIMessageRecord(
             threadID: threadID, seq: seq,
             role: seq.isMultiple(of: 2) ? "user" : "assistant",
             content: "message \(seq)", createdAt: Date()
-        ))
-    }
+        )
+    })
     let session = AISession(
         transport: transport, executor: SchemaExecutor(outcome: .ok("{}")),
         dialect: "postgres", schemaDigest: "d", store: store
@@ -3521,13 +3973,13 @@ private final class VersionedSkillRanker: SkillRanking {
     // Cursor is nil, so buildContext's oversized-unsummarized-tail branch
     // fires an immediate summarize() call as a side effect of actually
     // running — a signal independent of whether resolveTools has resolved.
-    for seq in 0..<200 {
-        try store.appendAIMessage(AIMessageRecord(
+    try seedActiveMessages(store, threadID: threadID, (0..<200).map { seq in
+        AIMessageRecord(
             threadID: threadID, seq: seq,
             role: seq.isMultiple(of: 2) ? "user" : "assistant",
             content: "message \(seq)", createdAt: Date()
-        ))
-    }
+        )
+    })
     let session = AISession(
         transport: transport, executor: SchemaExecutor(outcome: .ok("{}")),
         dialect: "postgres", schemaDigest: "d", store: store,
@@ -3562,13 +4014,13 @@ private final class VersionedSkillRanker: SkillRanking {
         id: threadID, dialect: "postgres", createdAt: Date(), updatedAt: Date()
     ))
     let bigContent = String(repeating: "A", count: 15_000)
-    for seq in 0..<30 {
-        try store.appendAIMessage(AIMessageRecord(
+    try seedActiveMessages(store, threadID: threadID, (0..<30).map { seq in
+        AIMessageRecord(
             threadID: threadID, seq: seq,
             role: seq.isMultiple(of: 2) ? "user" : "assistant",
             content: seq < 22 ? bigContent : "short \(seq)", createdAt: Date()
-        ))
-    }
+        )
+    })
     let session = AISession(
         transport: transport, executor: SchemaExecutor(outcome: .ok("{}")),
         dialect: "postgres", schemaDigest: "d", store: store
@@ -3603,13 +4055,13 @@ private final class VersionedSkillRanker: SkillRanking {
     try store.saveAIThread(AIThreadRecord(
         id: threadID, dialect: "postgres", createdAt: Date(), updatedAt: Date()
     ))
-    for seq in 0..<200 {
-        try store.appendAIMessage(AIMessageRecord(
+    try seedActiveMessages(store, threadID: threadID, (0..<200).map { seq in
+        AIMessageRecord(
             threadID: threadID, seq: seq,
             role: seq.isMultiple(of: 2) ? "user" : "assistant",
             content: "message \(seq)", createdAt: Date()
-        ))
-    }
+        )
+    })
     let session = AISession(
         transport: transport, executor: SchemaExecutor(outcome: .ok("{}")),
         dialect: "postgres", schemaDigest: "d", store: store
@@ -4080,21 +4532,21 @@ private func reportReadyWire(
     ))
     // Simulate an already-resolved clarify_request round, same shape
     // resolveClarification/resumeInteraction already persist.
-    try store.appendAIMessage(AIMessageRecord(
-        threadID: threadID, seq: 0, role: "user", content: "inspect it", createdAt: Date()
-    ))
-    try store.appendAIMessage(AIMessageRecord(
-        threadID: threadID, seq: 1, role: "assistant", content: "Which database?",
-        toolCalls: "local:interaction", createdAt: Date()
-    ))
-    try store.appendAIMessage(AIMessageRecord(
-        threadID: threadID, seq: 2, role: "user", content: "staging",
-        toolCalls: "local:interaction", createdAt: Date()
-    ))
-    try store.appendAIMessage(AIMessageRecord(
-        threadID: threadID, seq: 3, role: "assistant", content: "Using staging.",
-        toolCalls: "local:interaction", createdAt: Date()
-    ))
+    try seedActiveMessages(store, threadID: threadID, [
+        AIMessageRecord(threadID: threadID, seq: 0, role: "user", content: "inspect it", createdAt: Date()),
+        AIMessageRecord(
+            threadID: threadID, seq: 1, role: "assistant", content: "Which database?",
+            toolCalls: "local:interaction", createdAt: Date()
+        ),
+        AIMessageRecord(
+            threadID: threadID, seq: 2, role: "user", content: "staging",
+            toolCalls: "local:interaction", createdAt: Date()
+        ),
+        AIMessageRecord(
+            threadID: threadID, seq: 3, role: "assistant", content: "Using staging.",
+            toolCalls: "local:interaction", createdAt: Date()
+        ),
+    ])
     let session = AISession(
         transport: transport, executor: SchemaExecutor(outcome: .ok("{}")),
         dialect: "postgres", schemaDigest: "d", store: store
@@ -4555,8 +5007,10 @@ private func makeSessionWithReviewedReportDraft(
     let threadID = UUID()
     let seedNow = Date()
     try? store.saveAIThread(AIThreadRecord(id: threadID, dialect: "postgres", createdAt: seedNow, updatedAt: seedNow))
-    try? store.appendAIMessage(AIMessageRecord(threadID: threadID, seq: 0, role: "user", content: "The history panel looks empty after restart.", createdAt: seedNow))
-    try? store.appendAIMessage(AIMessageRecord(threadID: threadID, seq: 1, role: "assistant", content: "Let me check the local store for that thread.", createdAt: seedNow))
+    try? seedActiveMessages(store, threadID: threadID, [
+        AIMessageRecord(threadID: threadID, seq: 0, role: "user", content: "The history panel looks empty after restart.", createdAt: seedNow),
+        AIMessageRecord(threadID: threadID, seq: 1, role: "assistant", content: "Let me check the local store for that thread.", createdAt: seedNow),
+    ])
     session.loadThread(id: threadID.uuidString, turns: [])
     await session.send("/report \(text)")
     await session.resolveReportDraft(confirmed: true, attachContext: false)

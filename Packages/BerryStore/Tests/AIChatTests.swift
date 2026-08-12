@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import Testing
 @testable import BerryStore
 
@@ -179,10 +180,13 @@ struct AIChatTests {
         #expect(try store.saveAIMessageEmbeddingIfMessageExists(
             threadID: thread.id, seq: 0, vector: vector
         ) == false)
-        try store.appendAIMessage(AIMessageRecord(
+        let message = AIMessageRecord(
             threadID: thread.id, seq: 0, role: "user",
             content: "hello", createdAt: Date()
-        ))
+        )
+        try store.appendAIMessage(message)
+        // AI-35: aiMessagesMissingEmbeddings reads the active path.
+        try store.setActiveLeafMessage(threadID: thread.id, messageID: message.id)
         #expect(try store.saveAIMessageEmbeddingIfMessageExists(
             threadID: thread.id, seq: 0, vector: Array(vector.dropLast())
         ) == false)
@@ -196,12 +200,19 @@ struct AIChatTests {
         let store = try makeStore()
         let thread = AIThreadRecord(dialect: "postgres", createdAt: Date(), updatedAt: Date())
         try store.saveAIThread(thread)
+        // AI-35: aiMessagesMissingEmbeddings now reads the ACTIVE path, so
+        // this setup has to chain parentID + advance the thread's leaf the
+        // same way persistTurn does, not just insert flat rows.
+        var previous: UUID?
         for seq in 0..<4 {
-            try store.appendAIMessage(AIMessageRecord(
+            let message = AIMessageRecord(
                 threadID: thread.id, seq: seq, role: "user",
-                content: "\(seq)", createdAt: Date()
-            ))
+                content: "\(seq)", createdAt: Date(), parentID: previous
+            )
+            try store.appendAIMessage(message)
+            previous = message.id
         }
+        try store.setActiveLeafMessage(threadID: thread.id, messageID: previous)
         let vector = Array(repeating: Float(0.1), count: BerryStore.aiMessageEmbeddingDimension)
         try store.saveAIMessageEmbedding(threadID: thread.id, seq: 0, vector: vector)
 
@@ -239,5 +250,124 @@ struct AIChatTests {
 
         #expect(results.map(\.seq) == [1, 2])
         #expect(results[0].distance < results[1].distance)
+    }
+
+    // MARK: - AI-35: message tree (edit/version)
+
+    /// A real pre-v29 → v29 upgrade: builds a database through v28 only,
+    /// seeds it exactly like an existing user's thread (no parentID/
+    /// activeLeafMessageID — those columns don't exist yet), then runs the
+    /// rest of the migrator and asserts the backfill chained every row and
+    /// pointed the thread at its last message.
+    @Test func v29BackfillsParentIDAndActiveLeafForPreExistingThreads() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("berrydb-v29-test-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        var configuration = Configuration()
+        configuration.prepareDatabase { db in try SQLiteVecExtension.install(into: db) }
+        let dbQueue = try DatabaseQueue(path: tempURL.path, configuration: configuration)
+        try BerryStore.migrator.migrate(dbQueue, upTo: "v28-ai-thread-connection-key")
+
+        // Seed via raw SQL naming only the columns that exist at v28 — the
+        // current `AIThreadRecord`/`AIMessageRecord` Swift structs already
+        // carry the v29 fields, so `.insert(db)` would generate an INSERT
+        // listing columns this table doesn't have yet.
+        let threadID = UUID(), m0ID = UUID(), m1ID = UUID(), m2ID = UUID()
+        let now = Date()
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "INSERT INTO ai_thread (id, dialect, createdAt, updatedAt) VALUES (?, ?, ?, ?)",
+                arguments: [threadID, "postgres", now, now]
+            )
+            for (id, seq, role, content) in [
+                (m0ID, 0, "user", "hi"), (m1ID, 1, "assistant", "hello"), (m2ID, 2, "user", "again"),
+            ] {
+                try db.execute(
+                    sql: "INSERT INTO ai_message (id, threadID, seq, role, content, createdAt) VALUES (?, ?, ?, ?, ?, ?)",
+                    arguments: [id, threadID, seq, role, content, now]
+                )
+            }
+        }
+
+        try BerryStore.migrator.migrate(dbQueue) // brings it the rest of the way, through v29
+
+        let store = BerryStore(dbQueue: dbQueue)
+        let updatedThread = try #require(try store.aiThread(id: threadID))
+        #expect(updatedThread.activeLeafMessageID == m2ID)
+        #expect(try store.aiMessage(id: m0ID)?.parentID == nil)
+        #expect(try store.aiMessage(id: m1ID)?.parentID == m0ID)
+        #expect(try store.aiMessage(id: m2ID)?.parentID == m1ID)
+
+        // Parity: the active path for a never-branched thread must read
+        // identically to the old flat method.
+        let active = try store.activeAIMessages(threadID: threadID)
+        #expect(active.map(\.id) == [m0ID, m1ID, m2ID])
+        #expect(try active == store.aiMessages(threadID: threadID))
+    }
+
+    /// The core edit shape: editing m1 must not touch m1/m2 at all (still
+    /// fetchable, still the same content) — only the thread's active tip
+    /// moves to the new sibling's own chain.
+    @Test func editingAMessageLeavesTheOldSubtreeFullyIntact() throws {
+        let store = try makeStore()
+        let thread = AIThreadRecord(dialect: "postgres", createdAt: Date(), updatedAt: Date())
+        try store.saveAIThread(thread)
+
+        let m0 = AIMessageRecord(
+            threadID: thread.id, seq: 0, role: "user", content: "first",
+            createdAt: Date(timeIntervalSince1970: 0)
+        )
+        try store.appendAIMessage(m0)
+        let m1 = AIMessageRecord(
+            threadID: thread.id, seq: 1, role: "assistant", content: "old reply",
+            createdAt: Date(timeIntervalSince1970: 1), parentID: m0.id
+        )
+        try store.appendAIMessage(m1)
+        try store.setActiveLeafMessage(threadID: thread.id, messageID: m1.id)
+
+        // Edit m0: a new sibling m0b sharing m0's parent (nil).
+        let m0b = AIMessageRecord(
+            threadID: thread.id, seq: 2, role: "user", content: "first (edited)",
+            createdAt: Date(timeIntervalSince1970: 2), parentID: nil
+        )
+        try store.appendAIMessage(m0b)
+        try store.setActiveLeafMessage(threadID: thread.id, messageID: m0b.id)
+
+        // Old subtree untouched.
+        #expect(try store.aiMessage(id: m0.id)?.content == "first")
+        #expect(try store.aiMessage(id: m1.id)?.content == "old reply")
+        // Active path now shows only the edited version.
+        #expect(try store.activeAIMessages(threadID: thread.id).map(\.content) == ["first (edited)"])
+        // Both versions of the first message are siblings under nil.
+        let siblings = try store.siblingGroups(threadID: thread.id)
+        #expect(Set(siblings[nil] ?? []) == Set([m0.id, m0b.id]))
+    }
+
+    @Test func resolveTipFollowsTheMostRecentlyCreatedChildRepeatedly() throws {
+        let store = try makeStore()
+        let thread = AIThreadRecord(dialect: "postgres", createdAt: Date(), updatedAt: Date())
+        try store.saveAIThread(thread)
+
+        let root = AIMessageRecord(threadID: thread.id, seq: 0, role: "user", content: "root", createdAt: Date(timeIntervalSince1970: 0))
+        try store.appendAIMessage(root)
+        let childOld = AIMessageRecord(
+            threadID: thread.id, seq: 1, role: "user", content: "child-old",
+            createdAt: Date(timeIntervalSince1970: 1), parentID: root.id
+        )
+        let childNew = AIMessageRecord(
+            threadID: thread.id, seq: 2, role: "user", content: "child-new",
+            createdAt: Date(timeIntervalSince1970: 2), parentID: root.id
+        )
+        try store.appendAIMessage(childOld)
+        try store.appendAIMessage(childNew)
+        // childNew (the most recent) has its own further child; childOld is a dead end.
+        let grandchild = AIMessageRecord(
+            threadID: thread.id, seq: 3, role: "assistant", content: "grandchild",
+            createdAt: Date(timeIntervalSince1970: 3), parentID: childNew.id
+        )
+        try store.appendAIMessage(grandchild)
+
+        let tip = try store.resolveTip(threadID: thread.id, from: root.id)
+        #expect(tip == grandchild.id)
     }
 }

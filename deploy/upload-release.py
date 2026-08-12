@@ -131,6 +131,19 @@ def main() -> None:
     s3.upload_file(str(zip_path), bucket, last["file"],
                    ExtraArgs={"ContentType": "application/octet-stream"})
 
+    # A stable "always latest" alias for direct-download links (e.g. the
+    # website's download button), uploaded ALONGSIDE the versioned object
+    # above — never replacing it. Sparkle's appcast items each carry a
+    # signature/length tied to their OWN versioned filename (build_appcast
+    # above); collapsing every release onto one shared key would leave every
+    # older appcast entry pointing at content whose signature no longer
+    # matches, and a user mid-download during a release could get served a
+    # half-old/half-new file if a fixed key were the ONLY one ever written.
+    latest_key = f"BerryDB-latest{Path(last['file']).suffix}"
+    print(f"▸ Uploading {latest_key} → r2://{bucket}/")
+    s3.upload_file(str(zip_path), bucket, latest_key,
+                   ExtraArgs={"ContentType": "application/octet-stream"})
+
     appcast = build_appcast(history, download_base)
     (DEPLOY / "appcast.xml").write_text(appcast)
     print("▸ Uploading appcast.xml")
@@ -140,8 +153,10 @@ def main() -> None:
     purge_cache([
         f"{download_base.rstrip('/')}/appcast.xml",
         f"{download_base.rstrip('/')}/{last['file']}",
+        f"{download_base.rstrip('/')}/{latest_key}",
     ])
     print(f"✓ Published BerryDB {last['version']}: {download_base.rstrip('/')}/{last['file']}")
+    print(f"  Latest alias: {download_base.rstrip('/')}/{latest_key}")
 
 
 if __name__ == "__main__":

@@ -36,7 +36,15 @@ public final class BerryStore: Sendable {
         try Self.migrator.migrate(dbQueue)
     }
 
-    private static var migrator: DatabaseMigrator {
+    /// Test-only: wraps an already-prepared `DatabaseQueue` as-is, running no
+    /// migration. Lets a migration test build a pre-v29 database, seed data,
+    /// migrate it partway or fully with `BerryStore.migrator` directly, then
+    /// exercise `BerryStore`'s own methods against the result.
+    init(dbQueue: DatabaseQueue) {
+        self.dbQueue = dbQueue
+    }
+
+    static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1-connection-profile") { db in
             try db.create(table: "connection_profile") { t in
@@ -413,6 +421,42 @@ public final class BerryStore: Sendable {
             // connection and stay dialect-scoped only (docs/agents/architecture/11 §7.3).
             try db.alter(table: "ai_thread") { t in
                 t.add(column: "connectionKey", .text)
+            }
+        }
+        migrator.registerMigration("v29-ai-message-tree") { db in
+            // AI-35 (docs/agents/architecture/11 §7.3): editing/versioning a
+            // chat message. A parent-pointer tree over `ai_message` (nil
+            // `parentID` = first message in the thread) — editing a message
+            // inserts a sibling rather than deleting anything, so the old
+            // reply stays reachable. `ai_thread.activeLeafMessageID` is the
+            // current tip; walking `parentID` from there to nil is the
+            // active transcript. `seq` stays a thread-wide counter that's
+            // never reused across the tree, so `UNIQUE(threadID, seq)`
+            // needs no change.
+            try db.alter(table: "ai_message") { t in
+                t.add(column: "parentID", .blob).indexed()
+            }
+            try db.alter(table: "ai_thread") { t in
+                t.add(column: "activeLeafMessageID", .blob)
+            }
+            // Backfill: every pre-v29 thread is one straight line in seq
+            // order (branching didn't exist yet) — chain each row to the
+            // one immediately before it and point the thread at the last one.
+            let threadIDs = try UUID.fetchAll(db, sql: "SELECT DISTINCT threadID FROM ai_message")
+            for threadID in threadIDs {
+                let ids = try UUID.fetchAll(
+                    db, sql: "SELECT id FROM ai_message WHERE threadID = ? ORDER BY seq ASC",
+                    arguments: [threadID]
+                )
+                var previous: UUID?
+                for id in ids {
+                    try db.execute(sql: "UPDATE ai_message SET parentID = ? WHERE id = ?", arguments: [previous, id])
+                    previous = id
+                }
+                try db.execute(
+                    sql: "UPDATE ai_thread SET activeLeafMessageID = ? WHERE id = ?",
+                    arguments: [previous, threadID]
+                )
             }
         }
         return migrator
@@ -1010,6 +1054,128 @@ public final class BerryStore: Sendable {
         }
     }
 
+    // MARK: - AI-35: active-path message tree (editing/versioning, docs/agents/architecture/11 §7.3)
+    //
+    // `ai_message.parentID` (v29) forms a tree — editing a message inserts a
+    // sibling rather than deleting anything, so the old reply stays
+    // reachable. `ai_thread.activeLeafMessageID` is the current tip; walking
+    // `parentID` from there back to nil is "the conversation as currently
+    // shown". Every reader that needs that (opening a thread, search,
+    // context-building) must use one of these instead of the flat
+    // `aiMessages*` methods above, or an edited-away message can resurface.
+
+    /// Walks `parentID` from `leafID` back to nil, root-first — ONE indexed
+    /// `WHERE threadID = ?` fetch (same cost as the old flat `aiMessages`
+    /// query) followed by an in-memory dictionary walk, not N sequential
+    /// point-lookup queries: a first version did exactly that (simplest to
+    /// write) and was measurably slow enough on a 200-message thread to
+    /// blow through a test's fixed retry budget — every point-lookup is a
+    /// full GRDB/SQLite round trip, and `buildContext` calls into this on
+    /// every single turn (docs/feature/08 perf plan — the same "O(n) work
+    /// that compounds" class of bug that plan already fixed once here).
+    private func walkActivePath(db: Database, threadID: UUID, leafID: UUID?) throws -> [AIMessageRecord] {
+        guard leafID != nil else { return [] }
+        let all = try AIMessageRecord.filter(Column("threadID") == threadID).fetchAll(db)
+        let byID = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+        var chain: [AIMessageRecord] = []
+        var cursor = leafID
+        while let id = cursor, let message = byID[id] {
+            chain.append(message)
+            cursor = message.parentID
+        }
+        return chain.reversed()
+    }
+
+    /// The active transcript for a thread, root to `activeLeafMessageID` —
+    /// the branch-aware replacement for `aiMessages(threadID:)`.
+    public func activeAIMessages(threadID: UUID) throws -> [AIMessageRecord] {
+        try dbQueue.read { db in
+            guard let thread = try AIThreadRecord.fetchOne(db, key: threadID) else { return [] }
+            return try walkActivePath(db: db, threadID: threadID, leafID: thread.activeLeafMessageID)
+        }
+    }
+
+    public func activeAIMessagesAsync(threadID: UUID) async throws -> [AIMessageRecord] {
+        try await dbQueue.read { db in
+            guard let thread = try AIThreadRecord.fetchOne(db, key: threadID) else { return [] }
+            return try walkActivePath(db: db, threadID: threadID, leafID: thread.activeLeafMessageID)
+        }
+    }
+
+    /// Branch-aware replacement for `aiRecentMessagesAsync` — the last
+    /// `limit` non-interaction messages on the ACTIVE path, oldest first.
+    public func activeAIRecentMessagesAsync(threadID: UUID, limit: Int) async throws -> [AIMessageRecord] {
+        try await dbQueue.read { db in
+            guard let thread = try AIThreadRecord.fetchOne(db, key: threadID) else { return [] }
+            let path = try walkActivePath(db: db, threadID: threadID, leafID: thread.activeLeafMessageID)
+            let nonInteraction = path.filter { $0.toolCalls != "local:interaction" }
+            return Array(nonInteraction.suffix(limit))
+        }
+    }
+
+    /// Branch-aware replacement for `aiMessagesAsync(threadID:sinceSeq:)` —
+    /// non-interaction messages strictly after `sinceSeq`, ACTIVE path only.
+    public func activeAIMessagesAsync(threadID: UUID, sinceSeq: Int) async throws -> [AIMessageRecord] {
+        try await dbQueue.read { db in
+            guard let thread = try AIThreadRecord.fetchOne(db, key: threadID) else { return [] }
+            let path = try walkActivePath(db: db, threadID: threadID, leafID: thread.activeLeafMessageID)
+            return path.filter { $0.seq > sinceSeq && $0.toolCalls != "local:interaction" }
+        }
+    }
+
+    public func aiMessage(id: UUID) throws -> AIMessageRecord? {
+        try dbQueue.read { db in try AIMessageRecord.fetchOne(db, key: id) }
+    }
+
+    /// Retargets a thread's active tip — used both when a normal turn
+    /// finishes (advance to the newly-appended assistant reply) and when
+    /// editing/switching versions (jump elsewhere in the tree).
+    public func setActiveLeafMessage(threadID: UUID, messageID: UUID?) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE ai_thread SET activeLeafMessageID = ? WHERE id = ?",
+                arguments: [messageID, threadID]
+            )
+        }
+    }
+
+    /// Follows the most-recently-created child repeatedly until a message
+    /// with no children is reached — switching to a version always lands on
+    /// that version's own latest content, not necessarily its first reply.
+    public func resolveTip(threadID: UUID, from messageID: UUID) throws -> UUID {
+        try dbQueue.read { db in
+            var current = messageID
+            while let child = try AIMessageRecord
+                .filter(Column("threadID") == threadID && Column("parentID") == current)
+                .order(Column("createdAt").desc)
+                .fetchOne(db)
+            {
+                current = child.id
+            }
+            return current
+        }
+    }
+
+    /// Every user-message fork point in a thread: parentID -> sibling
+    /// message ids sharing it, oldest first (creation order = version 1, 2,
+    /// 3, ...). `nil` is a valid key — versions of the thread's very first
+    /// message all share a nil `parentID`. A caller checks its own message's
+    /// `parentID` against this map and shows nav only when the group has
+    /// more than one entry.
+    public func siblingGroups(threadID: UUID) throws -> [UUID?: [UUID]] {
+        try dbQueue.read { db in
+            let rows = try AIMessageRecord
+                .filter(Column("threadID") == threadID && Column("role") == "user")
+                .order(Column("createdAt").asc)
+                .fetchAll(db)
+            var groups: [UUID?: [UUID]] = [:]
+            for row in rows {
+                groups[row.parentID, default: []].append(row.id)
+            }
+            return groups
+        }
+    }
+
     // MARK: - Pending AI control interactions
 
     public func savePendingAIInteraction(
@@ -1150,7 +1316,10 @@ public final class BerryStore: Sendable {
     public func aiMessagesMissingEmbeddings(
         threadID: UUID, beforeSeq: Int? = nil
     ) throws -> [AIMessageRecord] {
-        let messages = try aiMessages(threadID: threadID)
+        // AI-35: active-path only — an edited-away message has nothing left
+        // worth embedding, and would otherwise sit here forever re-offering
+        // itself as "missing" every time the background backfill runs.
+        let messages = try activeAIMessages(threadID: threadID)
         let prefix = "\(threadID.uuidString)#"
         let embedded: Set<Int> = try dbQueue.read { db in
             let rows = try Row.fetchAll(

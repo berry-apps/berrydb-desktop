@@ -19,6 +19,11 @@ public struct AIThreadRecord: Codable, Sendable, Equatable, FetchableRecord, Per
     /// pre-v18 thread whose summary coverage is unknown and must be rebuilt
     /// once before incremental folding can begin.
     public var summaryThroughSeq: Int?
+    /// The current tip of the active path through this thread's message tree
+    /// (AI-35, v29) — walking `AIMessageRecord.parentID` back from here to
+    /// `nil` is the transcript actually shown/appended to. Nil only for a
+    /// thread with no messages yet.
+    public var activeLeafMessageID: UUID?
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -26,7 +31,7 @@ public struct AIThreadRecord: Codable, Sendable, Equatable, FetchableRecord, Per
 
     public init(
         id: UUID = UUID(), dialect: String, connectionKey: String? = nil, title: String? = nil,
-        summary: String? = nil, summaryThroughSeq: Int? = nil,
+        summary: String? = nil, summaryThroughSeq: Int? = nil, activeLeafMessageID: UUID? = nil,
         createdAt: Date, updatedAt: Date
     ) {
         self.id = id
@@ -35,6 +40,7 @@ public struct AIThreadRecord: Codable, Sendable, Equatable, FetchableRecord, Per
         self.title = title
         self.summary = summary
         self.summaryThroughSeq = summaryThroughSeq
+        self.activeLeafMessageID = activeLeafMessageID
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -54,12 +60,20 @@ public struct AIMessageRecord: Codable, Sendable, Equatable, FetchableRecord, Pe
     /// (AI-31, v26) — nil for a turn that didn't touch one, or one persisted
     /// before this column existed.
     public var artifactsJSON: String?
+    /// The message this one continues from (AI-35, v29) — nil for the first
+    /// message in a thread. Editing a message inserts a NEW row with the
+    /// SAME `parentID` as the one being edited (a sibling), so the original
+    /// and its whole downstream subtree stay reachable rather than being
+    /// deleted; `seq` stays a thread-wide counter that's never reused, so
+    /// this never collides with the pre-existing `UNIQUE(threadID, seq)`.
+    public var parentID: UUID?
 
     public static let databaseTableName = "ai_message"
 
     public init(
         id: UUID = UUID(), threadID: UUID, seq: Int, role: String, content: String,
-        toolCalls: String? = nil, toolCallID: String? = nil, createdAt: Date, artifactsJSON: String? = nil
+        toolCalls: String? = nil, toolCallID: String? = nil, createdAt: Date, artifactsJSON: String? = nil,
+        parentID: UUID? = nil
     ) {
         self.id = id
         self.threadID = threadID
@@ -70,6 +84,7 @@ public struct AIMessageRecord: Codable, Sendable, Equatable, FetchableRecord, Pe
         self.toolCallID = toolCallID
         self.createdAt = createdAt
         self.artifactsJSON = artifactsJSON
+        self.parentID = parentID
     }
 }
 

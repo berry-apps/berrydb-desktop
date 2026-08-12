@@ -27,6 +27,12 @@ public struct WorkspaceView: View {
     @State private var aiController: AIPanelController
     @State private var processBuffer = ResultBuffer()
     @State private var usersBuffer = ResultBuffer()
+    /// Forwarded to `AboutSheetView`'s "Check for Updates…" button — kept as
+    /// a plain closure (not the app target's own `UpdaterControlling` type)
+    /// so BerryUI stays decoupled from BerryApp (docs/architecture/04 §one-way
+    /// dependency direction). Defaults to a no-op so existing/test call sites
+    /// that construct `WorkspaceView()` without it keep compiling.
+    private let checkForUpdates: () -> Void
     private enum SidebarTab: String, CaseIterable, Identifiable {
         case connections
         case objects
@@ -103,7 +109,7 @@ public struct WorkspaceView: View {
     /// Opens detached-tab windows (docs/ui/01 D1).
     @Environment(\.openWindow) private var openWindow
 
-    public init() {
+    public init(checkForUpdates: @escaping () -> Void = {}) {
         // License and AI panel share ONE LicenseManager so activation updates
         // both the toolbar badge and the AI entitlement/token together.
         let license = LicenseManager.makeDefault()
@@ -111,6 +117,7 @@ public struct WorkspaceView: View {
         _aiController = State(initialValue: AIPanelController(
             license: license, backendURL: LicenseManager.backendURL()
         ))
+        self.checkForUpdates = checkForUpdates
     }
 
     public var body: some View {
@@ -180,7 +187,7 @@ public struct WorkspaceView: View {
             LicenseView(license: license, initialBalance: aiController.balance)
         }
         .sheet(isPresented: $showAbout) {
-            AboutSheetView()
+            AboutSheetView(checkForUpdates: checkForUpdates)
         }
         .sheet(isPresented: $showQuickOpen) {
             QuickOpenView(
@@ -373,6 +380,8 @@ public struct WorkspaceView: View {
             aiController.openArtifact = { artifactID in viewModel.openArtifact(id: artifactID) }
             aiController.openObject = { objectID in viewModel.selectObject(id: objectID) }
             aiController.openTextInTab = { text in viewModel.newEditorTab(text: text) }
+            aiController.openMermaidInTab = { source in viewModel.openMermaidDiagram(source: source) }
+            aiController.openMermaidTab = { source, title in viewModel.openMermaidDiagram(source: source, title: title) }
             aiController.mentionCandidates = { query in viewModel.matchingArtifactMentions(query: query) }
             aiController.uiGraphSnapshot = { viewModel.uiGraphSnapshot() }
             // AI Command Palette NL routing (DI-22, docs/architecture/13
@@ -462,6 +471,14 @@ public struct WorkspaceView: View {
             if !aiController.isBuilt { bindAI() }
             syncIntelligenceEntitlement()
         }
+    }
+
+    /// The toolbar license badges below read raw `license.status`
+    /// otherwise, which shows "Unlicensed" even when Apple Intelligence
+    /// bypass access is what's actually making the AI panel usable —
+    /// mirrors `LicenseView`'s own `isAppleIntelligenceActive`.
+    private var isAppleIntelligenceLicenseActive: Bool {
+        aiController.appleIntelligenceGranted
     }
 
     /// SQL/script text + tab title for the active tab, when it's a kind that
@@ -620,9 +637,12 @@ public struct WorkspaceView: View {
             Button {
                 showLicense = true
             } label: {
-                Label(license.status.shortLabel, systemImage: license.status.systemImage)
-                    .font(.system(size: 11, weight: .medium))
-                    .labelStyle(.titleAndIcon)
+                Label(
+                    isAppleIntelligenceLicenseActive ? L("Active") : license.status.shortLabel,
+                    systemImage: isAppleIntelligenceLicenseActive ? "apple.intelligence" : license.status.systemImage
+                )
+                .font(.system(size: 11, weight: .medium))
+                .labelStyle(.titleAndIcon)
             }
         }
 
@@ -1589,43 +1609,54 @@ public struct WorkspaceView: View {
             headerButton(L("History"), "clock.arrow.circlepath",
                          // SQL, Mongo, or Qdrant — mirrors `hasAnySession` in
                          // `menuActions` above (history recording works for all three).
-                         enabled: viewModel.session != nil || viewModel.dataSourceSession != nil) { viewModel.openTool(.history) }
+                         enabled: viewModel.session != nil || viewModel.dataSourceSession != nil,
+                         isActive: isToolActive(.history)) { viewModel.openTool(.history) }
             headerButton(L("Saved Queries"), "bookmark",
-                         enabled: viewModel.session != nil || viewModel.dataSourceSession != nil) { viewModel.openTool(.savedQueries) }
+                         enabled: viewModel.session != nil || viewModel.dataSourceSession != nil,
+                         isActive: isToolActive(.savedQueries)) { viewModel.openTool(.savedQueries) }
             headerButton(L("Artifacts"), "shippingbox",
-                         enabled: viewModel.session != nil || viewModel.dataSourceSession != nil) { viewModel.openTool(.artifacts) }
+                         enabled: viewModel.session != nil || viewModel.dataSourceSession != nil,
+                         isActive: isToolActive(.artifacts)) { viewModel.openTool(.artifacts) }
 
             headerDivider
 
             headerButton(L("New Table…"), "tablecells.badge.ellipsis",
-                         enabled: viewModel.session != nil) { viewModel.openTool(.newTable) }
+                         enabled: viewModel.session != nil,
+                         isActive: isToolActive(.newTable)) { viewModel.openTool(.newTable) }
             headerButton(L("New Collection…"), "folder.badge.plus",
                          enabled: viewModel.dataSourceSession != nil) { showNewCollectionSheet = true }
             headerButton(L("Import CSV…"), "square.and.arrow.down",
-                         enabled: !viewModel.importableTables().isEmpty) { viewModel.openTool(.importCSV) }
+                         enabled: !viewModel.importableTables().isEmpty,
+                         isActive: isToolActive(.importCSV)) { viewModel.openTool(.importCSV) }
             // Backup manager (feature/04) opens as a tab (docs/ui/02 §4): a list of
             // this connection's backups with New Backup / Restore. SQL → .sql dump;
             // Mongo/Qdrant → bundle.
             headerButton(L("Backup"), "externaldrive",
-                         enabled: viewModel.session != nil || viewModel.dataSourceSession != nil) { viewModel.openTool(.backup) }
+                         enabled: viewModel.session != nil || viewModel.dataSourceSession != nil,
+                         isActive: isToolActive(.backup)) { viewModel.openTool(.backup) }
             if viewModel.processListSupported {
                 headerButton(L("Processes"), "cpu",
-                             enabled: viewModel.session != nil) { viewModel.openTool(.processes) }
+                             enabled: viewModel.session != nil,
+                             isActive: isToolActive(.processes)) { viewModel.openTool(.processes) }
             }
             if viewModel.userManagementSupported || viewModel.userManagementInfoMessage != nil {
                 headerButton(L("Users"), "person.2",
-                             enabled: viewModel.session != nil || viewModel.dataSourceSession != nil) { viewModel.openTool(.users) }
+                             enabled: viewModel.session != nil || viewModel.dataSourceSession != nil,
+                             isActive: isToolActive(.users)) { viewModel.openTool(.users) }
             }
 
             headerDivider
 
             if license.hasFeature(LicenseFeature.intelligence) {
                 headerButton(L("Insights"), "lightbulb",
-                             enabled: viewModel.session != nil) { viewModel.openTool(.insights) }
+                             enabled: viewModel.session != nil,
+                             isActive: isToolActive(.insights)) { viewModel.openTool(.insights) }
                 headerButton(L("Graph Explorer"), "point.3.connected.trianglepath.dotted",
-                             enabled: viewModel.session != nil) { viewModel.openTool(.graphExplorer) }
+                             enabled: viewModel.session != nil,
+                             isActive: isToolActive(.graphExplorer)) { viewModel.openTool(.graphExplorer) }
                 headerButton(L("Time Machine"), "clock.arrow.2.circlepath",
-                             enabled: viewModel.session != nil) { viewModel.openTool(.timeline) }
+                             enabled: viewModel.session != nil,
+                             isActive: isToolActive(.timeline)) { viewModel.openTool(.timeline) }
             } else {
                 headerButton(L("Unlock Intelligence…"), "lock", enabled: true) { showLicense = true }
             }
@@ -1641,18 +1672,22 @@ public struct WorkspaceView: View {
             headerDivider
 
             headerButton(L("AI Assistant"), "sparkles",
-                         enabled: viewModel.session != nil || viewModel.dataSourceSession != nil) { showAIPanel.toggle() }
+                         enabled: viewModel.session != nil || viewModel.dataSourceSession != nil,
+                         isActive: showAIPanel) { showAIPanel.toggle() }
 
             headerDivider
             Button {
                 showLicense = true
             } label: {
-                Label(license.status.shortLabel, systemImage: license.status.systemImage)
-                    .font(.system(size: 11, weight: .medium))
-                    .labelStyle(.titleAndIcon)
+                Label(
+                    isAppleIntelligenceLicenseActive ? L("Active") : license.status.shortLabel,
+                    systemImage: isAppleIntelligenceLicenseActive ? "apple.intelligence" : license.status.systemImage
+                )
+                .font(.system(size: 11, weight: .medium))
+                .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.borderless)
-            .tint(license.status.tint)
+            .tint(isAppleIntelligenceLicenseActive ? .green : license.status.tint)
             .help(L("License"))
             .accessibilityLabel(L("License"))
         }
@@ -1669,16 +1704,23 @@ public struct WorkspaceView: View {
         _ title: String,
         _ systemImage: String,
         enabled: Bool,
+        isActive: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
         }
         .labelStyle(IconOrTitledLabelStyle(showsTitle: showButtonLabels))
-        .buttonStyle(IconButtonStyle(showsLabel: showButtonLabels))
+        .buttonStyle(IconButtonStyle(showsLabel: showButtonLabels, isActive: isActive))
         .disabled(!enabled)
         .help(title)
         .accessibilityLabel(title)
+    }
+
+    /// Whether `kind`'s tab is the focused group's active tab — the header
+    /// button that opened it stays highlighted while it's the one in view.
+    private func isToolActive(_ kind: WorkspaceToolKind) -> Bool {
+        viewModel.activeTabID == "tool:\(kind.rawValue)"
     }
 
     /// The split grid (ui.md §1, VS Code-style): rows stack vertically, each row
@@ -2009,6 +2051,8 @@ public struct WorkspaceView: View {
                 onSave: { viewModel.saveActiveElasticsearchQuery() },
                 onFocus: { viewModel.focusedGroupID = groupID }
             )
+        case .mermaidDiagram(let state):
+            MermaidTabView(source: state.source)
         case nil:
             EmptyView()
         }

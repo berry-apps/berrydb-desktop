@@ -189,6 +189,10 @@ public final class AIPanelController {
     /// itself (not Intelligence-gated).
     public var slowestQueries: ((Int) -> [QueryHistoryEntry])?
     public var createDebugTab: ((String, String?) -> Void)?
+    /// `open_mermaid_tab` (AI-34 follow-up) — same action as `MermaidBlock`'s
+    /// "Open in Tab" button (`openMermaidInTab` below), but reachable from a
+    /// tool call instead of only a chat-bubble click.
+    public var openMermaidTab: ((String, String?) -> Void)?
     public var onRefreshSchema: (() -> Void)?
     /// Forwards `AISession.onTurnAdmitted` (see its doc comment) — set once
     /// per `aiSession` construction in `bind()`, since `aiSession` itself is
@@ -211,6 +215,9 @@ public final class AIPanelController {
     /// `openArtifact`, this text may never have been an artifact at all (a
     /// `get_schema` object list, a statement the model proposed but never ran).
     public var openTextInTab: ((String) -> Void)?
+    /// AI-34: opens a chat-rendered Mermaid diagram as its own tab, zoomable —
+    /// `WorkspaceViewModel.openMermaidDiagram(source:)`.
+    public var openMermaidInTab: ((String) -> Void)?
 
     /// Bumped whenever a working block expands or collapses, so the transcript
     /// can re-run its scroll-to-bottom.
@@ -387,6 +394,10 @@ public final class AIPanelController {
     public let mcpAllowlist: [MCPServerManifest] = MCPAllowlist.bundled()
 
     public var draft = ""
+    /// Set while the composer is editing a previously-sent message (AI-35)
+    /// instead of drafting a new one — `prepareSend()` routes to
+    /// `AISession.prepareEdit` and clears this the moment it's consumed.
+    public var editingMessageID: UUID?
     public private(set) var balance: Balance?
     /// Throttle window for `refreshBalance` (below) — the number moves slowly
     /// enough (whole-turn token counts / dollars) that fetching it after
@@ -522,6 +533,12 @@ public final class AIPanelController {
         aiSession?.queuedMessages ?? []
     }
 
+    /// Cancels one queued message before it drains — see
+    /// `AISession.removeQueuedMessage(at:)`.
+    public func removeQueuedMessage(at index: Int) {
+        aiSession?.removeQueuedMessage(at: index)
+    }
+
     public func resolveReport(confirmed: Bool, attachContext: Bool) {
         guard !isResolvingLocally else { return }
         isResolvingLocally = true
@@ -616,10 +633,23 @@ public final class AIPanelController {
     /// ever activated at all) blocks the panel.
     public var availability: Availability {
         guard session != nil || dataSourceSession != nil else { return .noConnection }
-        if case .none = license.status { return .unlicensed }
+        if case .none = license.status, !appleIntelligenceGranted { return .unlicensed }
         guard enabledForConnection else { return .disabledForConnection }
         guard consentGiven else { return .needsConsent }
         return .ready
+    }
+
+    /// True when Apple Intelligence access (AI-20) — not a real
+    /// license/trial — has been granted and is currently usable. Re-evaluated
+    /// live, not cached, off `license.status` and
+    /// `AppleFoundationProvider.isAvailable()`.
+    ///
+    /// Deliberately independent of the on-device toggle: the toggle lives
+    /// inside the panel this property gates, so coupling them would lock a
+    /// user out with no way back to the toggle once it's off.
+    public var appleIntelligenceGranted: Bool {
+        guard case .none = license.status else { return false }
+        return AppleIntelligenceAccess.isGranted && AppleFoundationProvider.isAvailable()
     }
 
     // MARK: - Bind to the active session
@@ -728,6 +758,7 @@ public final class AIPanelController {
                 readOpenTabs: { [weak self] in self?.readOpenTabs?() },
                 activeTabStatements: { [weak self] which in self?.activeTabStatements?(which) ?? [] },
                 createDebugTab: { [weak self] sql, title in self?.createDebugTab?(sql, title) },
+                openMermaidTab: { [weak self] diagram, title in self?.openMermaidTab?(diagram, title) },
                 executeStatement: { [weak self] sql, lease in
                     guard lease.isValid else { return .denied }
                     guard let dataSourceSession = self?.dataSourceSession else {
@@ -1034,20 +1065,36 @@ public final class AIPanelController {
 
     /// What `prepareSend` decided, for `send(_:)` below to carry out.
     public enum PreparedSend {
-        case local(String)
+        case local(AISession.SendLocalAdmission)
         case backend(AISession.SendAdmission)
+        /// The message was already appended (both bubbles) because there
+        /// was nowhere to route it. `send(_:)` has nothing further to do —
+        /// this just lets callers still reach their post-send logic (e.g.
+        /// scrolling to the new bubble) the same as any other case.
+        case handled
+        /// Apple-Intelligence-only access (no real license), but this
+        /// device has an email captured via the grant — try a real trial
+        /// for it before giving up. Balance is shared per email across
+        /// devices (not per device), so an email that already topped up
+        /// elsewhere picks its balance back up automatically the moment
+        /// its own fresh trial-token quota runs out — no account-linking
+        /// needed, the backend already does this.
+        case backendAfterTrial(AISession.SendAdmission, email: String)
     }
 
-    /// Synchronous half of send(): validates, clears `draft`, and (backend
-    /// path) admits the prompt into `AISession` — which appends the user's
-    /// transcript bubble immediately. Callers must run this directly on the
-    /// call stack of the user action (not inside a `Task {}`) so both the
-    /// composer clearing and the user's own message bubble show up the
-    /// instant Enter/Send fires, instead of waiting for a new Task's turn
-    /// behind whatever is already queued on the MainActor (e.g. an in-flight
-    /// turn's per-token transcript updates) — that queuing delay is what
-    /// previously read as "takes forever to send, and the bubble lags even
-    /// further behind that".
+    /// Synchronous half of send(): validates, clears `draft`, and admits the
+    /// prompt into `AISession` (`admitSend` for the backend path,
+    /// `admitSendLocal` for on-device) — which appends the user's transcript
+    /// bubble, and the empty "preparing" assistant bubble, immediately.
+    /// Callers must run this directly on the call stack of the user action
+    /// (not inside a `Task {}`) so both the composer clearing and the
+    /// bubbles show up the instant Enter/Send fires, instead of waiting for
+    /// a new Task's turn behind whatever is already queued on the MainActor
+    /// (e.g. an in-flight turn's per-token transcript updates) — that
+    /// queuing delay is what previously read as "takes forever to send, and
+    /// the bubble lags even further behind that". The on-device path used to
+    /// skip this (`sendLocal` was a single `async func`), so it alone kept
+    /// lagging behind Send whenever the MainActor was busy.
     public func prepareSend() -> PreparedSend? {
         guard availability == .ready, let aiSession else { return nil }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1057,10 +1104,49 @@ public final class AIPanelController {
         // an earlier turn must not silently cover statements a later,
         // unrelated request proposes (§6).
         autoApproveSafeThisTurn = false
-        // On-device path (AI-20): when the user opted in AND Apple Intelligence is
-        // available, run the turn locally; otherwise fall back to the backend.
+        // A device with no real license/trial must never reach the metered
+        // backend through any branch below — editing included.
+        let hasRealLicense: Bool = {
+            if case .none = license.status { return false }
+            return true
+        }()
+        // Editing a past message (AI-35) always goes through the backend —
+        // versioning/tree state lives in AISession.prepareEdit, which
+        // sendLocal's on-device loop doesn't participate in.
+        if let messageID = editingMessageID {
+            editingMessageID = nil
+            guard hasRealLicense else {
+                aiSession.admitBlocked(text, reason: L(
+                    "Editing needs cloud AI — on-device doesn't support it yet. Add a trial, license, or credit in License settings to edit this message."
+                ))
+                return .handled
+            }
+            guard let admission = aiSession.prepareEdit(messageID: messageID, newText: text) else { return nil }
+            return .backend(admission)
+        }
+        // On-device (AI-20): checked here, at the point of sending, not in
+        // `availability` — that's what keeps the toggle from also gating
+        // whether the panel itself is reachable.
         if UserDefaults.standard.bool(forKey: "berry.ai.onDevice"), AppleFoundationProvider.isAvailable() {
-            return .local(text)
+            return .local(aiSession.admitSendLocal(text, provider: AppleFoundationProvider()))
+        }
+        guard hasRealLicense else {
+            // AI-20: no real license, but this device already has an email
+            // (captured when Apple Intelligence access was granted) — try
+            // a real trial for it before giving up, instead of just
+            // telling the user to go do it themselves. Requires
+            // `canRunImmediately` (checked and consumed on this same
+            // synchronous call stack, so it can't go stale before
+            // `admitSend` runs) — a message that would otherwise queue
+            // must not get entangled with an auto-trial attempt that might
+            // then fail, which would leave it orphaned.
+            if let email = AppleIntelligenceAccess.grantedEmail, aiSession.canRunImmediately {
+                return .backendAfterTrial(aiSession.admitSend(text), email: email)
+            }
+            aiSession.admitBlocked(text, reason: L(
+                "On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on above, or add a trial, license, or credit in License settings to use cloud AI instead."
+            ))
+            return .handled
         }
         return .backend(aiSession.admitSend(text))
     }
@@ -1068,22 +1154,50 @@ public final class AIPanelController {
     public func send(_ prepared: PreparedSend) async {
         guard let aiSession else { return }
         switch prepared {
-        case .local(let text):
-            await aiSession.sendLocal(text, provider: AppleFoundationProvider())
+        case .local(let admission):
+            await aiSession.runLocal(admission)
         case .backend(let admission):
-            await aiSession.run(admission)
-            // Reported: an admin's mid-session budget top-up left the quota-
-            // exhausted banner (AIPanelView's `balance?.isExhausted` fallback)
-            // stuck showing even after a retry succeeded — the 30s throttle
-            // below is right for the common case, but must not win when the
-            // cache is the one thing actively lying: a turn that just
-            // completed without error is direct proof the cached "exhausted"
-            // reading is stale, so force the refresh in exactly that case.
-            let staleExhausted = balance?.isExhausted == true && aiSession.lastError == nil
-            await refreshBalance(force: staleExhausted)
-            // A fresh chat now exists / got its title on the backend — reflect it (AI-21).
-            await refreshThreads()
+            await runOnBackendAndRefresh(admission)
+        case .handled:
+            break
+        case let .backendAfterTrial(admission, email):
+            await license.startTrial(email: email)
+            if case .none = license.status {
+                // Trial start failed (network, or the server rejected it) —
+                // the assistant bubble already exists from admitSend's
+                // beginTurn; fail it in place with an explanation rather
+                // than leaving a permanent spinner or attempting the
+                // backend call anyway with no valid token. Reuse the same
+                // code→message mapping LicenseView uses (e.g. this device
+                // already used its trial under a different email, TM-07)
+                // instead of a generic message that would bury the actual,
+                // actionable reason.
+                if case let .run(_, assistantIndex, assistantTurnID) = admission {
+                    let reason = license.lastError.map(licenseErrorMessage) ?? L(
+                        "Couldn't start a trial for cloud AI — check your connection, or add a trial, license, or credit in License settings."
+                    )
+                    aiSession.failActiveTurn(assistantIndex: assistantIndex, assistantTurnID: assistantTurnID, reason: reason)
+                }
+            } else {
+                await runOnBackendAndRefresh(admission)
+            }
         }
+    }
+
+    private func runOnBackendAndRefresh(_ admission: AISession.SendAdmission) async {
+        guard let aiSession else { return }
+        await aiSession.run(admission)
+        // Reported: an admin's mid-session budget top-up left the quota-
+        // exhausted banner (AIPanelView's `balance?.isExhausted` fallback)
+        // stuck showing even after a retry succeeded — the 30s throttle
+        // below is right for the common case, but must not win when the
+        // cache is the one thing actively lying: a turn that just
+        // completed without error is direct proof the cached "exhausted"
+        // reading is stale, so force the refresh in exactly that case.
+        let staleExhausted = balance?.isExhausted == true && aiSession.lastError == nil
+        await refreshBalance(force: staleExhausted)
+        // A fresh chat now exists / got its title on the backend — reflect it (AI-21).
+        await refreshThreads()
     }
 
     // MARK: - Approval gate backing (§6)

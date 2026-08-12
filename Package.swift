@@ -390,7 +390,10 @@ let package = Package(
         ),
         .testTarget(
             name: "BerryStoreTests",
-            dependencies: ["BerryStore", "BerryDriverKit"],
+            dependencies: [
+                "BerryStore", "BerryDriverKit",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ],
             path: "Packages/BerryStore/Tests"
         ),
         .testTarget(

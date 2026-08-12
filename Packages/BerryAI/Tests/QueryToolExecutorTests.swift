@@ -655,12 +655,69 @@ struct QueryToolExecutorTests {
         let session = try await makeSession()
         let executor = makeExecutor(session: session, gate: ScriptedGate(false))
         let names = executor.toolSpecs.map(\.name)
-        for expected in ["get_schema", "run_sql", "read_current_tab", "run_tab_statements", "explain_query", "create_debug_tab"] {
+        for expected in [
+            "get_schema", "run_sql", "read_current_tab", "run_tab_statements", "explain_query",
+            "create_debug_tab", "open_mermaid_tab",
+        ] {
             #expect(names.contains(expected), "advertises \(expected)")
         }
         // run_tab_statements exposes the which enum so the model picks a mode.
         let rts = executor.toolSpecs.first { $0.name == "run_tab_statements" }
         #expect(rts?.parametersJSON.contains("cursor") == true)
+    }
+
+    /// Reported live: the model had no tool that opened a `.mermaidDiagram`
+    /// tab, so it reused `create_debug_tab` for a diagram, landing the raw
+    /// Mermaid source in a plain SQL editor tab with no rendering at all.
+    @Test func openMermaidTabForwardsDiagramAndTitle() async throws {
+        let session = try await makeSession()
+        var captured: (diagram: String, title: String?)?
+        let executor = QueryToolExecutor(
+            session: session, catalog: SchemaCatalog(session: session), gate: ScriptedGate(false),
+            onPropose: { _, _ in },
+            openMermaidTab: { diagram, title in captured = (diagram, title) }
+        )
+
+        let outcome = await executor.execute(
+            AIToolCall(
+                id: "c", name: "open_mermaid_tab",
+                args: ["diagram": "erDiagram\n  A ||--o{ B : has", "title": "Schema overview"]
+            )
+        )
+
+        #expect(outcome.status == "ok")
+        #expect(captured?.diagram == "erDiagram\n  A ||--o{ B : has")
+        #expect(captured?.title == "Schema overview")
+    }
+
+    @Test func openMermaidTabOmitsTitleWhenTheModelDoesNotSendOne() async throws {
+        let session = try await makeSession()
+        var captured: (diagram: String, title: String?)?
+        let executor = QueryToolExecutor(
+            session: session, catalog: SchemaCatalog(session: session), gate: ScriptedGate(false),
+            onPropose: { _, _ in },
+            openMermaidTab: { diagram, title in captured = (diagram, title) }
+        )
+
+        let outcome = await executor.execute(
+            AIToolCall(id: "c", name: "open_mermaid_tab", args: ["diagram": "flowchart TD\n  A --> B"])
+        )
+
+        #expect(outcome.status == "ok")
+        #expect(captured?.title == nil)
+    }
+
+    @Test func openMermaidTabFailsWithoutADiagram() async throws {
+        let session = try await makeSession()
+        let executor = QueryToolExecutor(
+            session: session, catalog: SchemaCatalog(session: session), gate: ScriptedGate(false),
+            onPropose: { _, _ in },
+            openMermaidTab: { _, _ in Issue.record("must not open a tab without a diagram") }
+        )
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "open_mermaid_tab", args: [:]))
+
+        #expect(outcome.status == "error")
     }
 
     @Test func createDebugTabAlwaysCreatesNewTab() async throws {

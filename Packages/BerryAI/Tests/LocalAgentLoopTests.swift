@@ -124,4 +124,96 @@ struct LocalAgentLoopTests {
         // Apple Intelligence device the #if branch decides.
         _ = AppleFoundationProvider.isAvailable()
     }
+
+    /// Records every prompt it was called with, so a test can inspect what
+    /// the NEXT round actually sends — `ScriptedLocal` above only cares about
+    /// what comes back out.
+    private final class CapturingScriptedLocal: LocalCompletionProvider, @unchecked Sendable {
+        let replies: [String]
+        var prompts: [String] = []
+        var index = 0
+        init(_ replies: [String]) { self.replies = replies }
+        static func isAvailable() -> Bool { true }
+        func complete(prompt: String) async throws -> String {
+            prompts.append(prompt)
+            defer { index += 1 }
+            return index < replies.count ? replies[index] : "done"
+        }
+    }
+
+    private struct LargeResultExecutor: AIToolExecutor {
+        static let blob = String(repeating: "x", count: 5000)
+        func execute(_ call: AIToolCall) async -> ToolOutcome { .ok(Self.blob) }
+    }
+
+    /// Reproduces the live report: a real tool call's result (schema/query,
+    /// unlike this suite's other tests which use a 2-char `EchoExecutor`
+    /// stub) joined the on-device transcript RAW. Apple's on-device model has
+    /// a much smaller context window than the backend's cloud models, so a
+    /// non-trivial result already blows it in round 2 — `provider.stream`
+    /// throws there with nothing shown yet, which `AISession.sendLocal`
+    /// reports as "The on-device model didn't return an answer.", giving no
+    /// hint that the actual cause was an oversized prompt.
+    @MainActor
+    @Test func largeToolResultIsTruncatedBeforeJoiningTheLocalTranscript() async {
+        let provider = CapturingScriptedLocal([
+            #"{"tool":"get_schema","args":{}}"#,
+            "Done.",
+        ])
+        let loop = LocalAgentLoop(provider: provider, executor: LargeResultExecutor())
+        _ = await loop.run(
+            userText: "what tables?",
+            tools: [AIToolSpec(name: "get_schema", description: "schema", parametersJSON: "{}")],
+            onDelta: { _ in }
+        )
+        #expect(provider.prompts.count == 2)
+        let secondRoundPrompt = provider.prompts[1]
+        #expect(!secondRoundPrompt.contains(LargeResultExecutor.blob))
+        #expect(secondRoundPrompt.contains("truncated"))
+    }
+
+    /// Mirrors the real `LocalCapabilityHost.execute` behavior for a tool
+    /// name that was never advertised — the exact shape of the live bug.
+    private struct AdvertisedOnlyExecutor: AIToolExecutor {
+        let advertised: Set<String>
+        func execute(_ call: AIToolCall) async -> ToolOutcome {
+            guard advertised.contains(call.name) else {
+                return .failed("Capability was not advertised for this turn")
+            }
+            return .ok(#"{"ran":true}"#)
+        }
+    }
+
+    /// Reported live: a plain "which model do you use" question made the
+    /// weak on-device model hallucinate a tool call for a tool that was
+    /// never offered. The loop fed the raw capability-host error back into
+    /// the model's own context as the "tool result", and the model then
+    /// echoed that internal error string back verbatim as its answer on the
+    /// next round — the user saw "Capability was not advertised for this
+    /// turn" as the reply to an ordinary question.
+    @MainActor
+    @Test func hallucinatedToolNameIsCorrectedNotEchoedFromAnInternalError() async {
+        let provider = CapturingScriptedLocal([
+            #"{"tool":"get_model_info","args":{}}"#, // hallucinated — never advertised
+            "I use an on-device model.",
+        ])
+        let loop = LocalAgentLoop(
+            provider: provider,
+            executor: AdvertisedOnlyExecutor(advertised: ["get_schema"])
+        )
+        var streamed = ""
+        let final = await loop.run(
+            userText: "which model do you use",
+            tools: [AIToolSpec(name: "get_schema", description: "schema", parametersJSON: "{}")],
+            onDelta: { streamed += $0 }
+        )
+        #expect(final == "I use an on-device model.")
+        #expect(provider.prompts.count == 2)
+        let secondRoundPrompt = provider.prompts[1]
+        // The correction must name the bad tool in plain language, not just
+        // relay the capability host's internal error string back into the
+        // model's own context.
+        #expect(secondRoundPrompt.contains("get_model_info"))
+        #expect(!secondRoundPrompt.contains("Capability was not advertised"))
+    }
 }

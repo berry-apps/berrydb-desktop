@@ -126,6 +126,12 @@ public final class QueryToolExecutor: AIToolExecutor {
     private let readOpenTabs: () -> OpenTabsSnapshot?
     private let activeTabStatements: (String) -> [String]
     private let createDebugTab: (String, String?) -> Void
+    /// AI-34 follow-up: opens a diagram directly in its own zoomable tab —
+    /// same underlying action as the inline chat block's "Open in Tab"
+    /// button. Without this the model's only tab-creation tool was
+    /// `create_debug_tab`, whose tab type has no Mermaid rendering; reused
+    /// for a diagram it just showed the raw source as plain text.
+    private let openMermaidTab: (String, String?) -> Void
     /// UI-owned NoSQL boundary. The lease is intentionally passed through
     /// instead of checked only here: connection/query/write code must validate
     /// it after approval and immediately before each irreversible operation.
@@ -195,6 +201,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         readOpenTabs: @escaping () -> OpenTabsSnapshot? = { nil },
         activeTabStatements: @escaping (String) -> [String] = { _ in [] },
         createDebugTab: @escaping (String, String?) -> Void = { _, _ in },
+        openMermaidTab: @escaping (String, String?) -> Void = { _, _ in },
         executeStatement: (@MainActor (String, AIExecutionLease) async -> AIDirectStatementResult)? = nil,
         listCollections: (() -> [String])? = nil,
         store: BerryStore? = nil,
@@ -214,6 +221,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         self.readOpenTabs = readOpenTabs
         self.activeTabStatements = activeTabStatements
         self.createDebugTab = createDebugTab
+        self.openMermaidTab = openMermaidTab
         self.store = store
         self.profileID = profileID
         self.resolveArtifactID = resolveArtifactID
@@ -258,6 +266,11 @@ public final class QueryToolExecutor: AIToolExecutor {
                     parametersJSON: #"{"type":"object","properties":{"sql":{"type":"string","description":"The query script."},"query":{"type":"string","description":"The query script."},"title":{"type":"string"}}}"#
                 ),
                 AIToolSpec(
+                    name: "open_mermaid_tab",
+                    description: "Open a Mermaid diagram in its own dedicated tab with zoom/pan controls — use for a diagram too large or dense to read well inline, or when the user asks to view a diagram in its own tab. This only opens the tab; it does not also render the diagram inline in your reply, so still include it as a ```mermaid fenced block in your reply if you want that too.",
+                    parametersJSON: #"{"type":"object","properties":{"diagram":{"type":"string","description":"Valid Mermaid diagram source."},"title":{"type":"string"}},"required":["diagram"]}"#
+                ),
+                AIToolSpec(
                     name: "get_artifact",
                     description: "Look up a durable artifact (a query/tab this agent previously created or ran) by id — its title, kind, and the payload/result of its latest run, or a specific version if requested.",
                     parametersJSON: #"{"type":"object","properties":{"artifact_id":{"type":"string"},"version_number":{"type":"integer"}},"required":["artifact_id"]}"#
@@ -284,6 +297,7 @@ public final class QueryToolExecutor: AIToolExecutor {
             AIToolSpec(name: "run_tab_statements", description: "Run the statements in the open SQL tab (all, the selection, or the one under the cursor), each through the approval gate.", parametersJSON: #"{"type":"object","properties":{"which":{"type":"string","enum":["all","selection","cursor"],"description":"Which statements to run."}},"required":["which"]}"#),
             AIToolSpec(name: "explain_query", description: "EXPLAIN the statement under the cursor and return the query plan tree.", parametersJSON: #"{"type":"object","properties":{"analyze":{"type":"boolean","description":"Use EXPLAIN ANALYZE (actually runs the statement)."}}}"#),
             AIToolSpec(name: "create_debug_tab", description: "Open a new SQL editor tab containing the given SQL.", parametersJSON: #"{"type":"object","properties":{"sql":{"type":"string"},"title":{"type":"string"}},"required":["sql"]}"#),
+            AIToolSpec(name: "open_mermaid_tab", description: "Open a Mermaid diagram in its own dedicated tab with zoom/pan controls — use for a diagram too large or dense to read well inline, or when the user asks to view a diagram in its own tab. This only opens the tab; it does not also render the diagram inline in your reply, so still include it as a ```mermaid fenced block in your reply if you want that too.", parametersJSON: #"{"type":"object","properties":{"diagram":{"type":"string","description":"Valid Mermaid diagram source."},"title":{"type":"string"}},"required":["diagram"]}"#),
             AIToolSpec(name: "get_artifact", description: "Look up a durable artifact (a query/tab this agent previously created or ran) by id — its title, kind, and the payload/result of its latest run, or a specific version if requested.", parametersJSON: #"{"type":"object","properties":{"artifact_id":{"type":"string"},"version_number":{"type":"integer"}},"required":["artifact_id"]}"#),
             AIToolSpec(name: "get_artifact_overview", description: "Cheap first look at a large artifact before reading it: payload size and how many chunks read_artifact_chunk needs to cover it, without the content itself. Call this first if get_artifact might return too much (e.g. a run_tab_statements artifact with many statements).", parametersJSON: #"{"type":"object","properties":{"artifact_id":{"type":"string"},"version_number":{"type":"integer"}},"required":["artifact_id"]}"#),
             AIToolSpec(name: "read_artifact_chunk", description: "Read one bounded chunk of a large artifact's result (one chunk per statement for a multi-statement run) — loop chunk_index from 0 to total_chunks-1 to read all of it without truncation.", parametersJSON: #"{"type":"object","properties":{"artifact_id":{"type":"string"},"version_number":{"type":"integer"},"chunk_index":{"type":"integer"}},"required":["artifact_id","chunk_index"]}"#),
@@ -306,6 +320,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         case "run_tab_statements": await runTabStatements(which: call.args["which"], lease: lease)
         case "explain_query": await explainQuery(analyze: call.args["analyze"] == "true", lease: lease)
         case "create_debug_tab": createDebugTabTool(sql: call.args["sql"], title: call.args["title"], lease: lease)
+        case "open_mermaid_tab": openMermaidTabTool(diagram: call.args["diagram"], title: call.args["title"], lease: lease)
         case "get_artifact": getArtifact(artifactID: call.args["artifact_id"], versionNumber: call.args["version_number"])
         case "get_artifact_overview": getArtifactOverview(artifactID: call.args["artifact_id"], versionNumber: call.args["version_number"])
         case "read_artifact_chunk": readArtifactChunk(
@@ -643,6 +658,20 @@ public final class QueryToolExecutor: AIToolExecutor {
         guard lease.isValid else { return .denied }
         createDebugTab(sql, Self.tabTitle(explicit: title, sql: sql))
         return .ok(Self.json(tabResultPayload(["created": true])))
+    }
+
+    /// AI-34 follow-up. No `tabResultPayload`/artifact-linking here (unlike
+    /// `createDebugTabTool` above) — `readActiveTab()`/`artifactKind(forTabID:)`
+    /// only understand the SQL/Mongo/Qdrant editor tab kinds, and a Mermaid
+    /// tab has no query text or run result to track as an artifact version.
+    private func openMermaidTabTool(diagram: String?, title: String?, lease: AIExecutionLease) -> ToolOutcome {
+        guard let diagram, !diagram.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .failed("open_mermaid_tab requires 'diagram'")
+        }
+        guard lease.isValid else { return .denied }
+        let resolvedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        openMermaidTab(diagram, resolvedTitle?.isEmpty == false ? resolvedTitle : nil)
+        return .ok(Self.json(["created": true]))
     }
 
     /// The model's own title if it sent one, otherwise a name derived from the

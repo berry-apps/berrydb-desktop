@@ -465,6 +465,15 @@
 /* App menu — auto-update (docs/architecture/10 §3) */
 "Check for Updates…" = "Check for Updates…";
 
+/* AI composer — queued message strip */
+"Remove from queue" = "Remove from queue";
+
+/* About sheet + License sheet — contact links */
+"Updates:" = "Updates:";
+"Telegram:" = "Telegram:";
+"Telegram" = "Telegram";
+"Unknown" = "Unknown";
+
 /* Toolbar category menus (grouped header) */
 "Library" = "Library";
 "Intelligence" = "Intelligence";
@@ -712,3 +721,9 @@
 "Roles (optional)" = "Roles (optional)";
 "Command Preview" = "Command Preview";
 "Couldn't load users" = "Couldn't load users";
+
+/* AI-20 follow-up: prepareSend() found nowhere to route a turn (Apple-Intelligence-only access with on-device off, and no real license to fall back to) */
+"Editing needs cloud AI — on-device doesn't support it yet. Add a trial, license, or credit in License settings to edit this message." = "Editing needs cloud AI — on-device doesn't support it yet. Add a trial, license, or credit in License settings to edit this message.";
+"On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on above, or add a trial, license, or credit in License settings to use cloud AI instead." = "On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on above, or add a trial, license, or credit in License settings to use cloud AI instead.";
+"Use Free On-Device Instead" = "Use Free On-Device Instead";
+"This Mac supports Apple Intelligence — skip the trial and run AI on-device for free." = "This Mac supports Apple Intelligence — skip the trial and run AI on-device for free.";

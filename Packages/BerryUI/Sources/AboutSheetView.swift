@@ -3,8 +3,22 @@ import SwiftUI
 
 public struct AboutSheetView: View {
     @Environment(\.dismiss) private var dismiss
+    private let checkForUpdates: () -> Void
 
-    public init() {}
+    public init(checkForUpdates: @escaping () -> Void = {}) {
+        self.checkForUpdates = checkForUpdates
+    }
+
+    /// Real bundle version — `Bundle.main.infoDictionary` is unpopulated
+    /// under `swift run`/tests (no `.app` bundle), hence the placeholder
+    /// fallback rather than a fake version number.
+    private var versionString: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String
+        let build = info?["CFBundleVersion"] as? String
+        guard let short, let build else { return L("Unknown") }
+        return "\(short) (Build \(build))"
+    }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -43,21 +57,24 @@ public struct AboutSheetView: View {
                         Text("•").foregroundStyle(.secondary)
                         Text(L("Version:"))
                             .fontWeight(.medium)
-                        Text("1.0.0 (Build 2026.1)")
+                        Text(versionString)
                             .foregroundStyle(.secondary)
                     }
                     .font(.system(size: 12))
 
                     HStack(spacing: 6) {
                         Text("•").foregroundStyle(.secondary)
-                        Text(L("Status:"))
+                        Text(L("Updates:"))
                             .fontWeight(.medium)
-                        HStack(spacing: 4) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                            Text(L("You are up to date!"))
-                                .foregroundStyle(.green)
+                        Button {
+                            checkForUpdates()
+                        } label: {
+                            Text(L("Check for Updates…"))
+                                .foregroundStyle(BerryTheme.accent)
                         }
+                        .buttonStyle(.plain)
+                        .focusable(false)
+                        .focusEffectDisabled()
                     }
                     .font(.system(size: 12))
                 }
@@ -115,6 +132,23 @@ public struct AboutSheetView: View {
                             .focusable(false)
                             .focusEffectDisabled()
                         }
+
+                        HStack(spacing: 6) {
+                            Text("•").foregroundStyle(.secondary)
+                            Text(L("Telegram:"))
+                                .fontWeight(.medium)
+                            Button {
+                                if let url = URL(string: "https://t.me/berryecosystem") {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            } label: {
+                                Text("t.me/berryecosystem")
+                                    .foregroundStyle(BerryTheme.accent)
+                            }
+                            .buttonStyle(.plain)
+                            .focusable(false)
+                            .focusEffectDisabled()
+                        }
                     }
                     .font(.system(size: 12))
                 }
@@ -123,7 +157,7 @@ public struct AboutSheetView: View {
             Divider()
 
             HStack {
-                Text("Copyright © 2026 Notex Work. All rights reserved.")
+                Text("Copyright © 2026 BerryHub. All rights reserved.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                 Spacer()
@@ -137,7 +171,7 @@ public struct AboutSheetView: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 24)
-        .frame(width: 450, height: 420)
+        .frame(width: 450, height: 452)
         .focusable(false)
         .focusEffectDisabled()
     }

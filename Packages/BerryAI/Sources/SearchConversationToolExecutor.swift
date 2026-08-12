@@ -47,7 +47,9 @@ public final class SearchConversationToolExecutor: AIToolExecutor {
             return .ok(#"{"matches":[]}"#)
         }
 
-        let messages = ((try? store.aiMessages(threadID: threadID)) ?? [])
+        // AI-35: active path only — an edited-away message must not resurface
+        // here as if it were still part of the live conversation.
+        let messages = ((try? store.activeAIMessages(threadID: threadID)) ?? [])
             .filter { $0.toolCalls != "local:interaction" }
         guard messages.count > AIConversationPolicy.recentWindow else {
             return .ok(#"{"matches":[]}"#)

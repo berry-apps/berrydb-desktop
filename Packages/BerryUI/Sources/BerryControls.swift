@@ -82,15 +82,20 @@ extension ButtonStyle where Self == CompactButtonStyle {
 struct IconButtonStyle: ButtonStyle {
     var size: CGFloat = 13
     var showsLabel = false
+    /// True while the action this button triggers is the current workspace
+    /// state (its tab is focused, its panel is open, …) — same accent-tint
+    /// fill the tab strip uses for the selected tab (`EditorTabView.resultTab`).
+    var isActive = false
 
     func makeBody(configuration: Configuration) -> some View {
-        IconButtonBody(configuration: configuration, size: size, showsLabel: showsLabel)
+        IconButtonBody(configuration: configuration, size: size, showsLabel: showsLabel, isActive: isActive)
     }
 
     struct IconButtonBody: View {
         let configuration: ButtonStyleConfiguration
         let size: CGFloat
         let showsLabel: Bool
+        let isActive: Bool
         @Environment(\.isEnabled) private var isEnabled
         @State private var hovering = false
 
@@ -104,7 +109,8 @@ struct IconButtonStyle: ButtonStyle {
                 .frame(minWidth: 24)
                 .frame(height: 20)
                 .background(
-                    (hovering && isEnabled) || configuration.isPressed ? BerryTheme.hover : .clear,
+                    isActive ? BerryTheme.accent.opacity(0.16)
+                        : ((hovering && isEnabled) || configuration.isPressed ? BerryTheme.hover : .clear),
                     in: RoundedRectangle(cornerRadius: BerryTheme.Radius.control)
                 )
                 .contentShape(RoundedRectangle(cornerRadius: BerryTheme.Radius.control))

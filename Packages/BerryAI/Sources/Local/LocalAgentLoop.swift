@@ -100,6 +100,12 @@ public final class LocalAgentLoop {
                     if let prose = gate.push(delta) { emit(prose) }
                 }
             } catch {
+                // Swallowed into a generic "didn't return an answer" by the
+                // caller (AISession.sendLocal) — the underlying FoundationModels
+                // error (guardrail refusal, context window exceeded, unsupported
+                // locale, ...) is the only thing that explains WHY, so it must
+                // be visible in Console.app rather than guessed at blind.
+                NSLog("[AILocal] on-device stream failed, held tail=%d chars: %@", gate.heldTail().count, String(describing: error))
                 let tail = gate.heldTail()
                 if Self.parseToolCall(tail) == nil,
                    !tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -122,13 +128,25 @@ public final class LocalAgentLoop {
                         allowFreeText: call.args["allow_free_text"] as? Bool ?? true
                     ))
                 }
+                // A weak model can hallucinate a tool name that was never
+                // offered — left to reach `executor.execute`, the resulting
+                // "not advertised" error re-enters the model's own context
+                // as a fake tool result, and it can echo that error back
+                // verbatim as its answer. Name the bad tool in plain
+                // language instead, something it can act on.
+                guard tools.contains(where: { $0.name == call.name }) else {
+                    let validNames = tools.map(\.name).joined(separator: ", ")
+                    transcript += "There is no tool named \"\(call.name)\". Valid tools: \(validNames). If no tool is needed, just reply in plain text.\n"
+                    continue
+                }
                 let toolCall = AIToolCall(
                     id: "local-\(UUID().uuidString.prefix(8))",
                     name: call.name,
                     args: Self.flatten(call.args)
                 )
                 let outcome = await executor.execute(toolCall)
-                transcript += "Assistant used tool \(call.name); result: \(outcome.resultJSON ?? outcome.status)\n"
+                let resultText = Self.truncatedForLocalContext(outcome.resultJSON ?? outcome.status)
+                transcript += "Assistant used tool \(call.name); result: \(resultText)\n"
                 continue
             }
 
@@ -147,6 +165,7 @@ public final class LocalAgentLoop {
             if !trimmed.isEmpty { emit(tail) } // fenced code / trailing prose the gate held
             return .completed(shown)
         }
+        NSLog("[AILocal] hit maxRounds (%d) without a final answer, shown=%d chars", Self.maxRounds, shown.count)
         return .completed(shown)
     }
 
@@ -227,6 +246,21 @@ public final class LocalAgentLoop {
             i += 1
         }
         return nil
+    }
+
+    /// Apple's on-device model has a much smaller context window than the
+    /// backend's cloud models (docs/agents/architecture/10, AI-20) — a tool
+    /// result joined into the transcript raw (a schema dump, a query result)
+    /// can already exceed it in round 2, throwing from `provider.stream`
+    /// with nothing shown yet. That reaches the user as an unexplained "the
+    /// on-device model didn't return an answer" (`AISession.sendLocal`), so
+    /// this caps what a single tool result contributes rather than trusting
+    /// every tool's output to already be on-device-sized.
+    nonisolated private static let maxToolResultChars = 2000
+
+    nonisolated static func truncatedForLocalContext(_ text: String) -> String {
+        guard text.count > maxToolResultChars else { return text }
+        return String(text.prefix(maxToolResultChars)) + "... [truncated, \(text.count) chars total]"
     }
 
     /// AIToolCall.args is flat [String: String]; stringify nested values.

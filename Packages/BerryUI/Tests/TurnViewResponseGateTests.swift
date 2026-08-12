@@ -255,7 +255,7 @@ struct PulsingDotsTests {
     /// `.opacity`) re-proposes the parent's full size and the dots grow to fill
     /// the panel width, which is the overflow that was reported.
     @Test func aDotIsFixedSizeRegardlessOfProposedSpace() {
-        let dot = PulsingDot(isOn: true, delay: 0)
+        let dot = PulsingDot(phase: 0)
         #expect(dot.diameter == 6)
     }
 

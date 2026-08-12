@@ -68,6 +68,22 @@ public enum WorkspaceToolKind: String, Sendable, CaseIterable {
     }
 }
 
+/// A Mermaid diagram opened from the AI chat into its own tab (AI-34,
+/// docs/architecture/02) — plain data, not `@Observable`: unlike the other
+/// tab states, the diagram never changes after the chat rendered it, so
+/// there's nothing here for a tab view to mutate in place.
+public struct MermaidTabState: Identifiable, Sendable {
+    public let id: UUID
+    public let source: String
+    public let title: String
+
+    public init(id: UUID = UUID(), source: String, title: String) {
+        self.id = id
+        self.source = source
+        self.title = title
+    }
+}
+
 /// One tab in the workspace (UD-01): a table grid, an SQL editor, or a tool
 /// (History, Saved Queries, …) that used to be a modal (docs/ui/02 §4).
 @MainActor
@@ -78,6 +94,8 @@ public enum WorkspaceTab: @MainActor Identifiable {
     /// ALTER designer for an existing table (CT-01/02/03) — a tab, not a modal
     /// (docs/ui/02 §4); payload is the table's current design.
     case alterTable(TableDesign)
+    /// A Mermaid diagram from the AI chat, opened full-size with zoom (AI-34).
+    case mermaidDiagram(MermaidTabState)
     /// A Mongo collection / Qdrant point-collection tab (docs/architecture/12 §7).
     case collection(CollectionTabState)
     /// A Mongo shell query tab (docs/feedback/01.md item 2) — sibling of
@@ -100,6 +118,7 @@ public enum WorkspaceTab: @MainActor Identifiable {
         case .mongoShell(let state): "mongoShell:\(state.id.uuidString)"
         case .qdrantQuery(let state): "qdrantQuery:\(state.id.uuidString)"
         case .elasticsearchQuery(let state): "elasticsearchQuery:\(state.id.uuidString)"
+        case .mermaidDiagram(let state): "mermaidDiagram:\(state.id.uuidString)"
         }
     }
 
@@ -113,6 +132,7 @@ public enum WorkspaceTab: @MainActor Identifiable {
         case .mongoShell(let state): state.title
         case .qdrantQuery(let state): state.title
         case .elasticsearchQuery(let state): state.title
+        case .mermaidDiagram(let state): state.title
         }
     }
 
@@ -126,6 +146,7 @@ public enum WorkspaceTab: @MainActor Identifiable {
         case .mongoShell: "curlybraces.square"
         case .qdrantQuery: "point.3.filled.connected.trianglepath.dotted"
         case .elasticsearchQuery: "magnifyingglass"
+        case .mermaidDiagram: "point.3.connected.trianglepath.dotted"
         }
     }
 }
@@ -241,6 +262,7 @@ public final class WorkspaceViewModel {
     public private(set) var layoutRows: [EditorLayoutRow] = []
     public var focusedGroupID: String = ""
     private var editorCounter = 0
+    private var mermaidDiagramCounter = 0
 
     private var store: BerryStore?
     private var snapshotSink: (any SchemaSnapshotSink)?
@@ -869,7 +891,7 @@ public final class WorkspaceViewModel {
             case .mongoShell(let state): state.cancel()
             case .qdrantQuery(let state): state.cancel()
             case .elasticsearchQuery(let state): state.cancel()
-            case .tool, .alterTable: break
+            case .tool, .alterTable, .mermaidDiagram: break
             }
         }
         tabs = []
@@ -1535,6 +1557,17 @@ public final class WorkspaceViewModel {
         activeTabID = tabID
     }
 
+    /// Opens a chat-rendered Mermaid diagram as its own tab (AI-34) — the
+    /// zoomable, full-size counterpart to the small inline chat block. Always
+    /// creates a new tab (mirrors `newEditorTab`), since re-opening the same
+    /// diagram from a different message is a distinct thing to look at.
+    public func openMermaidDiagram(source: String, title: String? = nil) {
+        mermaidDiagramCounter += 1
+        let state = MermaidTabState(source: source, title: title ?? L("Diagram") + " \(mermaidDiagramCounter)")
+        tabs.append(.mermaidDiagram(state))
+        activeTabID = "mermaidDiagram:\(state.id.uuidString)"
+    }
+
     public func newEditorTab(text: String = "", title: String? = nil) {
         editorCounter += 1
         let resolved = SnippetPlaceholder.resolve(text)
@@ -1624,7 +1657,7 @@ public final class WorkspaceViewModel {
             // not resurrect on the next connect (UD-05).
             try? store?.deleteEditorSession(id: document.id)
             logWorkspaceAction("tab_closed", description: "Closed tab \"\(document.title)\"")
-        case .tool, .alterTable:
+        case .tool, .alterTable, .mermaidDiagram:
             break // no per-tab resources to tear down
         case .collection(let state):
             state.cancel()
@@ -1947,6 +1980,7 @@ public final class WorkspaceViewModel {
             case .mongoShell: kind = "mongoShell"
             case .qdrantQuery(let state): kind = "qdrantQuery"; sql = state.rawJSON
             case .elasticsearchQuery(let state): kind = "elasticsearchQuery"; sql = state.rawJSON
+            case .mermaidDiagram: kind = "mermaidDiagram"
             }
             return OpenTabsSnapshot.Pane(
                 id: tab.id,
@@ -1983,6 +2017,7 @@ public final class WorkspaceViewModel {
             case .mongoShell: kind = "mongoShell"
             case .qdrantQuery: kind = "qdrantQuery"
             case .elasticsearchQuery: kind = "elasticsearchQuery"
+            case .mermaidDiagram: kind = "mermaidDiagram"
             }
             return UIGraphSnapshot.Tab(id: tab.id, kind: kind, title: tab.title)
         }
