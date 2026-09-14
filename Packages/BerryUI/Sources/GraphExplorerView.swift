@@ -1,14 +1,14 @@
 import BerryGraph
 import SwiftUI
 
-/// Graph Explorer (docs/architecture/11 §5, DI-02/04): pick a harvested table
+/// Graph Explorer: pick a harvested table
 /// and see what it depends on, what depends on it, and its full blast radius.
 /// Reads the DSG through the viewModel — presentation only.
 struct GraphExplorerView: View {
     let tables: () -> [String]
     let overview: (String) -> TableGraphOverview
-    /// Quantified impact against real recent workload (docs/feature/07 §4,
-    /// DI-16) — nil only when the feature itself is unavailable, not for "no
+ /// Quantified impact against real recent workload
+ /// — nil only when the feature itself is unavailable, not for "no
     /// matches" (see `WorkspaceViewModel.simulateImpact`).
     let simulateImpact: (String) -> ImpactSimulator.Report?
     let onReveal: (String) -> Void
@@ -104,8 +104,8 @@ struct GraphExplorerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Quantified impact against real recent workload (docs/feature/07 §4,
-    /// DI-16) — complements the pure-topology "Blast radius" group above with
+ /// Quantified impact against real recent workload
+ /// — complements the pure-topology "Blast radius" group above with
     /// which of the recent history's queries actually touch this table (or
     /// anything in its blast radius), ranked by how often they ran.
     private func impactGroup(_ table: String) -> some View {

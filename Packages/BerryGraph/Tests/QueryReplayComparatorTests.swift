@@ -4,7 +4,7 @@ import Testing
 
 @testable import BerryGraph
 
-@Suite("Query Replay Comparator (DI-17)")
+@Suite("Query Replay Comparator")
 struct QueryReplayComparatorTests {
     private func snapshot(_ ms: Double, at ts: Date) -> QueryReplaySnapshotRecord {
         QueryReplaySnapshotRecord(

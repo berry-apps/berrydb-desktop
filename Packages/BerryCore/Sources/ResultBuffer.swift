@@ -3,7 +3,7 @@ import Foundation
 import Observation
 
 /// Result buffer for the grid — receives batches from the stream, the UI reads
-/// by row (docs/architecture/04 §3). M0: kept in RAM (by default the grid loads
+/// by row. M0: kept in RAM (by default the grid loads
 /// at most auto-LIMIT rows); spilling to disk past a threshold comes in M1.
 @MainActor
 @Observable
@@ -30,14 +30,14 @@ public final class ResultBuffer {
     /// drivers (Postgres/MySQL) only emit columns alongside the first row, so an
     /// empty table's SELECT arrives with no columns. The caller supplies them
     /// from the schema catalog so the grid still shows headers and can insert
-    /// (docs/ui, empty-table editing). No-op unless the buffer completed empty.
+ /// (empty-table editing). No-op unless the buffer completed empty.
     public func seedColumnsIfEmpty(_ metas: [ColumnMeta]) {
         guard state == .complete, columns.isEmpty, rows.isEmpty, !metas.isEmpty else { return }
         columns = metas
     }
 
     /// Consume the result stream. The driver already groups batches of 500–1000
-    /// rows; one MainActor hop per batch — keeps 60fps (docs/architecture/04 §4).
+ /// rows; one MainActor hop per batch — keeps 60fps.
     public func consume(_ stream: AsyncThrowingStream<ResultEvent, Error>) {
         task?.cancel()
         columns = []
@@ -86,7 +86,7 @@ public final class ResultBuffer {
     }
 
     /// Awaits stream completion — the editor runs statements sequentially
-    /// (ED-04/05) and needs to know when one finished before starting the next.
+ /// and needs to know when one finished before starting the next.
     public func waitUntilFinished() async {
         await task?.value
     }

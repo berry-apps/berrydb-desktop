@@ -8,7 +8,7 @@ import Testing
 
 /// Runs against a real `mongo:7` from `BERRYDB_TEST_MONGO` (`host:port:user:
 /// pass:database`, see Tests/docker/compose.yml); skipped when the env var is
-/// unset (docs/architecture/12 §10, CLAUDE.md · Build & test). This is the
+/// unset (see Tests/docker/compose.yml). This is the
 /// "ground truth" suite for the hand-rolled OP_MSG/BSON/SCRAM-SHA-256 stack —
 /// the pure unit tests (BSONTests, MongoOpMsgTests, SCRAMTests,
 /// MongoWireClientTests, MongoConnectionTests) exercise the same code against
@@ -117,7 +117,7 @@ struct MongoConformanceTests {
     /// pipeline-mode query goes through (`CollectionTabState.parsePipeline`
     /// → `BerryDocument.init(jsonObject:)`). That JSON path is where
     /// `WorkspaceMongoDataSourceTests.aggregationPipelineFiltersAndSorts`
-    /// (docs/architecture/12 §7 query UI) caught a real, pre-existing bug:
+ /// (query UI) caught a real, pre-existing bug:
     /// `JSONSerialization` bridges JSON `0`/`1` AND `true`/`false` to
     /// `NSNumber` ambiguously (both satisfy `as? Bool`), so a `$sort`
     /// direction like `{"price": 1}` was silently mistyped as `.bool(true)`
@@ -165,7 +165,7 @@ struct MongoConformanceTests {
             _ = try await connection.write(.insert(collection: name, document: .object([("i", .int(Int64(i)))])))
         }
 
-        // NS-08: an empty/null id means "no filter" -> deleteMany({}), the
+ // an empty/null id means "no filter" -> deleteMany({}), the
         // same structural risk SQL DangerGuard flags for DELETE w/o WHERE.
         let result = try await connection.write(.delete(collection: name, id: .null))
         #expect(result.affectedCount == 4)
@@ -363,7 +363,7 @@ struct MongoConformanceTests {
         #expect(!names.contains(name))
     }
 
-    // MARK: DataSourceDriver entry point (docs/architecture/12 §2/§8)
+ // MARK: DataSourceDriver entry point
 
     @Test func driverConnectSucceedsAgainstAReachableServer() async throws {
         let driver = MongoDriver()
@@ -402,7 +402,7 @@ struct MongoConformanceTests {
         }
     }
 
-    // MARK: - User management (TI-03 Phase C, docs/architecture/14)
+ // MARK: - User management (Phase C)
 
     /// Real `createUser`/`usersInfo`/`dropUser` admin commands against a real
     /// `mongod` — not just our own BSON encoding verifying itself. Only

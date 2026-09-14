@@ -8,7 +8,7 @@ import Testing
 
 @testable import BerryUI
 
-/// Time Machine Timeline (docs/feature/07 §1, DI-08) — end-to-end through the
+/// Time Machine Timeline — end-to-end through the
 /// workspace against an in-process SQLite schema. Serialized: registers
 /// `SQLiteDriver` (shared global `DriverRegistry` state), same caveat
 /// `WorkspaceGraphTests` documents.

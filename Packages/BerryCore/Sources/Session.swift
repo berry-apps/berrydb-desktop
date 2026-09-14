@@ -3,30 +3,30 @@ import BerryTunnel
 import Foundation
 
 /// One logical connection — decoupled from the physical connection so it can
-/// later reconnect without losing tab state (docs/architecture/04 §3).
+/// later reconnect without losing tab state.
 public struct Session: Sendable, Identifiable {
     public let id: UUID
     /// Saved profile this session was opened from (nil for quick-open) —
-    /// used by history (ED-06) and snapshots (DI-08).
+ /// used by history and snapshots.
     public let profileID: UUID?
-    /// Production label (KN-07) — tightens DangerGuard (07 §6).
+ /// Production label — tightens DangerGuard.
     public let isProduction: Bool
     public let config: ConnectionConfig
     public let connection: any DriverConnection
     public let capabilities: Capabilities
     public let dialect: any SQLDialect
     public let driverDisplayName: String
-    /// Non-nil when the connection runs through an SSH tunnel (KN-03);
-    /// closed together with the session (docs/architecture/06 · L1).
+ /// Non-nil when the connection runs through an SSH tunnel;
+ /// closed together with the session.
     public let tunnel: SSHTunnel?
-    /// Whether statements run in this session are logged to history (ED-06) —
+ /// Whether statements run in this session are logged to history
     /// off when the profile disables it.
     public let recordHistory: Bool
 
     public var displayName: String { config.name }
 }
 
-/// Per-step outcome of a connection test (KN-06). `steps` holds every stage
+/// Per-step outcome of a connection test. `steps` holds every stage
 /// that was attempted, in order; `errorMessage` is nil on full success.
 public struct ConnectionTestReport: Sendable, Equatable {
     public enum Step: String, Sendable, CaseIterable {
@@ -59,7 +59,7 @@ public struct ConnectionTestReport: Sendable, Equatable {
     }
 }
 
-/// Connection lifecycle (docs/architecture/04 §2). M1: open/close + test;
+/// Connection lifecycle. M1: open/close + test;
 /// automatic reconnect comes with M2 session restore.
 public actor ConnectionManager {
     public static let shared = ConnectionManager()
@@ -68,7 +68,7 @@ public actor ConnectionManager {
 
     public init() {}
 
-    /// Test connection (KN-06): tunnel (if any) → connect → ping → close;
+ /// Test connection: tunnel (if any) → connect → ping → close;
     /// reports the first failing step through the thrown DriverError.
     public func test(_ config: ConnectionConfig) async throws {
         let report = await testReport(config)
@@ -77,7 +77,7 @@ public actor ConnectionManager {
         }
     }
 
-    /// Test connection with a per-step breakdown (KN-06). Runs the same
+ /// Test connection with a per-step breakdown. Runs the same
     /// tunnel → connect → ping sequence as `test`, but records the outcome and
     /// timing of each attempted step and stops at the first failure instead of
     /// throwing, so the UI can show exactly where a connection breaks.
@@ -186,7 +186,7 @@ public actor ConnectionManager {
     }
 
     /// SSH first, then swap the endpoint to the tunnel's local port
-    /// (docs/architecture/06 · L1).
+ ///.
     private func prepareEndpoint(
         _ config: ConnectionConfig
     ) async throws -> (ConnectionConfig, SSHTunnel?) {

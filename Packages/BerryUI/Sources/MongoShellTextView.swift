@@ -14,13 +14,13 @@ struct MongoShellTextView: NSViewRepresentable {
     /// Runs the whole script — a Mongo shell tab has no per-statement "current
     /// selection" concept, so ⌘R and ⇧⌘↩ both land here.
     let onRun: () -> Void
-    /// Completion source (ED-03): (script, utf16Cursor) → popup rows, already
+ /// Completion source: (script, utf16Cursor) → popup rows, already
     /// ranked by the caller.
     var completionItems: ((String, Int) -> [CompletionItem])?
-    /// Called when this editor takes keyboard focus (ui.md 01 §4) so the
+ /// Called when this editor takes keyboard focus so the
     /// workspace can activate its split pane.
     var onFocus: (() -> Void)?
-    /// One-shot: when true, this editor grabs keyboard focus (docs/ui/03) so a
+ /// One-shot: when true, this editor grabs keyboard focus so a
     /// freshly split/opened pane gets the caret. `onDidFocus` clears it.
     var pendingFocus = false
     var onDidFocus: (() -> Void)?
@@ -42,7 +42,7 @@ struct MongoShellTextView: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         // Don't accept drops — otherwise dragging a workspace tab over the editor
         // gets inserted as text; the pane's SwiftUI drop handles tab moves/splits
-        // (docs/ui/03). The editor never needs drag-in text.
+ // The editor never needs drag-in text.
         textView.unregisterDraggedTypes()
         textView.delegate = context.coordinator
         context.coordinator.wireCallbacks(textView)
@@ -64,7 +64,7 @@ struct MongoShellTextView: NSViewRepresentable {
         guard let textView = context.coordinator.textView as? RunnableTextView else { return }
         // Re-wire every update: the run closures capture `session`, which is nil
         // on the first render of a tab built before its connection is live. Left
-        // stale, ⌘R (which RunnableTextView claims before the menu, ED-04) fires
+ // stale, ⌘R (which RunnableTextView claims before the menu) fires
         // against a nil session and silently no-ops on those tabs.
         context.coordinator.wireCallbacks(textView)
         if textView.string != text {
@@ -85,7 +85,7 @@ struct MongoShellTextView: NSViewRepresentable {
     }
 
     /// Move keyboard focus to this editor when a new pane/tab requested it
-    /// (docs/ui/03). Deferred until the view is in a window; clears the request
+ /// Deferred until the view is in a window; clears the request
     /// once focus lands so it only fires once.
     private func grabFocusIfNeeded(_ textView: NSTextView) {
         guard pendingFocus else { return }
@@ -106,7 +106,7 @@ struct MongoShellTextView: NSViewRepresentable {
         /// keystroke stalls typing, so we debounce until the user pauses.
         private var highlightTask: Task<Void, Never>?
         /// Previous document length, to tell insertion from deletion for
-        /// auto-completion (ui.md 01 §5).
+ /// auto-completion.
         var lastTextLength = 0
 
         init(_ parent: MongoShellTextView) {
@@ -114,7 +114,7 @@ struct MongoShellTextView: NSViewRepresentable {
         }
 
         /// Point the text view's run/focus callbacks at the CURRENT representable, so
-        /// they never keep a stale `session`/`document` from the first render (ED-04).
+ /// they never keep a stale `session`/`document` from the first render.
         func wireCallbacks(_ textView: RunnableTextView) {
             textView.onRunCurrent = { [weak self] in self?.parent.onRun() }
             textView.onRunAll = { [weak self] in self?.parent.onRun() }
@@ -130,7 +130,7 @@ struct MongoShellTextView: NSViewRepresentable {
             scheduleHighlight(textView)
 
             // Accepting a completion also changes the text — don't immediately
-            // re-open the popup on that change (docs/ui/03).
+ // re-open the popup on that change.
             if let runnable = textView as? RunnableTextView, runnable.didAcceptCompletion {
                 runnable.didAcceptCompletion = false
                 popup.hide()
@@ -155,7 +155,7 @@ struct MongoShellTextView: NSViewRepresentable {
             parent.onCursorMove(textView.selectedRange().location)
         }
 
-        // MARK: Completion (ED-03) — custom floating popup (docs/ui spec):
+ // MARK: Completion — custom floating popup:
         // dark themed rows with icons, blue selection, yellow match highlight,
         // ↑ ↓ ↩ ⇥ ⎋ keyboard navigation routed from the text view.
 
@@ -242,7 +242,7 @@ struct MongoShellTextView: NSViewRepresentable {
             highlightTask = Task { [weak self, weak textView] in
                 // nanoseconds, not Task.sleep(for:) — confirmed Swift
                 // runtime crash risk in release builds (swiftlang/swift#86204,
-                // #84793; docs/tests/crash.md), not a style choice.
+ // #84793), not a style choice.
                 try? await Task.sleep(nanoseconds: 120_000_000)
                 guard !Task.isCancelled, let self, let textView else { return }
                 self.highlight(textView)

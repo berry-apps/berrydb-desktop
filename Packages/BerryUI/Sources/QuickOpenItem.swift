@@ -2,7 +2,7 @@ import BerryDataSourceKit
 import BerryDriverKit
 import Foundation
 
-/// One row in the global quick-open palette (TR-02, ⌘P): a relational object
+/// One row in the global quick-open palette (⌘P): a relational object
 /// (table/view/function/…) or a Mongo/Qdrant collection — whichever the
 /// active session has. Selecting one opens it the same way clicking it in
 /// the sidebar would (WorkspaceView.open / .openCollection).

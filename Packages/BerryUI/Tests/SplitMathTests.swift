@@ -3,8 +3,8 @@ import Testing
 
 @testable import BerryUI
 
-/// Resizable-split fraction math (ui.md §1).
-@Suite("SplitMath (ui.md §1)")
+/// Resizable-split fraction math.
+@Suite("SplitMath")
 struct SplitMathTests {
     private func approx(_ a: [CGFloat], _ b: [CGFloat]) -> Bool {
         a.count == b.count && zip(a, b).allSatisfy { abs($0 - $1) < 0.0001 }

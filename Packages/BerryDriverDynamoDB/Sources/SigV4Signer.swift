@@ -2,9 +2,7 @@ import CryptoKit
 import Foundation
 
 /// Hand-rolled AWS Signature Version 4 request signer for DynamoDB auth
-/// (docs/architecture/12 §4). `aws-sdk-swift` (the doc's stated preference)
-/// was tried first and abandoned — see docs/architecture/12 §4 "Trạng thái
-/// hiện thực" for why. Zero external dependency: CryptoKit is an Apple
+/// Zero external dependency: CryptoKit is an Apple
 /// platform framework already used elsewhere in the app (BerryLicense,
 /// BerryTunnel), not a new SwiftPM package.
 ///
@@ -151,7 +149,7 @@ enum SigV4Signer {
     }
 
     /// DateKey → DateRegionKey → DateRegionServiceKey → SigningKey, each a
-    /// keyed HMAC over the previous result (docs/architecture/12 §4).
+ /// keyed HMAC over the previous result.
     static func deriveSigningKey(secret: String, dateStamp: String, region: String, service: String) -> Data {
         let dateKey = hmac(key: Data(("AWS4" + secret).utf8), data: Data(dateStamp.utf8))
         let regionKey = hmac(key: dateKey, data: Data(region.utf8))

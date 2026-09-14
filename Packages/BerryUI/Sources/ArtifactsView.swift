@@ -19,7 +19,7 @@ extension Artifact.Kind {
     }
 }
 
-/// Artifacts library (AI-29, docs/draft/09.md): durable, linkable references
+/// Artifacts library: durable, linkable references
 /// to queries/tabs the AI agent (or the user) created — mirrors
 /// `SavedQueriesView`, minus folder/global (an artifact always belongs to one
 /// connection). Reopen a past artifact into a linked tab, save the active

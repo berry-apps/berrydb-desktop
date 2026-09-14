@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryCore
 
-/// ⌘/ line-comment toggling (docs/ui).
+/// ⌘/ line-comment toggling.
 @Suite("SQLCommentToggler (⌘/)")
 struct SQLCommentTogglerTests {
     @Test func commentsTheCaretLine() {

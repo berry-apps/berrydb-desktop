@@ -4,7 +4,7 @@ import BerryDriverKit
 import Foundation
 import UniformTypeIdentifiers
 
-/// Copy-as formats surfaced in the grid context menu (DL-07).
+/// Copy-as formats surfaced in the grid context menu.
 enum GridCopyFormat: CaseIterable {
     case csv
     case json
@@ -57,7 +57,7 @@ enum GridCopy {
     }
 }
 
-/// Target of the cell viewer sheet (DL-06).
+/// Target of the cell viewer sheet.
 struct CellTarget: Identifiable {
     let id = UUID()
     let row: Int
@@ -89,7 +89,7 @@ struct CellTarget: Identifiable {
     }
 }
 
-/// Shared export flow (XN-01/02): save panel → streaming ExportEngine over
+/// Shared export flow: save panel → streaming ExportEngine over
 /// the buffer's rows; format follows the chosen file extension.
 @MainActor
 enum ExportPanel {
@@ -105,7 +105,7 @@ enum ExportPanel {
         ].compactMap(\.self)
 
         // Accessory: format + encoding + header, so TSV and UTF-16 are reachable
-        // (XN-01) instead of inferring everything from the file extension.
+ // instead of inferring everything from the file extension.
         let extensions = ["csv", "tsv", "json", "ndjson"]
         let formatPopup = NSPopUpButton(frame: .zero, pullsDown: false)
         formatPopup.addItems(withTitles: [
@@ -156,7 +156,7 @@ enum ExportPanel {
         }
     }
 
-    /// SQL export (XN-03): INSERT statements with a chosen batch size and an
+ /// SQL export: INSERT statements with a chosen batch size and an
     /// optional CREATE TABLE header, saved via a `.sql` panel.
     static func presentSQL(
         buffer: ResultBuffer,

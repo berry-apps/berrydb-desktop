@@ -1,15 +1,15 @@
 import BerryDriverKit
 import Foundation
 
-/// `DatabaseDriver` for DynamoDB via PartiQL (NS-04/05, docs/architecture/12
-/// §4) — the highest-reuse of the three NoSQL/vector drivers: it implements
+/// `DatabaseDriver` for DynamoDB via PartiQL
+/// — the highest-reuse of the three NoSQL/vector drivers: it implements
 /// the EXISTING `DatabaseDriver` contract (not `DataSourceDriver`) because
 /// DynamoDB's `ExecuteStatement`/`BatchExecuteStatement` API is SQL-shaped.
 public struct DynamoDBDriver: DatabaseDriver {
     public static let id: DriverID = .dynamodb
     public static let displayName = "DynamoDB"
 
-    // Capability matrix: docs/architecture/05 §4 "DynamoDB (V2, PartiQL)" column
+ // Capability matrix: "DynamoDB (V2, PartiQL)" column
     // — kept in exact lockstep with that table.
     public static let capabilities = Capabilities(
         // TransactWriteItems (≤25 items) is the real atomic mechanism, not
@@ -17,18 +17,18 @@ public struct DynamoDBDriver: DatabaseDriver {
         // wraps runs in BEGIN/COMMIT/ROLLBACK text; `DynamoDBConnection.execute`
         // treats those three as client-side no-ops (no real atomicity/rollback)
         // rather than sending invalid PartiQL — documented in
-        // docs/architecture/12 §4 "Trạng thái hiện thực".
+ //
         transactions: true,
-        cancelQuery: false,          // ❌ chỉ hủy phía client (05 §4) — no server-side cancel API
-        multipleDatabases: false,    // mỗi table độc lập, không có khái niệm database
+ cancelQuery: false, // client-side cancellation only — no server-side cancel API
+        multipleDatabases: false,    // each table is independent, no database concept
         schemas: false,
         explain: false,
         processList: false,
-        serverSideCursor: true,      // ⚠️ NextToken — phân trang tuần tự, không seek
-        keyValueBrowser: false,      // dùng grid PartiQL bình thường
+        serverSideCursor: true,      // ⚠️ NextToken — sequential pagination, no seek
+        keyValueBrowser: false,      // uses standard PartiQL grid
         // No real CREATE/DROP USER — DynamoDB has no in-DB user concept,
         // access is AWS IAM, outside the driver's reach. true here only
-        // makes the Users tab show a static info panel (TI-03 Phase D,
+ // makes the Users tab show a static info panel (Phase D,
         // WorkspaceViewModel.userManagementInfoMessage) instead of hiding
         // entirely — listUsersSQL() stays nil (inherited default), so real
         // management (userManagementSupported) is still always false.
@@ -45,7 +45,7 @@ public struct DynamoDBDriver: DatabaseDriver {
 }
 
 /// `SQLDialect` for DynamoDB PartiQL — every rule below was verified against
-/// a running `dynamodb-local` (docs/architecture/12 §10), not assumed.
+/// a running `dynamodb-local`, not assumed.
 public struct PartiQLDialect: SQLDialect {
     public init() {}
 
@@ -60,11 +60,11 @@ public struct PartiQLDialect: SQLDialect {
     /// dynamodb-local with `ValidationException: Unsupported clause: LIMIT`.
     /// PartiQL SELECT's grammar has no LIMIT clause at all (pagination is via
     /// `NextToken`/the request-level `Limit` field, not statement text) — so
-    /// auto-LIMIT (ED-12) has no home in the SQL-text channel QueryService
+ /// auto-LIMIT has no home in the SQL-text channel QueryService
     /// uses. Deliberate deviation, not a bug: DynamoDB SELECTs always run
     /// fully paginated (`DynamoDBConnection` follows every `NextToken`)
     /// unless the user's own WHERE narrows the result — see
-    /// docs/architecture/12 §4 "Trạng thái hiện thực" for the full writeup
+ /// for the full writeup
     /// (including why a hidden client-side row cap was rejected: it would
     /// silently truncate CSV export, which calls `execute` with
     /// `autoLimit: nil` expecting every row).
@@ -91,5 +91,5 @@ public struct PartiQLDialect: SQLDialect {
     // no override needed.
     // explainPrefix/processListSQL/killSessionSQL: inherited defaults (nil for
     // the latter two) already match capabilities.explain/.processList == false
-    // (05 §4) — unreachable from the UI, no override needed.
+ // unreachable from the UI, no override needed.
 }

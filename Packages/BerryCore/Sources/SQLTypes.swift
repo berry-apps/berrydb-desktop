@@ -1,6 +1,6 @@
 import BerryDriverKit
 
-/// Column type names offered in the table designer picker, per engine (CT-05).
+/// Column type names offered in the table designer picker, per engine.
 /// The type field stays free-text (any DBMS type works); this list is the
 /// convenience menu, now dialect-aware so pgvector/jsonb/enum/unsigned/… show up
 /// for the right database instead of one generic list.

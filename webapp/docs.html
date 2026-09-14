@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BerryDB Documentation 🫐 — Complete Architecture, Drivers & Feature Guide</title>
+  <meta name="description" content="Official developer and user documentation for BerryDB: macOS native database client with Swift 6, AppKit DataGrid, PostgreSQL, MySQL 8.4, SQLite, Redis, SSH Tunnels, and AI SQL Copilot." />
+  <meta name="keywords" content="BerryDB Docs, macOS Postgres client tutorial, SQLite viewer Mac guide, SSH tunnel database, AppKit DataGrid" />
+  <meta name="author" content="Berry Apps" />
+  <meta name="theme-color" content="#080B13" />
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="public/images/favicon.png" />
+  <link rel="apple-touch-icon" href="public/images/berrydb-logo.png" />
+
+  <!-- Anti-FOUC Theme Script: Default to DARK MODE -->
+  <script>
+    (function() {
+      const theme = localStorage.getItem('berry_theme');
+      if (theme === 'light') {
+        document.documentElement.classList.remove('dark');
+      } else {
+        document.documentElement.classList.add('dark');
+      }
+    })();
+  </script>
+
+  <!-- Canonical URL -->
+  <link rel="canonical" href="https://db.berryhub.app/docs.html" />
+
+  <!-- OpenGraph -->
+  <meta property="og:type" content="article" />
+  <meta property="og:url" content="https://db.berryhub.app/docs.html" />
+  <meta property="og:site_name" content="BerryHub Documentation" />
+  <meta property="og:title" content="BerryDB Documentation 🫐 — Complete User & Architecture Manual" />
+  <meta property="og:description" content="Detailed guide on AppKit DataGrid, database drivers (PostgreSQL, MySQL, SQLite, Redis), SSH tunnels, and AI SQL Copilot." />
+  <meta property="og:image" content="https://db.berryhub.app/public/images/og-preview.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:locale" content="en_US" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="BerryDB Documentation 🫐 — Complete Manual" />
+  <meta name="twitter:description" content="Official documentation for BerryDB: Native macOS database management with Swift 6 & AppKit." />
+  <meta name="twitter:image" content="https://db.berryhub.app/public/images/og-preview.png" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            display: ['"Plus Jakarta Sans"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            berry: {
+              50: '#fff1f2',
+              100: '#ffe4e6',
+              200: '#fecdd3',
+              300: '#fda4af',
+              400: '#fb7185',
+              500: '#f43f5e',
+              600: '#e11d48',
+              700: '#be123c',
+              800: '#9f1239',
+              900: '#881337',
+              950: '#4c0519',
+            },
+            accent: {
+              50: '#ecfdf5',
+              100: '#d1fae5',
+              500: '#10b981',
+              600: '#059669',
+              700: '#047857',
+            },
+            dark: {
+              bg: '#080B13',
+              surface: '#0D121F',
+              card: '#0E1424',
+              cardHover: '#141C30',
+              border: '#1E293B',
+              muted: '#94A3B8',
+            }
+          },
+          boxShadow: {
+            'glow-berry': '0 0 40px -10px rgba(225, 29, 72, 0.45)',
+            'glow-berry-lg': '0 0 60px -15px rgba(225, 29, 72, 0.55)',
+            'glow-emerald': '0 0 40px -10px rgba(16, 185, 129, 0.4)',
+            'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.08)',
+            'glass-dark': '0 8px 32px 0 rgba(0, 0, 0, 0.55)',
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    .glass-nav {
+      background: rgba(255, 255, 255, 0.88);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+    .dark .glass-nav {
+      background: rgba(8, 11, 19, 0.92);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+    .kbd-tag {
+      box-shadow: 0 2px 0 rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.4);
+    }
+    .dark .kbd-tag {
+      box-shadow: 0 2px 0 rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.15);
+    }
+    section[id] {
+      scroll-margin-top: 5.5rem;
+    }
+    .active-doc-link {
+      color: #e11d48 !important;
+      background-color: rgba(255, 241, 242, 0.95) !important;
+      font-weight: 700 !important;
+      border-left: 3px solid #f43f5e !important;
+      padding-left: 0.625rem !important;
+    }
+    .dark .active-doc-link {
+      color: #fb7185 !important;
+      background-color: rgba(30, 41, 59, 0.95) !important;
+      border-left-color: #f43f5e !important;
+    }
+  </style>
+</head>
+
+<body class="bg-[#FCFAF9] dark:bg-dark-bg text-slate-800 dark:text-slate-100 font-sans antialiased transition-colors duration-300 selection:bg-rose-500 selection:text-white">
+
+  <!-- ==================== HEADER ==================== -->
+  <header class="fixed top-0 left-0 right-0 z-50 transition-all duration-300 glass-nav border-b border-slate-200/80 dark:border-slate-800/80">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      
+      <!-- Brand Logo -->
+      <a href="/" class="flex items-center gap-3 group">
+        <img src="public/images/berrydb-logo.png" alt="BerryDB Logo" class="w-10 h-10 rounded-2xl shadow-glow-berry transition-transform group-hover:scale-105 duration-200 object-contain" />
+        <div class="flex flex-col">
+          <span class="font-display font-extrabold text-lg tracking-tight text-slate-900 dark:text-white leading-none flex items-center gap-1.5">
+            BerryDB
+            <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500/10 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 font-mono font-semibold border border-rose-500/20">Docs</span>
+          </span>
+          <span class="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Developer & User Manual</span>
+        </div>
+      </a>
+
+      <!-- Search Box in Header -->
+      <div class="hidden md:flex items-center relative max-w-xs w-full">
+        <i data-lucide="search" class="w-4 h-4 absolute left-3 text-slate-400 pointer-events-none"></i>
+        <input type="text" id="docSearch" placeholder="Search documentation (⌘K)..." class="w-full pl-9 pr-4 py-1.5 text-xs rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-rose-500 transition" />
+      </div>
+
+      <!-- Right Actions -->
+      <div class="flex items-center gap-2 sm:gap-3">
+        <a href="/" class="text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 transition hidden sm:inline">
+          Home
+        </a>
+
+        <!-- BerryShot Cross Link -->
+        <a href="https://shot.berryhub.app" target="_blank" rel="noopener" class="text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 px-2.5 py-1.5 rounded-lg transition hidden md:flex items-center gap-1.5">
+          <span>🍓</span>
+          <span>BerryShot</span>
+        </a>
+
+        <!-- BerryHub Cross Link -->
+        <a href="https://berryhub.app" target="_blank" rel="noopener" class="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 px-2.5 py-1.5 rounded-lg transition hidden md:flex items-center gap-1">
+          <i data-lucide="globe" class="w-3.5 h-3.5"></i>
+          <span>BerryHub</span>
+        </a>
+
+        <!-- Theme Toggle -->
+        <button id="themeToggleBtn" onclick="toggleTheme()" type="button" aria-label="Toggle Dark/Light Mode" class="w-9 h-9 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700/80 transition shadow-sm cursor-pointer">
+          <svg class="w-4 h-4 hidden dark:block text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path></svg>
+          <svg class="w-4 h-4 block dark:hidden text-slate-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
+        </button>
+
+        <!-- Download CTA -->
+        <a href="https://download-db.berryhub.app/BerryDB-latest.dmg" class="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-berry-600 via-rose-500 to-berry-700 hover:from-berry-700 hover:to-rose-600 shadow-glow-berry transition">
+          <i data-lucide="download" class="w-4 h-4"></i>
+          <span class="hidden sm:inline">Get App</span>
+        </a>
+
+        <!-- Mobile Table of Contents Toggle -->
+        <button id="mobileTocBtn" aria-label="Open Table of Contents" class="lg:hidden w-9 h-9 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition">
+          <i data-lucide="list" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+    </div>
+
+    <!-- Mobile Table of Contents Drawer -->
+    <div id="mobileTocDrawer" class="lg:hidden hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-dark-bg/95 backdrop-blur-xl px-4 py-5 max-h-[75vh] overflow-y-auto space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between">
+        <span class="font-display font-bold text-xs uppercase tracking-wider text-slate-900 dark:text-white">BerryDB Documentation</span>
+        <button onclick="document.getElementById('mobileTocDrawer').classList.add('hidden')" class="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-white">Close</button>
+      </div>
+      <div class="space-y-3 text-xs">
+        <div>
+          <span class="font-bold text-slate-400 uppercase text-[10px] block mb-1">Getting Started</span>
+          <div class="space-y-1 pl-2">
+            <a href="#intro" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Overview & Architecture</a>
+            <a href="#workspace" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Workspace & Layout</a>
+            <a href="#installation" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Installation & Build</a>
+          </div>
+        </div>
+        <div>
+          <span class="font-bold text-slate-400 uppercase text-[10px] block mb-1">Core Features</span>
+          <div class="space-y-1 pl-2">
+            <a href="#datagrid" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">60fps Streaming DataGrid</a>
+            <a href="#ai-copilot" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">AI SQL Copilot</a>
+            <a href="#connection-manager" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Connection Profiles & SSH</a>
+            <a href="#schema-designer" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Visual Schema Designer</a>
+            <a href="#explain-plan" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Visual EXPLAIN Plan</a>
+            <a href="#redis-inspector" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Redis Key-Value Browser</a>
+            <a href="#import-export" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Import & Export Wizard</a>
+            <a href="#query-history" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">History & Diagnostics</a>
+          </div>
+        </div>
+        <div>
+          <span class="font-bold text-slate-400 uppercase text-[10px] block mb-1">Reference & Security</span>
+          <div class="space-y-1 pl-2">
+            <a href="#drivers" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Database Drivers</a>
+            <a href="#shortcuts-ref" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Keyboard Shortcuts</a>
+            <a href="#troubleshooting" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">FAQ & Troubleshooting</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    </div>
+  </header>
+
+
+  <!-- ==================== MAIN CONTENT WITH SIDEBAR ==================== -->
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-20">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+      
+      <!-- SIDEBAR NAVIGATION -->
+      <aside class="lg:col-span-3">
+        <div class="sticky top-24 max-h-[calc(100vh-7rem)] overflow-y-auto pr-2 pb-8 space-y-6 text-sm text-slate-600 dark:text-slate-400">
+          
+          <div>
+            <h3 class="font-display font-bold text-xs uppercase tracking-wider text-slate-900 dark:text-white mb-2">Getting Started</h3>
+            <ul class="space-y-1">
+              <li><a href="#intro" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition text-emerald-600 dark:text-emerald-400 bg-emerald-50/50 dark:bg-slate-800/50">Overview & Architecture</a></li>
+              <li><a href="#workspace" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Workspace & Layout</a></li>
+              <li><a href="#installation" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Installation & Build</a></li>
+            </ul>
+          </div>
+
+          <div>
+            <h3 class="font-display font-bold text-xs uppercase tracking-wider text-slate-900 dark:text-white mb-2">Core Features</h3>
+            <ul class="space-y-1">
+              <li><a href="#datagrid" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">60fps Streaming DataGrid</a></li>
+              <li><a href="#ai-copilot" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">AI SQL Copilot</a></li>
+              <li><a href="#connection-manager" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Connection & SSH Profiles</a></li>
+              <li><a href="#schema-designer" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Visual Schema & Table Editor</a></li>
+              <li><a href="#explain-plan" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Visual EXPLAIN Query Plan</a></li>
+              <li><a href="#redis-inspector" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Redis Key-Value Browser</a></li>
+              <li><a href="#import-export" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Import & Export Wizard</a></li>
+              <li><a href="#query-history" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">History & Performance Audit</a></li>
+            </ul>
+          </div>
+
+          <div>
+            <h3 class="font-display font-bold text-xs uppercase tracking-wider text-slate-900 dark:text-white mb-2">Engines & Security</h3>
+            <ul class="space-y-1">
+              <li><a href="#drivers" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Database Driver Specs</a></li>
+              <li><a href="#keychain" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Keychain Enclave Security</a></li>
+              <li><a href="#shortcuts-ref" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Keyboard Shortcuts</a></li>
+              <li><a href="#troubleshooting" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">FAQ & Troubleshooting</a></li>
+              <li><a href="#support" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Community & Support</a></li>
+            </ul>
+          </div>
+
+        </div>
+      </aside>
+
+      <!-- DOCUMENTATION ARTICLES -->
+      <main class="lg:col-span-9 space-y-16 text-left">
+        
+        <!-- SECTION 1: OVERVIEW -->
+        <section id="intro" class="space-y-4">
+          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 text-xs font-bold uppercase">
+            <span>Introduction</span>
+          </div>
+          <h1 class="font-display text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+            BerryDB Documentation
+          </h1>
+          <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">
+            <strong>BerryDB</strong> is a native macOS database management client built with Swift 6 and AppKit. It is architected as an ultra-fast, lightweight alternative to web-wrapped or JVM-based database clients that consumes under 50MB of RAM and launches in under 150ms.
+          </p>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
+            <div class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 shadow-sm">
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2"><i data-lucide="zap" class="w-4 h-4 text-emerald-500"></i> Hardware Grid</h4>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">AppKit NSTableView streaming 1,000,000+ rows with zero frame drops.</p>
+            </div>
+            <div class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 shadow-sm">
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2"><i data-lucide="lock" class="w-4 h-4 text-blue-500"></i> Keychain Enclave</h4>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Hardware encrypted storage for all database passwords & SSH keys.</p>
+            </div>
+            <div class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 shadow-sm">
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2"><i data-lucide="sparkles" class="w-4 h-4 text-purple-500"></i> AI SQL Copilot</h4>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Schema-aware natural language query generation without data leaks.</p>
+            </div>
+          </div>
+        </section>
+
+
+        <!-- SECTION 2: WORKSPACE & LAYOUT -->
+        <section id="workspace" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="layout-dashboard" class="w-5 h-5 text-emerald-500"></i>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Workspace & Multi-tab Navigation</h2>
+          </div>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            BerryDB features an intuitive macOS layout with a collapsible connection sidebar, multi-tab SQL scratchpad, split-pane result grid, and interactive AI assistant sidebar.
+          </p>
+
+          <!-- Screenshot Illustration -->
+          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
+            <img src="public/images/Capture-1786694680.png" alt="BerryDB Main Workspace" class="w-full h-auto object-cover" />
+            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
+              Figure 1: Main BerryDB Workspace with Sidebar Schema Catalog, Multi-tab Query Editor, and Inline Results Grid.
+            </div>
+          </div>
+        </section>
+
+
+        <!-- SECTION 3: INSTALLATION -->
+        <section id="installation" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="download" class="w-5 h-5 text-emerald-500"></i>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Installation & Building From Source</h2>
+          </div>
+
+          <h3 class="font-bold text-base text-slate-900 dark:text-white">Option 1: Official DMG Release (Recommended)</h3>
+          <p class="text-sm text-slate-600 dark:text-slate-300">
+            Download for Apple Silicon, macOS Sonoma (14.0+) & Sequoia:
+          </p>
+          <div class="p-4 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between flex-wrap gap-4">
+            <span class="text-xs font-mono text-slate-800 dark:text-slate-200">https://download-db.berryhub.app/BerryDB-latest.dmg</span>
+            <a href="https://download-db.berryhub.app/BerryDB-latest.dmg" class="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition">Download .DMG</a>
+          </div>
+
+          <h3 class="font-bold text-base text-slate-900 dark:text-white pt-3">Option 2: Build From Source with Swift SPM & Makefile</h3>
+          <div class="rounded-xl bg-slate-950 p-4 border border-slate-800 text-xs font-mono text-slate-200 space-y-2 overflow-x-auto">
+            <p class="text-slate-500"># 1. Clone repository</p>
+            <p>git clone https://github.com/berry-apps/berrydb-desktop.git && cd berrydb-desktop</p>
+            <p class="text-slate-500 pt-2"># 2. Build and launch local development instance</p>
+            <p>make run</p>
+            <p class="text-slate-500 pt-2"># 3. Assemble release bundle into dist/BerryDB.app</p>
+            <p>make app</p>
+          </div>
+        </section>
+
+
+        <!-- SECTION 4: STREAMING DATAGRID -->
+        <section id="datagrid" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="table-2" class="w-5 h-5 text-emerald-500"></i>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">60fps Streaming DataGrid</h2>
+          </div>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            The AppKit <code class="font-mono text-xs">NSTableView</code> DataGrid delivers hardware-accelerated rendering capable of streaming millions of rows without locking the main thread. Supports inline cell editing, dynamic column sorting, and instant pagination.
+          </p>
+
+          <!-- Screenshot Illustration -->
+          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
+            <img src="public/images/Screenshot-FDADEF7C-75A2-479E-832F-386FA3974B33.png" alt="Streaming DataGrid" class="w-full h-auto object-cover" />
+            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
+              Figure 2: 60fps DataGrid with inline editing, sticky column headers, and execution metric indicators.
+            </div>
+          </div>
+        </section>
+
+
+        <!-- SECTION 5: AI SQL COPILOT -->
+        <section id="ai-copilot" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="sparkles" class="w-5 h-5 text-purple-500"></i>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">AI SQL Copilot & Chat Assistant</h2>
+          </div>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            Transform plain English prompts into optimized SQL queries for PostgreSQL, MySQL, SQLite, and DuckDB. The assistant understands your schema, foreign key relationships, and data types while ensuring zero row-data leakage.
+          </p>
+
+          <!-- Screenshot Illustration -->
+          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
+            <img src="public/images/Screenshot-9E1F8A3F-0E70-4F56-90AD-E3B6CC9DA071.png" alt="AI SQL Copilot" class="w-full h-auto object-cover" />
+            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
+              Figure 3: AI SQL Copilot Assistant side panel generating complex multi-table JOINs and query fixes.
+            </div>
+          </div>
+        </section>
+
+
+        <!-- SECTION 6: CONNECTION MANAGER & SSH -->
+        <section id="connection-manager" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="shield-check" class="w-5 h-5 text-emerald-500"></i>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Connection Profiles & SSH Bastion Tunnels</h2>
+          </div>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            Configure direct connections, SSL/mTLS client certificates, and SSH Jump Hosts with RSA/Ed25519 keys to access private cloud VPC databases safely.
+          </p>
+
+          <!-- Screenshot Illustration -->
+          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
+            <img src="public/images/Screenshot-C676D002-6AEF-4B29-91FD-45B2D417D483.png" alt="Connection Profile Sheet" class="w-full h-auto object-cover" />
+            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
+              Figure 4: Connection Profile Manager with Host, Port, Authentication, SSL/TLS, and SSH Tunnel tabs.
+            </div>
+          </div>
+        </section>
+
+
+        <!-- SECTION 7: SCHEMA DESIGNER -->
+        <section id="schema-designer" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="layers" class="w-5 h-5 text-blue-500"></i>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Visual Schema & Table Structure Designer</h2>
+          </div>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            Inspect and alter columns, default constraints, primary keys, and B-Tree indexes visually without writing manual <code class="font-mono text-xs">ALTER TABLE</code> statements:
+          </p>
+
+          <!-- Screenshot Illustration -->
+          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
+            <img src="public/images/Screenshot-C07EBF19-E582-4E57-AC61-7B020C5921B5.png" alt="Table Schema Designer" class="w-full h-auto object-cover" />
+            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
+              Figure 5: Table Schema Designer with column types, nullability, auto-increments, and foreign key relations.
+            </div>
+          </div>
+        </section>
+
+
+        <!-- SECTION 8: VISUAL EXPLAIN PLAN -->
+        <section id="explain-plan" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="git-branch" class="w-5 h-5 text-amber-500"></i>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Visual EXPLAIN Query Plan Profiler</h2>
+          </div>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            Press <kbd class="kbd-tag px-2 py-1 rounded bg-slate-200 dark:bg-slate-800 font-mono text-xs">⌘E</kbd> to inspect the execution plan tree. Spot sequential scans, missing indexes, and expensive hash joins instantly with color-coded node cost tags:
+          </p>
+
+          <!-- Screenshot Illustration -->
+          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
+            <img src="public/images/Screenshot-47E670EA-CE85-45EA-A846-4B55A9AA58CD.png" alt="Visual EXPLAIN Plan" class="w-full h-auto object-cover" />
+            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
+              Figure 6: Visual EXPLAIN Query Plan highlighting high-cost operations, sequential scans, and actual row counts.
+            </div>
+          </div>
+        </section>
+
+
+        <!-- SECTION 9: REDIS INSPECTOR -->
+        <section id="redis-inspector" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="cpu" class="w-5 h-5 text-rose-500"></i>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Redis Key-Value & Cache Browser</h2>
+          </div>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            Explore Redis databases (DB 0-15), search keys with wildcard patterns, inspect TTL values, and modify Strings, Hashes, Lists, Sets, and JSON data directly:
+          </p>
+
+          <!-- Screenshot Illustration -->
+          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
+            <img src="public/images/Screenshot-35D4A78D-6AA1-4483-9815-EBE8AB262A26.png" alt="Redis Key Inspector" class="w-full h-auto object-cover" />
+            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
+              Figure 7: Redis Key-Value Browser with live key filtering, TTL tracker, and data type inspector.
+            </div>
+          </div>
+        </section>
+
+
+        <!-- SECTION 10: IMPORT & EXPORT WIZARD -->
+        <section id="import-export" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="arrow-up-down" class="w-5 h-5 text-cyan-500"></i>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Import & Export Wizard</h2>
+          </div>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            Fast batch imports and exports for CSV, JSON, NDJSON, and raw SQL dumps with automatic delimiter detection and transaction isolation:
+          </p>
+
+          <!-- Screenshot Illustration -->
+          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
+            <img src="public/images/Screenshot-150574A9-3368-4F2A-9B08-2717518D840B.png" alt="Import and Export Wizard" class="w-full h-auto object-cover" />
+            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
+              Figure 8: Import / Export Wizard with format selections, header mapping, and chunked batch writes.
+            </div>
+          </div>
+        </section>
+
+
+        <!-- SECTION 11: HISTORY & AUDIT -->
+        <section id="query-history" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="history" class="w-5 h-5 text-indigo-500"></i>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Query Replay, History & Diagnostics</h2>
+          </div>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            Review past SQL statements with precise execution duration timestamps, rows affected, and one-click query replay:
+          </p>
+
+          <!-- Screenshot Illustration -->
+          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
+            <img src="public/images/Screenshot-566C26C5-CC0E-4B6B-B400-A397634FC76E.png" alt="Query History and Audit Log" class="w-full h-auto object-cover" />
+            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
+              Figure 9: Query History and Execution Log with execution timing, status badges, and replay actions.
+            </div>
+          </div>
+        </section>
+
+
+        <!-- SECTION 12: DATABASE DRIVER SPECS -->
+        <section id="drivers" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="database" class="w-5 h-5 text-emerald-500"></i>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Supported Database Drivers</h2>
+          </div>
+          <ul class="list-disc list-inside space-y-2 text-xs sm:text-sm text-slate-600 dark:text-slate-300">
+            <li><strong>PostgreSQL 12-16+:</strong> Citus, Timescale, CockroachDB, JSONB operators, real socket cancellation (<code class="font-mono text-xs">pg_cancel_backend</code>).</li>
+            <li><strong>MySQL 8.4+ & MariaDB:</strong> Full support for <code class="font-mono text-xs">caching_sha2_password</code> and <code class="font-mono text-xs">mysql_native_password</code>.</li>
+            <li><strong>SQLite 3:</strong> Native C <code class="font-mono text-xs">libsqlite3</code> binding, Write-Ahead Logging (WAL), and zero setup file loading.</li>
+            <li><strong>Microsoft SQL Server:</strong> T-SQL execution, table alteration, and stored procedure support.</li>
+            <li><strong>Redis:</strong> Key-value cache, TTL management, and JSON manipulation.</li>
+            <li><strong>DuckDB & ClickHouse:</strong> High-speed columnar OLAP queries on Parquet / Arrow files.</li>
+          </ul>
+        </section>
+
+
+        <!-- SECTION 13: SHORTCUTS -->
+        <section id="shortcuts-ref" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="command" class="w-5 h-5 text-emerald-500"></i>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Keyboard Shortcuts Reference</h2>
+          </div>
+
+          <div class="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+            <table class="w-full text-left text-xs sm:text-sm">
+              <thead class="bg-slate-100 dark:bg-slate-900 font-bold text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-800">
+                <tr>
+                  <th class="py-3 px-4">Action</th>
+                  <th class="py-3 px-4">Keyboard Shortcut</th>
+                  <th class="py-3 px-4">Context</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-200 dark:divide-slate-800 bg-white dark:bg-[#0E1424] text-slate-700 dark:text-slate-300">
+                <tr>
+                  <td class="py-3 px-4 font-medium">Execute Query</td>
+                  <td class="py-3 px-4 font-mono font-bold text-emerald-600 dark:text-emerald-400">⌘ R / ⌘ Enter</td>
+                  <td class="py-3 px-4 text-slate-500">SQL Editor</td>
+                </tr>
+                <tr>
+                  <td class="py-3 px-4 font-medium">Command Palette</td>
+                  <td class="py-3 px-4 font-mono font-bold text-emerald-600 dark:text-emerald-400">⌘ K</td>
+                  <td class="py-3 px-4 text-slate-500">Global</td>
+                </tr>
+                <tr>
+                  <td class="py-3 px-4 font-medium">Visual EXPLAIN Plan</td>
+                  <td class="py-3 px-4 font-mono font-bold text-emerald-600 dark:text-emerald-400">⌘ E</td>
+                  <td class="py-3 px-4 text-slate-500">SQL Editor</td>
+                </tr>
+                <tr>
+                  <td class="py-3 px-4 font-medium">Format SQL Statement</td>
+                  <td class="py-3 px-4 font-mono font-bold text-emerald-600 dark:text-emerald-400">⌘ ⌥ F</td>
+                  <td class="py-3 px-4 text-slate-500">SQL Editor</td>
+                </tr>
+                <tr>
+                  <td class="py-3 px-4 font-medium">New Query Tab</td>
+                  <td class="py-3 px-4 font-mono font-bold text-emerald-600 dark:text-emerald-400">⌘ T</td>
+                  <td class="py-3 px-4 text-slate-500">Workspace</td>
+                </tr>
+                <tr>
+                  <td class="py-3 px-4 font-medium">Cancel Running Query</td>
+                  <td class="py-3 px-4 font-mono font-bold text-rose-600 dark:text-rose-400">⌘ . / ESC</td>
+                  <td class="py-3 px-4 text-slate-500">Active Execution</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+
+        <!-- SECTION 14: FAQ -->
+        <section id="troubleshooting" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="help-circle" class="w-5 h-5 text-emerald-500"></i>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Frequently Asked Questions</h2>
+          </div>
+
+          <div class="space-y-4">
+            <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800">
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Why does BerryDB use under 50MB RAM compared to traditional cross-platform tools (850MB+)?</h4>
+              <p class="text-xs text-slate-600 dark:text-slate-400 mt-2 leading-relaxed">
+                BerryDB is compiled as a pure native macOS Mach-O binary with Swift 6 and AppKit. It does not bundle Chromium, Node.js, or Java JVM runtimes. Memory is allocated strictly on demand and released promptly.
+              </p>
+            </div>
+
+            <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800">
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Is my database data safe when using the AI Copilot?</h4>
+              <p class="text-xs text-slate-600 dark:text-slate-400 mt-2 leading-relaxed">
+                Yes. BerryDB only sends table names, column names, and data types (schema metadata) to the AI model. No row data, personal values, or secret payloads are ever transmitted.
+              </p>
+            </div>
+          </div>
+        </section>
+
+
+        <!-- SECTION 15: COMMUNITY & SUPPORT -->
+        <section id="support" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 stroke-current fill-none text-emerald-500" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="4"></circle><line x1="4.93" x2="9.17" y1="4.93" y2="9.17"></line><line x1="14.83" x2="19.07" y1="14.83" y2="19.07"></line><line x1="14.83" x2="19.07" y1="9.17" y2="4.93"></line><line x1="4.93" x2="9.17" y1="19.07" y2="14.83"></line></svg>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Community, Feedback & Support</h2>
+          </div>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            Need assistance, have questions about database drivers, or want to contribute? Connect directly with the Berry Apps team:
+          </p>
+
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+            <!-- Email -->
+            <a href="mailto:info@berryhub.app" class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 hover:border-emerald-500/60 shadow-sm transition group">
+              <div class="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-3 group-hover:scale-105 transition">
+                <svg class="w-5 h-5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"></rect><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path></svg>
+              </div>
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Email Support</h4>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">info@berryhub.app</p>
+            </a>
+
+            <!-- Telegram -->
+            <a href="https://t.me/berryecosystem" target="_blank" rel="noopener" class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 hover:border-sky-500/60 shadow-sm transition group">
+              <div class="w-9 h-9 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-sky-500 flex items-center justify-center mb-3 group-hover:scale-105 transition">
+                <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/></svg>
+              </div>
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Telegram Community</h4>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">@berryecosystem</p>
+            </a>
+
+            <!-- X (Twitter) -->
+            <a href="https://x.com/berryecosystem" target="_blank" rel="noopener" class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 hover:border-slate-400 shadow-sm transition group">
+              <div class="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 flex items-center justify-center mb-3 group-hover:scale-105 transition">
+                <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+              </div>
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Follow on X</h4>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">@berryecosystem</p>
+            </a>
+          </div>
+        </section>
+
+      </main>
+
+    </div>
+  </div>
+
+
+  <!-- ==================== JAVASCRIPT LOGIC ==================== -->
+  <script>
+    // Robust Dark / Light Theme Logic
+    const htmlEl = document.documentElement;
+
+    function applyTheme(theme) {
+      if (theme === 'light') {
+        htmlEl.classList.remove('dark');
+        localStorage.setItem('berry_theme', 'light');
+      } else {
+        htmlEl.classList.add('dark');
+        localStorage.setItem('berry_theme', 'dark');
+      }
+    }
+
+    window.toggleTheme = function() {
+      const isDark = htmlEl.classList.contains('dark');
+      applyTheme(isDark ? 'light' : 'dark');
+    };
+
+    const savedTheme = localStorage.getItem('berry_theme') || 'dark';
+    applyTheme(savedTheme);
+
+    const themeToggleBtn = document.getElementById('themeToggleBtn');
+    if (themeToggleBtn) {
+      themeToggleBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        window.toggleTheme();
+      });
+    }
+
+    // Safe Lucide Icons Initialization
+    function initIcons() {
+      if (window.lucide && typeof lucide.createIcons === 'function') {
+        lucide.createIcons();
+      }
+    }
+    initIcons();
+    document.addEventListener('DOMContentLoaded', initIcons);
+    window.addEventListener('load', initIcons);
+
+    // Real-time Docs Search Filter
+    const docSearch = document.getElementById('docSearch');
+    if (docSearch) {
+      docSearch.addEventListener('input', (e) => {
+        const term = e.target.value.toLowerCase().trim();
+        const sections = document.querySelectorAll('main section');
+        sections.forEach(sec => {
+          if (!term) {
+            sec.style.display = 'block';
+            return;
+          }
+          const text = sec.textContent.toLowerCase();
+          sec.style.display = text.includes(term) ? 'block' : 'none';
+        });
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+          e.preventDefault();
+          docSearch.focus();
+        }
+      });
+    }
+
+    // ScrollSpy for Active Sidebar Link
+    const docLinks = document.querySelectorAll('aside .doc-link');
+    const docSections = document.querySelectorAll('main section[id]');
+
+    function updateActiveSidebar() {
+      const scrollPosition = window.scrollY + 130;
+      let currentSectionId = '';
+
+      docSections.forEach((section) => {
+        const top = section.offsetTop;
+        const height = section.offsetHeight;
+        if (scrollPosition >= top && scrollPosition < top + height) {
+          currentSectionId = section.getAttribute('id');
+        }
+      });
+
+      if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight - 60) {
+        if (docSections.length > 0) {
+          currentSectionId = docSections[docSections.length - 1].getAttribute('id');
+        }
+      }
+
+      if (!currentSectionId && docSections.length > 0) {
+        currentSectionId = docSections[0].getAttribute('id');
+      }
+
+      if (currentSectionId) {
+        docLinks.forEach((link) => {
+          const href = link.getAttribute('href').replace('#', '');
+          if (href === currentSectionId) {
+            link.classList.add('active-doc-link');
+          } else {
+            link.classList.remove('active-doc-link');
+          }
+        });
+      }
+    }
+
+    window.addEventListener('scroll', updateActiveSidebar, { passive: true });
+    window.addEventListener('load', updateActiveSidebar);
+    updateActiveSidebar();
+
+    // Mobile Table of Contents Toggle
+    const mobileTocBtn = document.getElementById('mobileTocBtn');
+    const mobileTocDrawer = document.getElementById('mobileTocDrawer');
+    if (mobileTocBtn && mobileTocDrawer) {
+      mobileTocBtn.addEventListener('click', () => {
+        mobileTocDrawer.classList.toggle('hidden');
+      });
+      document.querySelectorAll('.mobile-doc-link').forEach(l => {
+        l.addEventListener('click', () => {
+          mobileTocDrawer.classList.add('hidden');
+        });
+      });
+    }
+  </script>
+
+</body>
+</html>

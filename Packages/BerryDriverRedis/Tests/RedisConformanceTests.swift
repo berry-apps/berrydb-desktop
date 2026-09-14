@@ -9,7 +9,7 @@ import Testing
 /// Runs against a real Redis/Valkey from `BERRYDB_TEST_REDIS`
 /// (see Tests/docker/compose.yml); skipped when the env var is unset.
 ///
-/// `RedisConnection` requires macOS 15+ (docs/architecture/15 §3), but
+/// `RedisConnection` requires macOS 15+, but
 /// Swift Testing's `@Suite`/`@Test` macros reject being combined directly
 /// with `@available` — so this suite (and every test in it) stays
 /// unannotated, and each test guards its macOS-15-only body with
@@ -29,7 +29,7 @@ struct RedisConformanceTests {
             // default (.prefer) would otherwise try a TLS handshake and fail,
             // since Redis's wire protocol has no Postgres-style "try TLS, fall
             // back to plaintext" byte (same limitation already documented for
-            // Mongo, docs/architecture/12 §3 point 1).
+ // Mongo, point 1).
             tlsMode: .disable
         ))
     }
@@ -98,7 +98,7 @@ struct RedisConformanceTests {
     /// part of the driver (ZRANGE WITHSCORES pair-splitting especially).
     /// Values are seeded directly with `redis-cli` rather than through this
     /// driver (which has no per-type write path yet, v1 scope: string
-    /// SET/DEL/EXPIRE only, docs/architecture/15 §4) — a real server's own
+ /// SET/DEL/EXPIRE only) — a real server's own
     /// commands populate the fixtures, this test only exercises reads.
     @Test func getDecodesEveryNonStringType() async throws {
         guard #available(macOS 15, *) else { return }
@@ -162,7 +162,7 @@ struct RedisConformanceTests {
         #expect(entries.first?.fields == ["field": "streamvalue"])
     }
 
-    /// N3 (docs/architecture/05 §1): a driver must never buffer a full
+ /// N3: a driver must never buffer a full
     /// result set. Seeds a hash past the driver's 1000-member batch size and
     /// asserts `get()` returns a bounded page, not the full 1500 members —
     /// this is the regression guard for the HGETALL→HSCAN fix; it would fail
@@ -248,7 +248,7 @@ struct RedisConformanceTests {
     /// Every non-string `write()` case, round-tripped through `get()` —
     /// mirrors `getDecodesEveryNonStringType`'s per-type coverage, but for
     /// the write path this driver had none of until now (v1 was
-    /// string SET/DEL/EXPIRE only, docs/architecture/15 §4).
+ /// string SET/DEL/EXPIRE only).
     @Test func writeAddsAndRemovesEveryNonStringType() async throws {
         guard #available(macOS 15, *) else { return }
         let conn = try await makeConnection()

@@ -4,9 +4,9 @@ import Testing
 
 @testable import BerryTunnel
 
-/// Public-key auth from OpenSSH private keys (KN-03). Uses ssh-keygen to make
+/// Public-key auth from OpenSSH private keys. Uses ssh-keygen to make
 /// real keys of each type — no server needed, just key parsing.
-@Suite("SSH key auth (KN-03)")
+@Suite("SSH key auth")
 struct SSHKeyAuthTests {
     private func makeTempDir() throws -> String {
         let dir = NSTemporaryDirectory() + "berry_ssh_\(UUID().uuidString)"
@@ -35,7 +35,7 @@ struct SSHKeyAuthTests {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
-        // ECDSA parsing is our own (KN-03) — all three curves must load.
+ // ECDSA parsing is our own — all three curves must load.
         for type in ["ed25519", "rsa", "ecdsa"] {
             let path = try generateKey(type: type, into: dir)
             #expect(throws: Never.self) {
@@ -132,5 +132,26 @@ struct SSHKeyAuthTests {
         #expect(throws: (any Error).self) {
             _ = try SSHTunnel.authMethod(for: config(keyPath: path, passphrase: "wrong"))
         }
+    }
+
+    /// The key-format conversion shells out to ssh-keygen. Command-line arguments
+    /// are readable by any process running as the same user, so a passphrase there
+    /// is scrapeable with a `ps` loop — which would undo the Keychain protecting
+    /// it everywhere else. It must travel through the environment instead, which
+    /// `ps` does not expose.
+    @Test func theConversionKeepsThePassphraseOffTheCommandLine() {
+        let args = SSHTunnel.conversionArguments(keyPath: "/tmp/berry-test-key")
+
+        #expect(args == ["-p", "-o", "-f", "/tmp/berry-test-key"])
+        // -N and -P are the flags that carry a passphrase. Their absence is the
+        // whole point; this is what fails if someone folds them back in.
+        #expect(!args.contains("-N"), "-N puts the new passphrase in argv")
+        #expect(!args.contains("-P"), "-P puts the old passphrase in argv")
+
+        let env = SSHTunnel.conversionEnvironment(askpassPath: "/tmp/askpass.sh", passphrase: "s3cret")
+        #expect(env[SSHTunnel.passphraseEnvKey] == "s3cret", "the passphrase must reach ssh-keygen somehow")
+        #expect(env["SSH_ASKPASS"] == "/tmp/askpass.sh")
+        #expect(env["SSH_ASKPASS_REQUIRE"] == "force", "without force, ssh-keygen ignores the helper when a TTY exists")
+        #expect(!args.joined(separator: " ").contains("s3cret"))
     }
 }

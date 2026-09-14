@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryUI
 
-/// Pure native-command preview rendering (docs/architecture/12 §6/§7) — no
+/// Pure native-command preview rendering — no
 /// Docker, always runs.
 @Suite("DataSourceCommandPreview")
 struct DataSourceCommandPreviewTests {

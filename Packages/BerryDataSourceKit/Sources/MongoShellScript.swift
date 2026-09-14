@@ -1,7 +1,7 @@
 import Foundation
 
 /// Lexical tokens for the Mongo shell query language (`db.<collection>.<method>(args)`,
-/// docs/feedback/01.md item 2). Deliberately small: this is a query console
+/// item 2). Deliberately small: this is a query console
 /// grammar, not general JavaScript — no expressions, only literal arguments.
 public enum MongoShellToken: Equatable, Sendable {
     case identifier(String)

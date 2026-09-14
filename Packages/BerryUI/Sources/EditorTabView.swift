@@ -2,39 +2,42 @@ import AppKit
 import BerryCore
 import BerryDriverKit
 import BerryGraph
+import BerryStore
 import SwiftUI
 
-/// One SQL editor tab: editor on top, result sets below (ED-01/04/05).
+/// One SQL editor tab: editor on top, result sets below.
 struct EditorTabView: View {
     @Bindable var document: EditorDocument
     let session: Session?
     let isProduction: Bool
     var objects: [SchemaObject] = []
     var catalog: SchemaCatalog?
-    /// Manual transaction control (ED-11) — shared across the session's tabs.
+ /// Manual transaction control — shared across the session's tabs.
     var transaction: TransactionController?
     /// Fires when this editor takes focus, so the workspace activates its split
-    /// pane (ui.md 01 §4).
+ /// pane.
     var onFocus: (() -> Void)?
-    /// Debounced session persistence (UD-05) — wired to the view model.
+ /// Debounced session persistence — wired to the view model.
     var onPersist: (() -> Void)?
     var onRefreshSchema: (() -> Void)?
+    var availableProfiles: [ConnectionProfile] = []
+    var onAttachProfile: ((ConnectionProfile) -> Void)?
     /// Saves a Query Replay snapshot for this result's SQL + measured
-    /// duration (docs/feature/07 §5, DI-17); returns how it compares to the
+ /// duration; returns how it compares to the
     /// previous saved snapshot of the same query, if any.
     var onSaveQueryReplay: ((String, Double) async -> QueryReplayComparator.Comparison?)?
 
-    /// Label mode for the exec cluster (docs/ui) — shared app-wide setting.
+ /// Label mode for the exec cluster — shared app-wide setting.
     @AppStorage("berry.showButtonLabels") private var showButtonLabels = false
 
     @State private var warmTask: Task<Void, Never>?
     @State private var persistTask: Task<Void, Never>?
     @State private var viewerTarget: CellTarget?
-    /// EXPLAIN results render as a tree (ED-09); this switches to the raw grid.
+ /// EXPLAIN results render as a tree; this switches to the raw grid.
     @State private var showPlanGrid = false
-    /// Selected result tab (Navicat-style: Message / Summary / Result N).
+    /// Selected result tab (Message / Summary / Result N).
     @State private var selectedResultTab: ResultTabKey?
-    /// Data vs Info sub-tab inside a result (docs/ui).
+ /// Data vs Info sub-tab inside a result.
     @State private var resultSubTab: ResultSubTab = .data
     /// Whether the results pane is collapsed (only tab bar visible).
     @State private var resultsCollapsed = false
@@ -44,7 +47,7 @@ struct EditorTabView: View {
     /// Brief checkmark confirmation after "Save for Replay" (matches
     /// `CopyButton`'s pattern elsewhere in this file's family of views).
     @State private var justSavedReplay = false
-    /// Visualize Result (docs/feature/07 §8) — chart sheet for the currently
+ /// Visualize Result — chart sheet for the currently
     /// displayed result.
     @State private var showVisualize = false
     /// Set synchronously in `run(_:)`'s manual-transaction branch, before its
@@ -78,17 +81,17 @@ struct EditorTabView: View {
         persistTask = Task {
             // nanoseconds, not Task.sleep(for:) — confirmed Swift runtime
             // crash risk in release builds (swiftlang/swift#86204, #84793;
-            // docs/tests/crash.md), not a style choice.
+ // not a style choice.
             try? await Task.sleep(nanoseconds: 800_000_000)
             guard !Task.isCancelled else { return }
             onPersist?()
         }
     }
 
-    /// Pre-fetches columns for the tables referenced in the document (ED-03)
+ /// Pre-fetches columns for the tables referenced in the document
     /// so the completion callback can stay synchronous.
     private func warmReferencedColumns() {
-        guard let catalog else { return }
+        guard let catalog, document.text.utf8.count <= 256 * 1024 else { return }
         warmTask?.cancel()
         let snapshotObjects = objects
         warmTask = Task { [text = document.text] in
@@ -111,7 +114,7 @@ struct EditorTabView: View {
 
     private var editorPane: some View {
         VStack(spacing: 0) {
-            // ONE exec button (docs/ui): it runs every statement in the active
+ // ONE exec button: it runs every statement in the active
             // editor; ⌘R / ⌘↩ do the same. DangerGuard confirms any
             // data-destroying statement before it executes.
             QueryTabToolbar(
@@ -145,6 +148,23 @@ struct EditorTabView: View {
                     .help(Text(L("Format")) + Text(verbatim: "  ⇧⌘L"))
                 },
                 trailing: {
+                    if session == nil || document.isDetached {
+                        Menu {
+                            if availableProfiles.isEmpty {
+                                Text(L("No Saved Connections"))
+                            } else {
+                                ForEach(availableProfiles) { profile in
+                                    Button(profile.name) {
+                                        onAttachProfile?(profile)
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label(L("Attach Connection to Run"), systemImage: "bolt.badge.link")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                    }
                     autoLimitControl
                     transactionControls
                 }
@@ -155,7 +175,7 @@ struct EditorTabView: View {
                 text: $document.text,
                 onCursorMove: { document.cursorLocation = $0 },
                 onSelectionChange: { document.selectedRange = $0 },
-                // Navicat exec (docs/ui): ⌘R/⌘↩ run the selection if there is
+                // Execution rule: ⌘R/⌘↩ run the selection if there is
                 // one, else the whole editor. ⇧⌘↩ always runs everything.
                 onRunCurrent: { selection in runSmart(selection: selection) },
                 onRunAll: { runAll() },
@@ -164,7 +184,7 @@ struct EditorTabView: View {
                 completionItems: { script, cursor in
                     let dialect = session?.dialect
                     let builtins = session.map { SQLBuiltins.functions(for: $0.config.driver) } ?? []
-                    // Dialect-specific commands (PRAGMA/USE/COPY…) alongside builtins (ED-13).
+ // Dialect-specific commands (PRAGMA/USE/COPY…) alongside builtins.
                     let statements = session.map { SQLStatements.statements(for: $0.config.driver) } ?? []
                     return CompletionProvider.suggestions(
                         script: script,
@@ -186,7 +206,7 @@ struct EditorTabView: View {
                             insert = template
                         default:
                             // Quote identifiers that need it so a PascalCase/odd
-                            // name survives (docs/ui/02 §7); display stays bare.
+ // name survives; display stays bare.
                             if let dialect, CompletionProvider.identifierNeedsQuoting(display) {
                                 insert = dialect.quoteIdentifier(display)
                             }
@@ -208,7 +228,7 @@ struct EditorTabView: View {
         }
     }
 
-    /// Automatic row-cap selector (ED-12) — change or turn off the SELECT LIMIT.
+ /// Automatic row-cap selector — change or turn off the SELECT LIMIT.
     private var autoLimitControl: some View {
         Menu {
             Button(L("No limit")) { document.autoLimit = nil }
@@ -226,7 +246,7 @@ struct EditorTabView: View {
         .help(L("Automatic row limit"))
     }
 
-    /// Manual transaction controls (ED-11) — only when the driver supports
+ /// Manual transaction controls — only when the driver supports
     /// transactions. Auto-commit toggle plus Commit/Rollback while a
     /// transaction is open.
     @ViewBuilder
@@ -265,8 +285,8 @@ struct EditorTabView: View {
         }
     }
 
-    // MARK: - Result area (Navicat-style: Message / Summary / Result N tabs;
-    // Data / Info sub-tabs inside a result). docs/ui.
+    // MARK: - Result area (Message / Summary / Result N tabs;
+    // Data / Info sub-tabs inside a result).
 
     /// Result sets (statements with columns), numbered sequentially. A SELECT
     /// that returned 0 rows still counts — network drivers ship no columns for
@@ -361,7 +381,7 @@ struct EditorTabView: View {
     }
 
     /// A Data / Info sub-tab chip — same look as the Result N tabs so the
-    /// header reads as one consistent tab strip (docs/ui).
+ /// header reads as one consistent tab strip.
     private func subTab(_ tab: ResultSubTab, label: String, icon: String) -> some View {
         let selected = resultSubTab == tab
         return Button {
@@ -408,7 +428,7 @@ struct EditorTabView: View {
                 }
                 .buttonStyle(.iconAction).help(L("Export…"))
                 .disabled(result.buffer.rowCount == 0)
-                // Visualize Result (docs/feature/07 §8) — only a quick,
+ // Visualize Result — only a quick,
                 // first-row check for "has a numeric column" (not a full
                 // table scan every render; the sheet itself handles "no
                 // numeric values after all" gracefully).
@@ -450,8 +470,8 @@ struct EditorTabView: View {
             + Double(duration.components.attoseconds) / 1e15
     }
 
-    /// Tooltip text for the "Save for Replay" button (docs/feature/07 §5,
-    /// DI-17) — the comparison against the previous saved snapshot when one
+ /// Tooltip text for the "Save for Replay" button
+ /// — the comparison against the previous saved snapshot when one
     /// exists, otherwise a plain explanation of what the button does.
     private var replayComparisonHelp: String {
         guard let replayComparison else {
@@ -543,7 +563,7 @@ struct EditorTabView: View {
         }
     }
 
-    /// Run log — one line per statement (Navicat "Message").
+    /// Run log — one line per statement ("Message").
     private var messageLogView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
@@ -568,7 +588,7 @@ struct EditorTabView: View {
         }
     }
 
-    /// Aggregate overview of the whole run (Navicat "Summary").
+    /// Aggregate overview of the whole run ("Summary").
     private var summaryView: some View {
         let total = document.results.count
         let failed = document.results.filter(isFailure).count
@@ -587,7 +607,7 @@ struct EditorTabView: View {
         }
     }
 
-    /// Column metadata + stats for one result (Navicat "Info").
+    /// Column metadata + stats for one result ("Info").
     private func resultInfoView(_ result: EditorResult) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
@@ -653,7 +673,7 @@ struct EditorTabView: View {
         return BufferStatusBar.format(total)
     }
 
-    /// The plan tree for an EXPLAIN result, when its output parses (ED-09).
+ /// The plan tree for an EXPLAIN result, when its output parses.
     private func planTree(for result: EditorResult) -> [PlanNode]? {
         guard result.buffer.state == .complete,
               result.sql.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -663,7 +683,7 @@ struct EditorTabView: View {
     }
 
 
-    /// Apply staged edits directly (docs/ui). On success re-run the SELECT for
+ /// Apply staged edits directly. On success re-run the SELECT for
     /// fresh rows; on failure `editing.applyError` shows inline under the grid.
     private func applyResultEdits(_ result: EditorResult) {
         guard let session else { return }
@@ -686,7 +706,7 @@ struct EditorTabView: View {
         return Circle().fill(color).frame(width: 6, height: 6)
     }
 
-    /// Navicat exec rule (docs/ui): a non-empty selection runs only the
+    /// Query execution rule: a non-empty selection runs only the
     /// highlighted SQL; an empty selection runs the whole editor.
     private func runSmart(selection: NSRange? = nil) {
         let range = selection ?? document.selectedRange
@@ -734,7 +754,7 @@ struct EditorTabView: View {
     }
 }
 
-/// Navicat-style result tabs (docs/ui).
+/// Result tab navigation keys.
 private enum ResultTabKey: Hashable {
     case message
     case summary

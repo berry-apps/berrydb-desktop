@@ -3,7 +3,7 @@ import BerryDriverKit
 import Foundation
 import Observation
 
-/// Editing state for one editor query result (docs/ui/01 D4a, Navicat-style):
+/// Editing state for one editor query result:
 /// when the statement is a plain single-table SELECT whose primary key is in
 /// the result, the grid stages edits/inserts/deletes exactly like a table tab —
 /// local until the SQL preview is applied.
@@ -24,10 +24,10 @@ final class ResultEditState {
     /// The resolved base table, set for any single-table SELECT that maps to a
     /// known table — even without a PK (needed for INSERT).
     private(set) var resolvedTable: TableRef?
-    /// Why the result isn't (fully) editable, for a visible hint (docs/ui).
+ /// Why the result isn't (fully) editable, for a visible hint.
     private(set) var readOnlyReason: String?
 
-    /// Editing EXISTING rows needs a primary key to target the row (06 · L3).
+ /// Editing EXISTING rows needs a primary key to target the row (06).
     var canEdit: Bool { changeSet != nil && !pkColumns.isEmpty }
     /// Inserting needs no PK — allowed for any single-table result (like the
     /// table grid). Existing PK-less rows stay read-only.
@@ -73,7 +73,7 @@ final class ResultEditState {
 
         // Empty (0-row) result: network drivers ship no columns. For a
         // `SELECT *` we know the shape from the catalog — seed it so an empty
-        // table still shows headers and can be edited (docs/ui, like Navicat).
+        // table still shows headers and can be edited.
         if buffer.columns.isEmpty {
             let flat = sql.replacingOccurrences(of: "\n", with: " ")
             let isStar = flat.range(
@@ -107,7 +107,7 @@ final class ResultEditState {
         }
     }
 
-    // MARK: - Staging (mirrors the table grid, DL-03/04/05)
+ // MARK: - Staging (mirrors the table grid)
 
     private func pkValues(forRow row: Int) -> ChangeSet.RowKey? {
         guard let buffer, row < buffer.rowCount else { return nil }
@@ -218,7 +218,7 @@ final class ResultEditState {
     }
 
     /// ChangeSet + staged inserts — exactly what the preview shows and apply
-    /// runs (06 · L3). NULL insert cells are omitted so DEFAULTs apply.
+ /// runs (06). NULL insert cells are omitted so DEFAULTs apply.
     private func combinedChangeSet() -> ChangeSet? {
         guard var combined = changeSet, let buffer else { return nil }
         for rowValues in insertedRows {

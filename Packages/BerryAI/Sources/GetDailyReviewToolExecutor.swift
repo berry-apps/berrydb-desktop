@@ -1,7 +1,7 @@
 import BerryGraph
 import Foundation
 
-/// Client-executed `get_daily_review` (DI-23, docs/architecture/13 §6): reads
+/// Client-executed `get_daily_review`: reads
 /// today's Daily Review digest, generating one first if none exists yet or
 /// today's is overdue — reuses `WorkspaceViewModel.maybeGenerateDailyReview`/
 /// `latestDailyReview` (already back the Insight Panel's "Today's Summary"),

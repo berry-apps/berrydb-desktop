@@ -3,9 +3,9 @@ import BerryCore
 import BerryDriverKit
 import SwiftUI
 
-/// Cell viewer/editor (DL-06): large text, pretty JSON, hex, and image tabs.
+/// Cell viewer/editor: large text, pretty JSON, hex, and image tabs.
 /// Editing (when allowed) stages through the same ChangeSet path as inline
-/// edits — nothing bypasses the SQL preview (06 · L3).
+/// edits — nothing bypasses the SQL preview (06).
 struct CellViewerSheet: View {
     enum Tab: Hashable {
         case text

@@ -1,8 +1,8 @@
 import AppKit
 import BerryDataSourceKit
 
-/// Confirmation gate for a `DataSourceChangeSet` write (docs/architecture/12
-/// §6/§7) — the NoSQL/vector sibling of `DangerConfirmer` (BerryCore, 07 §6).
+/// Confirmation gate for a `DataSourceChangeSet` write
+/// — the NoSQL/vector sibling of `DangerConfirmer` (BerryCore).
 /// There is no `QueryService`-style single funnel for
 /// `DataSourceConnection.write` the way SQL has — `applyDataSourceWrite` on
 /// `WorkspaceViewModel` IS that one path, and it reads this swappable static
@@ -15,7 +15,7 @@ public protocol DataSourceWriteConfirming: Sendable {
 
 /// NSAlert-based implementation — mirrors `AlertDangerConfirmer`'s pattern:
 /// `.safe` proceeds without prompting (insert/update/delete-by-id all
-/// classify as safe); only `.confirm` (empty-filter delete, NS-08) blocks on
+/// classify as safe); only `.confirm` (empty-filter delete) blocks on
 /// a real alert showing the native-command preview.
 struct AlertDataSourceWriteConfirmer: DataSourceWriteConfirming {
     func confirm(_ level: DataSourceDangerLevel, preview: String) async -> Bool {
@@ -41,7 +41,7 @@ struct AlertDataSourceWriteConfirmer: DataSourceWriteConfirming {
     }
 
     /// Mirrors `AlertDangerConfirmer.typedConfirm` (SQL's DROP/TRUNCATE-on-
-    /// production gate, docs/architecture/07 §6 CT-04) verbatim — the user
+ /// production gate) verbatim — the user
     /// must retype the exact object name, not just click a button.
     @MainActor
     private static func typedConfirm(objectName: String, reason: DataSourceDangerReason, preview: String) -> Bool {

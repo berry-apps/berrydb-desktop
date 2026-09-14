@@ -1,8 +1,8 @@
 import Foundation
 import GRDB
 
-/// Per-connection AI preferences (docs/architecture/09 §6): AI on for this
-/// connection (AI-07), sending sample rows allowed (AI-06), safe SELECTs
+/// Per-connection AI preferences: AI on for this
+/// connection, sending sample rows allowed, safe SELECTs
 /// auto-run, and the metadata policy accepted. Keyed by profile — one row each;
 /// profileless quick-open connections keep these in memory only. Stored
 /// locally; never leaves the machine.
@@ -13,7 +13,7 @@ public struct AIConnectionSetting: Identifiable, Codable, Sendable {
     public var allowSampleRows: Bool
     public var autoApproveSelects: Bool
     public var consentGiven: Bool
-    /// Enabled/trusted MCP servers (AI-16), stored as JSON arrays of ids.
+ /// Enabled/trusted MCP servers, stored as JSON arrays of ids.
     public var enabledMcpServers: String
     public var trustedMcpServers: String
     public var updatedAt: Date

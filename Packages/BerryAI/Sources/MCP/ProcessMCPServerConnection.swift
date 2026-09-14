@@ -1,12 +1,12 @@
 import Foundation
 
-/// Drives one MCP server subprocess over stdio JSON-RPC (docs/agents/architecture/08 §4):
+/// Drives one MCP server subprocess over stdio JSON-RPC:
 /// `initialize` + `tools/list` at start, `tools/call` per invocation. An actor so the
 /// pending-request map and pipe writes are race-free.
 ///
 /// Not covered by unit tests — it needs a live server binary; the JSON-RPC codec
 /// and LineFramer it builds on ARE tested. Verify against a real allowlisted
-/// server before shipping (doc 08 §8).
+/// server before shipping (doc).
 public actor ProcessMCPServerConnection: MCPServerConnection {
     public nonisolated let serverID: String
     private let manifest: MCPServerManifest
@@ -29,7 +29,7 @@ public actor ProcessMCPServerConnection: MCPServerConnection {
         // continuations must still be resumed. An un-resumed CheckedContinuation
         // that gets deallocated is a fatal Swift Concurrency error (aborts the
         // process via swift_task_dealloc) — this is what showed up in the crash
-        // report (docs/tests/crash.md), surfaced from inside Task.sleep's cleanup
+ // report, surfaced from inside Task.sleep's cleanup
         // once the actor (and its in-flight timeout tasks) went away.
         for (_, continuation) in pending {
             continuation.resume(throwing: MCPError.notRunning)

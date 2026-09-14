@@ -17,8 +17,8 @@ public final class AIExecutionLease {
     }
 }
 
-/// Result of running a tool locally (docs/architecture/09 §3). Status is fed
-/// back to the gateway so the model reacts to denials/errors (§6).
+/// Result of running a tool locally. Status is fed
+/// back to the gateway so the model reacts to denials/errors.
 public struct ToolOutcome: Sendable, Equatable {
     public let status: String // "ok" | "denied" | "error"
     public let resultJSON: String?
@@ -40,7 +40,7 @@ public struct ToolOutcome: Sendable, Equatable {
     }
 }
 
-/// A tool the client advertises to the gateway each turn (docs/agents/architecture/05).
+/// A tool the client advertises to the gateway each turn.
 /// For static tools, only name/handler version cross the negotiated boundary;
 /// the backend owns the provider-facing descriptor. `parametersJSON` is sent
 /// only for validated dynamic `skill:`/`mcp:` extensions.
@@ -67,14 +67,14 @@ public struct AIToolSpec: Sendable, Equatable {
 }
 
 /// Runs the tools the gateway requests. Implemented in the UI layer where the
-/// session, schema catalog, editor, and the approval prompt live (09 §4/§6).
+/// session, schema catalog, editor, and the approval prompt live.
 /// Every write/DDL must be approved; SELECT may auto-approve per setting.
 @MainActor
 public protocol AIToolExecutor {
     func execute(_ call: AIToolCall) async -> ToolOutcome
     func execute(_ call: AIToolCall, lease: AIExecutionLease) async -> ToolOutcome
     /// Specs for the tools this executor handles, advertised to the gateway so
-    /// the model knows they exist (docs/agents/architecture/05 §4). Default none.
+ /// the model knows they exist. Default none.
     var toolSpecs: [AIToolSpec] { get }
     /// Called with a partial SQL/query string as the LLM streams a `propose_sql`
     /// argument, so the editor tab can update in real-time. Default: no-op.

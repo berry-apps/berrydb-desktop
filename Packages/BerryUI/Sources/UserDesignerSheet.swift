@@ -2,12 +2,12 @@ import BerryCore
 import BerryDriverKit
 import SwiftUI
 
-/// Create-user form (TI-03, docs/architecture/14): username/password, host
+/// Create-user form: username/password, host
 /// (MySQL only — `'user'@'host'`), and an optional list of initial grants
-/// from a curated privilege picker (docs/architecture/14 §Deferred: no
+/// from a curated privilege picker (no
 /// per-table/per-column grants, no role membership). The generated SQL is
 /// ALWAYS shown before Create, same "preview before apply" rule as
-/// `TableDesignerSheet` (CT-01) — `preview`/`onApply` follow that exact
+/// `TableDesignerSheet` — `preview`/`onApply` follow that exact
 /// calling convention so the caller wires this the same way.
 struct UserDesignerSheet: View {
     let driver: DriverID
@@ -19,7 +19,7 @@ struct UserDesignerSheet: View {
     @State private var applyError: String?
     @State private var isApplying = false
 
-    /// Curated common privileges (docs/architecture/14 §Architecture) — not
+ /// Curated common privileges — not
     /// every value is meaningful on every dialect (e.g. CONNECT is
     /// Postgres-only); an unsupported pick surfaces as the server's own
     /// error, not a client-side filter per driver.

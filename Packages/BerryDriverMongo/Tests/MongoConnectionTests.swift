@@ -107,7 +107,7 @@ struct MongoConnectionTests {
         #expect(items == [.object([("total", .int(42))])])
     }
 
-    // MARK: createCollection (docs/architecture/12 §3) — ref.database ignored,
+ // MARK: createCollection — ref.database ignored,
     // always creates on the connection's own working database (makeConfig's
     // "berrydb" default here).
 
@@ -154,7 +154,7 @@ struct MongoConnectionTests {
         #expect(result.affectedCount == 1)
     }
 
-    // MARK: write — delete (NS-08 routing)
+ // MARK: write — delete (routing)
 
     @Test func deleteWithConcreteIDFiltersByIDAndDeletesOne() async throws {
         let connection = try await makeConnection(handlers: [
@@ -238,7 +238,7 @@ struct MongoConnectionTests {
         }
     }
 
-    // MARK: DataSourceDriver entry point (docs/architecture/12 §2/§8)
+ // MARK: DataSourceDriver entry point
 
     @Test func driverConnectFailsFastWhenHandshakeFails() async throws {
         let driver = MongoDriver()

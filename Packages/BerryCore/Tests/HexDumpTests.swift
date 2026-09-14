@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryCore
 
-@Suite("HexDump & pretty JSON (DL-06)")
+@Suite("HexDump & pretty JSON")
 struct HexDumpTests {
     @Test func formatsClassicHexLines() {
         let dump = HexDump.format(Data("Hello, Berry!".utf8))

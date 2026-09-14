@@ -9,29 +9,29 @@ import BerryTunnel
 import Foundation
 import Observation
 
-/// A workspace tool that opens as a tab instead of a modal (docs/ui/02 §4).
+/// A workspace tool that opens as a tab instead of a modal.
 /// The `kind` lets the tab strip and the content switch behave per type.
 public enum WorkspaceToolKind: String, Sendable, CaseIterable {
     case history
     case savedQueries
-    /// Artifacts library (AI-29, docs/draft/09.md) — durable, linkable
+ /// Artifacts library — durable, linkable
     /// references to queries/tabs the AI agent (or the user) created.
     case artifacts
     case newTable
     case importCSV
     case processes
     case backup
-    /// Database Insights (DI-09), Architecture Score (docs/feature/07 §10),
-    /// Database Memory (§12), Daily Review (§15) — a tab, not a modal
-    /// (docs/ui/02 §4), same as every other former-sheet tool here.
+ /// Database Insights, Architecture Score,
+ /// Database Memory, Daily Review — a tab, not a modal
+ /// same as every other former-sheet tool here.
     case insights
-    /// Graph Explorer + Impact Simulator (docs/feature/07 §2/§4) — a tab, not
+ /// Graph Explorer + Impact Simulator — a tab, not
     /// a modal, same reasoning as `.insights`.
     case graphExplorer
-    /// Time Machine Timeline (docs/feature/07 §1, DI-08) — a tab, not a
+ /// Time Machine Timeline — a tab, not a
     /// modal, same reasoning as `.insights`.
     case timeline
-    /// User & permission management (TI-03, docs/architecture/14) — a tab,
+ /// User & permission management — a tab,
     /// not a modal, same reasoning as `.insights`.
     case users
 
@@ -68,8 +68,8 @@ public enum WorkspaceToolKind: String, Sendable, CaseIterable {
     }
 }
 
-/// A Mermaid diagram opened from the AI chat into its own tab (AI-34,
-/// docs/architecture/02) — plain data, not `@Observable`: unlike the other
+/// A Mermaid diagram opened from the AI chat into its own tab
+/// — plain data, not `@Observable`: unlike the other
 /// tab states, the diagram never changes after the chat rendered it, so
 /// there's nothing here for a tab view to mutate in place.
 public struct MermaidTabState: Identifiable, Sendable {
@@ -84,27 +84,27 @@ public struct MermaidTabState: Identifiable, Sendable {
     }
 }
 
-/// One tab in the workspace (UD-01): a table grid, an SQL editor, or a tool
-/// (History, Saved Queries, …) that used to be a modal (docs/ui/02 §4).
+/// One tab in the workspace: a table grid, an SQL editor, or a tool
+/// (History, Saved Queries, …) that used to be a modal.
 @MainActor
-public enum WorkspaceTab: @MainActor Identifiable {
+public enum WorkspaceTab: @preconcurrency Identifiable {
     case table(TableTabState)
     case editor(EditorDocument)
     case tool(WorkspaceToolKind)
-    /// ALTER designer for an existing table (CT-01/02/03) — a tab, not a modal
-    /// (docs/ui/02 §4); payload is the table's current design.
+ /// ALTER designer for an existing table — a tab, not a modal
+ /// payload is the table's current design.
     case alterTable(TableDesign)
-    /// A Mermaid diagram from the AI chat, opened full-size with zoom (AI-34).
+ /// A Mermaid diagram from the AI chat, opened full-size with zoom.
     case mermaidDiagram(MermaidTabState)
-    /// A Mongo collection / Qdrant point-collection tab (docs/architecture/12 §7).
+ /// A Mongo collection / Qdrant point-collection tab.
     case collection(CollectionTabState)
-    /// A Mongo shell query tab (docs/feedback/01.md item 2) — sibling of
+ /// A Mongo shell query tab (item 2) — sibling of
     /// `.editor` for the NoSQL side.
     case mongoShell(MongoShellTabState)
-    /// A Qdrant query tab (docs/feature/03) — the vector sibling of `.mongoShell`,
+ /// A Qdrant query tab — the vector sibling of `.mongoShell`,
     /// hybrid Form/JSON query surface with scriptable read + upsert/delete.
     case qdrantQuery(QdrantQueryTabState)
-    /// An Elasticsearch query tab (docs/architecture/17 §5) — the search-engine
+ /// An Elasticsearch query tab — the search-engine
     /// sibling of `.mongoShell`/`.qdrantQuery`, a JSON-only Query DSL surface.
     case elasticsearchQuery(ElasticsearchQueryTabState)
 
@@ -151,7 +151,7 @@ public enum WorkspaceTab: @MainActor Identifiable {
     }
 }
 
-/// One editor group = one pane in the split (ui.md §1). Holds an ordered subset
+/// One editor group = one pane in the split. Holds an ordered subset
 /// of the open tabs and its own active tab, so groups stay independent.
 public struct EditorGroup: Identifiable, Sendable {
     public let id: String
@@ -159,7 +159,7 @@ public struct EditorGroup: Identifiable, Sendable {
     public var activeTabID: String?
 }
 
-/// One row of the split grid (ui.md §1): a horizontal strip of groups. Rows
+/// One row of the split grid: a horizontal strip of groups. Rows
 /// stack vertically, so the whole layout is a rows-of-columns grid like VS Code
 /// — "split right" adds a column to a row, "split down" adds a new row.
 public struct EditorLayoutRow: Identifiable, Sendable {
@@ -167,7 +167,7 @@ public struct EditorLayoutRow: Identifiable, Sendable {
     public var groupIDs: [String]
 }
 
-/// Dependency overview for one table over the DSG (Graph Explorer, DI-02/04).
+/// Dependency overview for one table over the DSG (Graph Explorer).
 public struct TableGraphOverview: Sendable, Equatable {
     public let table: String
     /// Tables this one references (FK/derive out).
@@ -179,7 +179,7 @@ public struct TableGraphOverview: Sendable, Equatable {
 }
 
 /// One existence change between two Digital-Twin snapshots (Time Machine
-/// Timeline, docs/feature/07 §1) — a table/column/index that appeared or
+/// Timeline) — a table/column/index that appeared or
 /// disappeared. Existence-only: `graph_node`'s attrs are upserted in place
 /// with no history, and the snapshot digest itself only covers node/edge
 /// existence, so an attribute-only change (e.g. a column's type) never even
@@ -193,13 +193,13 @@ public struct TimelineChange: Identifiable, Sendable, Equatable {
     public let tableName: String?
 }
 
-/// ViewModel for one workspace (1 window) — docs/architecture/04 §3.
-/// Owns the saved-profile list (KN-01), the single active session (M1;
-/// multiple concurrent sessions arrive later) and the tab strip (ED-01).
+/// ViewModel for one workspace (1 window)
+/// Owns the saved-profile list, the single active session (M1;
+/// multiple concurrent sessions arrive later) and the tab strip.
 @MainActor
 @Observable
 public final class WorkspaceViewModel {
-    // MARK: Saved profiles (KN-01/02)
+ // MARK: Saved profiles
 
     public private(set) var profiles: [ConnectionProfile] = []
     public private(set) var storeError: String?
@@ -209,7 +209,7 @@ public final class WorkspaceViewModel {
     public private(set) var session: Session?
     public private(set) var activeProfileID: UUID?
     public private(set) var catalog: SchemaCatalog?
-    /// Manual transaction control for the editor (ED-11) — reset per session
+ /// Manual transaction control for the editor — reset per session
     /// because a transaction is scoped to one physical connection.
     public private(set) var transaction = TransactionController()
     public private(set) var objects: [SchemaObject] = []
@@ -223,19 +223,19 @@ public final class WorkspaceViewModel {
     public private(set) var errorMessage: String?
     public private(set) var isConnecting = false
 
-    /// Q15 tier gating (docs/architecture/11 §8): when false, the Database
+ /// Q15 tier gating: when false, the Database
     /// Intelligence layer (DSG harvest, analyzers, Graph Explorer) stays off.
     /// The view keeps this in sync with the license entitlement; defaults on so
     /// tests and profileless quick-open aren't gated.
     public var intelligenceEntitled = true
 
-    // MARK: Active NoSQL/vector session (docs/architecture/12 §7) — mutually
+ // MARK: Active NoSQL/vector session — mutually
     // exclusive with `session` above: connecting to one tears down the other
     // (one active connection per workspace, SQL XOR NoSQL).
 
     public private(set) var dataSourceSession: DataSourceSession?
     public private(set) var collections: [CollectionRef] = []
-    // Key-value (Redis, docs/architecture/15 §2) — third sibling, mutually
+ // Key-value (Redis) — third sibling, mutually
     // exclusive with both `session` and `dataSourceSession` above.
     public private(set) var keyValueSession: KeyValueSession?
     /// Sidebar/tree selection for collections — kept separate from
@@ -248,13 +248,13 @@ public final class WorkspaceViewModel {
     /// `QueryService.dangerConfirmer`). See `DataSourceWriteConfirmer.swift`.
     public static var dataSourceWriteConfirmer: any DataSourceWriteConfirming = AlertDataSourceWriteConfirmer()
 
-    // MARK: Tabs (UD-01, ED-01)
+ // MARK: Tabs
 
     /// All open tabs (the documents/grids themselves) — the source of truth.
     /// Which pane shows which tab is tracked by `groups`, not here.
     public private(set) var tabs: [WorkspaceTab] = []
 
-    /// Editor groups (VS Code-style, ui.md §1). Each group owns an ordered
+ /// Editor groups (VS Code-style). Each group owns an ordered
     /// subset of `tabs` and its own active tab, so the panes are independent.
     /// `focusedGroupID` is where new tabs land. `groups` is the data store;
     /// `layoutRows` is the 2D arrangement (which group sits where in the grid).
@@ -267,7 +267,7 @@ public final class WorkspaceViewModel {
     private var store: BerryStore?
     private var snapshotSink: (any SchemaSnapshotSink)?
 
-    /// Digital-Twin graph store (DI-08), backed by the same store.sqlite.
+ /// Digital-Twin graph store, backed by the same store.sqlite.
     private var graphStore: GraphStore? { store.map(GraphStore.init(store:)) }
 
     public init() {
@@ -287,8 +287,8 @@ public final class WorkspaceViewModel {
         wireSinks()
     }
 
-    /// Single wiring point for the core → store sinks (ED-06, DI-08) and the
-    /// DangerGuard confirmation gate (07 §6).
+ /// Single wiring point for the core → store sinks and the
+ /// DangerGuard confirmation gate.
     private func wireSinks() {
         QueryService.dangerConfirmer = AlertDangerConfirmer()
         guard let store else { return }
@@ -297,9 +297,9 @@ public final class WorkspaceViewModel {
     }
 
     /// Bounded recent-actions log for the AI `get_ui_state` tool
-    /// (docs/feature/08, AI-28). Deliberately narrow — only tab
+ /// Deliberately narrow — only tab
     /// opened/closed/pane-split, not every tab/pane mutation (see
-    /// docs/architecture/13 §8b's rejected DI-18 for why an unbounded
+ /// See the rejected alternative for why an unbounded
     /// version of this would be a mistake).
     private func logWorkspaceAction(_ kind: String, description: String) {
         guard let store else { return }
@@ -415,7 +415,7 @@ public final class WorkspaceViewModel {
         guard let sourceGroup = groups.first(where: { $0.id == groupID }) else { return nil }
         // A split opens a fresh, independent tab in the new pane — not a
         // second view of the same document, which would edit in lock-step
-        // (docs/ui/03 §1). Drag a tab across panes to move an existing one.
+ // Drag a tab across panes to move an existing one.
         //
         // The new tab matches the pane's OWN active tab's type (Mongo shell
         // stays Mongo shell, Qdrant stays Qdrant) instead of always being a
@@ -442,7 +442,7 @@ public final class WorkspaceViewModel {
         default:
             editorCounter += 1
             let document = EditorDocument(title: L("Untitled"), text: "")
-            document.pendingFocus = true // caret lands in the new pane (docs/ui/03 §1)
+ document.pendingFocus = true // caret lands in the new pane
             tab = .editor(document)
             persistEditor(document)
         }
@@ -452,7 +452,7 @@ public final class WorkspaceViewModel {
 
     /// Move a tab from one pane to another (drag-drop). No-op onto the same
     /// pane. An emptied source pane is removed afterward.
-    /// Where a tab is dropped over a pane (docs/ui/01 D2, VS Code style): the
+ /// Where a tab is dropped over a pane (D2, VS Code style): the
     /// center moves it into the pane; an edge splits a new pane off that side.
     public enum DropZone: Sendable, Equatable {
         case center, left, right, top, bottom
@@ -470,13 +470,13 @@ public final class WorkspaceViewModel {
 
         if zone == .center {
             // Move into the target pane. If the source pane had only this tab, it
-            // empties and closes (docs/ui/03) — standard split behavior.
+ // empties and closes — standard split behavior.
             moveTab(tabID, from: sourceGroupID, to: targetGroupID)
             return
         }
 
         // Edge split: a brand-new pane that already holds the dragged tab, so a
-        // split can never show an empty artboard (docs/ui/03). Remove the tab
+ // split can never show an empty artboard. Remove the tab
         // from its old pane and drop the empties.
         let newGroup = EditorGroup(id: UUID().uuidString, tabIDs: [tabID], activeTabID: tabID)
         if let si = groups.firstIndex(where: { $0.id == sourceGroupID }) {
@@ -507,12 +507,12 @@ public final class WorkspaceViewModel {
         pruneEmptyGroups()
     }
 
-    // MARK: - Profile CRUD (KN-01)
+ // MARK: - Profile CRUD
 
     public func save(profile: ConnectionProfile, secrets: ConnectionSecrets) {
         do {
             try store?.save(profile)
-            // Single Keychain write point (07 §2) — only freshly typed secrets
+ // Single Keychain write point — only freshly typed secrets
             // are written; empty means "keep what is stored".
             if let dbPassword = secrets.dbPassword {
                 KeychainService.savePassword(dbPassword, kind: .database, profileID: profile.id)
@@ -535,7 +535,7 @@ public final class WorkspaceViewModel {
     public func delete(profile: ConnectionProfile) {
         do {
             try store?.deleteProfile(id: profile.id)
-            // Never leave orphaned secrets behind (07 §2).
+ // Never leave orphaned secrets behind.
             KeychainService.deleteSecrets(profileID: profile.id)
             if activeProfileID == profile.id {
                 disconnect()
@@ -546,7 +546,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    /// Clone a saved connection (KN-01). Copies the config and its stored
+ /// Clone a saved connection. Copies the config and its stored
     /// secrets so the duplicate connects without re-entering the password.
     public func duplicate(profile: ConnectionProfile) {
         var copy = profile
@@ -565,7 +565,7 @@ public final class WorkspaceViewModel {
         // slow or pop an access prompt, and doing them inline froze the UI. The
         // task is tracked so connecting to the copy WAITS for its secrets —
         // otherwise a quick Duplicate → Connect raced the clone and failed with
-        // authMechanismRequiresPassword (docs/ui/03).
+ // authMechanismRequiresPassword.
         let sourceID = profile.id
         let destID = copy.id
         let clone = Task.detached {
@@ -585,7 +585,7 @@ public final class WorkspaceViewModel {
     /// In-flight Keychain clones from `duplicate` — awaited by `connect`.
     private var pendingSecretClones: [UUID: Task<Void, Never>] = [:]
 
-    /// Manually re-read the live schema (TR-05) — clears the per-session cache
+ /// Manually re-read the live schema — clears the per-session cache
     /// so newly created objects show up without reconnecting.
     public func refreshSchema() {
         Task {
@@ -595,7 +595,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    /// Saved connections grouped by `groupName` (KN-02). Ungrouped profiles come
+ /// Saved connections grouped by `groupName`. Ungrouped profiles come
     /// first (nil group); within a group, order follows `sortOrder`.
     public var connectionGroups: [(name: String?, profiles: [ConnectionProfile])] {
         Dictionary(grouping: profiles) { $0.groupName }
@@ -603,7 +603,7 @@ public final class WorkspaceViewModel {
             .sorted { ($0.name ?? "") < ($1.name ?? "") }
     }
 
-    /// Reorder connections within a group (KN-02 drag-to-reorder) and persist
+ /// Reorder connections within a group (drag-to-reorder) and persist
     /// the new `sortOrder`.
     public func moveProfiles(group: String?, from source: IndexSet, to destination: Int) {
         var inGroup = profiles
@@ -622,7 +622,7 @@ public final class WorkspaceViewModel {
         profiles = (try? store?.allProfiles()) ?? profiles
     }
 
-    // MARK: - Connect (docs/architecture/06 · L1)
+ // MARK: - Connect
 
     /// Must be called directly from a tap/menu handler, before creating the
     /// `Task` that awaits `connect`/`connectDataSource`/`openSQLiteFile` —
@@ -664,7 +664,7 @@ public final class WorkspaceViewModel {
         if let clone = pendingSecretClones[profile.id] {
             await clone.value
         }
-        // Single Keychain read point (07 §2): secrets go straight into
+ // Single Keychain read point: secrets go straight into
         // the in-RAM config, never stored on the profile.
         let config = profile.makeConfig(
             password: KeychainService.readPassword(kind: .database, profileID: profile.id),
@@ -699,7 +699,7 @@ public final class WorkspaceViewModel {
                 await ConnectionManager.shared.close(old.id)
             }
             // One active connection per workspace, SQL XOR NoSQL XOR key-value
-            // (docs/architecture/12 §7, 15 §2).
+ //
             if let old = dataSourceSession {
                 await old.connection.close()
                 await old.tunnel?.close()
@@ -734,7 +734,7 @@ public final class WorkspaceViewModel {
             objects = []
             tabs = []
             errorMessage = error.localizedDescription
-            // A changed SSH host key (07 §4) is recoverable: offer to trust the
+ // A changed SSH host key is recoverable: offer to trust the
             // new key and reconnect. Only saved profiles use SSH, so profileID
             // is present.
             if case let DriverError.sshHostKeyChanged(host, port, stored, presented) = error,
@@ -745,7 +745,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    // MARK: - SSH host-key change (07 §4)
+ // MARK: - SSH host-key change
 
     public struct HostKeyChange: Equatable, Sendable {
         public let host: String
@@ -763,6 +763,23 @@ public final class WorkspaceViewModel {
     /// detail-pane replacement for connection failures, not a transient
     /// action result).
     public var quickActionError: String?
+
+    public struct LargeFileWarning: Equatable, Sendable {
+        public let url: URL
+        public let sizeInBytes: Int64
+        public var sizeInMB: Double { Double(sizeInBytes) / (1024 * 1024) }
+
+        public init(url: URL, sizeInBytes: Int64) {
+            self.url = url
+            self.sizeInBytes = sizeInBytes
+        }
+    }
+
+    /// Non-nil when a user attempts to open an SQL file exceeding `largeSQLFileThreshold`.
+    public var pendingLargeFile: LargeFileWarning?
+
+    /// Non-nil when an SQL file open attempt throws an error.
+    public var fileOpenError: String?
 
     /// Synchronous prefix of `trustChangedHostKeyAndReconnect()` — trusts the
     /// key and dismisses the alert (`hostKeyChange = nil`) directly on the
@@ -799,7 +816,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    /// `DataSourceDriver` sibling of `ConnectionManager.testReport` (KN-06) —
+ /// `DataSourceDriver` sibling of `ConnectionManager.testReport`
     /// same tunnel → connect → ping breakdown reported through the same
     /// `ConnectionTestReport` type the sheet already renders generically.
     private func testDataSourceConnection(_ config: ConnectionConfig) async -> ConnectionTestReport {
@@ -856,7 +873,7 @@ public final class WorkspaceViewModel {
     public func disconnect() {
         if let old = session {
             // Best-effort rollback of any open manual transaction before the
-            // socket closes (ED-11) — an abandoned BEGIN must not leak.
+ // socket closes — an abandoned BEGIN must not leak.
             let tx = transaction
             Task {
                 if tx.isActive { _ = await tx.rollback(session: old) }
@@ -905,21 +922,21 @@ public final class WorkspaceViewModel {
     public func refreshObjects() async throws {
         guard let catalog else { return }
         objects = try await catalog.objects(forceRefresh: true)
-        // Seed/refresh the Digital Twin off the UI path (DI-08) — metadata only
-        // (Q6), deduped by digest, off on production (KN-07). Never blocks or
+ // Seed/refresh the Digital Twin off the UI path — metadata only
+ // (Q6), deduped by digest, off on production. Never blocks or
         // fails the refresh.
         Task { await harvestGraphNow() }
-        // Daily Review digest (DI-23) — same off-UI-path pattern; only does
+ // Daily Review digest — same off-UI-path pattern; only does
         // real work when due, so this is a cheap no-op most of the time.
         Task { await maybeGenerateDailyReview() }
     }
 
     /// Harvests the DSG for the active saved profile and records a Digital-Twin
-    /// snapshot (docs/architecture/11 §4/§6). Metadata only (Q6); silently a
-    /// no-op on a production profile (KN-07) or a profileless quick-open.
+ /// snapshot. Metadata only (Q6); silently a
+ /// no-op on a production profile or a profileless quick-open.
     /// Best-effort — a harvest error never surfaces to the session.
     public func harvestGraphNow() async {
-        guard intelligenceEntitled else { return } // Q15 tier gate (11 §8)
+ guard intelligenceEntitled else { return } // Q15 tier gate
         guard let session, let catalog, let profileID = activeProfileID, let graphStore else { return }
         _ = try? await SchemaHarvester.harvest(
             session: session, catalog: catalog, into: graphStore,
@@ -927,9 +944,9 @@ public final class WorkspaceViewModel {
         )
     }
 
-    /// Generates and persists a Daily Review digest if due (DI-23,
-    /// docs/architecture/13 §5.3) — a fixed, BerryDB-defined cadence, not a
-    /// background job (§1 "not a 24/7 agent": this only runs when the app is
+ /// Generates and persists a Daily Review digest if due
+ /// — a fixed, BerryDB-defined cadence, not a
+ /// background job ("not a 24/7 agent": this only runs when the app is
     /// open and a profile refreshes, never while closed). Best-effort, never
     /// surfaces an error to the session.
     public func maybeGenerateDailyReview() async {
@@ -943,28 +960,28 @@ public final class WorkspaceViewModel {
     }
 
     /// The most recent Daily Review digest for the active profile, decoded —
-    /// nil if none exists yet (DI-23).
+ /// nil if none exists yet.
     public func latestDailyReview() -> DailyReviewSummary? {
         guard let profileID = activeProfileID, let store,
               let record = try? store.latestDailyReview(profileID: profileID) else { return nil }
         return DailyReviewBuilder.decode(record.summaryJSON)
     }
 
-    /// Local `graph_query` executor for the AI panel (docs/architecture/11 §7),
+ /// Local `graph_query` executor for the AI panel,
     /// or nil when no DSG can be persisted (quick-open / no store).
     public func graphExecutor(profileID: UUID) -> (any AIToolExecutor)? {
         graphStore.map { GraphToolExecutor(store: $0, profileID: profileID) }
     }
 
-    /// Runs the analyzers for the active profile (docs/architecture/11 §7, DI-09).
+ /// Runs the analyzers for the active profile.
     /// Three sources, merged severity-first:
-    ///   - offline graph analyzers (Schema DI-07, Index DI-05) over the latest
+ /// offline graph analyzers (Schema, Index) over the latest
     ///     harvested DSG — deterministic, no DBMS access;
-    ///   - Convention Memory (DI-21), naming mismatches against the schema's
+ /// Convention Memory, naming mismatches against the schema's
     ///     own established convention;
-    ///   - the Query Analyzer (DI-06), which EXPLAINs the recent workload (plan
+ /// the Query Analyzer, which EXPLAINs the recent workload (plan
     ///     only, no user data — Q6).
-    /// Insights the user has dismissed (DI-26) are filtered out. Empty when
+ /// Insights the user has dismissed are filtered out. Empty when
     /// nothing is harvested and no workload exists.
     public func analyzeInsights() async -> [Insight] {
         guard intelligenceEntitled, let session else { return [] } // Q15 tier gate
@@ -986,7 +1003,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    /// Records that the user applied an insight's suggested fix (DI-26).
+ /// Records that the user applied an insight's suggested fix.
     public func recordInsightApplied(_ insightID: String) {
         guard let profileID = activeProfileID else { return }
         try? store?.recordRecommendationFeedback(
@@ -995,7 +1012,7 @@ public final class WorkspaceViewModel {
     }
 
     /// Records that the user dismissed an insight — it won't be shown again
-    /// by `analyzeInsights()` (DI-26).
+ /// by `analyzeInsights()`.
     public func recordInsightDismissed(_ insightID: String) {
         guard let profileID = activeProfileID else { return }
         try? store?.recordRecommendationFeedback(
@@ -1016,8 +1033,8 @@ public final class WorkspaceViewModel {
         return graph.nodes.values.filter { $0.kind == .table }.map(\.name).sorted()
     }
 
-    /// Dependency overview for one table over the DSG (docs/architecture/11 §5,
-    /// DI-02/04): what it depends on (FK/derive out), what depends on it
+ /// Dependency overview for one table over the DSG
+ /// what it depends on (FK/derive out), what depends on it
     /// directly, and its full blast radius (transitive reverse reachability).
     /// Names, not node ids. Empty when nothing is harvested / table unknown.
     public func graphOverview(_ table: String) -> TableGraphOverview {
@@ -1034,8 +1051,8 @@ public final class WorkspaceViewModel {
         )
     }
 
-    /// Quantified impact of a hypothetical change to `table` (docs/feature/07
-    /// §4, DI-16): recent, actually-executed queries (ED-06 history) that
+ /// Quantified impact of a hypothetical change to `table`
+ /// recent, actually-executed queries (history) that
     /// touch it or anything in its blast radius, ranked by call frequency.
     /// Complements `graphOverview`'s pure topology with real workload
     /// evidence. `nil` only when the feature itself is unavailable (no
@@ -1051,11 +1068,11 @@ public final class WorkspaceViewModel {
     }
 
     /// Saves the just-completed run of `sql` as a Query Replay snapshot
-    /// (docs/feature/07 §5, DI-17) — user-initiated only ("Save for
+ /// user-initiated only ("Save for
     /// Replay"), distinct from the automatic `query_history` log. Reuses the
     /// duration already measured by the run that just finished, but also
-    /// captures a fresh EXPLAIN ANALYZE plan (docs/architecture/13 §5.2):
-    /// unlike DI-06's harvester probe (plain EXPLAIN, never executes),
+ /// captures a fresh EXPLAIN ANALYZE plan:
+ /// unlike's harvester probe (plain EXPLAIN, never executes),
     /// EXPLAIN ANALYZE genuinely runs `sql` again, so it goes through the
     /// normal `QueryService`/DangerGuard path (N1) like any other statement —
     /// a mutating query re-prompts for confirmation exactly as it would if
@@ -1077,7 +1094,7 @@ public final class WorkspaceViewModel {
     }
 
     /// Runs `EXPLAIN ANALYZE sql` through the real SQL path and parses it into
-    /// a plan tree (DI-17). Nil on anything short of a recognized plan — no
+ /// a plan tree. Nil on anything short of a recognized plan — no
     /// session, a dialect without EXPLAIN (`Capabilities.explain == false`),
     /// a declined/failed run, or an unrecognized result shape — since a
     /// replay snapshot without a plan is still useful (matches pre-existing
@@ -1110,7 +1127,7 @@ public final class WorkspaceViewModel {
     }
 
     /// Bounded window of PRIOR snapshots (not including the current one) for
-    /// convention-consistency checks (docs/feature/07 §12, "Database
+ /// convention-consistency checks ("Database
     /// Memory") — capped so a long-lived, frequently-changed profile doesn't
     /// make every insight refresh reload dozens of full historical graphs.
     /// `graphSnapshots` is already newest-first, so `dropFirst()` skips the
@@ -1126,8 +1143,8 @@ public final class WorkspaceViewModel {
         }
     }
 
-    /// Digital-Twin snapshot history for the Time Machine Timeline (docs/feature/07
-    /// §1), newest first — already digest-deduped at write time
+ /// Digital-Twin snapshot history for the Time Machine Timeline
+ /// newest first — already digest-deduped at write time
     /// (`BerryStore.saveGraph`), so every entry represents a real structural
     /// change, not refresh noise.
     public func timelineSnapshots() -> [GraphSnapshotRecord] {
@@ -1170,7 +1187,7 @@ public final class WorkspaceViewModel {
 
     // MARK: - Tabs
 
-    /// Open (or focus) a table tab (DL-01, docs/architecture/06 · L2).
+ /// Open (or focus) a table tab.
     public func select(_ object: SchemaObject) {
         guard let session else { return }
         selectedObjectID = object.id
@@ -1185,7 +1202,7 @@ public final class WorkspaceViewModel {
         activeTabID = tabID
     }
 
-    // MARK: - ALTER TABLE designer (CT-01/02/03)
+ // MARK: - ALTER TABLE designer
 
     /// The current design of an existing table, as the ALTER designer's
     /// starting point.
@@ -1208,8 +1225,8 @@ public final class WorkspaceViewModel {
             .warnings
     }
 
-    /// AI Schema Review for an in-progress edit (DI-15, docs/architecture/13
-    /// §5.1): runs the same analyzer rules Insight Panel uses against a
+ /// AI Schema Review for an in-progress edit
+ /// runs the same analyzer rules Insight Panel uses against a
     /// hypothetical graph with `edited`'s columns/indexes/foreign keys, before
     /// any DDL runs. Empty when nothing is harvested yet — nothing to compare
     /// the edit against.
@@ -1219,7 +1236,7 @@ public final class WorkspaceViewModel {
     }
 
     /// AI Schema Review for a proposed NEW column on an existing table
-    /// (`preview_migration` tool, docs/architecture/13 §6) — reconstructs the
+ /// (`preview_migration` tool) — reconstructs the
     /// table's current design via a live catalog lookup (`tableDesign(of:)`,
     /// the same starting point the ALTER designer uses), appends the
     /// proposed column, and runs the same analyzer `migrationPreview(editing:)`
@@ -1250,14 +1267,14 @@ public final class WorkspaceViewModel {
         }
     }
 
-    /// The CREATE DDL for an object (TR-03), or nil if the driver can't produce
+ /// The CREATE DDL for an object, or nil if the driver can't produce
     /// one. Runs off the SQL path via the driver introspector.
     public func ddl(of object: SchemaObject) async -> String? {
         guard let catalog else { return nil }
         return try? await catalog.ddl(of: object)
     }
 
-    /// TR-04 quick-info panel.
+ /// quick-info panel.
     public func tableStats(of object: SchemaObject) async -> TableStats? {
         guard let catalog else { return nil }
         return try? await catalog.tableStats(TableRef(database: object.database, name: object.name))
@@ -1280,13 +1297,13 @@ public final class WorkspaceViewModel {
         }
     }
 
-    // MARK: - CSV import (XN-05)
+ // MARK: - CSV import
 
     public func importableTables() -> [SchemaObject] {
         objects.filter { $0.kind == .table }
     }
 
-    /// Column names of a table, for building the import mapping (XN-05).
+ /// Column names of a table, for building the import mapping.
     public func columns(of object: SchemaObject) async -> [String] {
         guard let catalog else { return [] }
         let ref = TableRef(database: object.database, name: object.name)
@@ -1294,7 +1311,7 @@ public final class WorkspaceViewModel {
     }
 
     /// Columns of a table by (possibly schema-qualified) name — for the FK
-    /// designer's referenced-column suggestions (CT-03).
+ /// designer's referenced-column suggestions.
     public func columns(ofTableNamed name: String) async -> [String] {
         let parts = name.split(separator: ".").map(String.init)
         let bare = parts.last ?? name
@@ -1310,7 +1327,7 @@ public final class WorkspaceViewModel {
     }
 
     /// Runs a CSV import through the importer and formats a user-facing result
-    /// (XN-05). `records` are the data rows (header already stripped).
+ /// `records` are the data rows (header already stripped).
     public func runImport(
         records: [CSVParser.Record],
         into object: SchemaObject,
@@ -1339,21 +1356,21 @@ public final class WorkspaceViewModel {
         }
     }
 
-    // MARK: - Process list (TI-01)
+ // MARK: - Process list
 
     public var processListSupported: Bool {
         guard let session else { return false }
         return session.capabilities.processList && session.dialect.processListSQL() != nil
     }
 
-    /// Streams the server's process/activity list into a buffer (TI-01),
+ /// Streams the server's process/activity list into a buffer,
     /// through the single SQL path (N1).
     public func loadProcessList(into buffer: ResultBuffer) {
         guard let session, let sql = session.dialect.processListSQL() else { return }
         buffer.consume(QueryService.execute(sql, on: session, autoLimit: nil))
     }
 
-    /// Terminates a server session by pid (TI-01). Returns an error message on
+ /// Terminates a server session by pid. Returns an error message on
     /// failure, nil on success.
     public func killSession(id: String) async -> String? {
         guard let session, let sql = session.dialect.killSessionSQL(id: id) else {
@@ -1367,7 +1384,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    // MARK: - User management (TI-03, docs/architecture/14)
+ // MARK: - User management
 
     public var userManagementSupported: Bool {
         if let session { return session.capabilities.userManagement && session.dialect.listUsersSQL() != nil }
@@ -1376,7 +1393,7 @@ public final class WorkspaceViewModel {
     }
 
     /// A static, read-only note shown in the Users tab in place of real
-    /// management (TI-03 Phase D) — for a connection with no in-DB user
+ /// management (Phase D) — for a connection with no in-DB user
     /// system: DynamoDB (`capabilities.userManagement == true` but no real
     /// `listUsersSQL()` — access is AWS IAM) or Qdrant
     /// (`DataSourceCapabilities.userManagementInfo` — access is an API key).
@@ -1392,17 +1409,17 @@ public final class WorkspaceViewModel {
         return nil
     }
 
-    /// Streams the server's user/role list into a buffer (TI-03), through the
+ /// Streams the server's user/role list into a buffer, through the
     /// single SQL path (N1). Columns normalized to: user, host, superuser,
-    /// can_login (docs/architecture/14 §2).
+ /// can_login.
     public func loadUsers(into buffer: ResultBuffer) {
         guard let session, let sql = session.dialect.listUsersSQL() else { return }
         buffer.consume(QueryService.execute(sql, on: session, autoLimit: nil))
     }
 
-    /// Drops a user/role (TI-03). Returns an error message on failure, nil on
+ /// Drops a user/role. Returns an error message on failure, nil on
     /// success — including the DB's own error when the user still owns
-    /// objects (no automatic REASSIGN/DROP OWNED, docs/architecture/14 §Deferred).
+ /// objects (no automatic REASSIGN/DROP OWNED).
     public func dropUser(username: String, host: String?) async -> String? {
         guard let session, let sql = session.dialect.dropUserSQL(username: username, host: host) else {
             return L("Cannot drop this user")
@@ -1430,7 +1447,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    // MARK: - User management, DataSource family (TI-03 Phase C, docs/architecture/14)
+ // MARK: - User management, DataSource family (Phase C)
     //
     // Mongo's `createUser` command takes its initial role list directly (one
     // round trip), unlike SQL's CREATE USER + N separate GRANT statements —
@@ -1452,7 +1469,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    /// Drops a user (TI-03 Phase C). Returns an error message on failure, nil
+ /// Drops a user (Phase C). Returns an error message on failure, nil
     /// on success — same "surface the server's own error" contract as the
     /// SQL side's `dropUser(username:host:)`.
     public func dropDataSourceUser(username: String) async -> String? {
@@ -1465,9 +1482,9 @@ public final class WorkspaceViewModel {
         }
     }
 
-    // MARK: - Table designer (CT-01/02/03)
+ // MARK: - Table designer
 
-    /// SQL preview for the designer — always shown before applying (CT-01).
+ /// SQL preview for the designer — always shown before applying.
     public func designPreview(_ design: TableDesign) -> [String] {
         guard let session else { return [] }
         return design.statements(dialect: session.dialect)
@@ -1487,7 +1504,7 @@ public final class WorkspaceViewModel {
     }
 
     /// Opens the table referenced by a foreign key, filtered to the referenced
-    /// row (DL-08). No-op if the referenced table isn't in the object list.
+ /// row. No-op if the referenced table isn't in the object list.
     public func jumpToReference(_ fk: ForeignKeyInfo, value: BerryValue) {
         guard let session else { return }
         guard let object = objects.first(where: {
@@ -1511,9 +1528,9 @@ public final class WorkspaceViewModel {
         activeTabID = tabID
     }
 
-    /// New SQL editor tab (ED-01, ⌘T). Optional initial text — used by the
-    /// history viewer's "insert into new tab" action (ED-06).
-    // MARK: - Detached tab windows (docs/ui/01 D1)
+ /// New SQL editor tab (⌘T). Optional initial text — used by the
+ /// history viewer's "insert into new tab" action.
+ // MARK: - Detached tab windows (D1)
 
     /// Tabs currently living in their own window — still in `tabs` (their
     /// documents stay alive) but in no pane.
@@ -1538,7 +1555,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    /// Open (or focus) the ALTER designer for a table as a tab (docs/ui/03).
+ /// Open (or focus) the ALTER designer for a table as a tab.
     public func openAlterTable(_ design: TableDesign) {
         let tabID = "alter:\(design.database ?? "").\(design.name)"
         if !tabs.contains(where: { $0.id == tabID }) {
@@ -1547,7 +1564,7 @@ public final class WorkspaceViewModel {
         activeTabID = tabID
     }
 
-    /// Open (or focus) a tool as a tab instead of a modal (docs/ui/02 §4).
+ /// Open (or focus) a tool as a tab instead of a modal.
     /// Tools are singletons — one History tab, one Processes tab, etc.
     public func openTool(_ kind: WorkspaceToolKind) {
         let tabID = "tool:\(kind.rawValue)"
@@ -1557,7 +1574,7 @@ public final class WorkspaceViewModel {
         activeTabID = tabID
     }
 
-    /// Opens a chat-rendered Mermaid diagram as its own tab (AI-34) — the
+ /// Opens a chat-rendered Mermaid diagram as its own tab — the
     /// zoomable, full-size counterpart to the small inline chat block. Always
     /// creates a new tab (mirrors `newEditorTab`), since re-opening the same
     /// diagram from a different message is a distinct thing to look at.
@@ -1572,12 +1589,55 @@ public final class WorkspaceViewModel {
         editorCounter += 1
         let resolved = SnippetPlaceholder.resolve(text)
         let document = EditorDocument(title: title ?? L("Untitled"), text: resolved.text)
-        document.pendingFocus = true // caret lands in the new editor (docs/ui/03)
-        document.pendingSelection = resolved.selection // ED-07: pre-select the snippet's first placeholder
+ document.pendingFocus = true // caret lands in the new editor
+ document.pendingSelection = resolved.selection // pre-select the snippet's first placeholder
         tabs.append(.editor(document))
         activeTabID = "editor:\(document.id.uuidString)"
         persistEditor(document)
         logWorkspaceAction("tab_opened", description: "Opened SQL tab \"\(document.title)\"")
+    }
+
+    /// Maximum file size (1 MB) before warning user about sluggish interactive editing.
+    public static let largeSQLFileThreshold: Int64 = 1 * 1024 * 1024
+    /// Buffers URLs opened before WorkspaceView mounts (cold start from Finder)
+    public static var pendingOpenURLs: [URL] = []
+
+    @discardableResult
+    public func openSQLFile(at url: URL, bypassLargeCheck: Bool = false) async throws -> EditorDocument? {
+        // If already open, focus that tab
+        for tab in tabs {
+            if case .editor(let doc) = tab, doc.fileURL == url {
+                activeTabID = "editor:\(doc.id.uuidString)"
+                return doc
+            }
+        }
+
+        let resourceValues = try? url.resourceValues(forKeys: [.fileSizeKey])
+        let size = Int64(resourceValues?.fileSize ?? 0)
+
+        if size > Self.largeSQLFileThreshold && !bypassLargeCheck {
+            // Large file safeguard: caller or UI triggers advisory warning
+            pendingLargeFile = LargeFileWarning(url: url, sizeInBytes: size)
+            return nil
+        }
+
+        // Offload file I/O to background cooperative thread
+        let data = try await Task.detached(priority: .userInitiated) {
+            try Data(contentsOf: url)
+        }.value
+
+        guard let content = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
+            throw CocoaError(.fileReadInapplicableStringEncoding)
+        }
+
+        let doc = EditorDocument(title: url.lastPathComponent, text: content)
+        doc.fileURL = url
+        doc.isDetached = (session == nil)
+        tabs.append(.editor(doc))
+        activeTabID = "editor:\(doc.id.uuidString)"
+        persistEditor(doc)
+        logWorkspaceAction("tab_opened", description: "Opened SQL file \"\(doc.title)\"")
+        return doc
     }
 
     /// Close a tab. With `groupID`, closes it in that pane only (VS Code); the
@@ -1654,7 +1714,7 @@ public final class WorkspaceViewModel {
         case .editor(let document):
             document.cancel(session: session)
             // Closing an editor tab discards its persisted session — it must
-            // not resurrect on the next connect (UD-05).
+ // not resurrect on the next connect.
             try? store?.deleteEditorSession(id: document.id)
             logWorkspaceAction("tab_closed", description: "Closed tab \"\(document.title)\"")
         case .tool, .alterTable, .mermaidDiagram:
@@ -1678,10 +1738,10 @@ public final class WorkspaceViewModel {
 
     /// Run the focused editor from the menu bar (Query menu). `all` runs every
     /// statement; otherwise the statement at the cursor. Mirrors the editor
-    /// toolbar's transaction gate (ED-11) so manual transactions still wrap it.
+ /// toolbar's transaction gate so manual transactions still wrap it.
     public func runFocusedEditor(all: Bool = false) {
         guard case .editor(let document) = activeTab, let session else { return }
-        // Navicat exec (docs/ui): the menu Run honors a selection when one
+        // Query exec: the menu Run honors a selection when one
         // exists, otherwise runs everything.
         let mode: EditorDocument.RunMode
         if !all, document.selectedRange.length > 0 {
@@ -1700,14 +1760,14 @@ public final class WorkspaceViewModel {
         }
     }
 
-    /// Pretty-print the focused editor (ED-08) from the menu bar. The editor
+ /// Pretty-print the focused editor from the menu bar. The editor
     /// view does the formatting so the caret/selection is preserved.
     public func formatFocusedEditor() {
         guard case .editor(let document) = activeTab else { return }
         document.formatRequestID += 1
     }
 
-    /// Split the focused group into a new pane (⌘\, ui.md §1). `down` opens a
+ /// Split the focused group into a new pane (⌘\). `down` opens a
     /// new grid row; otherwise a new column to the right.
     public func splitFocusedGroup(down: Bool = false) {
         ensureFocusedGroup()
@@ -1715,7 +1775,7 @@ public final class WorkspaceViewModel {
         if down { splitDown(id) } else { splitRight(id) }
     }
 
-    /// ⌘/ — toggle line comments in the focused editor (docs/ui).
+ /// ⌘/ — toggle line comments in the focused editor.
     public func toggleCommentFocusedEditor() {
         if case .editor(let document) = activeTab {
             document.commentToggleRequestID += 1
@@ -1728,9 +1788,12 @@ public final class WorkspaceViewModel {
         return false
     }
 
-    // MARK: - Editor session persistence (UD-05)
+ // MARK: - Editor session persistence
 
     public func persistEditor(_ document: EditorDocument) {
+        // Files on disk (fileURL != nil) stay on disk and must not duplicate their content in store.sqlite.
+        // Also avoid writing huge documents (>512 KB) into the local SQLite store so app relaunch stays instantaneous.
+        guard document.fileURL == nil && document.text.utf8.count <= 512 * 1024 else { return }
         try? store?.saveEditorSession(EditorSessionRecord(
             id: document.id,
             profileID: activeProfileID,
@@ -1745,6 +1808,11 @@ public final class WorkspaceViewModel {
         guard let store, let records = try? store.editorSessions(profileID: profileID),
               !records.isEmpty else { return }
         for record in records {
+            // Guard against oversized sessions from past versions that freeze the UI
+            if record.text.utf8.count > 512 * 1024 {
+                try? store.deleteEditorSession(id: record.id)
+                continue
+            }
             let document = EditorDocument(id: record.id, title: record.title, text: record.text)
             document.savedQueryID = record.savedQueryID
             document.artifactID = record.artifactID
@@ -1763,7 +1831,7 @@ public final class WorkspaceViewModel {
         focusedGroupID = group.id
     }
 
-    // MARK: - Saved queries (ED-07)
+ // MARK: - Saved queries
 
     public private(set) var savedQueries: [SavedQuery] = []
 
@@ -1787,7 +1855,7 @@ public final class WorkspaceViewModel {
             folder: (trimmedFolder?.isEmpty ?? true) ? nil : trimmedFolder
         )
         try? store?.saveSavedQuery(query)
-        // Link the tab to its saved query and take the saved name (docs/ui):
+ // Link the tab to its saved query and take the saved name:
         // later ⌘S saves update the same record, like a file.
         if case .editor(let document) = activeTab, document.text == sql {
             document.title = name
@@ -1802,7 +1870,7 @@ public final class WorkspaceViewModel {
 
     /// ⌘S — save the active editor's SQL to saved queries under its tab name,
     /// upserting by name so repeated saves update rather than duplicate
-    /// (docs/ui/03 §2).
+ ///
     public func saveCurrentSQL() {
         guard case .editor(let document) = activeTab,
               !document.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -1823,7 +1891,7 @@ public final class WorkspaceViewModel {
 
     // MARK: - Backups (feature/04)
 
-    /// Past backups for the active connection, newest first (Navicat-style list).
+    /// Past backups for the active connection, newest first.
     public private(set) var backupFiles: [BackupFile] = []
 
     /// Per-connection key for the backups directory — stable across restarts
@@ -1855,7 +1923,7 @@ public final class WorkspaceViewModel {
         try? store?.deleteSavedQuery(id: id)
     }
 
-    /// Save button on a Qdrant query tab (docs/feature/03): update the linked
+ /// Save button on a Qdrant query tab: update the linked
     /// saved query if any, otherwise create one under the tab title carrying the
     /// canonical JSON — the vector analogue of `saveCurrentSQL`.
     public func saveActiveQdrantQuery() {
@@ -1890,7 +1958,7 @@ public final class WorkspaceViewModel {
         try? store?.saveSavedQuery(query)
     }
 
-    // MARK: - Per-connection AI settings (AI-06/AI-07, docs/architecture/09 §6)
+ // MARK: - Per-connection AI settings
 
     public func loadAISetting(profileID: UUID) -> AIConnectionSetting? {
         try? store?.aiSetting(profileID: profileID)
@@ -1906,7 +1974,7 @@ public final class WorkspaceViewModel {
         return nil
     }
 
-    /// Snapshot of the active editor tab for the AI `read_current_tab` tool (AI-17).
+ /// Snapshot of the active editor tab for the AI `read_current_tab` tool.
     public func activeTabSnapshot() -> ActiveTabSnapshot? {
         guard let tab = activeTab else { return nil }
         switch tab {
@@ -1952,7 +2020,7 @@ public final class WorkspaceViewModel {
     }
 
     /// Panes in the order the UI numbers them: rows top→bottom, groups within a
-    /// row left→right, so pane 1 is the top(-left) one (docs/ui/01 §1).
+ /// row left→right, so pane 1 is the top(-left) one.
     private var orderedGroups: [EditorGroup] {
         layoutRows.flatMap(\.groupIDs).compactMap { id in groups.first { $0.id == id } }
     }
@@ -1963,7 +2031,7 @@ public final class WorkspaceViewModel {
     }
 
     /// Every open pane, numbered as the UI shows them, for the AI `get_open_tabs`
-    /// tool so it can disambiguate a split before acting (AI-17, §5).
+ /// tool so it can disambiguate a split before acting.
     public func openTabsSnapshot() -> OpenTabsSnapshot? {
         let ordered = orderedGroups
         guard !ordered.isEmpty else { return nil }
@@ -1996,7 +2064,7 @@ public final class WorkspaceViewModel {
 
     /// Every open tab across every pane (unlike `openTabsSnapshot()`, which
     /// only carries each pane's active tab), for the AI `get_ui_state`/
-    /// `query_ui_graph` tools (docs/feature/08, AI-27).
+ /// `query_ui_graph` tools.
     public func uiGraphSnapshot() -> UIGraphSnapshot? {
         let ordered = orderedGroups
         guard !ordered.isEmpty else { return nil }
@@ -2025,7 +2093,7 @@ public final class WorkspaceViewModel {
     }
 
     /// Statements for the AI `run_tab_statements`/`explain_query` tools, mapping
-    /// the tool's "all"/"selection"/"cursor" onto `EditorDocument.RunMode` (AI-17/18).
+ /// the tool's "all"/"selection"/"cursor" onto `EditorDocument.RunMode`.
     public func activeEditorStatements(for which: String) -> [String] {
         switch activeTab {
         case .editor(let document):
@@ -2050,7 +2118,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    /// The saved query the active editor is linked to, if any (docs/ui).
+ /// The saved query the active editor is linked to, if any.
     public var activeEditorSavedQueryID: UUID? {
         switch activeTab {
         case .editor(let document): return document.savedQueryID
@@ -2061,7 +2129,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    /// Open a saved query as a linked tab (docs/ui): re-opening focuses the
+ /// Open a saved query as a linked tab: re-opening focuses the
     /// existing tab; otherwise a new tab is created carrying the query's name
     /// and the link used by ⌘S. Branches on whether a SQL or Mongo session is
     /// active (mirrors `newQueryTab()`, Task 8).
@@ -2092,7 +2160,7 @@ public final class WorkspaceViewModel {
             tabs.append(.mongoShell(state))
             activeTabID = "mongoShell:\(state.id.uuidString)"
         case .vector:
-            // Qdrant saved queries persist the canonical JSON in `sql` (docs/feature/03).
+ // Qdrant saved queries persist the canonical JSON in `sql`.
             let state = QdrantQueryTabState(title: query.name, rawJSON: query.sql)
             state.savedQueryID = query.id
             state.pendingFocus = true
@@ -2100,7 +2168,7 @@ public final class WorkspaceViewModel {
             activeTabID = "qdrantQuery:\(state.id.uuidString)"
         case .search:
             // Elasticsearch saved queries persist the canonical JSON in `sql`
-            // (docs/architecture/17 §5), same as Qdrant.
+ // same as Qdrant.
             let state = ElasticsearchQueryTabState(title: query.name, rawJSON: query.sql)
             state.savedQueryID = query.id
             state.pendingFocus = true
@@ -2116,7 +2184,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    // MARK: - Artifacts (AI-29, docs/draft/09.md)
+ // MARK: - Artifacts
 
     public private(set) var artifacts: [Artifact] = []
 
@@ -2129,8 +2197,8 @@ public final class WorkspaceViewModel {
         try? store?.deleteArtifact(id: id)
     }
 
-    /// Candidates for the composer's `@{...}` mention autocomplete (AI-32,
-    /// docs/draft/09.md): this connection's artifacts plus its relational
+ /// Candidates for the composer's `@{...}` mention autocomplete
+ /// this connection's artifacts plus its relational
     /// schema objects, filtered by `query`. Reads artifacts fresh from the
     /// store each call rather than the cached `artifacts` property (which
     /// only updates on an explicit `refreshArtifacts()`) so a mention typed
@@ -2141,7 +2209,7 @@ public final class WorkspaceViewModel {
         return ArtifactMentionItem.filter(artifacts: artifacts, objects: objects, query: query)
     }
 
-    /// Look up the artifact linked to a tab by its `WorkspaceTab.id` (AI-30)
+ /// Look up the artifact linked to a tab by its `WorkspaceTab.id`
     /// — lets the AI's tool executor accumulate versions onto the same
     /// artifact across repeated tool calls against the same tab instead of
     /// creating a new one each time.
@@ -2158,7 +2226,7 @@ public final class WorkspaceViewModel {
         return nil
     }
 
-    /// Links a tab to an artifact the AI's tool executor just created (AI-30)
+ /// Links a tab to an artifact the AI's tool executor just created
     /// — mirrors how `openSavedQuery`/`saveArtifact` set the link from the UI side.
     public func setArtifactID(_ artifactID: UUID, forTab tabID: String) {
         for tab in tabs where tab.id == tabID {
@@ -2200,10 +2268,10 @@ public final class WorkspaceViewModel {
     /// just opening the live object itself via `select(_:)`, the same as
     /// `TableTabState`/`CollectionTabState` already do from stable
     /// name-derived ids.
-    /// Opens an artifact by id (AI-31) — resolves it from local storage
+ /// Opens an artifact by id — resolves it from local storage
     /// first, since a chat bubble's chip only carries the id/version, not
     /// the full record.
-    /// Entry point for an artifact chip click in the AI panel (AI-31).
+ /// Entry point for an artifact chip click in the AI panel.
     ///
     /// `[AIARTIFACT]` tracing: every failure below is a silent `return`, and
     /// `try? store?.artifact(id:)` collapses three distinct causes into one —
@@ -2234,7 +2302,7 @@ public final class WorkspaceViewModel {
         openArtifact(artifact)
     }
 
-    /// Opens a table/view by its `SchemaObject.id` (AI-32) — a user's own
+ /// Opens a table/view by its `SchemaObject.id` — a user's own
     /// chat bubble linkifies an `@{Name}` mention that resolves to a live
     /// object the same way an artifact chip does, but only ever carries the
     /// id string, not the full object.
@@ -2372,11 +2440,11 @@ public final class WorkspaceViewModel {
         }
     }
 
-    /// Parses a `resultSnapshotJSON` (AI-30's `run_sql` single-statement shape
+ /// Parses a `resultSnapshotJSON` ('s `run_sql` single-statement shape
     /// `{"columns":[...],"rows":[...]}`, or `run_tab_statements`'s
     /// `{"statements":[{"sql":...,"columns":...,"rows":...}, ...]}`) into the
     /// shape `EditorDocument.loadSnapshotResults` expects — one entry per
-    /// statement, matching ED-05.
+ /// statement,.
     private static func parseResultSnapshots(
         _ json: String, fallbackSQL: String
     ) -> [(sql: String, columns: [String], rows: [[String?]])] {
@@ -2394,7 +2462,7 @@ public final class WorkspaceViewModel {
     }
 
     /// Saves the active query/tab as a brand-new artifact — the manual entry
-    /// point into the same model AI-30 will wire the agent's own tools into.
+ /// point into the same model will wire the agent's own tools into.
     /// Links the active tab the same way `saveSavedQuery` does.
     @discardableResult
     public func saveArtifact(title: String) -> Artifact? {
@@ -2437,7 +2505,7 @@ public final class WorkspaceViewModel {
     }
 
     /// ⌘S on a linked tab: write the editor's SQL back into ITS saved query
-    /// (docs/ui). Returns false when the tab isn't linked yet (caller prompts
+ /// Returns false when the tab isn't linked yet (caller prompts
     /// for a name instead).
     @discardableResult
     public func updateLinkedSavedQuery() -> Bool {
@@ -2465,7 +2533,7 @@ public final class WorkspaceViewModel {
         return true
     }
 
-    /// Rename a saved query (docs/ui); any open tab linked to it follows.
+ /// Rename a saved query; any open tab linked to it follows.
     /// `.mongoShell` tabs aren't restored across app restarts the way
     /// `.editor` tabs are via `persistEditor` — Mongo shell session
     /// persistence is out of scope here, so renaming just updates the
@@ -2493,7 +2561,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    // MARK: - Query history (ED-06)
+ // MARK: - Query history
 
     /// The loaded page(s) of history for the tab. DB-side search + keyset paging
     /// keep RAM flat and let search hit the whole table (not just a slice).
@@ -2538,7 +2606,7 @@ public final class WorkspaceViewModel {
     }
 
     /// The slowest recent successful queries (`get_slow_queries` tool
-    /// bridge, docs/feature/07 §14) — re-ranks the same `query_history` the
+ /// bridge) — re-ranks the same `query_history` the
     /// History tab already shows by duration instead of recency. Base "ai"
     /// tier like History itself, not Intelligence-gated. Bounded to the most
     /// recent 500 entries (matching `ImpactSimulator`'s own workload window)
@@ -2563,7 +2631,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    // MARK: - NoSQL/vector: connect (docs/architecture/12 §7, design decision #1/#2)
+ // MARK: - NoSQL/vector: connect (design decision #1/#2)
 
     /// Connect to a Mongo/Qdrant profile — the `DataSourceDriver` sibling of
     /// `connect(profile:)`. One active connection per workspace, SQL XOR
@@ -2636,7 +2704,7 @@ public final class WorkspaceViewModel {
     /// SSH tunnel setup for a Mongo/Qdrant/Elasticsearch config — mirrors
     /// `Session.prepareEndpoint` (BerryCore), duplicated here because
     /// `DataSourceDriver` has no `ConnectionManager` equivalent to share it
-    /// through (docs/architecture/12 §7).
+ /// through.
     private func prepareDataSourceEndpoint(
         _ config: ConnectionConfig
     ) async throws -> (ConnectionConfig, SSHTunnel?) {
@@ -2650,13 +2718,13 @@ public final class WorkspaceViewModel {
     }
 
     /// Read-path failure when no key-value session is active — separate from
-    /// `DataSourceError` since it's a different family (docs/architecture/15).
+ /// `DataSourceError` since it's a different family.
     enum KeyValueViewModelError: LocalizedError {
         case noConnection
         var errorDescription: String? { L("No connection") }
     }
 
-    // MARK: - Key-value: connect (docs/architecture/15 §2/§3)
+ // MARK: - Key-value: connect
 
     /// Connect to a Redis profile — the `KeyValueDriver` sibling of
     /// `connect(profile:)`/`connectDataSource(profile:)`. One active
@@ -2741,7 +2809,7 @@ public final class WorkspaceViewModel {
         return (config.replacingEndpoint(host: "127.0.0.1", port: tunnel.localPort), tunnel)
     }
 
-    // MARK: - Key-value: browse & write (docs/architecture/15 §4)
+ // MARK: - Key-value: browse & write
 
     /// Cursor-paginated key scan (N3: never `KEYS`) — `cursor: nil` starts a
     /// fresh scan.
@@ -2814,8 +2882,8 @@ public final class WorkspaceViewModel {
     }
 
     /// Opens a Mongo shell tab pre-seeded with a starter query for `ref`
-    /// (Navicat: double-clicking a table opens `SELECT * FROM t LIMIT 1000` in a
-    /// SQL tab — this is the Mongo-shell equivalent, docs/feedback/01.md item 2).
+    /// (Double-clicking a table opens `SELECT * FROM t LIMIT 1000` in a
+    /// SQL tab — this is the Mongo-shell equivalent).
     /// Re-focuses the existing tab for the same collection instead of duplicating it.
     private func openMongoShellTab(for ref: CollectionRef, session: DataSourceSession) {
         let existing = tabs.compactMap { tab -> MongoShellTabState? in
@@ -2835,7 +2903,7 @@ public final class WorkspaceViewModel {
         })
     }
 
-    /// Blank Mongo shell tab (Navicat "New Query" for Mongo), mirroring
+    /// Blank Mongo shell tab ("New Query" for Mongo), mirroring
     /// `newEditorTab()`. Doesn't auto-run — a blank tab has nothing to execute.
     public func newMongoShellTab(text: String = "", title: String? = nil) {
         let state = MongoShellTabState(title: title ?? L("Untitled"), text: text)
@@ -2845,7 +2913,7 @@ public final class WorkspaceViewModel {
         logWorkspaceAction("tab_opened", description: "Opened Mongo shell tab \"\(state.title)\"")
     }
 
-    /// Contextual "New Query" (docs/ui, docs/feedback/01.md item 2): SQL when
+ /// Contextual "New Query" (item 2): SQL when
     /// connected to a relational session, Mongo shell when connected to a Mongo
     /// data source, the JSON query surface for Qdrant/Elasticsearch (kept off
     /// a shell language — see this plan's Global Constraints), and a no-op
@@ -2863,7 +2931,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    /// Blank Qdrant query tab (docs/feature/03) — the "New Query" surface for a
+ /// Blank Qdrant query tab — the "New Query" surface for a
     /// vector connection, sibling of `newMongoShellTab()`. Collection is chosen
     /// inside the query (JSON/form), so this isn't bound to one collection.
     public func newQdrantQueryTab(rawJSON: String = "", collection: String = "", title: String? = nil) {
@@ -2876,7 +2944,7 @@ public final class WorkspaceViewModel {
         logWorkspaceAction("tab_opened", description: "Opened Qdrant query tab \"\(state.title)\"")
     }
 
-    /// Blank Elasticsearch query tab (docs/architecture/17 §5) — the "New Query"
+ /// Blank Elasticsearch query tab — the "New Query"
     /// surface for a search connection, sibling of `newQdrantQueryTab()`. Index
     /// is chosen inside the query JSON, so this isn't bound to one index.
     public func newElasticsearchQueryTab(rawJSON: String = "", index: String = "", title: String? = nil) {
@@ -2889,17 +2957,17 @@ public final class WorkspaceViewModel {
         logWorkspaceAction("tab_opened", description: "Opened Elasticsearch query tab \"\(state.title)\"")
     }
 
-    /// Open a query-history entry (ED-06) into a *runnable* surface for the current
+ /// Open a query-history entry into a *runnable* surface for the current
     /// connection — mirroring `newQueryTab()`. History always opened a SQL editor
     /// tab, which can't execute against a Mongo/Qdrant/Elasticsearch data source
     /// (no SQL session), so re-running past queries silently failed there.
     /// - SQL session: a SQL editor tab.
     /// - Mongo (`.document`): a Mongo shell tab (the entry is the verbatim script).
-    /// - Qdrant (`.vector`): the entry is the canonical query JSON (docs/feature/03)
+ /// Qdrant (`.vector`): the entry is the canonical query JSON
     ///   → a Qdrant query tab. Legacy entries were readable descriptions, not JSON;
     ///   those fall back to re-opening the referenced collection's tab by name.
     /// - Elasticsearch (`.search`): same JSON-canonical shape as Qdrant
-    ///   (docs/architecture/17 §5) → an Elasticsearch query tab.
+ /// → an Elasticsearch query tab.
     public func openQueryFromHistory(_ sql: String) {
         if session != nil {
             newEditorTab(text: sql)
@@ -2927,7 +2995,7 @@ public final class WorkspaceViewModel {
 
     // MARK: - NoSQL/vector: create collection
 
-    /// Explicit collection/point-set creation (docs/architecture/12 §3/§5) —
+ /// Explicit collection/point-set creation
     /// called directly from `NewCollectionSheet`'s submit action, NOT through
     /// `applyDataSourceWrite`: creating a collection is schema-ish, not a
     /// destructive data change, so it skips `DataSourceDangerGuard`/the write
@@ -2947,7 +3015,7 @@ public final class WorkspaceViewModel {
 
     /// The single call site every `DataSourceChangeSet` write goes through
     /// (N1 sibling — SQL's equivalent funnel is `QueryService`, which has no
-    /// direct analogue for `DataSourceConnection.write`): classify (NS-08) →
+ /// direct analogue for `DataSourceConnection.write`): classify →
     /// render the native-command preview → confirm → apply. Returns an error
     /// message on failure, nil on success OR user cancel.
     @discardableResult
@@ -3012,7 +3080,7 @@ public final class WorkspaceViewModel {
     /// Runs a fixed, non-editable Truncate/Drop statement directly from a
     /// context menu instead of opening an editor tab to review first — the
     /// statement is exactly what the menu item says, so there's nothing to
-    /// review. `QueryService`'s existing DangerGuard confirm (07 §6) still
+ /// review. `QueryService`'s existing DangerGuard confirm still
     /// gates each one with a native alert before anything runs; more than one
     /// statement (Drop Selected Objects) gets ONE summary confirm up front,
     /// mirroring `EditorDocument.runStatements`'s batching exactly, instead of
@@ -3085,4 +3153,8 @@ public enum DataSourceWriteOutcome: Sendable {
     case succeeded
     case cancelled
     case failed(String)
+}
+
+extension Notification.Name {
+    public static let berryDBOpenSQLFile = Notification.Name("BerryDBOpenSQLFile")
 }

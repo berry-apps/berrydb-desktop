@@ -6,7 +6,7 @@ private extension PlanNode {
     var outlineChildren: [PlanNode]? { children.isEmpty ? nil : children }
 }
 
-/// Query-plan tree renderer (ED-09): EXPLAIN results shown as an expandable
+/// Query-plan tree renderer: EXPLAIN results shown as an expandable
 /// operator tree instead of a flat grid.
 struct ExplainTreeView: View {
     let nodes: [PlanNode]

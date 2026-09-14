@@ -2,18 +2,17 @@ import BerryDataSourceKit
 import BerryDriverKit
 import Foundation
 
-/// One page of a PIT + `search_after` scroll (docs/architecture/17 §2). Not
-/// `Sendable` itself — `[String: Any]` JSON blobs cross the actor boundary
-/// via region-based isolation, same as `QdrantHTTPClient.scroll`'s plain
-/// tuple return.
-struct ElasticsearchScrollPage {
+/// One page of a PIT + `search_after` scroll. Marked
+/// `@unchecked Sendable` because the underlying JSON dictionary contains `Any`
+/// values that cross the actor boundary.
+struct ElasticsearchScrollPage: @unchecked Sendable {
     let hits: [[String: Any]]
     /// nil once the PIT has been closed (last page reached).
     let nextPageToken: String?
 }
 
 /// Thin REST/JSON client over `URLSession` — zero vendored dependency, same
-/// pattern as `QdrantHTTPClient` (docs/architecture/17 §1: no maintained
+/// pattern as `QdrantHTTPClient` (no maintained
 /// Swift Elasticsearch client exists either). Every method maps failures to
 /// `DataSourceError` so the actor above never touches HTTP/JSON details
 /// directly.
@@ -40,7 +39,7 @@ struct ElasticsearchHTTPClient: Sendable {
 
     /// API key wins over Basic auth when both are set — self-hosted clusters
     /// default to Basic (`username`/`password`), Elastic Cloud/Serverless
-    /// pushes/requires API keys (docs/architecture/17 §3). `elasticsearchAPIKey`
+ /// pushes/requires API keys. `elasticsearchAPIKey`
     /// is expected already `base64(id:api_key)`-encoded, the same "encoded"
     /// value ES's own `POST /_security/api_key` response returns — BerryDB
     /// does not mint keys itself in v1, only consumes an existing one.
@@ -118,7 +117,7 @@ struct ElasticsearchHTTPClient: Sendable {
         return "HTTP \(status)"
     }
 
-    // MARK: Indices (docs/architecture/17 §2/§4)
+ // MARK: Indices
 
     /// `GET /_resolve/index/*` — NOT `_cat/indices`, which Elastic's own docs
     /// scope to human/CLI consumption rather than application use. The
@@ -157,21 +156,38 @@ struct ElasticsearchHTTPClient: Sendable {
         return ElasticsearchWire.flattenMapping(properties)
     }
 
-    // MARK: Query (docs/architecture/17 §2)
+ // MARK: Query
 
     /// `refresh=true` on every write below, same read-after-write reasoning
     /// as `QdrantHTTPClient.waitForResult`: ES's default 1s refresh interval
     /// means a query issued right after an unwaited write can miss it, and
-    /// BerryDB always previews-then-applies (DL-03/04) expecting the change
+ /// BerryDB always previews-then-applies expecting the change
     /// visible immediately afterward.
     private static let refreshTrue = [URLQueryItem(name: "refresh", value: "true")]
 
-    func search(index: String, query: BerryDocument, from: Int, size: Int) async throws -> [[String: Any]] {
+    /// Search hits from Elasticsearch. Marked `@unchecked Sendable` because the
+    /// underlying JSON dictionary contains `Any` values that cross the actor boundary.
+    struct ElasticsearchSearchResults: @unchecked Sendable, RandomAccessCollection {
+        typealias Element = [String: Any]
+        typealias Index = Int
+
+        let hits: [[String: Any]]
+
+        init(hits: [[String: Any]]) {
+            self.hits = hits
+        }
+
+        var startIndex: Int { hits.startIndex }
+        var endIndex: Int { hits.endIndex }
+        subscript(position: Int) -> [String: Any] { hits[position] }
+    }
+
+    func search(index: String, query: BerryDocument, from: Int, size: Int) async throws -> ElasticsearchSearchResults {
         let body: [String: Any] = ["query": ElasticsearchWire.queryDSLBody(query), "from": from, "size": size]
         let req = try request(method: "POST", path: "\(index)/_search", jsonBody: body)
         let json = try await send(req)
         let hitsWrapper = json["hits"] as? [String: Any]
-        return (hitsWrapper?["hits"] as? [[String: Any]]) ?? []
+        return ElasticsearchSearchResults(hits: (hitsWrapper?["hits"] as? [[String: Any]]) ?? [])
     }
 
     /// One page per call, `pageToken` opaquely carrying `(pit_id,
@@ -239,7 +255,7 @@ struct ElasticsearchHTTPClient: Sendable {
         return (pitID, searchAfter)
     }
 
-    // MARK: Write (docs/architecture/17 §2)
+ // MARK: Write
 
     /// `id` nil lets Elasticsearch auto-generate one; the response's `_id`
     /// becomes the caller's `insertedID`.
@@ -269,7 +285,7 @@ struct ElasticsearchHTTPClient: Sendable {
     }
 
     /// `POST /{index}/_delete_by_query` — an empty/`match_all` query is the
-    /// "no id, no filter" whole-index delete case (NS-08-equivalent).
+ /// "no id, no filter" whole-index delete case (-equivalent).
     func deleteByQuery(index: String, query: BerryDocument) async throws -> Int {
         let body: [String: Any] = ["query": ElasticsearchWire.queryDSLBody(query)]
         let req = try request(method: "POST", path: "\(index)/_delete_by_query", query: Self.refreshTrue, jsonBody: body)

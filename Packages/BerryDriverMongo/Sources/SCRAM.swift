@@ -5,9 +5,9 @@ import Foundation
 /// hash choice) — MongoDB's default auth mechanism since 4.0. No networking:
 /// `MongoWireClient` drives the two `saslStart`/`saslContinue` round trips and
 /// feeds server responses in here. Verified byte-for-byte against RFC 7677
-/// §3's own worked example (`SCRAMTests`) — the same "verify against a real
+/// The spec's own worked example (`SCRAMTests`) — the same "verify against a real
 /// vector, don't derive by hand" discipline `SigV4Signer` used for AWS SigV4
-/// (docs/architecture/12 §4).
+///
 enum SCRAM {
     enum SCRAMError: Error, LocalizedError {
         case malformedServerMessage(String)
@@ -43,7 +43,7 @@ enum SCRAM {
     }
 
     static func clientFirst(username: String, nonce: String) -> ClientFirst {
-        // RFC 5802 §5.1 "saslname" escaping — '=' and ',' would otherwise
+ // RFC 5802 "saslname" escaping — '=' and ',' would otherwise
         // collide with the message's own field/value delimiters.
         let escaped = username
             .replacingOccurrences(of: "=", with: "=3D")
@@ -57,7 +57,7 @@ enum SCRAM {
         let salt: Data
         let iterations: Int
         /// The raw server-first-message text — folded into the auth message
-        /// hash verbatim (RFC 5802 §3), not reconstructed from the parsed
+ /// hash verbatim (RFC 5802), not reconstructed from the parsed
         /// fields.
         let raw: String
     }
@@ -80,7 +80,7 @@ enum SCRAM {
     }
 
     /// Computes the client-final-message and the server signature this
-    /// client independently expects back — RFC 5802 §3's algorithm, SHA-256
+ /// client independently expects back — RFC 5802's algorithm, SHA-256
     /// throughout (RFC 7677). For SCRAM-SHA-256 (unlike Mongo's legacy
     /// SCRAM-SHA-1/MONGODB-CR path) the password feeds PBKDF2 directly, no
     /// `MD5(user:mongo:pwd)` pre-digest.
@@ -139,7 +139,7 @@ enum SCRAM {
     /// PBKDF2-HMAC-SHA256 (RFC 2898) — CryptoKit has no PBKDF2 primitive, so
     /// this is built from `HMAC<SHA256>` directly (same zero-dependency
     /// reasoning `SigV4Signer` used for its own HMAC chain,
-    /// docs/architecture/12 §4). Verified against RFC 7677's test vector,
+ /// Verified against RFC 7677's test vector,
     /// not hand-derived.
     private static func pbkdf2HMACSHA256(password: [UInt8], salt: [UInt8], iterations: Int, keyLength: Int = 32) -> [UInt8] {
         var result: [UInt8] = []

@@ -1,8 +1,8 @@
 import BerryDriverKit
 import Foundation
 
-/// Builds the structural DSG from harvested schema metadata (docs/architecture
-/// /11 §4/§5): tables/views become nodes, columns and indexes hang off them,
+/// Builds the structural DSG from harvested schema metadata
+/// tables/views become nodes, columns and indexes hang off them,
 /// and foreign keys become `references` edges. Workload/plan/migration edges are
 /// added by the harvesters in a later pass. Pure — the caller fetches
 /// `TableDetail`s (via `SchemaCatalog`, N1) and passes them in.

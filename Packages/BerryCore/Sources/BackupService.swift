@@ -1,7 +1,7 @@
 import BerryDriverKit
 import Foundation
 
-/// Whole-database backup/restore (docs/feature/04) — Navicat's "Dump SQL File" /
+/// Whole-database backup/restore — "Dump SQL File" /
 /// "Execute SQL File" for SQL connections, built from existing primitives
 /// (introspector DDL + `ExportEngine.sqlInsert` for dump, `StatementSplitter` +
 /// `QueryService` for restore). Streams row data so RAM stays flat (principle N3).

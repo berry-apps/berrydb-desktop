@@ -30,11 +30,11 @@ struct DynamoDBHTTPClientTests {
             #expect(json["Statement"] as? String == #"SELECT * FROM "Music""#)
             return (dynamoStubResponse(request.url!, status: 200), dynamoStubJSON(["Items": []]))
         }
-        let (items, nextToken) = try await client.executeStatement(
+        let page = try await client.executeStatement(
             #"SELECT * FROM "Music""#, nextToken: nil, limit: nil
         )
-        #expect(items.isEmpty)
-        #expect(nextToken == nil)
+        #expect(page.items.isEmpty)
+        #expect(page.nextToken == nil)
     }
 
     @Test func executeStatementIncludesNextTokenAndLimitWhenGiven() async throws {
@@ -57,9 +57,9 @@ struct DynamoDBHTTPClientTests {
             ]
             return (dynamoStubResponse(request.url!, status: 200), dynamoStubJSON(body))
         }
-        let (items, nextToken) = try await client.executeStatement("SELECT * FROM \"T\"", nextToken: nil, limit: nil)
-        #expect(items.count == 1)
-        #expect(nextToken == "abc123")
+        let page = try await client.executeStatement("SELECT * FROM \"T\"", nextToken: nil, limit: nil)
+        #expect(page.items.count == 1)
+        #expect(page.nextToken == "abc123")
     }
 
     @Test func listTablesFollowsLastEvaluatedTableNamePagination() async throws {

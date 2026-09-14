@@ -1,23 +1,23 @@
 import BerryDriverKit
 import Foundation
 
-/// `DatabaseDriver` for SQL Server via FreeTDS DB-Library (docs/architecture/05
-/// §4, V2⚠️) — the one deliberate exception to this app's pure-Swift/no-FFI
+/// `DatabaseDriver` for SQL Server via FreeTDS DB-Library
+/// V2⚠️) — the one deliberate exception to this app's pure-Swift/no-FFI
 /// rule (Q8). Bridges to FreeTDS (LGPL, dynamically linked) because TDS has no
 /// REST/JSON surface to reuse the way DynamoDB/Qdrant do, and no
 /// production-viable pure-Swift TDS implementation exists yet — see
-/// docs/architecture/16-sql-server.md for the researched alternatives and why
+/// for the researched alternatives and why
 /// each was rejected.
 public struct SQLServerDriver: DatabaseDriver {
     public static let id: DriverID = .sqlserver
     public static let displayName = "SQL Server"
 
-    // Capability matrix: docs/architecture/05 §4 "SQL Server (V2⚠️)" column —
+ // Capability matrix: "SQL Server (V2⚠️)" column
     // kept in lockstep with that table EXCEPT cancelQuery, which the table
     // assumed (✅ "attention signal") before this driver actually existed.
     public static let capabilities = Capabilities(
         transactions: true,
-        // ❌, contradicting docs/architecture/05 §4's original assumption —
+ // ❌, contradicting's original assumption
         // a real finding, not a guess. FreeTDS DB-Library's `execute()` runs
         // fully BLOCKING calls (no async I/O to suspend/interrupt), and the
         // one candidate mechanism (a secondary connection issuing
@@ -28,7 +28,7 @@ public struct SQLServerDriver: DatabaseDriver {
         // test. See `SQLServerConnection.cancelCurrentQuery()`'s doc comment
         // for the full investigation. Revisit only with real evidence a safe
         // mechanism exists — this doc comment is exactly the kind of
-        // "record the reasoning" CLAUDE.md asks for before re-attempting
+        // Record of reasoning before re-attempting
         // something already tried and reverted.
         cancelQuery: false,
         multipleDatabases: true,    // USE <db> on the same connection
@@ -82,13 +82,13 @@ public struct SQLServerDialect: SQLDialect {
     /// single-string-prefix shape at all; returning a prefix here would
     /// silently produce a broken/no-op EXPLAIN rather than a real plan.
     /// `capabilities.explain` stays `true` per the architecture doc's matrix,
-    /// but the UI-level EXPLAIN feature (ED-09) needs its own SQL-Server-aware
+ /// but the UI-level EXPLAIN feature needs its own SQL-Server-aware
     /// multi-statement path — tracked as a known v1 gap, not implemented here.
     public func explainPrefix(analyze: Bool) -> String {
         "SET SHOWPLAN_XML ON;\n-- BerryDB: SQL Server's plan output needs a multi-statement SET/run/SET sequence, not a text prefix — see SQLServerDialect.explainPrefix's doc comment. This EXPLAIN is a known v1 gap."
     }
 
-    /// Normalized columns: pid, user, db, state, query, seconds (TI-01).
+ /// Normalized columns: pid, user, db, state, query, seconds.
     /// Excludes our own session so the user never kills the viewing
     /// connection. `sys.dm_exec_sql_text` needs `CROSS APPLY` since it's a
     /// table-valued function keyed by `sql_handle`, not a plain join column.
@@ -110,7 +110,7 @@ public struct SQLServerDialect: SQLDialect {
         return "KILL \(id)"
     }
 
-    // MARK: User management (TI-03) — SQL Server logins are server-level
+ // MARK: User management — SQL Server logins are server-level
     // (like Postgres roles, not host-scoped like MySQL) — `host` is ignored.
 
     public func listUsersSQL() -> String? {
@@ -136,7 +136,7 @@ public struct SQLServerDialect: SQLDialect {
     }
 
     /// v1 grant scope, matching Postgres/MySQL's own curated common-grant
-    /// set (docs/architecture/14 §Deferred): server-level roles only
+ /// set: server-level roles only
     /// (`sysadmin`, `dbcreator`, etc. — `privilege` here IS the role name),
     /// not per-database/per-table GRANT statements.
     public func grantSQL(privilege: String, on target: String, to username: String, host: String?) -> String? {

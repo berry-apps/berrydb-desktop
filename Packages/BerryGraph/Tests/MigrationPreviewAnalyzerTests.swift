@@ -4,10 +4,10 @@ import Testing
 
 @testable import BerryGraph
 
-/// Migration Preview Analyzer (DI-15, docs/architecture/13 §5.2) — runs the
+/// Migration Preview Analyzer — runs the
 /// existing Schema/Index Analyzer rules against an edited `TableDesign`
 /// before any DDL executes.
-@Suite("Migration Preview Analyzer (DI-15)")
+@Suite("Migration Preview Analyzer")
 struct MigrationPreviewAnalyzerTests {
     private func column(
         _ name: String, type: String = "int", pk: Bool = false, nullable: Bool = true

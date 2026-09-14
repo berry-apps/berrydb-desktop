@@ -25,7 +25,7 @@ private final class CaptureHandler: ChannelInboundHandler {
 /// DIFFERENT event loops" (GlueHandler.swift's own doc comment). This wires
 /// exactly that topology — local side on one single-threaded group, remote
 /// side on another — so every partner* hop is a genuine cross-loop call,
-/// reproducing KN-03's `NIOLoopBound` precondition crash deterministically
+/// reproducing's `NIOLoopBound` precondition crash deterministically
 /// rather than depending on MultiThreadedEventLoopGroup's thread assignment.
 @Suite("GlueHandler cross-event-loop pump")
 struct GlueHandlerTests {

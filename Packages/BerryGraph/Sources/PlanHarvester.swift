@@ -2,8 +2,8 @@ import BerryCore
 import BerryDriverKit
 import Foundation
 
-/// Harvests execution plans for the recent workload (docs/architecture/11 §4/§7,
-/// DI-06). For each distinct recent SELECT it runs plain `EXPLAIN` — which
+/// Harvests execution plans for the recent workload
+/// For each distinct recent SELECT it runs plain `EXPLAIN` — which
 /// estimates the plan WITHOUT executing the query, so no user rows are read
 /// (Q6) — parses the plan, and feeds the Query Analyzer.
 ///

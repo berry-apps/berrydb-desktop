@@ -1,7 +1,7 @@
 import BerryDriverKit
 import SwiftUI
 
-/// Quick-info panel (TR-04): row count/size/engine/comment for the selected
+/// Quick-info panel: row count/size/engine/comment for the selected
 /// object, best-effort per driver (any field the DBMS doesn't expose shows
 /// "—", never a fake value — see each Introspector.tableStats).
 struct TableStatsSheet: View {
@@ -28,7 +28,7 @@ struct TableStatsSheet: View {
         }
         // Generous fixed frame, not sized to intrinsic content: .formStyle(.grouped)
         // is backed by a scrollable List on macOS, so a tight frame made it clip
-        // and scroll instead of showing all 4 rows at once (docs/CLAUDE.md window rules).
+        // and scroll instead of showing all 4 rows at once (window and layout rules).
         .frame(width: 420, height: 300)
         .task {
             stats = await load()

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Redis/Valkey's type tags (`TYPE` command) — schemaless key space, so this
-/// is the closest thing to a "kind" a key has (docs/architecture/15 §2).
+/// is the closest thing to a "kind" a key has.
 public enum KeyValueType: String, Sendable, Equatable, Hashable {
     case string, hash, list, set, sortedSet, stream, none
 }
@@ -18,7 +18,7 @@ public struct KeyValueEntry: Sendable, Equatable {
     }
 }
 
-/// One page of a cursor-paginated `SCAN` (N3: never `KEYS`, docs/architecture/05 §5).
+/// One page of a cursor-paginated `SCAN` (N3: never `KEYS`).
 public struct KeyValueScanPage: Sendable, Equatable {
     public let entries: [KeyValueEntry]
     /// `nil` cursor means the scan is complete — matches Redis's own SCAN
@@ -88,7 +88,7 @@ public enum KeyValueChangeSet: Sendable, Equatable {
     case sortedSetRemove(key: String, member: String)
     /// `XADD key * field value` — a single field/value pair per append, same
     /// one-at-a-time scope as the hash case; multi-field appends are
-    /// deferred (docs/architecture/15 §5).
+ /// deferred.
     case streamAdd(key: String, field: String, value: String)
 }
 

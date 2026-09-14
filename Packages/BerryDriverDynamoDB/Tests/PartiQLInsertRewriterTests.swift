@@ -7,7 +7,7 @@ import Testing
 /// `INSERT INTO t (c1, c2) VALUES (v1, v2)` into DynamoDB's actual
 /// `INSERT INTO t VALUE {'c1': v1, 'c2': v2}` syntax — verified necessary
 /// against dynamodb-local (the generic form is rejected with
-/// `ValidationException: Statement wasn't well formed`, docs/architecture/12 §4).
+/// `ValidationException: Statement wasn't well formed`).
 @Suite("PartiQLInsertRewriter")
 struct PartiQLInsertRewriterTests {
     @Test func rewritesTheExactShapeChangeSetGenerates() {

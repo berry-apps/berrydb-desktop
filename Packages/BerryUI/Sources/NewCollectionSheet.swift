@@ -1,14 +1,14 @@
 import BerryDataSourceKit
 import SwiftUI
 
-/// Explicit collection creation (NS-09 gap fix, docs/architecture/12 §3/§5):
+/// Explicit collection creation (gap fix):
 /// a fresh Mongo/Qdrant connection starts with zero collections and — unlike
 /// SQL's "New Table…" — there was previously no UI action to create one.
 /// A Name field always; `.vector` (Qdrant) additionally needs vector size +
 /// distance metric up front, since `PUT /collections/{name}` has no
 /// implicit-creation-on-insert equivalent to Mongo's (see
 /// `QdrantConnection.createCollection`). Small enough to fit without internal
-/// scrolling (UD-07). Not gated behind `DataSourceDangerGuard`/write-confirm:
+/// scrolling. Not gated behind `DataSourceDangerGuard`/write-confirm:
 /// creating a collection isn't a destructive action, so `onCreate` calls
 /// `WorkspaceViewModel.createCollection` directly.
 struct NewCollectionSheet: View {
@@ -23,7 +23,7 @@ struct NewCollectionSheet: View {
     @State private var errorMessage: String?
     @State private var isCreating = false
 
-    /// Qdrant's supported distance metrics (docs/architecture/12 §5) — same
+ /// Qdrant's supported distance metrics — same
     /// baseline already used by `WorkspaceQdrantDataSourceTests`.
     enum QdrantDistance: String, CaseIterable, Identifiable {
         case cosine = "Cosine"

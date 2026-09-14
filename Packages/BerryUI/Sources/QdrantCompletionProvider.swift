@@ -1,7 +1,7 @@
 import BerryCore
 import Foundation
 
-/// Suggestions for the Qdrant JSON query editor (docs/feature/03) — the vector
+/// Suggestions for the Qdrant JSON query editor — the vector
 /// sibling of `MongoShellCompletionProvider`. Token-position heuristics on the
 /// text before the cursor: top-level keys of the DSL, `op` values, and
 /// collection names right after `"collection":`.

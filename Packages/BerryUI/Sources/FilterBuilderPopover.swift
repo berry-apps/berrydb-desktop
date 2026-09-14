@@ -2,7 +2,7 @@ import BerryCore
 import BerryDriverKit
 import SwiftUI
 
-/// Visual WHERE builder (DL-02): a few column/operator/value rows joined by AND.
+/// Visual WHERE builder: a few column/operator/value rows joined by AND.
 /// It writes a fragment into the tab's raw filter field, which remains the
 /// source of truth so power users can still hand-edit it.
 struct FilterBuilderPopover: View {

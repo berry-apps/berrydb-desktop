@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import Observation
 
-/// License lifecycle state (docs/architecture/10 §3 · L8).
+/// License lifecycle state.
 public enum LicenseStatus: Equatable, Sendable {
     /// No license installed — running unlicensed.
     case none
@@ -14,7 +14,7 @@ public enum LicenseStatus: Equatable, Sendable {
     /// feature-lockout as `.fallback` but kept as its own case so the UI can
     /// say "your trial ended" instead of the unrelated "Fallback mode"
     /// label, which used to fire here too and read as an error state rather
-    /// than an expected, actionable one (docs/architecture/10 §3).
+ /// than an expected, actionable one.
     case trialExpired(version: String)
     /// Past grace on a paid/admin plan — local-only features of `version`, AI off.
     case fallback(version: String)
@@ -29,9 +29,9 @@ public enum LicenseStatus: Equatable, Sendable {
 }
 
 /// Named paid capabilities carried in the license blob's `entitlements`
-/// (docs/architecture/10 §3, 11 §8). Strings match what berrydb-backend signs.
+/// Strings match what berrydb-backend signs.
 public enum LicenseFeature {
-    /// AI agent (docs/architecture/09).
+ /// AI agent.
     public static let ai = "ai"
     /// Database Intelligence — DSG harvest, analyzers, Graph Explorer (Q15).
     public static let intelligence = "intelligence"
@@ -42,7 +42,7 @@ public enum LicenseFeature {
 @MainActor
 @Observable
 public final class LicenseManager {
-    /// Grace window after expiry (docs/architecture/10 §3).
+ /// Grace window after expiry.
     public nonisolated static let graceDays = 14
 
     /// Dev signing public key from berrydb-backend's built-in seed. Replace
@@ -80,8 +80,8 @@ public final class LicenseManager {
     /// (`LicenseFeature.intelligence` — DSG harvest/analyzer/Graph
     /// Explorer/Time Machine) is no longer sold as a separate tier above
     /// "pro"/"ai"; every gate reading this function unlocks together. If
-    /// tiered gating is ever reintroduced, `docs/architecture/01 §Q15`,
-    /// `10 §3`, `11 §8`, `02`, `13` all documented the old split and would
+ /// tiered gating is ever reintroduced, ``,
+ /// ``, ``, `02`, `13` all documented the old split and would
     /// need the reverse update.
     public func hasFeature(_ feature: String) -> Bool {
         Self.hasFeature(feature, status: status, entitlements: payload?.entitlements ?? [])
@@ -102,7 +102,7 @@ public final class LicenseManager {
         await run { try await self.client.activate(key: key, deviceHash: DeviceID.deviceHash(), appVersion: self.appVersion) }
     }
 
-    /// Restore a Paddle purchase by the email used at checkout (10 §2) — the
+ /// Restore a Paddle purchase by the email used at checkout — the
     /// fallback when the checkout didn't carry a device hash.
     public func restorePurchase(email: String) async {
         await run { try await self.client.licenseByEmail(email: email, deviceHash: DeviceID.deviceHash()) }
@@ -121,7 +121,7 @@ public final class LicenseManager {
     }
 
     /// After opening the topup checkout, poll until the webhook has upgraded
-    /// this device's own token (docs/architecture/10 §2 gap-fix: the token
+ /// this device's own token (gap-fix: the token
     /// is rewritten in place to carry the paying email and a non-expiring
     /// "topup" plan, not reissued as a new key) — i.e. until `refresh`
     /// reports the "topup" plan. Stops on success, an unexpected error, or
@@ -155,7 +155,7 @@ public final class LicenseManager {
         }
     }
 
-    /// Starts an AI-credit topup (docs/architecture/10 §2, TM-11): asks the
+ /// Starts an AI-credit topup: asks the
     /// backend to open a Paddle checkout for `amountCents`. Returns the
     /// checkout URL to open, or nil (with `lastError` set) on failure — e.g.
     /// below the admin-configured minimum (`amount_too_small`).
@@ -186,7 +186,7 @@ public final class LicenseManager {
     }
 
     /// One-shot: pull a subscription the backend has already granted this device
-    /// (docs/architecture/10 §2). Covers the case where the post-checkout poll
+ /// Covers the case where the post-checkout poll
     /// timed out or the app was reopened after paying — the license shows up
     /// without re-subscribing. Silent when there's nothing yet (no_subscription)
     /// or on transport failure; never downgrades the current status.
@@ -205,7 +205,7 @@ public final class LicenseManager {
         }
     }
 
-    /// Refresh window before expiry (docs/architecture/09 §7): renew the offline
+ /// Refresh window before expiry: renew the offline
     /// blob a few days early so a lapsed network doesn't drop the user to grace.
     public nonisolated static let refreshWindow: TimeInterval = 3 * 86_400
 
@@ -220,7 +220,7 @@ public final class LicenseManager {
 
     /// Forces a refresh against the backend and re-verifies the returned blob.
     /// Unlike `activate`/`startTrial`/`restorePurchase`, a definitive rejection
-    /// here (docs/architecture/10 §3 · L8) means the license already installed
+ /// here means the license already installed
     /// is no longer honored — revoked key/device, not just "couldn't reach the
     /// server" — so it clears the stale cached blob instead of leaving
     /// `status` showing whatever it was before this call.
@@ -233,8 +233,8 @@ public final class LicenseManager {
         Double(exp) - now.timeIntervalSince1970 <= window
     }
 
-    /// Bearer token for the AI gateway (docs/architecture/09 §3), minted at
-    /// activation and stored in the Keychain (07 §2). Nil until activated.
+ /// Bearer token for the AI gateway, minted at
+ /// activation and stored in the Keychain. Nil until activated.
     public nonisolated static func apiToken() -> String? {
         LicenseKeychain.readToken() ?? "dev-token"
     }

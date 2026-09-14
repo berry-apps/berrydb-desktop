@@ -1,16 +1,16 @@
 import Foundation
 
 /// SQL dialect of each DBMS — identifier quoting, LIMIT syntax, and SQL
-/// generation for ChangeSet/table designer (docs/architecture/05 §1).
+/// generation for ChangeSet/table designer.
 public protocol SQLDialect: Sendable {
     func quoteIdentifier(_ identifier: String) -> String
-    /// LIMIT clause appended to the end of a SELECT (auto-LIMIT, ED-12).
+ /// LIMIT clause appended to the end of a SELECT (auto-LIMIT).
     func limitClause(_ limit: Int) -> String
     /// True when this dialect's `limitClause` is only valid on a query that
     /// already has an `ORDER BY` — T-SQL's `OFFSET...FETCH` (SQL Server's
     /// `limitClause`) is a hard syntax error without one, unlike every other
     /// dialect's `LIMIT`. Default `false`; `QueryService.applyAutoLimitIfNeeded`
-    /// (ED-12) uses this to inject a no-op `ORDER BY` first instead of
+ /// uses this to inject a no-op `ORDER BY` first instead of
     /// blindly appending `limitClause` to arbitrary SQL text and producing a
     /// broken statement.
     func requiresOrderByForLimit() -> Bool
@@ -18,17 +18,17 @@ public protocol SQLDialect: Sendable {
     func boolLiteral(_ value: Bool) -> String
     /// Blob literal — X'..' for SQLite/MySQL, '\x..' for Postgres.
     func blobLiteral(_ data: Data) -> String
-    /// EXPLAIN prefix (ED-09) — "EXPLAIN QUERY PLAN" on SQLite,
+ /// EXPLAIN prefix — "EXPLAIN QUERY PLAN" on SQLite,
     /// "EXPLAIN [ANALYZE]" elsewhere.
     func explainPrefix(analyze: Bool) -> String
-    /// Process/activity list query (TI-01) — nil when unsupported. Columns are
+ /// Process/activity list query — nil when unsupported. Columns are
     /// normalized to: pid, user, db, state, query, seconds.
     func processListSQL() -> String?
-    /// Statement that terminates a server session by id (TI-01) — nil when
+ /// Statement that terminates a server session by id — nil when
     /// unsupported. `id` must be a server-provided numeric process id.
     func killSessionSQL(id: String) -> String?
 
-    // MARK: User management (TI-03, docs/architecture/14)
+ // MARK: User management
     //
     // All nil-when-unsupported, same shape as processListSQL/killSessionSQL —
     // SQLite (no user concept) overrides none of these and gets nil for
@@ -96,7 +96,7 @@ extension SQLDialect {
     }
 
     /// True when `id` is a bare server process id safe to embed in a KILL /
-    /// pg_terminate_backend call (TI-01). The value comes from the pid column
+ /// pg_terminate_backend call. The value comes from the pid column
     /// of the process list, but guard defensively anyway.
     public static func isValidSessionID(_ id: String) -> Bool {
         !id.isEmpty && id.allSatisfy(\.isNumber)
@@ -107,7 +107,7 @@ extension SQLDialect {
     }
 
     /// Renders a BerryValue as a safe SQL literal. ChangeSet-generated SQL
-    /// (docs/architecture/06 · L3) embeds literals because the driver contract
+ /// embeds literals because the driver contract
     /// executes plain SQL; every string goes through '' doubling and every
     /// non-obvious type through a typed renderer — nothing is interpolated raw.
     public func literal(_ value: BerryValue) -> String {
@@ -144,7 +144,7 @@ extension SQLDialect {
     }
 
     /// Quotes and escapes a plain string as a SQL string literal ('' doubling)
-    /// — shared by `literal(_:)` and the TI-03 user-management primitives
+ /// shared by `literal(_:)` and the user-management primitives
     /// (`createUserSQL`/`alterUserPasswordSQL` embed a password this way,
     /// since `DatabaseDriver.execute` takes raw SQL text with no separate
     /// parameter-binding path).
@@ -172,7 +172,7 @@ extension SQLDialect {
         select(from: table, whereClause: nil, orderBy: nil, limit: limit)
     }
 
-    /// Grid SELECT with optional user filter and column sort (DL-02).
+ /// Grid SELECT with optional user filter and column sort.
     /// `whereClause` is a raw user-authored fragment — same trust level as the
     /// SQL editor; `orderBy` column names are quoted by the dialect.
     public func select(

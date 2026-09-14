@@ -1,6 +1,6 @@
 import BerryDriverKit
 
-/// Built-in function names per engine for completion (docs/ui P1.4). Static
+/// Built-in function names per engine for completion (P1.4). Static
 /// lists — common, high-traffic functions, not exhaustive references.
 public enum SQLBuiltins {
     /// Shared ANSI-ish core every engine supports.

@@ -5,7 +5,7 @@ import Testing
 
 @testable import BerryCore
 
-@Suite("Transaction controller (ED-11)")
+@Suite("Transaction controller")
 @MainActor
 struct TransactionControllerTests {
     private func makeSession() async throws -> (ConnectionManager, Session, String) {

@@ -43,7 +43,7 @@ struct DynamoDBIntrospectorTests {
     /// this is what makes ChangeSet's generated UPDATE/DELETE WHERE clause
     /// (which ANDs every `isPrimaryKey` column) satisfy DynamoDB's "WHERE
     /// must equate the full primary key" requirement, verified against
-    /// dynamodb-local (docs/architecture/12 §4).
+ /// dynamodb-local.
     @Test func tableDetailMarksBothPartitionAndSortKeyAsPrimaryKey() async throws {
         let host = "dynamo-\(UUID().uuidString)".lowercased()
         let introspector = try makeIntrospector(host: host) { request, _ in
@@ -86,7 +86,7 @@ struct DynamoDBIntrospectorTests {
 
     // ItemCount/TableSizeBytes come back as JSON numbers in the real
     // DescribeTable response — verifying the NSNumber bridge reads them
-    // correctly (TR-04), not just that the keys are looked up.
+ // correctly, not just that the keys are looked up.
     @Test func tableStatsReadsItemCountAndSizeFromDescribeTable() async throws {
         let host = "dynamo-\(UUID().uuidString)".lowercased()
         let introspector = try makeIntrospector(host: host) { request, _ in
@@ -135,7 +135,7 @@ struct DynamoDBIntrospectorTests {
         #expect(ddl.contains("SORT KEY"))
         #expect(ddl.contains(#""Artist""#))
         #expect(ddl.contains(#""SongTitle""#))
-        // Clearly marked as synthesized, not authoritative (TR-03, 05 §5).
+ // Clearly marked as synthesized, not authoritative.
         #expect(ddl.contains("NOT authoritative"))
     }
 }

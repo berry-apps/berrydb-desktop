@@ -1,7 +1,7 @@
 import Foundation
 
 /// Decides whether an editor's query result maps back to a single table's rows,
-/// so the grid can offer in-place editing (docs/ui/01 D4a, Navicat-style). Only
+/// so the grid can offer in-place editing. Only
 /// a plain `SELECT … FROM <table>` qualifies — a join, grouping, DISTINCT,
 /// UNION, aggregate/function projection, or subquery breaks the 1:1 row→table
 /// mapping and keeps the result read-only.

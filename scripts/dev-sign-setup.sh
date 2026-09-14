@@ -45,14 +45,10 @@ openssl req -x509 -newkey rsa:2048 -nodes \
     -keyout "$TMP/key.pem" -out "$TMP/cert.pem" \
     -days 3650 -config "$TMP/ext.cnf" >/dev/null 2>&1
 
-# -legacy + -macalg sha1: OpenSSL 3.x defaults to AES-256 encryption and a
-# SHA-256 MAC for PKCS12 export, neither of which macOS's `security import`
-# can verify ("MAC verification failed during PKCS12 import") — confirmed
-# directly (not assumed): -legacy alone still failed, only adding -macalg
-# sha1 on top of it actually imports. A genuinely empty PKCS12 password
-# *also* fails the same way regardless of algorithm (confirmed separately) —
-# not a real secret (immediately imported and discarded via the `trap` above),
-# just a fixed placeholder to satisfy the container format.
+# OpenSSL 3.x defaults to AES-256 encryption and SHA-256 MAC for PKCS12 export,
+# which macOS `security import` cannot verify. Using -legacy with -macalg sha1
+# ensures compatibility with macOS Keychain import.
+# The placeholder password satisfies the container format (immediately discarded).
 P12_PASSWORD="berrydb-dev-local-only"
 openssl pkcs12 -export -legacy -macalg sha1 -inkey "$TMP/key.pem" -in "$TMP/cert.pem" \
     -out "$TMP/id.p12" -passout "pass:$P12_PASSWORD" -name "$IDENTITY" >/dev/null 2>&1

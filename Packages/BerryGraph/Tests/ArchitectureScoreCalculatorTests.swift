@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import BerryGraph
 
-@Suite("Database Architecture Score (docs/feature/07 §10)")
+@Suite("Database Architecture Score")
 struct ArchitectureScoreCalculatorTests {
     @Test func emptyInsightsScorePerfectAcrossTheBoard() {
         let score = ArchitectureScoreCalculator.score([])

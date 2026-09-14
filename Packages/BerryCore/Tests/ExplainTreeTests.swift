@@ -4,8 +4,8 @@ import Testing
 
 @testable import BerryCore
 
-/// EXPLAIN plan tree parsing (ED-09).
-@Suite("ExplainTreeParser (ED-09)")
+/// EXPLAIN plan tree parsing.
+@Suite("ExplainTreeParser")
 struct ExplainTreeTests {
     @Test func parsesSQLiteQueryPlanByIDParent() throws {
         let columns = ["id", "parent", "notused", "detail"].map {
@@ -49,8 +49,8 @@ struct ExplainTreeTests {
         #expect(ExplainTreeParser.parse(columns: single, rows: [[.text("hello")]]) == nil)
     }
 
-    /// Query Replay stores this string verbatim (DI-17, docs/architecture/13
-    /// §5.2) — round-trips through `JSONSerialization` back into the same
+ /// Query Replay stores this string verbatim
+ /// — round-trips through `JSONSerialization` back into the same
     /// id/text/children shape.
     @Test func planNodeJSONStringRoundTripsTheTree() throws {
         let tree = [PlanNode(id: 1, text: "Seq Scan on orders", children: [

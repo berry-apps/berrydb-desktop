@@ -5,7 +5,7 @@ import Testing
 @testable import BerryUI
 
 /// URI-paste convenience for the Mongo connection sheet (task 3,
-/// `docs/draft/mongodb.md`) — pure parser, no SwiftUI/Docker involved.
+/// ``) — pure parser, no SwiftUI/Docker involved.
 @Suite("Mongo connection URI parsing")
 struct MongoConnectionURITests {
     @Test func userPassHostPortDatabase() {
@@ -63,7 +63,7 @@ struct MongoConnectionURITests {
 
     @Test func authSourceQueryParamPreferredOverPathDatabase() {
         // ConnectionConfig only has one `database` field, used as both the
-        // SCRAM authSource and the working database (docs/architecture/12 §3,
+ // SCRAM authSource and the working database
         // point 2) — authSource wins because that's what auth actually uses.
         let fields = try! MongoConnectionURI.parse("mongodb://user:pass@host/appdb?authSource=admin").get()
         #expect(fields.database == "admin")
@@ -95,7 +95,7 @@ struct MongoConnectionURITests {
     }
 
     @Test func multiHostBecomesHostPlusAdditionalHosts() {
-        // Replica set support (docs/architecture/12 §3, v1) — the first host
+ // Replica set support (v1) — the first host
         // becomes host/port, the rest become normalized "host:port" additionalHosts.
         let fields = try! MongoConnectionURI.parse("mongodb://host1:27017,host2:27018,host3/mydb").get()
         #expect(fields.host == "host1")

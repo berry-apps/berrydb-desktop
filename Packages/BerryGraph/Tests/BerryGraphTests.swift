@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryGraph
 
-@Suite("SchemaGraph algorithms (DI-02/04, docs/architecture/11 §5)")
+@Suite("SchemaGraph algorithms")
 struct SchemaGraphAlgorithmTests {
     /// Builds a small directed graph: a → b → c, and d → c.
     private func sample() -> SchemaGraph {
@@ -83,7 +83,7 @@ struct SchemaGraphAlgorithmTests {
     }
 }
 
-@Suite("SchemaGraphBuilder from schema (DI-01/02)")
+@Suite("SchemaGraphBuilder from schema")
 struct SchemaGraphBuilderTests {
     @Test func buildsTablesColumnsIndexesAndForeignKeys() {
         let objects = [

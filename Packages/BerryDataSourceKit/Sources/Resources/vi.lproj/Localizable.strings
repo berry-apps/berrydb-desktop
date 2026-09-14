@@ -1,4 +1,4 @@
-/* Vietnamese for DataSourceDriver-layer error wrappers (UD-06). */
+/* Vietnamese for DataSourceDriver-layer error wrappers. */
 
 "Connection failed: %@" = "Kết nối thất bại: %@";
 "Connection lost: %@" = "Mất kết nối: %@";

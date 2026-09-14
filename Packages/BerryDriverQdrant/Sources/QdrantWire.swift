@@ -2,7 +2,7 @@ import BerryDataSourceKit
 import Foundation
 
 /// Pure JSON <-> `BerryDocument` conversions for the Qdrant REST wire format
-/// (docs/architecture/12 §5) — no networking, so these are unit-testable
+/// no networking, so these are unit-testable
 /// without a stubbed `URLSession`.
 enum QdrantWire {
     /// A Qdrant point ID is either an unsigned integer or a UUID string.
@@ -71,8 +71,8 @@ enum QdrantWire {
         return .object(fields)
     }
 
-    /// Short label for the union-of-payload-fields schema inference (NS-06/07)
-    /// — describes shape, not a real type system (docs/architecture/12 §3).
+ /// Short label for the union-of-payload-fields schema inference
+ /// describes shape, not a real type system.
     static func typeLabel(_ doc: BerryDocument) -> String {
         switch doc {
         case .null: return "null"

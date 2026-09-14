@@ -1,7 +1,7 @@
 import BerryDataSourceKit
 import Foundation
 
-/// The Qdrant query DSL (docs/feature/03) — a JSON document that is the canonical,
+/// The Qdrant query DSL — a JSON document that is the canonical,
 /// runnable form of a Qdrant query, the vector-store analogue of a Mongo shell
 /// script. It is what the hybrid Form/JSON query tab edits, what history stores
 /// verbatim, and what a saved query persists. Reads map to `DataSourceQuery`,

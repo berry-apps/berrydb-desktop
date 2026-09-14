@@ -10,10 +10,10 @@ import BerryStore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Main window: saved connections + object browser (KN-01, TR-01) in the
+/// Main window: saved connections + object browser in the
 /// sidebar; a tab strip of table grids and SQL editors in the detail pane
-/// (UD-01, ED-01). All strings go through `L(_:)` — the app follows the
-/// system language (UD-06).
+/// All strings go through `L(_:)` — the app follows the
+/// system language.
 public struct WorkspaceView: View {
     @State private var viewModel = WorkspaceViewModel()
     @State private var connectionSheetTarget: ConnectionSheetTarget?
@@ -23,13 +23,16 @@ public struct WorkspaceView: View {
     @State private var showQuickOpen = false
     @State private var showCommandPalette = false
     @State private var showNewCollectionSheet = false
+    @State private var showImportSQLSheet = false
+    @State private var showRestoreDumpSheet = false
+    @State private var importSQLInitialURL: URL?
     @State private var license: LicenseManager
     @State private var aiController: AIPanelController
     @State private var processBuffer = ResultBuffer()
     @State private var usersBuffer = ResultBuffer()
     /// Forwarded to `AboutSheetView`'s "Check for Updates…" button — kept as
     /// a plain closure (not the app target's own `UpdaterControlling` type)
-    /// so BerryUI stays decoupled from BerryApp (docs/architecture/04 §one-way
+ /// so BerryUI stays decoupled from BerryApp (-way
     /// dependency direction). Defaults to a no-op so existing/test call sites
     /// that construct `WorkspaceView()` without it keep compiling.
     private let checkForUpdates: () -> Void
@@ -86,27 +89,27 @@ public struct WorkspaceView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarTab: SidebarTab = .connections
     @State private var objectTypeFilter: ObjectTypeFilter = .all
-    /// Sidebar filter over table/view names (TR-01).
+ /// Sidebar filter over table/view names.
     @State private var objectSearch = ""
-    /// Collapsed schema-tree groups (docs/ui/02 §1) — expanded by default.
+ /// Collapsed schema-tree groups — expanded by default.
     @State private var collapsedKinds: Set<SchemaObjectKind> = []
     @State private var collapsedGroupKeys: Set<String> = []
-    /// Object whose DDL is being shown (TR-03).
+ /// Object whose DDL is being shown.
     @State private var ddlObject: SchemaObject?
-    /// Object whose quick-info stats are being shown (TR-04).
+ /// Object whose quick-info stats are being shown.
     @State private var statsObject: SchemaObject?
     /// The pane a tab is currently being dragged over (D2 drop zones).
     @State private var dropTargetGroup: String?
-    /// ⌘S save-query prompt (docs/ui/03).
+ /// ⌘S save-query prompt.
     @State private var showSaveSQL = false
     @State private var saveSQLName = ""
-    /// Soft data-deletion warnings switch (docs/ui) — persisted; production
-    /// rules (07 §6) are unaffected.
+ /// Soft data-deletion warnings switch — persisted; production
+ /// rules are unaffected.
     @AppStorage("berry.warnDataDeletion") private var warnDataDeletion = true
-    /// Label mode for the icon action buttons (docs/ui): show titles next to
+ /// Label mode for the icon action buttons: show titles next to
     /// the icons in the header and exec clusters.
     @AppStorage("berry.showButtonLabels") private var showButtonLabels = false
-    /// Opens detached-tab windows (docs/ui/01 D1).
+ /// Opens detached-tab windows (D1).
     @Environment(\.openWindow) private var openWindow
 
     public init(checkForUpdates: @escaping () -> Void = {}) {
@@ -153,7 +156,7 @@ public struct WorkspaceView: View {
                 if showAIPanel {
                     HSplitView {
                         detail
-                            .background(BerryTheme.canvas) // main canvas (ui.md §5)
+ .background(BerryTheme.canvas) // main canvas
                         AIPanelView(
                             controller: aiController,
                             onUpgrade: {
@@ -168,12 +171,12 @@ public struct WorkspaceView: View {
                     }
                 } else {
                     detail
-                        .background(BerryTheme.canvas) // main canvas (ui.md §5)
+ .background(BerryTheme.canvas) // main canvas
                 }
             }
         }
-        .tint(BerryTheme.accent) // macOS blue accent everywhere (ui.md §5)
-        .focusEffectDisabled() // no focus outline on buttons (docs/ui/01)
+ .tint(BerryTheme.accent) // macOS blue accent everywhere
+ .focusEffectDisabled() // no focus outline on buttons
         // Also drives AppKit's native tab-strip label (View > Show Tab Bar) —
         // NSWindow.title is the only source that UI reads. An empty title
         // here previously left native tabs blank.
@@ -181,7 +184,7 @@ public struct WorkspaceView: View {
         .toolbar { toolbarContent }
         .focusedSceneValue(\.workspaceMenu, menuActions)
         // History / Saved Queries / New Table / Import / Processes / Insights /
-        // Graph Explorer are all tabs now, not sheets (docs/ui/02 §4) — see
+ // Graph Explorer are all tabs now, not sheets — see
         // toolTabView.
         .sheet(isPresented: $showLicense) {
             LicenseView(license: license, initialBalance: aiController.balance)
@@ -223,13 +226,38 @@ public struct WorkspaceView: View {
                 onCreate: { ref, options in await viewModel.createCollection(ref, options: options) }
             )
         }
+        .sheet(isPresented: $showImportSQLSheet) {
+            if let session = viewModel.session {
+                ImportSQLSheet(
+                    session: session,
+                    initialFileURL: importSQLInitialURL,
+                    onDismiss: {
+                        showImportSQLSheet = false
+                        importSQLInitialURL = nil
+                    },
+                    onSuccess: {
+                        viewModel.refreshSchema()
+                    }
+                )
+            }
+        }
+        .sheet(isPresented: $showRestoreDumpSheet) {
+            RestoreDumpSheet(
+                session: viewModel.session,
+                dataSourceSession: viewModel.dataSourceSession,
+                onDismiss: { showRestoreDumpSheet = false },
+                onSuccess: {
+                    viewModel.refreshSchema()
+                }
+            )
+        }
         .sheet(item: $connectionSheetTarget) { target in
             // item-based so editing a profile builds a fresh sheet with that
             // profile's fields, instead of reusing the "new" sheet's empty state
-            // (docs/ui/03: Edit was showing the New form).
+ // (Edit was showing the New form).
             ConnectionSheet(
                 profile: target.profile,
-                // All three driver families (docs/architecture/12 §8, 15 §2)
+ // All three driver families
                 // offer connection types here — the unified `DriverID` enum
                 // is what makes this a plain concatenation instead of a
                 // union type. KeyValueRegistry.registered is empty on
@@ -282,10 +310,57 @@ public struct WorkspaceView: View {
         } message: {
             Text(viewModel.quickActionError ?? "")
         }
+        .alert(
+            L("Large SQL File"),
+            isPresented: Binding(
+                get: { viewModel.pendingLargeFile != nil },
+                set: { if !$0 { viewModel.pendingLargeFile = nil } }
+            )
+        ) {
+            if let warning = viewModel.pendingLargeFile {
+                Button(L("Open in Editor")) {
+                    let url = warning.url
+                    viewModel.pendingLargeFile = nil
+                    Task {
+                        do {
+                            _ = try await viewModel.openSQLFile(at: url, bypassLargeCheck: true)
+                        } catch {
+                            viewModel.fileOpenError = error.localizedDescription
+                        }
+                    }
+                }
+                if viewModel.session != nil {
+                    Button(L("Import Directly")) {
+                        let url = warning.url
+                        viewModel.pendingLargeFile = nil
+                        importSQLInitialURL = url
+                        showImportSQLSheet = true
+                    }
+                }
+                Button(L("Cancel"), role: .cancel) {
+                    viewModel.pendingLargeFile = nil
+                }
+            }
+        } message: {
+            if let warning = viewModel.pendingLargeFile {
+                Text(String(format: L("This file is %.1f MB. Opening large SQL files in the interactive editor may cause sluggishness. Would you like to open it anyway?"), warning.sizeInMB))
+            }
+        }
+        .alert(
+            L("Unable to Open SQL File"),
+            isPresented: Binding(
+                get: { viewModel.fileOpenError != nil },
+                set: { if !$0 { viewModel.fileOpenError = nil } }
+            )
+        ) {
+            Button(L("OK"), role: .cancel) { viewModel.fileOpenError = nil }
+        } message: {
+            Text(viewModel.fileOpenError ?? "")
+        }
         .task {
             // propose_sql inserts/edits the active query tab, or reuses an
-            // open query tab if none is active (AI-17/18). create_debug_tab
-            // has its own, separate closure below that never reuses (AI-19).
+ // open query tab if none is active. create_debug_tab
+ // has its own, separate closure below that never reuses.
             // `title` names a tab this has to CREATE. An existing tab keeps its
             // own name — `renameOnReuse` is false for propose_sql, because
             // renaming a tab the user is working in would be wrong, and true for
@@ -337,7 +412,7 @@ public struct WorkspaceView: View {
                         existing.apply(sql, reuseTitle)
                     } else {
                         // Otherwise open a single new query tab, matching this
-                        // connection's native query shape (AI-19-adjacent fix:
+ // connection's native query shape (-adjacent fix:
                         // Qdrant/Elasticsearch used to fall through to a SQL
                         // editor tab here, which can't run their queries).
                         switch viewModel.dataSourceSession?.kind {
@@ -353,12 +428,12 @@ public struct WorkspaceView: View {
             // The title only takes effect where `applyQueryToTab` has to CREATE a
             // tab — an already-open tab keeps its own name, since renaming a tab
             // the user is working in would be wrong. Without it, every tab
-            // propose_sql opened landed as "Untitled" (docs/feature/09).
+ // propose_sql opened landed as "Untitled".
             aiController.onPropose = { sql, title in
                 applyQueryToTab(sql, title, false)
             }
             aiController.createDebugTab = { sql, title in
-                // AI-19 (docs/agents/architecture/09 §3.4): always a fresh
+ // always a fresh
                 // tab — never reuses/overwrites an existing one, unlike
                 // propose_sql/applyQueryToTab above. A debug tab has no
                 // stable identity to match against (not a saved query, not a
@@ -384,8 +459,8 @@ public struct WorkspaceView: View {
             aiController.openMermaidTab = { source, title in viewModel.openMermaidDiagram(source: source, title: title) }
             aiController.mentionCandidates = { query in viewModel.matchingArtifactMentions(query: query) }
             aiController.uiGraphSnapshot = { viewModel.uiGraphSnapshot() }
-            // AI Command Palette NL routing (DI-22, docs/architecture/13
-            // §5.3) — same registry the ⌘K palette/menu bar use.
+ // AI Command Palette NL routing
+ // — same registry the ⌘K palette/menu bar use.
             aiController.uiActionEntries = {
                 CommandPaletteEntries.build(from: menuActions).map {
                     UIActionEntry(action: $0.action, title: $0.title, isEnabled: $0.isEnabled, perform: $0.perform)
@@ -398,7 +473,7 @@ public struct WorkspaceView: View {
             aiController.maybeGenerateDailyReview = { await viewModel.maybeGenerateDailyReview() }
             aiController.latestDailyReview = { viewModel.latestDailyReview() }
             aiController.slowestQueries = { viewModel.slowestQueries(limit: $0) }
-            // Persist per-connection AI settings (AI-06/AI-07 + consent, 09 §6).
+ // Persist per-connection AI settings (+ consent).
             aiController.loadSettings = { profileID in
                 viewModel.loadAISetting(profileID: profileID).map {
                     let decode = { (json: String) -> Set<String> in
@@ -428,27 +503,27 @@ public struct WorkspaceView: View {
                     trustedMcpServers: encode(settings.trustedMCPServers)
                 ))
             }
-            // Local graph_query tool over the persisted DSG (11 §7) — only when
+ // Local graph_query tool over the persisted DSG — only when
             // the license unlocks Intelligence (Q15 tier gate).
             aiController.makeGraphExecutor = { profileID in
                 license.hasFeature(LicenseFeature.intelligence)
                     ? viewModel.graphExecutor(profileID: profileID) : nil
             }
             // Detached-tab windows resolve their tab through this workspace
-            // (docs/ui/01 D1).
+ // (D1).
             DetachedWorkspace.shared.viewModel = viewModel
             syncIntelligenceEntitlement()
-            // Apply the persisted data-deletion-warning switch (docs/ui).
+ // Apply the persisted data-deletion-warning switch.
             QueryService.confirmsDataDeletion = warnDataDeletion
             // Pull a subscription the backend already granted this device (e.g. a
             // Paddle payment whose post-checkout poll had timed out) so AI unlocks
-            // on launch without reopening the license sheet (10 §2).
+ // on launch without reopening the license sheet.
             await license.syncFromBackend()
             // Unconditional (not gated by refreshWindow like refreshIfNeeded):
-            // renews the blob early so a lapsed network keeps AI alive (09 §7),
+ // renews the blob early so a lapsed network keeps AI alive,
             // and — the reason this must not wait for near-expiry — catches a
             // revoked key/device promptly instead of only near the blob's own
-            // (possibly months-away) natural expiry (10 §3 · L8). A no-op
+ // (possibly months-away) natural expiry. A no-op
             // (silent, license stays as cached) for an unlicensed user (no
             // token yet) or while offline.
             await license.refreshNow()
@@ -471,6 +546,45 @@ public struct WorkspaceView: View {
             if !aiController.isBuilt { bindAI() }
             syncIntelligenceEntitlement()
         }
+        .task {
+            if !WorkspaceViewModel.pendingOpenURLs.isEmpty {
+                let pending = WorkspaceViewModel.pendingOpenURLs
+                WorkspaceViewModel.pendingOpenURLs.removeAll()
+                for url in pending {
+                    do {
+                        _ = try await viewModel.openSQLFile(at: url)
+                    } catch {
+                        viewModel.fileOpenError = error.localizedDescription
+                    }
+                }
+            }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            var handled = false
+            for url in urls where url.pathExtension.lowercased() == "sql" {
+                Task {
+                    do {
+                        _ = try await viewModel.openSQLFile(at: url)
+                    } catch {
+                        viewModel.fileOpenError = error.localizedDescription
+                    }
+                }
+                handled = true
+            }
+            return handled
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .berryDBOpenSQLFile)) { note in
+            if let url = note.object as? URL {
+                WorkspaceViewModel.pendingOpenURLs.removeAll(where: { $0 == url })
+                Task {
+                    do {
+                        _ = try await viewModel.openSQLFile(at: url)
+                    } catch {
+                        viewModel.fileOpenError = error.localizedDescription
+                    }
+                }
+            }
+        }
     }
 
     /// The toolbar license badges below read raw `license.status`
@@ -484,7 +598,7 @@ public struct WorkspaceView: View {
     /// SQL/script text + tab title for the active tab, when it's a kind that
     /// can be saved as a query (`.editor` or `.mongoShell`) — nil otherwise.
     /// Shared by "Save SQL" (⌘S) and the naming alert below (Q15: Mongo shell
-    /// tabs save the same way SQL editor tabs do, docs/feedback/01.md item 2).
+ /// tabs save the same way SQL editor tabs do, item 2).
     private var activeQuery: (sql: String, title: String)? {
         switch viewModel.activeTab {
         case .editor(let document): return (document.text, document.title)
@@ -493,10 +607,19 @@ public struct WorkspaceView: View {
         }
     }
 
-    /// ⌘S (docs/ui): a tab linked to a saved query writes back to that same
+ /// ⌘S: a tab linked to a saved query writes back to that same
     /// record, like saving a file; an unlinked tab prompts for a name once and
     /// links from then on.
     private func beginSaveSQL() {
+        if case .editor(let doc) = viewModel.activeTab, doc.fileURL != nil {
+            do {
+                try doc.saveToFile()
+                return
+            } catch {
+                viewModel.fileOpenError = error.localizedDescription
+                return
+            }
+        }
         guard let query = activeQuery,
               !query.sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         if viewModel.updateLinkedSavedQuery() { return }
@@ -531,7 +654,7 @@ public struct WorkspaceView: View {
 
     // The title bar keeps only the three app-level actions (they never overflow);
     // every workspace action lives in `actionHeaderBar` inside the content so
-    // macOS can't collapse them into a ">>" overflow menu (docs/ui/01 §1). The
+ // macOS can't collapse them into a ">>" overflow menu. The
     // same actions also live in the menu bar, which carries the shortcuts.
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
@@ -655,7 +778,7 @@ public struct WorkspaceView: View {
         WorkspaceMenuActions(
             hasSession: viewModel.session != nil,
             // SQL, OR Mongo (not Qdrant — no shell-script "New Query" concept
-            // in this plan, docs/architecture/12 §7) — lets Mongo users reach
+ // in this plan) — lets Mongo users reach
             // `newQueryTab()` from the menu/⌘T, not just by double-clicking a
             // collection in the sidebar.
             canOpenQueryTab: viewModel.session != nil || viewModel.dataSourceSession != nil,
@@ -681,8 +804,8 @@ public struct WorkspaceView: View {
             newSQLTab: { viewModel.newQueryTab() },
             runCurrent: { viewModel.runFocusedEditor() },
             runAll: {
-                // Navicat: selection or all, for SQL; Mongo shell/Qdrant have no
-                // selection concept, so Run always runs every statement (Q15).
+                // Selection or all, for SQL; Mongo shell/Qdrant have no
+                // selection concept, so Run always runs every statement.
                 switch viewModel.activeTab {
                 case .mongoShell(let state):
                     if let dataSourceSession = viewModel.dataSourceSession {
@@ -725,6 +848,7 @@ public struct WorkspaceView: View {
             unlockIntelligence: { showLicense = true },
             newTable: { viewModel.openTool(.newTable) },
             importCSV: { viewModel.openTool(.importCSV) },
+            importSQL: { showImportSQLSheet = true },
             showProcesses: { viewModel.openTool(.processes) },
             showUsers: { viewModel.openTool(.users) },
             refreshSchema: { viewModel.refreshSchema() },
@@ -732,6 +856,7 @@ public struct WorkspaceView: View {
             disconnect: { viewModel.disconnect() },
             toggleAI: { showAIPanel.toggle() },
             backup: { viewModel.openTool(.backup) },
+            restoreDump: { showRestoreDumpSheet = true },
             goToTable: { showQuickOpen = true },
             commandPalette: { showCommandPalette = true }
         )
@@ -1090,7 +1215,7 @@ public struct WorkspaceView: View {
         }
     }
 
-    /// Inline filter over the table/view lists (TR-01).
+ /// Inline filter over the table/view lists.
     private var objectFilterField: some View {
         HStack(spacing: 5) {
             Image(systemName: "magnifyingglass")
@@ -1121,7 +1246,7 @@ public struct WorkspaceView: View {
         }
     }
 
-    /// Expand/collapse binding for a schema-tree group (docs/ui/02 §1). An active
+ /// Expand/collapse binding for a schema-tree group. An active
     /// search force-expands so matches are never hidden in a collapsed group.
     private func expanded(_ kind: SchemaObjectKind) -> Binding<Bool> {
         Binding(
@@ -1179,7 +1304,7 @@ public struct WorkspaceView: View {
     }
 
     private func objectRow(_ object: SchemaObject, icon: String) -> some View {
-        // Whole-row hit target (docs/ui, the <li>/<a> split): the List row
+ // Whole-row hit target (the <li>/<a> split): the List row
         // itself (<li>) carries no padding and no gesture — it just wraps
         // tightly around this content. ALL padding, sizing, and events
         // (contentShape/onTapGesture/tag) live on the content (<a>) below,
@@ -1187,10 +1312,10 @@ public struct WorkspaceView: View {
         // with. Do not add .listRowInsets/.listRowBackground etc. here.
         HStack(spacing: 6) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: .medium)) // SF Symbols 13pt medium, ui.md §2
+ .font(.system(size: 13, weight: .medium)) // SF Symbols 13pt medium,
                 .foregroundStyle(.secondary)
                 .frame(width: 18)
-                .allowsHitTesting(false) // let every click fall through to the row's own tap gesture (docs/ui)
+ .allowsHitTesting(false) // let every click fall through to the row's own tap gesture
             Text(object.name)
                 .font(BerryTheme.Typeface.sidebarRow)
                 .allowsHitTesting(false)
@@ -1211,7 +1336,7 @@ public struct WorkspaceView: View {
             // (via .tag below), which is unreliable when a click lands on the
             // label's glyph area specifically because of this competing
             // onTapGesture — open(object) always fired, but the highlight
-            // didn't (docs/feedback/01.md #1). Set it explicitly instead of
+ // didn't (#1). Set it explicitly instead of
             // depending on that native path.
             viewModel.selectedObjectIDs = [object.id]
             open(object)
@@ -1299,7 +1424,7 @@ public struct WorkspaceView: View {
         }
     }
 
-    /// One row in the Mongo/Qdrant collection tree (docs/architecture/12 §7)
+ /// One row in the Mongo/Qdrant collection tree
     /// — the `CollectionRef` sibling of `objectRow`.
     private func collectionRow(_ ref: CollectionRef, kind: DataSourceKind) -> some View {
         HStack(spacing: 6) {
@@ -1307,7 +1432,7 @@ public struct WorkspaceView: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 18)
-                .allowsHitTesting(false) // let every click fall through to the row's own tap gesture (docs/ui)
+ .allowsHitTesting(false) // let every click fall through to the row's own tap gesture
             Text(ref.name)
                 .font(BerryTheme.Typeface.sidebarRow)
                 .allowsHitTesting(false)
@@ -1324,7 +1449,7 @@ public struct WorkspaceView: View {
                 return
             }
             #endif
-            // Same fix as objectRow above (docs/feedback/01.md #1) — don't rely
+ // Same fix as objectRow above (#1) — don't rely
             // on the native List click-to-select highlight, set it explicitly.
             viewModel.selectedObjectIDs = [ref.id]
             viewModel.openCollection(ref)
@@ -1340,7 +1465,7 @@ public struct WorkspaceView: View {
             switch viewModel.dataSourceSession?.kind {
             case .vector:
                 // Qdrant has no shell syntax — its actions use the JSON query tab
-                // and the point write path, not `db.x.…` scripts (docs/feature/03).
+ // and the point write path, not `db.x.…` scripts.
                 Button(L("New Qdrant Query")) {
                     viewModel.newQdrantQueryTab(collection: ref.name, title: ref.name)
                 }
@@ -1358,7 +1483,7 @@ public struct WorkspaceView: View {
                 }
             case .search:
                 // Elasticsearch has no shell syntax either — its actions use
-                // the JSON query tab (docs/architecture/17 §5), but unlike
+ // the JSON query tab, but unlike
                 // Qdrant it DOES support a real truncate (delete_by_query)
                 // and drop (delete index), same shape as Mongo below.
                 Button(L("New Elasticsearch Query")) {
@@ -1527,7 +1652,7 @@ public struct WorkspaceView: View {
     }
 
     /// Routes a saved-profile connect to the SQL or NoSQL/vector path by
-    /// driver (docs/architecture/12 §7) — the two `DriverRegistry`/
+ /// driver — the two `DriverRegistry`/
     /// `DataSourceRegistry` families stay separate all the way up to here.
     private func connect(_ profile: ConnectionProfile) async {
         // alreadyBegun: true — every caller of this wrapper already called
@@ -1565,7 +1690,7 @@ public struct WorkspaceView: View {
             ProgressView(L("Connecting…"))
         } else if let keyValueSession = viewModel.keyValueSession {
             // Redis has no tabs/collections — shown directly as the main
-            // content, bypassing paneContainer entirely (docs/architecture/15 §4).
+ // content, bypassing paneContainer entirely.
             KeyValueBrowserView(
                 capabilities: keyValueSession.capabilities,
                 initialDatabase: keyValueSession.database,
@@ -1576,13 +1701,15 @@ public struct WorkspaceView: View {
                 onWrite: { change in await viewModel.writeKeyValue(change) },
                 onSelectDatabase: { index in await viewModel.selectKeyValueDatabase(index) }
             )
+        } else if !viewModel.tabs.isEmpty {
+            paneContainer
         } else if viewModel.session == nil && viewModel.dataSourceSession == nil {
             ContentUnavailableView(
                 L("No connection"),
                 systemImage: "cylinder.split.1x2",
                 description: Text(L("Create a connection (⇧⌘N) or open a SQLite file (⌘O)"))
             )
-        } else if viewModel.tabs.isEmpty {
+        } else {
             ContentUnavailableView(
                 L("Select a table"),
                 systemImage: "tablecells",
@@ -1590,19 +1717,17 @@ public struct WorkspaceView: View {
                     ? L("Pick a collection from the sidebar")
                     : L("Pick a table from the sidebar, or open an SQL tab (⌘T)"))
             )
-        } else {
-            paneContainer
         }
     }
 
     /// Every workspace action as a direct, always-visible icon button
-    /// (docs/ui/01 §1). macOS collapses an overcrowded window toolbar into a
+ /// macOS collapses an overcrowded window toolbar into a
     /// ">>" overflow menu, so these live in the content instead — nothing is
-    /// ever hidden behind an extra click. Icon-only with hover tooltips (§3).
+ /// ever hidden behind an extra click. Icon-only with hover tooltips.
     private var actionHeaderBar: some View {
         HStack(spacing: 3) {
             headerButton(L("New SQL Tab"), "plus.square.on.square",
-                         // SQL, OR Mongo (Q15/docs/architecture/12 §7) — mirrors
+ // SQL, OR Mongo (Q15) — mirrors
                          // `canOpenQueryTab` in `menuActions` above so this header
                          // button stays consistent with the menu-bar entry point.
                          enabled: viewModel.session != nil || viewModel.dataSourceSession != nil) { viewModel.newQueryTab() }
@@ -1628,7 +1753,7 @@ public struct WorkspaceView: View {
             headerButton(L("Import CSV…"), "square.and.arrow.down",
                          enabled: !viewModel.importableTables().isEmpty,
                          isActive: isToolActive(.importCSV)) { viewModel.openTool(.importCSV) }
-            // Backup manager (feature/04) opens as a tab (docs/ui/02 §4): a list of
+ // Backup manager (feature/04) opens as a tab: a list of
             // this connection's backups with New Backup / Restore. SQL → .sql dump;
             // Mongo/Qdrant → bundle.
             headerButton(L("Backup"), "externaldrive",
@@ -1723,11 +1848,11 @@ public struct WorkspaceView: View {
         viewModel.activeTabID == "tool:\(kind.rawValue)"
     }
 
-    /// The split grid (ui.md §1, VS Code-style): rows stack vertically, each row
+ /// The split grid (VS Code-style): rows stack vertically, each row
     /// is a horizontal strip of panes. "Split right" adds a column; "split down"
     /// adds a row. Drag a tab onto another pane to move it there.
     private var paneContainer: some View {
-        // Custom resizable split (ui.md §1): drag a divider to resize, double-
+ // Custom resizable split: drag a divider to resize, double-
         // click it to collapse; the hairline turns macOS-blue on hover. Rows
         // stack vertically; each row splits into columns horizontally.
         ResizableSplit(axis: .vertical, ids: viewModel.layoutRows.map(\.id), minExtent: 140) { rowID in
@@ -1772,12 +1897,12 @@ public struct WorkspaceView: View {
                 viewModel.focusedGroupID = group.id
             })
             // Drop a tab: near an edge splits a new pane off that side, the
-            // middle moves it into this pane (docs/ui/01 D2). A wide center
+ // middle moves it into this pane (D2). A wide center
             // keeps ordinary moves reliable; only the outer 18% is a split edge.
             // Dropping a tab on a pane MOVES it there — always. Deriving a split
             // edge from the drop point proved unreliable across coordinate spaces
             // and kept hijacking ordinary moves; splitting is on the Split
-            // Right/Down buttons instead (docs/ui/03).
+ // Right/Down buttons instead.
             // The drop location is pane-local (verified). Near an edge splits a
             // new pane off that side; the wide center moves the tab here (D2).
             .dropDestination(for: String.self) { items, location in
@@ -1795,8 +1920,8 @@ public struct WorkspaceView: View {
 
     /// Which edge (or the center) of a pane a pane-local drop point falls in.
     /// The tab-strip band at the top ALWAYS means "move here" — dropping onto
-    /// another pane's tabs must never split (docs/ui/03). Below that, a wide
-    /// center moves and only the outer 12% is a split edge (docs/ui/01 D2).
+ /// another pane's tabs must never split. Below that, a wide
+ /// center moves and only the outer 12% is a split edge (D2).
     static func dropZone(for point: CGPoint, in size: CGSize) -> WorkspaceViewModel.DropZone {
         if point.y < 44 { return .center } // tab strip + margin
         let x = min(max(point.x / max(size.width, 1), 0), 1)
@@ -1811,7 +1936,7 @@ public struct WorkspaceView: View {
     private func tabStrip(_ group: EditorGroup) -> some View {
         HStack(spacing: 0) {
             // Pane number (top pane = 1) so the user and the AI can refer to the
-            // same pane when a split is open (get_open_tabs, docs/ui/01 §1).
+ // same pane when a split is open (get_open_tabs).
             if viewModel.groups.count > 1, let number = viewModel.paneNumber(of: group.id) {
                 Text("\(number)")
                     .font(.system(size: 10, weight: .bold))
@@ -1898,13 +2023,13 @@ public struct WorkspaceView: View {
             isActive ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear),
             in: RoundedRectangle(cornerRadius: 6)
         )
-        // Smooth hover for inactive chips (ui.md §3); sits behind the active
+ // Smooth hover for inactive chips; sits behind the active
         // selection fill, so it only shows when the chip isn't selected.
         .hoverHighlight(cornerRadius: 6)
         .contentShape(Rectangle())
         .onTapGesture { viewModel.focusTab(tab.id, inGroup: group.id) }
         .contextMenu {
-            // docs/ui/01 D1 — a tab can live in its own window; tools stay in
+ // D1 — a tab can live in its own window; tools stay in
             // the main window (singleton chrome).
             if case .tool = tab {} else {
                 Button(L("Move to New Window")) {
@@ -1984,12 +2109,14 @@ public struct WorkspaceView: View {
                 onFocus: { viewModel.focusedGroupID = groupID },
                 onPersist: { viewModel.persistEditor(document) },
                 onRefreshSchema: { viewModel.refreshSchema() },
+                availableProfiles: viewModel.profiles,
+                onAttachProfile: { profile in Task { await viewModel.connect(profile: profile) } },
                 onSaveQueryReplay: { sql, durationMS in await viewModel.saveQueryReplay(sql: sql, durationMS: durationMS) }
             )
         case .tool(let kind):
             toolTabView(kind, groupID: groupID)
         case .alterTable(let original):
-            // ALTER designer as a tab (docs/ui/03): prefilled from the live
+ // ALTER designer as a tab: prefilled from the live
             // table, preview shows the diff, apply runs the single SQL path.
             TableDesignerSheet(
                 preview: { edited in
@@ -2058,7 +2185,7 @@ public struct WorkspaceView: View {
         }
     }
 
-    /// Tools that used to be modals now render as tabs (docs/ui/02 §4). Their
+ /// Tools that used to be modals now render as tabs. Their
     /// "Close" closes the tab in this pane.
     @ViewBuilder
     private func toolTabView(_ kind: WorkspaceToolKind, groupID: String) -> some View {
@@ -2187,17 +2314,28 @@ public struct WorkspaceView: View {
         panel.allowedContentTypes = [
             UTType(filenameExtension: "sqlite"), UTType(filenameExtension: "db"),
             UTType(filenameExtension: "sqlite3"), UTType(filenameExtension: "db3"),
+            UTType(filenameExtension: "sql")
         ].compactMap(\.self)
         panel.treatsFilePackagesAsDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
-            guard viewModel.beginConnect() else { return }
-            Task { await viewModel.openSQLiteFile(at: url, alreadyBegun: true) }
+            if url.pathExtension.lowercased() == "sql" {
+                Task {
+                    do {
+                        _ = try await viewModel.openSQLFile(at: url)
+                    } catch {
+                        viewModel.fileOpenError = error.localizedDescription
+                    }
+                }
+            } else {
+                guard viewModel.beginConnect() else { return }
+                Task { await viewModel.openSQLiteFile(at: url, alreadyBegun: true) }
+            }
         }
     }
 }
 
 /// What the connection sheet is editing — drives `.sheet(item:)` so New and Edit
-/// each build a fresh sheet instead of reusing stale @State (docs/ui/03).
+/// each build a fresh sheet instead of reusing stale @State.
 private enum ConnectionSheetTarget: Identifiable {
     case new
     case edit(ConnectionProfile)

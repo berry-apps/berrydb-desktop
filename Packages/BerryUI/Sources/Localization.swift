@@ -8,7 +8,7 @@ import Foundation
 /// baked in at compile time, which only resolves on whichever Mac ran `swift
 /// build`. Every real user is on a different Mac, so touching `.module`
 /// directly crashed BerryUI's very first localized string on launch for a
-/// real user (docs/tests/crash.md) despite working fine in every local/dev
+/// real user despite working fine in every local/dev
 /// test on the build machine itself. This checks the correct packaged-app
 /// location first (`Contents/Resources`, where `scripts/make_app.sh` actually
 /// copies it) and the raw build-output layout second (covers `swift
@@ -28,7 +28,7 @@ let berryModuleBundle: Bundle = {
     return .module
 }()
 
-/// Localized string lookup for BerryUI (UD-06): the app follows the SYSTEM
+/// Localized string lookup for BerryUI: the app follows the SYSTEM
 /// language. English is the base; Vietnamese lives in `Resources/vi.lproj`.
 /// Interpolations map to format keys automatically
 /// (e.g. `L("Tables (\(n))")` looks up "Tables (%lld)").

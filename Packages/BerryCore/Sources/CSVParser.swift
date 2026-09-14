@@ -1,6 +1,6 @@
 import Foundation
 
-/// RFC 4180-style CSV parser (XN-05). A small state machine: fields may be
+/// RFC 4180-style CSV parser. A small state machine: fields may be
 /// quoted, quotes escape as `""`, and quoted fields may contain the delimiter
 /// or newlines. Each emitted record carries the 1-based physical line where it
 /// starts, so the importer can report failures by source line.

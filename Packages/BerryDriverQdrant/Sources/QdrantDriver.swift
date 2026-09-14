@@ -2,7 +2,7 @@ import BerryDataSourceKit
 import BerryDriverKit
 import Foundation
 
-/// `DataSourceDriver` for Qdrant (NS-06/07, docs/architecture/12 §5) — zero
+/// `DataSourceDriver` for Qdrant — zero
 /// vendored dependency: plain REST/JSON over `URLSession`. Simplest of the
 /// three NoSQL/vector drivers (no SigV4, no SCRAM).
 public struct QdrantDriver: DataSourceDriver {
@@ -14,7 +14,7 @@ public struct QdrantDriver: DataSourceDriver {
         write: true,
         vectorSearch: true,
         inferredSchemaOnly: true,
-        // No in-DB user system — access is controlled by API key (TI-03
+ // No in-DB user system — access is controlled by API key
         // Phase D). Shows a static info note in the Users tab instead of
         // hiding it entirely.
         userManagementInfo: true
@@ -25,7 +25,7 @@ public struct QdrantDriver: DataSourceDriver {
     public func connect(_ config: ConnectionConfig) async throws -> any DataSourceConnection {
         let connection = try QdrantConnection(config: config)
         // Fail fast on a bad host/port instead of only surfacing the problem
-        // on the first query — same expectation "Test connection" (KN-06)
+ // on the first query — same expectation "Test connection"
         // sets for the other drivers.
         guard await connection.ping() else {
             let host = config.host ?? "?"

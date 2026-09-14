@@ -3,8 +3,8 @@ import Testing
 
 @testable import BerryGraph
 
-/// Impact Simulator (DI-16, docs/architecture/13 §5.1).
-@Suite("Impact Simulator (DI-16)")
+/// Impact Simulator.
+@Suite("Impact Simulator")
 struct ImpactSimulatorTests {
     /// orders -> customers (FK), plus an index on orders.
     private func sampleGraph() -> SchemaGraph {

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Structural analysis over the DSG (docs/architecture/11 §7, DI-07): circular
+/// Structural analysis over the DSG: circular
 /// dependencies, tables without a primary key, columns that look like foreign
 /// keys but aren't constrained, and all-nullable tables. Pure — reads only the
 /// harvested graph, no DBMS access.

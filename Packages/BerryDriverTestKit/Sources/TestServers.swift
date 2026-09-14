@@ -2,7 +2,7 @@ import Foundation
 
 /// Test server coordinates parsed from env vars so conformance suites can run
 /// against real servers locally and in CI, and skip cleanly when absent
-/// (docs/architecture/08 §5).
+///
 ///
 /// Format: `HOST:PORT:USER:PASSWORD[:DATABASE]`
 public struct TestServer: Sendable {
@@ -32,13 +32,13 @@ public struct TestServer: Sendable {
     /// Mongo has real user/password SCRAM auth (unlike Qdrant's API-key-only
     /// shape), so it reuses this general `host:port:user:pass:database`
     /// shape rather than a narrower type — same as Postgres/MySQL
-    /// (docs/architecture/12 §3/§10). `database` doubles as the SCRAM
+ /// `database` doubles as the SCRAM
     /// authSource (see `Tests/docker/compose.yml`'s `mongo` service comment).
     public static let mongo = fromEnv("BERRYDB_TEST_MONGO")
 }
 
 /// Replica-set seed(s) for the v1 multi-seed/primary-discovery conformance
-/// suite (docs/architecture/12 §3) — separate from `TestServer.mongo`
+/// suite — separate from `TestServer.mongo`
 /// because this target has no auth (`Tests/docker/compose.yml`'s `mongo-rs`
 /// service) and needs a *list* of seeds rather than one host/port.
 ///
@@ -62,7 +62,7 @@ public struct MongoReplicaSetTestServer: Sendable {
     public static let mongoReplicaSet = fromEnv("BERRYDB_TEST_MONGO_RS")
 }
 
-/// Qdrant has no user/password — API key only (docs/architecture/12 §5) — so
+/// Qdrant has no user/password — API key only — so
 /// it gets its own narrower coordinate shape instead of reusing `TestServer`.
 ///
 /// Format: `HOST:PORT`
@@ -81,7 +81,7 @@ public struct QdrantTestServer: Sendable {
 }
 
 /// dynamodb-local accepts any non-empty SigV4 access key/secret (no real AWS
-/// account needed, docs/architecture/12 §10) — same narrower shape as
+/// account needed) — same narrower shape as
 /// `QdrantTestServer`, just `host:port`.
 ///
 /// Format: `HOST:PORT`
@@ -99,7 +99,7 @@ public struct DynamoDBTestServer: Sendable {
     public static let dynamodb = fromEnv("BERRYDB_TEST_DYNAMODB")
 }
 
-/// Redis/Valkey conformance target (docs/architecture/15, Phase 0 spike) — no
+/// Redis/Valkey conformance target (Phase 0 spike) — no
 /// auth needed for a local conformance container, same narrower shape as
 /// `QdrantTestServer`/`DynamoDBTestServer`.
 ///
@@ -118,7 +118,7 @@ public struct RedisTestServer: Sendable {
     public static let redis = fromEnv("BERRYDB_TEST_REDIS")
 }
 
-/// Elasticsearch conformance target (docs/architecture/17) — no auth needed
+/// Elasticsearch conformance target — no auth needed
 /// for a local conformance container (`xpack.security.enabled=false`, same
 /// as the `qdrant`/`mongo` no-auth conformance containers), same narrower
 /// shape as `QdrantTestServer`/`DynamoDBTestServer`/`RedisTestServer`.

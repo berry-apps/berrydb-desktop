@@ -4,12 +4,12 @@ import BerryStore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Create/edit a connection profile (KN-01) with TLS mode (KN-04), SSH tunnel
-/// (KN-03) and a test-connection action (KN-06). Secrets never touch the
+/// Create/edit a connection profile with TLS mode, SSH tunnel
+/// and a test-connection action. Secrets never touch the
 /// profile struct — they travel separately as `ConnectionSecrets` so the
-/// caller stores them in the Keychain (07 §2).
+/// caller stores them in the Keychain.
 ///
-/// Sizing follows UD-07: the sheet grows with its content and never scrolls.
+/// Sizing follows: the sheet grows with its content and never scrolls.
 public struct ConnectionSheet: View {
     public enum TestState: Equatable {
         case idle
@@ -17,7 +17,7 @@ public struct ConnectionSheet: View {
         case done(ConnectionTestReport)
     }
 
-    /// Two-step flow (KN-01): pick the connection type first, then configure
+ /// Two-step flow: pick the connection type first, then configure
     /// it — replaces the old single-screen layout's top row of type buttons,
     /// which got cramped as the driver count grew past what a fixed-width
     /// row could show clearly. Editing an existing profile skips straight to
@@ -28,7 +28,7 @@ public struct ConnectionSheet: View {
         case configure
     }
 
-    /// Elasticsearch auth mode (docs/architecture/17 §3): self-hosted
+ /// Elasticsearch auth mode: self-hosted
     /// clusters default to Basic, Elastic Cloud/Serverless pushes/requires
     /// API keys — both real, not a v1-only placeholder.
     private enum ElasticsearchAuthMode {
@@ -52,8 +52,8 @@ public struct ConnectionSheet: View {
     @State private var tlsCACertPath: String
     @State private var tlsClientCertPath: String
     @State private var tlsClientKeyPath: String
-    /// Mongo-only replica-set seeds beyond Host/Port (docs/architecture/12
-    /// §3, v1) — comma-separated "host:port" entries.
+ /// Mongo-only replica-set seeds beyond Host/Port
+ /// v1) — comma-separated "host:port" entries.
     @State private var mongoAdditionalHosts: String
     @State private var mongoReplicaSetName: String
     @State private var elasticsearchAuthMode: ElasticsearchAuthMode
@@ -67,7 +67,7 @@ public struct ConnectionSheet: View {
     @State private var sshPassphrase: String
     @State private var testState: TestState = .idle
     @State private var step: SheetStep
-    /// Mongo-only "paste a URI" convenience (task 3, `docs/draft/mongodb.md`)
+ /// Mongo-only "paste a URI" convenience (task 3, ``)
     /// — unidirectional: parsing fills Host/Port/Username/Password/Database/TLS
     /// once, it doesn't keep syncing with them afterwards.
     @State private var mongoURIInput: String = ""
@@ -258,8 +258,7 @@ public struct ConnectionSheet: View {
                     }
                 } else {
                     Section(L("Server")) {
-                        // Navicat-inspired convenience (docs/draft/mongodb.md):
-                        // paste a mongodb:// URI to fill the fields below in
+                        // Paste a mongodb:// URI to fill the fields below in
                         // one shot — unidirectional, not a live sync.
                         if driverID == .mongodb {
                             HStack {
@@ -281,7 +280,7 @@ public struct ConnectionSheet: View {
                         // Elasticsearch genuinely needs a mode switch, not a
                         // password-reuse hack: self-hosted defaults to Basic,
                         // Elastic Cloud/Serverless pushes/requires API keys
-                        // (docs/architecture/17 §3).
+ //
                         if driverID == .elasticsearch {
                             Picker(L("Authentication"), selection: $elasticsearchAuthMode) {
                                 Text(L("Username & Password")).tag(ElasticsearchAuthMode.basic)
@@ -304,13 +303,13 @@ public struct ConnectionSheet: View {
                             // DynamoDB has no username/password/database — reuses these
                             // same three fields (relabeled) for AWS SigV4 credentials
                             // instead of adding a parallel set of Keychain/profile
-                            // columns just for one driver (docs/architecture/12 §4,
+ // columns just for one driver
                             // ConnectionProfile.makeConfig does the field mapping).
                             TextField(driverID == .dynamodb ? L("Access Key ID") : L("Username"), text: $username)
                             // Qdrant auth is a single API-key header, not a
                             // user/password pair — reuses the Password field
                             // (relabeled) rather than adding a parallel secret
-                            // shape for one driver (docs/architecture/12 §5,
+ // shape for one driver
                             // `QdrantHTTPClient` reads `config.password` as the key).
                             SecureField(
                                 driverID == .dynamodb ? L("Secret Access Key")
@@ -320,7 +319,7 @@ public struct ConnectionSheet: View {
                             )
                         }
                         // Redis has no free-text database name — a numbered
-                        // index 0-15 (docs/architecture/15 §3). Still just the
+ // index 0-15. Still just the
                         // `database` String field underneath (`RedisConnection`
                         // already parses it as `Int`) — only the control
                         // differs, matching the relabel-not-duplicate pattern
@@ -350,7 +349,7 @@ public struct ConnectionSheet: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         }
-                        // Replica set v1 (docs/architecture/12 §3): Host/Port
+ // Replica set v1: Host/Port
                         // above stay the primary seed; these add seed members
                         // 2+. All reads/writes still go to the primary the
                         // driver finds at connect time — no secondary routing.
@@ -397,7 +396,7 @@ public struct ConnectionSheet: View {
                 .tabItem { Text(L("Advanced")) }
 
                 if !isFileBased {
-                    // Split out of General (UD-07: sheets never scroll) — the
+ // Split out of General (sheets never scroll) — the
                     // TLS block alone can run to 7 rows once Verify
                     // Certificate is picked (mode + warning + CA row + CA
                     // info + client cert row + client key row), which was
@@ -412,7 +411,7 @@ public struct ConnectionSheet: View {
                                 Text(L("Verify CA (skip hostname)")).tag(TLSMode.verifyCA)
                                 Text(L("Verify certificate")).tag(TLSMode.verifyFull)
                             }
-                            // 07 §4: prefer/require encrypt but don't authenticate
+ // prefer/require encrypt but don't authenticate
                             // the server — spell that out so it isn't mistaken
                             // for "secure".
                             if tlsMode == .prefer || tlsMode == .require {
@@ -423,7 +422,7 @@ public struct ConnectionSheet: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             }
-                            // KN-04: a custom CA is optional — empty means the
+ // a custom CA is optional — empty means the
                             // system trust store; a PEM file covers
                             // self-signed/private CAs.
                             if tlsMode.verifiesCertificate {
@@ -439,7 +438,7 @@ public struct ConnectionSheet: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             }
-                            // KN-04 mutual TLS: optional client certificate + key
+ // mutual TLS: optional client certificate + key
                             // (PEM paths; both required to take effect).
                             if tlsMode != .disable {
                                 HStack {
@@ -489,7 +488,7 @@ public struct ConnectionSheet: View {
             }
             .focusable(false)
             .focusEffectDisabled()
-            // docs/ui/02 §6: bordered fields so it's obvious where to type
+ // bordered fields so it's obvious where to type
             .textFieldStyle(.roundedBorder)
 
             Divider()
@@ -506,7 +505,7 @@ public struct ConnectionSheet: View {
             }
             .padding(12)
         }
-        // Fixed size on the outer `body` (UD-07: sheets never scroll) — even
+ // Fixed size on the outer `body` (sheets never scroll) — even
         // after splitting TLS into its own tab, General's tallest driver
         // variants (Redis: Database picker + ACL info label; Mongo: URI
         // paste row + Additional hosts + Replica Set) still overflowed 600
@@ -583,7 +582,7 @@ public struct ConnectionSheet: View {
     }
 
     /// Fills Host/Port/Username/Password/Database/TLS from `mongoURIInput`
-    /// (task 3, `docs/draft/mongodb.md`). Only overwrites a field the URI
+ /// (task 3, ``). Only overwrites a field the URI
     /// actually specified — e.g. an auth-less URI leaves a previously typed
     /// Username/Password alone rather than clearing it.
     private func parseMongoURI() {
@@ -658,7 +657,7 @@ public struct ConnectionSheet: View {
 
     private func builtConfig() -> ConnectionConfig {
         // Prefer freshly typed secrets; fall back to stored ones when editing
-        // (Keychain stays the single access point — docs/architecture/07 §2).
+ // (Keychain stays the single access point).
         func effective(_ typed: String, _ kind: KeychainService.SecretKind) -> String? {
             if !typed.isEmpty { return typed }
             guard let existing else { return nil }
@@ -680,7 +679,7 @@ public struct ConnectionSheet: View {
         testState = .done(await onTest(builtConfig()))
     }
 
-    /// Per-step result list for the last test (KN-06).
+ /// Per-step result list for the last test.
     @ViewBuilder
     private func testBreakdown(_ report: ConnectionTestReport) -> some View {
         VStack(alignment: .leading, spacing: 3) {

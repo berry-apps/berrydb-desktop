@@ -4,7 +4,7 @@ import CoreFoundation
 import Foundation
 
 /// A `role`/`content` pair for stateless context sent to the backend (Q17,
-/// docs/agents/architecture/11 §7.4) — a minimal `Sendable` stand-in for the
+/// — a minimal `Sendable` stand-in for the
 /// backend's `ai::provider::Message` (tool_calls/tool_call_id aren't needed
 /// for summarization/context-building, only for the live tool-call loop).
 public struct AIContextMessage: Sendable, Equatable {
@@ -16,7 +16,7 @@ public struct AIContextMessage: Sendable, Equatable {
     }
 }
 
-/// The client-built turn context for a stateless `postMessage` (Q17 §7.4) —
+/// The client-built turn context for a stateless `postMessage` (Q17)
 /// replaces what the backend used to load from `berry_ai_threads`/
 /// `berry_ai_messages`.
 public struct AITurnContext: Sendable, Equatable {
@@ -29,7 +29,7 @@ public struct AITurnContext: Sendable, Equatable {
 }
 
 /// The user's explicit confirmation of a reviewed `report_draft_ready` draft
-/// (Task 11, backend Task 3 §4) — digests only, per the additive `report`
+/// (Task 11) — digests only, per the additive `report`
 /// block on the resume request. `report` is valid only alongside `action:
 /// .accepted`; the reviewed text itself never rides along, only what it
 /// hashes to. `contextDigest` must be present exactly when `includeContext`
@@ -54,8 +54,7 @@ public enum AIReportPolicy {
     public static let maxContextBytes = 16 * 1024
 }
 
-/// One confirmed report, ready to submit (Task 12, backend Task 4 §
-/// `POST /v1/agent/report`).
+/// One confirmed report, ready to submit via `POST /v1/agent/report`.
 ///
 /// `conversationSummary` is present exactly when the user consented to attach
 /// conversation scope — the backend derives its own `include_context` check
@@ -188,7 +187,7 @@ enum AIRequestIntegrity {
         }.joined()
     }
 
-    /// The report draft digest rule (Task 11, backend Task 3 §4): lowercase
+ /// The report draft digest rule (Task 11): lowercase
     /// hex SHA-256 of the exact UTF-8 bytes — no normalization, no trimming,
     /// no case folding, so a trailing space hashes to a different report.
     /// Unlike `digest(_:)` above, this never goes through JSON encoding: any
@@ -263,7 +262,7 @@ enum AIRequestIntegrity {
     }
 }
 
-/// The AI gateway transport (docs/architecture/09 §3). Abstracted so the agent
+/// The AI gateway transport. Abstracted so the agent
 /// loop can be driven by a mock in tests.
 public protocol AITransport: Sendable {
     func createThread(dialect: String, schemaDigest: String) async throws -> String
@@ -272,7 +271,7 @@ public protocol AITransport: Sendable {
     /// compatibility shape; negotiated servers derive static descriptors from
     /// `capabilities`.
     func postMessage(threadID: String, text: String, tools: [AIToolSpec]) -> AsyncThrowingStream<AIStreamEvent, Error>
-    /// Stateless variant (Q17 §7.4): carries the client-built `context` and
+ /// Stateless variant (Q17): carries the client-built `context` and
     /// `dialect` (there's no server-side thread row for the backend to read
     /// one from). Defaults to the 3-arg overload, ignoring both, so existing
     /// mock transports don't need updating.
@@ -291,28 +290,28 @@ public protocol AITransport: Sendable {
         status: String,
         resultJSON: String?
     ) async throws
-    /// Top-K most relevant skill names for the query (docs/agents/architecture/07 §7).
+ /// Top-K most relevant skill names for the query.
     /// Returns [] on any failure — the caller falls back to no skill:<name> shortcuts.
     func rankSkills(skills: [SkillRankInput], query: String) async -> [String]
 
-    /// The device's saved conversations, most-recent first (AI-21). Keyset cursor:
+ /// The device's saved conversations, most-recent first. Keyset cursor:
     /// pass the last thread's `(updatedAt, id)` to fetch the next page.
     func listThreads(dialect: String?, limit: Int, beforeUpdatedAt: Int?, beforeID: String?) async -> [AIThreadSummary]
-    /// Rebuild a saved thread's display transcript from its stored messages (AI-21).
+ /// Rebuild a saved thread's display transcript from its stored messages.
     func loadThread(id: String) async throws -> [AITurn]
-    /// Delete a saved conversation (AI-21).
+ /// Delete a saved conversation.
     func deleteThread(id: String) async throws
-    /// Submits a confirmed report (`/report …`, docs/feature/05 F6) — the
+ /// Submits a confirmed report (`/report …`, F6) — the
     /// *only* path to `POST /v1/agent/report` since Task 12. The pre-Phase-4
     /// raw `{message, category, recent_messages}` shape has no receiver on
     /// the backend at all and is deliberately not expressible here.
     /// Idempotent for an identical `clientRequestID` + identical bytes.
     func submitReport(_ submission: AIReportSubmission) async throws -> AIReportReceipt
-    /// Stateless embedding for local RAG (Q17 §7.4/§7.5) — the backend doesn't
+ /// Stateless embedding for local RAG (Q17) — the backend doesn't
     /// store `text` or the returned vector; the caller persists it locally.
     /// Empty on any failure, matching `rankSkills`' fallback shape.
     func embed(text: String) async -> [Float]
-    /// Stateless conversation-summary fold (Q17 §7.4), replacing the old
+ /// Stateless conversation-summary fold (Q17), replacing the old
     /// server-side rolling summary — the backend doesn't store `previous` or
     /// `messages`. Empty on any failure (caller keeps the old summary).
     func summarize(previous: String, messages: [AIContextMessage]) async -> String
@@ -353,7 +352,7 @@ public extension AITransport {
     func summarize(previous: String, messages: [AIContextMessage]) async -> String { "" }
 }
 
-/// One saved conversation for the "past conversations" list (AI-21).
+/// One saved conversation for the "past conversations" list.
 public struct AIThreadSummary: Identifiable, Sendable, Equatable {
     public let id: String
     public let title: String
@@ -404,14 +403,14 @@ public struct AIClient: AITransport {
     /// backend restart (in-memory token store) is silently replaced instead
     /// of surfacing "Your session has expired" for a still-valid license.
     let reauthenticate: @Sendable () async -> Void
-    /// Read fresh per turn (docs/feature/07 §16, AI Database Coach) — the
+ /// Read fresh per turn (AI Database Coach) — the
     /// user's preferred explanation register ("beginner"/"intermediate"/
     /// "advanced"/"dba"), or nil to omit the field entirely (pre-existing
     /// server behavior, unset = its own default register). A closure rather
     /// than a threaded `postMessage` parameter so this stays additive: no
     /// protocol/overload signature change, no new AISession plumbing.
     let detailLevelProvider: @Sendable () -> String?
-    /// Read fresh per turn (docs/draft/10.md TM-13/14) — the user's chosen
+ /// Read fresh per turn — the user's chosen
     /// AI model ("{provider_id}/{model_id}"), or nil to omit the field
     /// entirely (server falls back to its own default role, same as an old
     /// client that never sends `model`). Same closure-not-parameter shape as
@@ -773,7 +772,7 @@ public struct AIClient: AITransport {
                     DiagnosticLog.default.event("producer: SSE loop open", detail: "thread=\(threadID)")
                     for try await raw in sseEvents(from: bytes) {
                         // Coalesced, not one line each: this fires per token
-                        // (681 times in one turn, docs/tests/crash.md).
+ // (681 times in one turn).
                         DiagnosticLog.default.tick("producer: \(raw.event)")
                         let data = Data(raw.data.utf8)
                         if let event = AIEvent.decode(event: raw.event, data: data) {
@@ -843,7 +842,7 @@ public struct AIClient: AITransport {
 
     public func listThreads(dialect: String? = nil, limit: Int = 50, beforeUpdatedAt: Int? = nil, beforeID: String? = nil) async -> [AIThreadSummary] {
         var path = "v1/agent/threads?limit=\(limit)"
-        // Keyset cursor (AI-21): only meaningful with both halves of (updated_at, id).
+ // Keyset cursor: only meaningful with both halves of (updated_at, id).
         if let beforeUpdatedAt, let beforeID {
             let encodedID = beforeID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? beforeID
             path += "&before_updated_at=\(beforeUpdatedAt)&before_id=\(encodedID)"

@@ -3,7 +3,7 @@ import BerryStore
 import Foundation
 
 /// Live tab/pane state handed from BerryUI to build the UI-state graph
-/// (docs/feature/08, AI-27). Declared here (not BerryUI) for the same reason
+/// Declared here (not BerryUI) for the same reason
 /// as `ActiveTabSnapshot`/`OpenTabsSnapshot`: `UIGraphToolExecutor` serializes
 /// it; BerryUI must not leak `WorkspaceViewModel`/`WorkspaceTab` types across
 /// the one-way module boundary.
@@ -49,12 +49,12 @@ public struct UIGraphSnapshot: Sendable {
     }
 }
 
-/// Answers `get_ui_state`/`query_ui_graph` (docs/feature/08, AI-27/28) —
+/// Answers `get_ui_state`/`query_ui_graph`
 /// mirrors `GraphToolExecutor`'s get_stats/graph_query split, but over a
 /// graph built FRESH on every call from live UI state + the bounded
 /// recent-actions log, never persisted (unlike the DSG). Not
 /// entitlement-gated: tab awareness is base "ai" capability, not Intelligence
-/// (docs/agents/architecture/13-tab-pane-awareness.md).
+///
 @MainActor
 public final class UIGraphToolExecutor: AIToolExecutor {
     private static let actionLimit = 50

@@ -1,112 +1,97 @@
-# BerryDB — Release & distribution
+# BerryDB — Release & Distribution
 
-Ký, notarize, và phát hành qua Sparkle (docs/architecture/08 §6, 10 §3). Toàn bộ
-secret nằm ở `.env` (gitignored) — xem `.env.example`. **Không bao giờ commit giá
-trị thật.**
+Guide for signing, notarizing, and releasing BerryDB with automated updates via Sparkle.
+All secrets reside in `deploy/.env` (gitignored) — see `deploy/.env.example`. **NEVER commit real credentials.**
 
-## Một lần: khóa cập nhật Sparkle (EdDSA)
+## 1. One-Time Setup: Sparkle Update Keys (EdDSA)
 
 ```sh
-# Từ một checkout Sparkle (hoặc bản release Sparkle), tạo cặp khóa:
-./bin/generate_keys            # lưu private key vào Keychain, in ra public key
+# Generate key pair from a Sparkle checkout or Sparkle release:
+./bin/generate_keys            # Saves private key into Keychain, prints public key
 ```
 
-- Public key → điền `SU_PUBLIC_ED_KEY` trong `.env` (được nhúng vào Info.plist).
-- Private key ở Keychain, dùng bởi `sign_update` khi release. Trỏ `SPARKLE_BIN`
-  tới `sign_update` nếu không nằm trong PATH/.build.
+- Public key -> Set `SU_PUBLIC_ED_KEY` in `deploy/.env` (embedded into `Info.plist`).
+- Private key resides in Keychain, used by `sign_update` during release packaging.
+- Set `SPARKLE_BIN` to `sign_update` if it is not in your `PATH` or `.build`.
 
-## Một lần: bật in-app updater (framework Sparkle)
+## 2. One-Time Setup: Enable In-App Updater (Sparkle Framework)
 
-Mặc định app build **không nhúng** Sparkle: menu *Check for Updates…* là no-op
-(`NoopUpdater`). Lý do — Sparkle là binary framework, sẽ phá vỡ mục tiêu zero
-runtime-dep + size guard (`scripts/check-size.sh`, 08 §6) của bản build thường và
-của test/`swift run`. Code updater (`App/Sources/AppUpdater.swift`) khóa theo
-`#if canImport(Sparkle)`, nên chỉ cần link framework là bản thật tự bật.
+By default, builds do **not** embed Sparkle: the *Check for Updates…* menu item is a no-op (`NoopUpdater`). This preserves zero runtime external dependencies and enforces binary size limits (`scripts/check-size.sh`) during development and testing.
 
-Để bật cho release:
+The updater code (`App/Sources/AppUpdater.swift`) is gated by `#if canImport(Sparkle)`, activating automatically once the framework is linked.
 
-1. Bỏ comment **hai** dòng trong `Package.swift`: `.package(url: …/Sparkle.git…)`
-   và `.product(name: "Sparkle", package: "Sparkle")` trong target `BerryApp`.
-   `canImport(Sparkle)` khi đó thành true → `SparkleUpdater` được biên dịch và
-   `makeUpdater()` kích hoạt nó khi chạy từ `.app` bundle đã ký.
-2. Nhúng + ký lại framework vào bundle **sau** `swift build -c release`, **trước**
-   `codesign` app ngoài cùng (bước thủ công — chưa tự động trong `make_app.sh` vì
-   không verify được headless):
+To enable Sparkle for a production release:
+
+1. Uncomment the two Sparkle lines in `Package.swift`:
+   - `.package(url: "https://github.com/sparkle-project/Sparkle.git", ...)`
+   - `.product(name: "Sparkle", package: "Sparkle")` in the `BerryApp` target.
+   `canImport(Sparkle)` evaluates to `true`, compiling `SparkleUpdater`.
+
+2. Embed and re-sign the framework into the bundle **after** `swift build -c release` and **before** the outer `codesign`:
 
    ```sh
    FW="$(swift build -c release --show-bin-path)/Sparkle.framework"
    mkdir -p dist/BerryDB.app/Contents/Frameworks
    ditto "$FW" dist/BerryDB.app/Contents/Frameworks/Sparkle.framework
-   # Ký từ trong ra ngoài: XPCServices + Autoupdate rồi tới framework.
+
+   # Sign from inside out: XPCServices + Autoupdate, then framework
    codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
      dist/BerryDB.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/*.xpc
    codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
      dist/BerryDB.app/Contents/Frameworks/Sparkle.framework
    ```
 
-   `release.sh` chạy `codesign --deep` cho app ngoài cùng sẽ ký lại toàn bộ, nên
-   `@rpath/Sparkle.framework` vượt library validation với Developer ID của ta.
-3. Vì đã nhúng dep ngoài hệ thống, thêm `Sparkle.framework` vào allowlist của
-   `scripts/check-size.sh` cho bản release (bản thường vẫn phải zero-dep).
+3. Add `Sparkle.framework` to the allowlist in `scripts/check-size.sh` for release builds.
 
-## Mỗi lần phát hành
+## 3. Release Process
+
+Push a tag. Everything else is automatic.
 
 ```sh
-python3 -m pip install -r deploy/requirements.txt   # boto3 (một lần)
-
-make release 0.2.0             # build → sign → notarize → staple → zip → ký Sparkle
-python3 deploy/upload-release.py   # upload R2 + dựng lại appcast + purge CDN
+git tag v1.0.3
+git push --tags
 ```
 
-- `deploy/release.sh` tạo `dist/BerryDB-<version>.dmg` (installer kéo-thả vào
-  Applications, đã notarize + staple) + `deploy/last-release.json`. App bên trong
-  được staple riêng để mở offline sau khi kéo ra. Sparkle 2 cập nhật thẳng từ .dmg.
-- `upload-release.py` gộp vào `deploy/releases.json` (lịch sử), dựng `appcast.xml`,
-  upload cả zip lẫn appcast lên R2, rồi purge cache Cloudflare. Upload thêm một
-  bản alias cố định `BerryDB-latest.<đuôi file>` (song song, không thay thế bản
-  versioned) — để link tải "luôn là bản mới nhất" trên website mà không phải sửa
-  URL mỗi lần phát hành. Appcast/Sparkle vẫn chỉ đọc các entry versioned; alias
-  không tham gia vào appcast vì chữ ký EdDSA của Sparkle gắn với đúng file
-  versioned, không phải với key cố định này.
+`.github/workflows/release.yml` then builds, signs, notarizes, checks the app size, publishes the DMG and appcast to R2, creates a GitHub Release and updates the website's version. Credentials come from GitHub Secrets, not from `deploy/.env`.
 
-## Checklist bảo mật trước khi phát hành thật
+To rehearse without publishing, run the workflow manually from the Actions tab with `dry_run` enabled: it builds, signs and notarizes, then stops before R2 and before creating the Release, and attaches the DMG as a workflow artifact.
 
-- [ ] **Thay khóa công khai license** `LicenseManager.devPublicKeyBase64`
-      (`Packages/BerryLicense/Sources/LicenseManager.swift`) bằng public key của
-      backend **production**. Khóa này **biên dịch thẳng vào binary** (verify
-      offline N4) — KHÔNG được đọc từ env lúc chạy (kẻ tấn công có thể thay khóa
-      tin cậy). Backend in public key lúc khởi động.
-- [ ] Backend production chạy **HTTPS** (`BERRYDB_BACKEND_URL=https://…`) — client
-      từ chối gửi bearer token qua `http://` non-loopback (fail về local, 07 §2).
-- [ ] TLS DB: nhắc người dùng dùng **Verify certificate** cho production
-      (prefer/require chỉ mã hóa, không xác thực máy chủ — 07 §4).
+**Fallback — releasing by hand.** Still supported and unchanged, for when Actions is unavailable:
 
-## Env cần thiết (`.env`)
+```sh
+# One-time. A venv, not a global install: a Homebrew-managed python3 refuses
+# the latter under PEP 668.
+python3 -m venv .venv-release
+.venv-release/bin/pip install -r deploy/requirements.txt
 
-| Nhóm | Key |
-|---|---|
-| Apple (ký + notarize) | `APPLE_ID`, `APP_SPEC_PASSWORD`, `SIGNING_IDENTITY`*, `APPLE_TEAM_ID`* |
-| Sparkle | `SU_PUBLIC_ED_KEY`, `SU_FEED_URL`*, `SPARKLE_BIN`* |
-| Cloudflare R2 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` |
-| CDN purge | `CF_ZONE_ID`, `CF_API_TOKEN` (khuyên dùng) |
-| Tải xuống | `DOWNLOAD_BASE_URL`* (mặc định domain R2 custom) |
+make release 1.0.3
+.venv-release/bin/python deploy/upload-release.py
+```
 
-\* có mặc định trong script — chỉ đặt khi đổi.
+- `deploy/release.sh` produces `dist/BerryDB-<version>.dmg` (drag-and-drop installer for Applications, notarized and stapled) and `deploy/last-release.json`. The inner app is stapled for offline execution. It signs the update through `scripts/sign-update.sh`, which reads the private key from the Keychain locally and from `SPARKLE_PRIVATE_ED_KEY` on a runner.
+- `deploy/upload-release.py` generates `appcast.xml`, uploads release files to Cloudflare R2, and purges CDN cache. It also publishes an alias `BerryDB-latest.dmg` for static download links. **The release history lives in R2**, not in the tracked `deploy/releases.json` — that file only seeds the very first run, and editing it afterwards changes nothing.
 
-## App icon
+## 4. Pre-Release Security Checklist
 
-Thả **`deploy/icon-1024.png`** (1024×1024) — `make_app.sh` tự render `AppIcon.icns`
-(mọi kích thước qua `sips`+`iconutil`, `.icns` là artifact — gitignore) và nhúng vào
-bundle. Không có → app dùng icon hệ thống mặc định (bản dev).
+- [ ] **Verify License Public Key**: Set `LicenseManager.devPublicKeyBase64` (`Packages/BerryLicense/Sources/LicenseManager.swift`) to the production backend's public key.
+- [ ] **Production Backend HTTPS**: Ensure production backend uses HTTPS (`BERRYDB_BACKEND_URL=https://...`) — client rejects non-loopback `http://`.
+- [ ] **Database TLS**: Encourage users to use certificate validation for production database connections.
 
-Hiện đang dùng **icon placeholder** (nền gradient xanh macOS + glyph database), sinh
-bởi `scripts/make_placeholder_icon.swift` (`swift scripts/make_placeholder_icon.swift deploy/icon-1024.png`).
-**Nên thay bằng art thật** — chỉ cần ghi đè `deploy/icon-1024.png`.
+## 5. Required Environment Variables (`deploy/.env`)
 
-## Ghi chú
+| Category | Variables | Description |
+| :--- | :--- | :--- |
+| **Apple Signing & Notarization** | `APPLE_ID`, `APP_SPEC_PASSWORD`, `SIGNING_IDENTITY`, `APPLE_TEAM_ID` | Developer ID cert and notarization credentials |
+| **Sparkle Updates** | `SU_PUBLIC_ED_KEY`, `SU_FEED_URL`, `SPARKLE_BIN` | Public EdDSA verification key and feed URL |
+| **Cloudflare R2** | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | S3-compatible credentials and release bucket |
+| **CDN Cache Purge** | `CF_ZONE_ID`, `CF_API_TOKEN` | Purges Cloudflare cache upon upload |
+| **Download URL** | `DOWNLOAD_BASE_URL` | Base URL for generated download links |
 
-- App **không sandbox** (dev tool cần host DB tùy ý + file SQLite tùy chọn) — chỉ
-  hardened runtime. Entitlements: `deploy/BerryDB.entitlements`.
-- `codesign --deep` ký lại mọi framework nhúng (kể cả Sparkle) bằng Developer ID
-  của ta → library validation vượt qua mà không cần nới lỏng.
-- `appcast.xml` và `releases.json` được sinh tự động — không sửa tay.
+## 6. App Icon
+
+Place `deploy/icon-1024.png` (1024x1024) in the deploy directory. `scripts/make_app.sh` renders `AppIcon.icns` using `sips` and `iconutil` and bundles it into the app.
+
+## 7. Notes
+
+- BerryDB runs with Apple Hardened Runtime (`deploy/BerryDB.entitlements`).
+- Appcast and release manifest (`releases.json`) are generated automatically during the release pipeline.

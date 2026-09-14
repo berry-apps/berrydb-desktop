@@ -6,7 +6,7 @@ import Observation
 /// Result of one statement inside a Mongo shell run (mirrors `EditorResult`,
 /// one result tab per statement — every statement gets a tab here, unlike
 /// SQL's Message/Result split, since every Mongo action either streams
-/// documents or gets a synthetic one-row acknowledgement, docs/feedback/01.md
+/// documents or gets a synthetic one-row acknowledgement,
 /// item 2).
 @MainActor
 public struct MongoShellResult: Identifiable {
@@ -20,7 +20,7 @@ public struct MongoShellResult: Identifiable {
     }
 }
 
-/// One Mongo shell query tab (docs/feedback/01.md item 2): script text + its
+/// One Mongo shell query tab (item 2): script text + its
 /// per-statement results. Sibling of `EditorDocument` for the SQL side.
 @MainActor
 @Observable
@@ -33,9 +33,9 @@ public final class MongoShellTabState: Identifiable {
     public private(set) var isRunning = false
     public var cursorLocation: Int = 0
     public var pendingFocus = false
-    /// Linked saved query (docs/ui), mirrors `EditorDocument.savedQueryID`.
+ /// Linked saved query, mirrors `EditorDocument.savedQueryID`.
     public var savedQueryID: UUID?
-    /// Linked artifact (AI-29, docs/draft/09.md), mirrors `EditorDocument.artifactID`.
+ /// Linked artifact, mirrors `EditorDocument.artifactID`.
     public var artifactID: UUID?
     /// Set when this tab was opened by double-clicking a collection in the
     /// sidebar (`WorkspaceViewModel.openCollection`) so re-clicking the same

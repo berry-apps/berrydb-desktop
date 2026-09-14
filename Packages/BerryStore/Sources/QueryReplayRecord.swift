@@ -2,9 +2,9 @@ import Foundation
 import GRDB
 
 /// A user-saved execution snapshot of one query, for comparing runs over time
-/// (DI-17, docs/architecture/13 §5.2) — e.g. "420ms yesterday, 63ms today,
+/// e.g. "420ms yesterday, 63ms today,
 /// what changed?" (plan-wise, not just wall-clock). Distinct from
-/// `query_history` (ED-06, which logs every run automatically): a replay
+/// `query_history` (which logs every run automatically): a replay
 /// snapshot only exists when the user explicitly asks to keep one.
 public struct QueryReplaySnapshotRecord: Codable, Sendable, Equatable, FetchableRecord, PersistableRecord, Identifiable {
     public var id: UUID
@@ -15,7 +15,7 @@ public struct QueryReplaySnapshotRecord: Codable, Sendable, Equatable, Fetchable
     public var ts: Date
     public var durationMS: Double
     /// EXPLAIN ANALYZE plan tree as JSON (`PlanNode.jsonString(of:)` shape),
-    /// DI-17 (docs/architecture/13 §5.2). Nil when the dialect has no EXPLAIN
+ /// Nil when the dialect has no EXPLAIN
     /// (`Capabilities.explain == false`), the run failed, or the plan shape
     /// wasn't recognized — a snapshot without a plan still records duration,
     /// same as before this field existed.

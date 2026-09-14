@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryCore
 
-/// Per-engine built-in function lists incl. vector / time-series (docs/ui).
+/// Per-engine built-in function lists incl. vector / time-series.
 @Suite("SQLBuiltins")
 struct SQLBuiltinsTests {
     @Test func postgresIncludesPgvectorAndTimescale() {

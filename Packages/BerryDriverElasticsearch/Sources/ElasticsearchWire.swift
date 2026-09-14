@@ -2,7 +2,7 @@ import BerryDataSourceKit
 import Foundation
 
 /// Pure JSON <-> `BerryDocument` conversions for the Elasticsearch REST wire
-/// format (docs/architecture/17 §2) — no networking, so these are
+/// format — no networking, so these are
 /// unit-testable without a stubbed `URLSession`, same split as `QdrantWire`.
 enum ElasticsearchWire {
     /// One search hit (`_id`/`_score`/`_index`/`_source`) folded into the flat
@@ -26,7 +26,7 @@ enum ElasticsearchWire {
     }
 
     /// The `sort` array on a hit — the tiebreaker values `search_after` needs
-    /// to resume from this hit on the next page (docs/architecture/17 §2).
+ /// to resume from this hit on the next page.
     static func sortValues(fromHitJSON json: [String: Any]) -> [Any]? {
         json["sort"] as? [Any]
     }
@@ -42,7 +42,7 @@ enum ElasticsearchWire {
     }
 
     /// Short label for the field-type schema shown alongside the real ES
-    /// `_mapping` (docs/architecture/17 §4) — mirrors `QdrantWire.typeLabel`'s
+ /// `_mapping` — mirrors `QdrantWire.typeLabel`'s
     /// intent but reports the ES-declared type name, not an inferred shape.
     static func flattenMapping(_ properties: [String: Any], prefix: String = "") -> [String: String] {
         var result: [String: String] = [:]

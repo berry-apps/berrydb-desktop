@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// The signed license claims (docs/architecture/10 §3). Mirrors the Rust
+/// The signed license claims. Mirrors the Rust
 /// `LicensePayload` in berrydb-backend; field names must match the JSON.
 public struct LicensePayload: Codable, Equatable, Sendable {
     public let plan: String

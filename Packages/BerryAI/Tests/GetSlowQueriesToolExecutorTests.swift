@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import BerryAI
 
-@Suite("get_slow_queries client tool (docs/feature/07 §14)")
+@Suite("get_slow_queries client tool")
 struct GetSlowQueriesToolExecutorTests {
     private func entry(sql: String, ms: Int) -> QueryHistoryEntry {
         QueryHistoryEntry(profileID: nil, sql: sql, startedAt: Date(), durationMS: ms, status: "success")

@@ -1,10 +1,10 @@
 import Foundation
 
-/// Saved-query snippet placeholders (ED-07): `${N:label}` in a saved query's
+/// Saved-query snippet placeholders: `${N:label}` in a saved query's
 /// SQL is stripped down to `label` on insert. The FIRST occurrence (by
 /// placeholder number, not source position) is reported back as a selection
 /// range so the editor can pre-select it — the user types straight over it,
-/// matching the "snippet có placeholder" behavior the feature spec asks for.
+/// matching the snippet placeholder behavior specified in the feature spec.
 /// Only one auto-selected stop per insert (v1); full Tab-cycling between
 /// multiple stops is out of scope for this pass.
 public enum SnippetPlaceholder {

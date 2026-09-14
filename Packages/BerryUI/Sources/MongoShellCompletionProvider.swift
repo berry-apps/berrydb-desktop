@@ -1,7 +1,7 @@
 import BerryCore
 import Foundation
 
-/// Suggestions for the Mongo shell editor (ED-13 sibling): collection names
+/// Suggestions for the Mongo shell editor (sibling): collection names
 /// right after `db.`, methods right after `db.<collection>.`, and `$`
 /// operators/stages inside object literals. Simpler than SQL's
 /// `CompletionProvider` (no qualified-name resolution) — token-position

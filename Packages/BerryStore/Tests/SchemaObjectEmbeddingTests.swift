@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import BerryStore
 
-@Suite("Semantic Database Search sqlite-vec store (docs/feature/07 §13)")
+@Suite("Semantic Database Search sqlite-vec store")
 struct SchemaObjectEmbeddingTests {
     private func makeStore() throws -> BerryStore {
         try BerryStore(path: ":memory:")

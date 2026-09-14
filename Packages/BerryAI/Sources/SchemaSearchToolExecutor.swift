@@ -1,12 +1,12 @@
 import BerryStore
 import Foundation
 
-/// Client-executed `search_schema` (DI-12, docs/feature/07 §13): search this
+/// Client-executed `search_schema`: search this
 /// connection's tables/collections by meaning, not literal name — e.g.
 /// "customer" can surface `users`, "payment" can surface `invoice`/`billing`.
 /// Name vectors and cosine-KNN live locally in `BerryStore`; vector creation
 /// uses the stateless `/v1/ai/embed` endpoint. Registered unconditionally
-/// (base "ai" capability), same as `search_conversation` (docs/architecture/09 §4).
+/// (base "ai" capability), same as `search_conversation`.
 @MainActor
 public final class SchemaSearchToolExecutor: AIToolExecutor {
     private let store: BerryStore

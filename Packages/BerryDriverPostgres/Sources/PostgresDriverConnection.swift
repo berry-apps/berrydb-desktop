@@ -4,7 +4,7 @@ import Logging
 import NIOSSL
 import PostgresNIO
 
-/// State needed to cancel from outside the actor (docs/architecture/05 §4):
+/// State needed to cancel from outside the actor:
 /// Postgres cancels a query via `pg_cancel_backend(pid)` on a SECONDARY CONNECTION.
 final class PostgresCancelBox: @unchecked Sendable {
     private let lock = NSLock()
@@ -41,7 +41,7 @@ public actor PostgresDriverConnection: DriverConnection {
         await refreshBackendPID()
     }
 
-    /// Client TLS config for the verifying modes (KN-04). A custom CA replaces
+ /// Client TLS config for the verifying modes. A custom CA replaces
     /// the trust store; verifyCA drops hostname checking for IP-reached servers.
     static func verifyingTLS(mode: TLSMode, caCertPath: String?) -> TLSConfiguration {
         var tls = TLSConfiguration.makeClientConfiguration()
@@ -52,7 +52,7 @@ public actor PostgresDriverConnection: DriverConnection {
         return tls
     }
 
-    /// Mutual TLS (KN-04): attach the client certificate chain + key when both
+ /// Mutual TLS: attach the client certificate chain + key when both
     /// paths are set. Applies to every TLS mode except `disable`.
     static func applyClientIdentity(_ tls: inout TLSConfiguration, config: ConnectionConfig) throws {
         guard let certPath = config.clientCertPath, !certPath.isEmpty,
@@ -65,7 +65,7 @@ public actor PostgresDriverConnection: DriverConnection {
         guard let host = config.host else {
             throw DriverError.connectionFailed("Missing host")
         }
-        // TLS per KN-04 (docs/architecture/07 §4); default is `prefer`.
+ // TLS; default is `prefer`.
         let tlsMode: PostgresConnection.Configuration.TLS
         switch config.tlsMode {
         case .disable:
@@ -82,7 +82,7 @@ public actor PostgresDriverConnection: DriverConnection {
             tlsMode = .require(try NIOSSLContext(configuration: tls))
         case .verifyCA, .verifyFull:
             // Verify the chain against the system trust store or a custom CA;
-            // verifyCA additionally skips the hostname check (KN-04).
+ // verifyCA additionally skips the hostname check.
             var tls = Self.verifyingTLS(mode: config.tlsMode, caCertPath: config.caCertPath)
             try Self.applyClientIdentity(&tls, config: config)
             tlsMode = .require(try NIOSSLContext(configuration: tls))
@@ -118,10 +118,10 @@ public actor PostgresDriverConnection: DriverConnection {
         }
     }
 
-    /// Test hook: exposes whether the cancel precondition holds (05 §4).
+ /// Test hook: exposes whether the cancel precondition holds.
     public nonisolated var debugBackendPID: Int32? { cancelBox.backendPID }
 
-    // MARK: - Execute (docs/architecture/06 · L2)
+ // MARK: - Execute
 
     public nonisolated func execute(_ sql: String) -> AsyncThrowingStream<ResultEvent, Error> {
         AsyncThrowingStream { continuation in
@@ -170,7 +170,7 @@ public actor PostgresDriverConnection: DriverConnection {
             }
             if !batch.isEmpty { continuation.yield(.rows(batch)) }
             continuation.yield(.complete(QueryStats(
-                rowsAffected: nil,   // PostgresNIO does not expose the command tag yet — note in 05 §6
+ rowsAffected: nil, // PostgresNIO does not expose the command tag yet — note
                 duration: clock.now - started
             )))
             continuation.finish()
@@ -179,7 +179,7 @@ public actor PostgresDriverConnection: DriverConnection {
         }
     }
 
-    // MARK: - Value mapping (docs/architecture/05 §3 — no information loss)
+ // MARK: - Value mapping (no information loss)
 
     static func berryValue(from cell: PostgresCell) -> BerryValue {
         guard cell.bytes != nil else { return .null }
@@ -247,7 +247,7 @@ public actor PostgresDriverConnection: DriverConnection {
 
     // MARK: - Control
 
-    /// Cancel via a secondary connection: `SELECT pg_cancel_backend(pid)` (05 §4, 06 · L6).
+ /// Cancel via a secondary connection: `SELECT pg_cancel_backend(pid)` (06).
     public nonisolated func cancelCurrentQuery() {
         guard let pid = cancelBox.backendPID else { return }
         let config = cancelBox.config
@@ -261,7 +261,7 @@ public actor PostgresDriverConnection: DriverConnection {
         }
     }
 
-    /// Postgres cannot switch databases on the same connection → reconnect (05 §4).
+ /// Postgres cannot switch databases on the same connection → reconnect.
     public func setDatabase(_ name: String) async throws {
         let newConfig = ConnectionConfig(
             driver: config.driver, name: config.name, filePath: nil,

@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// Observable progress for a backup/restore run (docs/feature/04). `@MainActor`
+/// Observable progress for a backup/restore run. `@MainActor`
 /// makes it Sendable, so a `@Sendable` progress callback running off the main
 /// actor can hand values back via `Task { @MainActor in … }` without a data race.
 @MainActor
@@ -29,9 +29,9 @@ public struct BackupFile: Identifiable, Hashable, Sendable {
     public var name: String { url.lastPathComponent }
 }
 
-/// The per-connection backups directory (docs/feature/04): a stable location
+/// The per-connection backups directory: a stable location
 /// under Application Support so the Backup manager can list past backups
-/// (Navicat-style) instead of the user hunting for loose files.
+/// instead of the user hunting for loose files.
 enum BackupsFolder {
     static func directory(forKey key: String) -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first

@@ -1,7 +1,7 @@
 import BerryDriverKit
 import Foundation
 
-/// Context-aware completion logic (ED-03) on top of SchemaCatalog data.
+/// Context-aware completion logic on top of SchemaCatalog data.
 /// Pure and synchronous over pre-fetched metadata so it is trivially
 /// testable; the editor resolves table details ahead of time via the
 /// catalog (tree-sitter-based context detection can replace the token
@@ -11,11 +11,11 @@ public enum CompletionProvider {
         case keyword(String)
         case table(String)
         case column(name: String, table: String)
-        /// Function / procedure / trigger (TR-01 objects) — offered in the
+ /// Function / procedure / trigger (objects) — offered in the
         /// general pool but never as a table name after FROM/JOIN.
         case routine(name: String, kind: SchemaObjectKind)
         /// Engine built-in function (NOW, COALESCE, …) — inserted with parens,
-        /// never quoted (docs/ui P1.4).
+ /// never quoted (P1.4).
         case builtin(String)
         /// DDL template snippet (crview, crfunc, crtrig) — inserted as full DDL text.
         case snippet(label: String, template: String, detail: String)
@@ -31,7 +31,7 @@ public enum CompletionProvider {
             }
         }
 
-        /// SF Symbol representing the suggestion type (custom popup, docs/ui).
+ /// SF Symbol representing the suggestion type (custom popup).
         public var iconName: String {
             switch self {
             case .keyword: return "textformat.abc"
@@ -60,7 +60,7 @@ public enum CompletionProvider {
 
     /// Positions in `candidate` (by character offset) that match `query` as a
     /// case-insensitive subsequence, for highlighting the typed characters in the
-    /// completion popup (docs/ui). Empty when the query isn't a subsequence.
+ /// completion popup. Empty when the query isn't a subsequence.
     public static func matchOffsets(of query: String, in candidate: String) -> [Int] {
         let q = Array(query.lowercased())
         guard !q.isEmpty else { return [] }
@@ -77,7 +77,7 @@ public enum CompletionProvider {
     }
 
     /// Whether an identifier must be quoted to survive case-folding or special
-    /// characters (docs/ui/02 §7) — e.g. a PascalCase table on Postgres. Only a
+ /// characters — e.g. a PascalCase table on Postgres. Only a
     /// bare ASCII-lowercase `[a-z_][a-z0-9_]*` is safe unquoted.
     public static func identifierNeedsQuoting(_ name: String) -> Bool {
         guard let first = name.first, !first.isNumber else { return true }

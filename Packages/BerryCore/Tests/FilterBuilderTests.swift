@@ -9,8 +9,8 @@ private struct DoubleQuoteDialect: SQLDialect {
     func limitClause(_ limit: Int) -> String { "LIMIT \(limit)" }
 }
 
-/// Visual filter builder (DL-02).
-@Suite("FilterBuilder (DL-02)")
+/// Visual filter builder.
+@Suite("FilterBuilder")
 struct FilterBuilderTests {
     private let dialect = DoubleQuoteDialect()
 

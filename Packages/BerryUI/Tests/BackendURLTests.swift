@@ -5,9 +5,9 @@ import Testing
 @testable import BerryUI
 
 /// The bearer token rides Authorization on every backend call, so a plaintext
-/// remote host would leak it (docs/architecture/07 §2). `secureBackendURL`
+/// remote host would leak it. `secureBackendURL`
 /// fails safe (07 security hardening).
-@Suite("Backend URL guard (07 §2)")
+@Suite("Backend URL guard")
 struct BackendURLTests {
     @Test func allowsHTTPSAnywhere() {
         #expect(LicenseManager.secureBackendURL("https://api.berrydb.dev").absoluteString

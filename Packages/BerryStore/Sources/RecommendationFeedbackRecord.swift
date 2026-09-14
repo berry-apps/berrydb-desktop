@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// The user's response to a single AI-generated Insight (DI-26, docs/architecture/13 §5.6).
+/// The user's response to a single AI-generated Insight.
 public enum RecommendationAction: String, Sendable, Codable, CaseIterable {
     case applied, dismissed, ignored
 }

@@ -2,11 +2,11 @@ import BerryStore
 import Foundation
 
 /// Client-executed replacement for the old gateway-handled `search_conversation`
-/// (Q17, docs/agents/architecture/11 §7.5) — RAG over this thread's earlier
+/// (Q17) — RAG over this thread's earlier
 /// (summarized-away) messages. Message vectors and cosine-KNN live locally in
 /// `BerryStore`; vector creation uses the stateless `/v1/ai/embed` endpoint.
 /// Registered the same
-/// way as `graph_query`/`get_stats` (docs/architecture/09 §4).
+/// way as `graph_query`/`get_stats`.
 @MainActor
 public final class SearchConversationToolExecutor: AIToolExecutor {
     private let store: BerryStore
@@ -47,7 +47,7 @@ public final class SearchConversationToolExecutor: AIToolExecutor {
             return .ok(#"{"matches":[]}"#)
         }
 
-        // AI-35: active path only — an edited-away message must not resurface
+ // active path only — an edited-away message must not resurface
         // here as if it were still part of the live conversation.
         let messages = ((try? store.activeAIMessages(threadID: threadID)) ?? [])
             .filter { $0.toolCalls != "local:interaction" }

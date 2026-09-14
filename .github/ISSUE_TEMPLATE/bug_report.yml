@@ -1,0 +1,67 @@
+name: "🐛 Bug Report"
+description: "File a report to help us reproduce and fix a bug in BerryDB"
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue! Please provide as much detail as possible to help us investigate.
+  - type: textarea
+    id: description
+    attributes:
+      label: "Describe the bug"
+      description: "A clear and concise description of what the bug is."
+      placeholder: "When querying PostgreSQL over SSH tunnel, the connection drops after..."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: "Steps to Reproduce"
+      description: "How can we reproduce this bug?"
+      placeholder: |
+        1. Open connection dialog
+        2. Enter credentials for ...
+        3. Click 'Test Connection'
+        4. See error ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Expected Behavior"
+      description: "What did you expect to happen instead?"
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: "Database Engine"
+      description: "Which database engine is affected?"
+      options:
+        - "PostgreSQL"
+        - "MySQL / MariaDB"
+        - "SQLite"
+        - "Redis / Valkey"
+        - "MongoDB"
+        - "Microsoft SQL Server"
+        - "DynamoDB"
+        - "Elasticsearch"
+        - "Qdrant"
+        - "N/A (General UI / App Core)"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: "Environment"
+      description: "Your macOS version, Mac architecture, and BerryDB version."
+      placeholder: "macOS 15.0 Sequoia (Apple Silicon M3), BerryDB v1.0.2"
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: "Additional Context / Screenshots"
+      description: "Add any error logs, stack traces, or screenshots here."

@@ -1,7 +1,7 @@
 import BerryStore
 import SwiftUI
 
-/// Query history viewer (ED-06): searchable, paged list of executed statements
+/// Query history viewer: searchable, paged list of executed statements
 /// for the active profile, with one-click insert into a new query tab. Search
 /// and paging happen in SQLite (`WorkspaceViewModel.refreshHistory`/
 /// `loadMoreHistory`), so a large history stays flat in RAM and search hits the

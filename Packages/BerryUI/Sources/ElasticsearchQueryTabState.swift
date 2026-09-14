@@ -3,7 +3,7 @@ import BerryDataSourceKit
 import Foundation
 import Observation
 
-/// One Elasticsearch query tab (docs/architecture/17 §5) — the search-engine
+/// One Elasticsearch query tab — the search-engine
 /// sibling of `QdrantQueryTabState`, simpler: a single JSON editor (no
 /// Form/JSON hybrid — Elasticsearch's Query DSL has no vector-shaped field
 /// awkward to represent as JSON the way Qdrant's raw vector array is, so a
@@ -26,7 +26,7 @@ public final class ElasticsearchQueryTabState: Identifiable {
     public var pendingFocus = false
     /// Linked saved query (mirrors `EditorDocument.savedQueryID`).
     public var savedQueryID: UUID?
-    /// Linked artifact (AI-29, docs/draft/09.md), mirrors `EditorDocument.artifactID`.
+ /// Linked artifact, mirrors `EditorDocument.artifactID`.
     public var artifactID: UUID?
 
     private var lastSession: DataSourceSession?

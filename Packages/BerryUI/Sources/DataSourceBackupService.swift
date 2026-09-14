@@ -2,7 +2,7 @@ import BerryDataSourceKit
 import Foundation
 
 /// Backup/restore for document (Mongo), vector (Qdrant), and search
-/// (Elasticsearch) connections (docs/feature/04) — the datasource analogue
+/// (Elasticsearch) connections — the datasource analogue
 /// of `BackupService` (SQL). A backup is a *bundle* directory: a
 /// `manifest.json` plus one NDJSON file per collection (one document/point
 /// per line). Restore recreates each collection and re-inserts its rows.

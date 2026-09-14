@@ -2,7 +2,7 @@ import BerryDataSourceKit
 import Foundation
 
 /// The subset of a `hello` command reply this driver reads — replica-set
-/// primary discovery, v1 (docs/architecture/12 §3). Field names/values
+/// primary discovery, v1. Field names/values
 /// verified against a real `mongod` (both standalone and a replica-set
 /// member) rather than assumed from memory, same discipline as `BSON`/`SCRAM`.
 struct MongoHelloResponse: Sendable, Equatable {

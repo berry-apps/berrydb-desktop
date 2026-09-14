@@ -1,17 +1,17 @@
 import BerryDriverKit
 import Foundation
 
-/// Quantifies blast radius (DI-04) against the actual workload instead of
-/// just topology (DI-16, docs/architecture/13 §5.1). Ranks affected queries
+/// Quantifies blast radius against the actual workload instead of
+/// just topology. Ranks affected queries
 /// by how often they actually ran, so a change touching a query called 12M
 /// times/day surfaces above one called 15 times/day — topology alone treats
 /// them the same.
 ///
 /// v1 scope: topology + call-frequency ranking only, computed entirely from
-/// the already-harvested DSG (DI-04) and local query history (ED-06) — no
+/// the already-harvested DSG and local query history — no
 /// DBMS access. A quantified latency estimate needs a live hypothetical-index
 /// capable EXPLAIN (Postgres + `hypopg`) and is a documented follow-up, not
-/// guessed at here (see docs/architecture/13 §5.1 — `IndexAdvisor`'s existing
+/// guessed at here (.1 — `IndexAdvisor`'s existing
 /// `confidence` precedent: report less rather than report wrong).
 public enum ImpactSimulator {
     public struct AffectedQuery: Sendable, Equatable {
@@ -30,7 +30,7 @@ public enum ImpactSimulator {
     }
 
     /// Simulates dropping/changing `nodeID` (a table or index in `graph`):
-    /// which tables would break (DI-04 blast radius) and, of the recent
+ /// which tables would break (blast radius) and, of the recent
     /// `workload`, which queries actually touch those tables — ranked by call
     /// frequency. Empty report when the node is unknown.
     public static func simulate(changing nodeID: String, in graph: SchemaGraph, workload: [String]) -> Report {

@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-/// "New Backup" sheet for a Mongo/Qdrant connection (docs/feature/04) — presented
+/// "New Backup" sheet for a Mongo/Qdrant connection — presented
 /// from the Backup manager. Pick a name and which collections; writes a bundle
 /// directory (manifest + NDJSON per collection) into the managed backups folder.
 struct DataSourceBackupSheet: View {

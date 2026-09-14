@@ -3,7 +3,7 @@ import Foundation
 /// A file-backed diagnostic log that coalesces high-frequency repeats.
 ///
 /// The AI streaming path defeats `NSLog`-per-event: a single turn produced 681
-/// `tool.arg_delta` and 191 `reasoning` events (docs/tests/crash.md). Printing
+/// `tool.arg_delta` and 191 `reasoning` events. Printing
 /// each one floods the terminal, buries the handful of lines that matter, and
 /// leaves nothing that can practically be copied out for analysis. It also
 /// costs real time on the MainActor in exactly the path being diagnosed, so the

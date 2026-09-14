@@ -6,7 +6,7 @@ public struct PostgresDriver: DatabaseDriver {
     public static let id: DriverID = .postgres
     public static let displayName = "PostgreSQL"
 
-    // Capability matrix: docs/architecture/05 §4.
+ // Capability matrix:
     public static let capabilities = Capabilities(
         transactions: true,
         cancelQuery: true,          // pg_cancel_backend on a secondary connection
@@ -39,8 +39,8 @@ public struct PostgresDialect: SQLDialect {
         "LIMIT \(limit)"
     }
 
-    /// Adds BUFFERS to the default ANALYZE prefix (DI-17, docs/architecture/13
-    /// §5.2) — buffer hit/read counts land as extra detail lines under each
+ /// Adds BUFFERS to the default ANALYZE prefix
+ /// — buffer hit/read counts land as extra detail lines under each
     /// plan node, which `ExplainTreeParser`'s indented-text parser already
     /// handles generically (no parser changes needed). Plain EXPLAIN is
     /// unaffected (still the default from `SQLDialect`).
@@ -53,7 +53,7 @@ public struct PostgresDialect: SQLDialect {
     }
 
     public func processListSQL() -> String? {
-        // Normalized columns: pid, user, db, state, query, seconds (TI-01).
+ // Normalized columns: pid, user, db, state, query, seconds.
         // Excludes our own backend so the user never kills the viewing session.
         """
         SELECT pid, usename AS user, datname AS db, state, query,
@@ -69,7 +69,7 @@ public struct PostgresDialect: SQLDialect {
         return "SELECT pg_terminate_backend(\(id))"
     }
 
-    // MARK: User management (TI-03) — roles are global (not per-database);
+ // MARK: User management — roles are global (not per-database);
     // a login-capable role is what this app calls a "user". `host` is
     // ignored: Postgres roles have no host-scoping concept.
 

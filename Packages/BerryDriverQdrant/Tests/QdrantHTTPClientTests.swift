@@ -65,7 +65,7 @@ struct QdrantHTTPClientTests {
         #expect(info.distance == "Dot")
     }
 
-    // MARK: Collection creation (docs/architecture/12 §5)
+ // MARK: Collection creation
 
     @Test func createCollectionSendsPutWithVectorConfig() async throws {
         let host = "qdrant-\(UUID().uuidString)".lowercased()
@@ -129,11 +129,11 @@ struct QdrantHTTPClientTests {
             ]
             return (stubResponse(request.url!, status: 200), stubJSONData(resultBody))
         }
-        let (points, nextToken) = try await client.scroll(
+        let page = try await client.scroll(
             collection: "docs", filter: nil, pageToken: "n:100", limit: 500, withVector: false
         )
-        #expect(points.count == 2)
-        #expect(nextToken == "n:103")
+        #expect(page.points.count == 2)
+        #expect(page.nextPageToken == "n:103")
     }
 
     @Test func scrollWithNoNextPageOffsetReturnsNilToken() async throws {
@@ -142,11 +142,11 @@ struct QdrantHTTPClientTests {
             let resultBody: [String: Any] = ["result": ["points": [], "next_page_offset": NSNull()], "status": "ok"]
             return (stubResponse(request.url!, status: 200), stubJSONData(resultBody))
         }
-        let (points, nextToken) = try await client.scroll(
+        let page = try await client.scroll(
             collection: "docs", filter: nil, pageToken: nil, limit: 500, withVector: true
         )
-        #expect(points.isEmpty)
-        #expect(nextToken == nil)
+        #expect(page.points.isEmpty)
+        #expect(page.nextPageToken == nil)
     }
 
     // MARK: Write request bodies

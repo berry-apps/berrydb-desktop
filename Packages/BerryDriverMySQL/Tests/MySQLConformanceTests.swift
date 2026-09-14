@@ -8,7 +8,7 @@ import Testing
 /// Runs against a real MySQL 8.4 from `BERRYDB_TEST_MYSQL`
 /// (see Tests/docker/compose.yml); skipped when the env var is unset.
 /// MySQL 8.x defaults to caching_sha2_password, so a successful connect here
-/// IS the M1 auth spike (docs/architecture/08 §1).
+/// IS the M1 auth spike.
 @Suite("MySQL driver conformance", .enabled(if: TestServer.mysql != nil))
 struct MySQLConformanceTests {
     private var harness: DriverConformance {
@@ -108,7 +108,7 @@ struct MySQLConformanceTests {
 
     // InnoDB's TABLE_ROWS is a persistent-statistics estimate — ANALYZE TABLE
     // refreshes it deterministically instead of racing InnoDB's background
-    // stats updater (TR-04, same reasoning as Postgres's ANALYZE/n_live_tup).
+ // stats updater (same reasoning as Postgres's ANALYZE/n_live_tup).
     @Test func tableStatsReflectsRowsEngineAndComment() async throws {
         let conn = try await harness.makeConnection()
         defer { Task { await conn.close() } }
@@ -203,7 +203,7 @@ struct MySQLConformanceTests {
         await cleanup()
     }
 
-    // TR-01: functions and triggers surface in the object tree.
+ // functions and triggers surface in the object tree.
     @Test func introspectsRoutinesAndTriggers() async throws {
         let conn = try await harness.makeConnection()
         defer { Task { await conn.close() } }
@@ -247,7 +247,7 @@ struct MySQLConformanceTests {
 
     @Test func processListRunsAndKillGuardsID() async throws {
         let dialect = MySQLDialect()
-        // The kill statement only accepts a numeric connection id (TI-01).
+ // The kill statement only accepts a numeric connection id.
         #expect(dialect.killSessionSQL(id: "42") == "KILL 42")
         #expect(dialect.killSessionSQL(id: "42; DROP TABLE x") == nil)
         #expect(dialect.killSessionSQL(id: "") == nil)

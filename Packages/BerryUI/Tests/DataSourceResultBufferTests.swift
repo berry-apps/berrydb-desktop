@@ -4,7 +4,7 @@ import Testing
 
 @testable import BerryUI
 
-/// Pure batching/column-union logic (docs/architecture/12 §7, N3) — drives
+/// Pure batching/column-union logic (N3) — drives
 /// the buffer with hand-built streams, no Docker.
 @MainActor
 @Suite("DataSourceResultBuffer")

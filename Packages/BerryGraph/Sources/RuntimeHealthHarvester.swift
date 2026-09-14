@@ -2,8 +2,8 @@ import BerryCore
 import BerryDriverKit
 import Foundation
 
-/// One instance-level health measurement at harvest time (DI-24,
-/// docs/architecture/13 §5.5) — a snapshot, not a continuous stream (§1 "not
+/// One instance-level health measurement at harvest time
+/// — a snapshot, not a continuous stream ("not
 /// a 24/7 agent").
 public struct RuntimeMetric: Sendable, Equatable {
     public let name: String
@@ -17,8 +17,8 @@ public struct RuntimeMetric: Sendable, Equatable {
 
 /// Harvests instance-level runtime health metrics at the same cadence as
 /// StatsHarvester (connect/refresh) — no new polling mechanism, just a few
-/// more queries in the harvest pass that already runs (DI-24,
-/// docs/architecture/13 §5.5). Metadata only (Q6), best-effort: a missing
+/// more queries in the harvest pass that already runs
+/// Metadata only (Q6), best-effort: a missing
 /// view or permissions error yields fewer metrics, never an error.
 public enum RuntimeHealthHarvester {
     public static func harvest(session: Session) async -> [RuntimeMetric] {

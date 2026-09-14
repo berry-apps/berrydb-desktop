@@ -7,7 +7,7 @@ import Testing
 
 /// Runs against a real dynamodb-local from `BERRYDB_TEST_DYNAMODB`
 /// (`host:port`, see Tests/docker/compose.yml); skipped when the env var is
-/// unset (docs/architecture/12 §10, CLAUDE.md · Build & test). dynamodb-local
+/// unset (see Tests/docker/compose.yml). dynamodb-local
 /// accepts any non-empty SigV4 credentials — no real AWS account needed.
 @Suite("DynamoDB driver conformance", .enabled(if: DynamoDBTestServer.dynamodb != nil))
 struct DynamoDBConformanceTests {
@@ -26,7 +26,7 @@ struct DynamoDBConformanceTests {
 
     /// Table creation is out of scope for the driver itself — same posture
     /// as Qdrant's "BerryDB only connects to a collection the user already
-    /// has" (docs/architecture/12 §5) — so conformance tests create/drop
+ /// has" — so conformance tests create/drop
     /// tables directly via the raw DynamoDB API, not through the driver.
     private func createTable(
         name: String, partitionKey: String, sortKey: String? = nil
@@ -96,7 +96,7 @@ struct DynamoDBConformanceTests {
         return (columns, rows, stats)
     }
 
-    // MARK: DatabaseDriver entry point (KN-06 "Test connection" expectation)
+ // MARK: DatabaseDriver entry point ("Test connection" expectation)
 
     @Test func driverConnectSucceedsAgainstAReachableServer() async throws {
         let driver = DynamoDBDriver()
@@ -151,7 +151,7 @@ struct DynamoDBConformanceTests {
         #expect(afterDelete.rows.isEmpty)
     }
 
-    /// Verified restriction (docs/architecture/12 §4): UPDATE/DELETE need
+ /// Verified restriction: UPDATE/DELETE need
     /// the FULL primary key in WHERE — a partition-key-only condition on a
     /// table with a sort key is rejected. This is exactly why
     /// `DynamoDBIntrospector.tableDetail` marks BOTH key columns
@@ -230,7 +230,7 @@ struct DynamoDBConformanceTests {
         #expect(ddl.contains("SORT KEY"))
     }
 
-    // MARK: Transaction-control no-op (docs/architecture/12 §4)
+ // MARK: Transaction-control no-op
 
     @Test func beginCommitRollbackAreAcceptedAsNoOpsByARealConnection() async throws {
         let connection = try await makeConnection()

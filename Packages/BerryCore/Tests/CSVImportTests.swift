@@ -5,7 +5,7 @@ import Testing
 
 @testable import BerryCore
 
-@Suite("CSV parser & importer (XN-05)")
+@Suite("CSV parser & importer")
 struct CSVImportTests {
     // MARK: - Parser
 

@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 /// Prominent, copyable error panel shown when a statement/query fails
-/// (docs/ui/02 §2). Shared by the SQL editor and the Mongo shell tab
-/// (docs/feedback/01.md item 2 — NoSQL previously only had a one-line status
+/// Shared by the SQL editor and the Mongo shell tab
+/// (item 2 — NoSQL previously only had a one-line status
 /// bar message, easy to miss).
 struct QueryErrorView: View {
     let message: String

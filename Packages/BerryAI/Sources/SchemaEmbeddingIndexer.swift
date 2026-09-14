@@ -1,8 +1,8 @@
 import BerryStore
 import Foundation
 
-/// Best-effort table/collection-name indexing for `search_schema` (docs/feature/07
-/// §13). Names are embedded lazily, right before a search needs them, so
+/// Best-effort table/collection-name indexing for `search_schema`
+/// Names are embedded lazily, right before a search needs them, so
 /// opening a connection never pays an embedding round trip it might not use.
 public struct SchemaEmbeddingIndexer: Sendable {
     private let store: BerryStore

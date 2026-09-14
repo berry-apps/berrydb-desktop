@@ -6,7 +6,7 @@ public struct MySQLDriver: DatabaseDriver {
     public static let id: DriverID = .mysql
     public static let displayName = "MySQL / MariaDB"
 
-    // Capability matrix: docs/architecture/05 §4.
+ // Capability matrix:
     public static let capabilities = Capabilities(
         transactions: true,
         cancelQuery: true,          // KILL QUERY <id> on a secondary connection
@@ -44,7 +44,7 @@ public struct MySQLDialect: SQLDialect {
     }
 
     public func processListSQL() -> String? {
-        // Normalized columns: pid, user, db, state, query, seconds (TI-01).
+ // Normalized columns: pid, user, db, state, query, seconds.
         """
         SELECT Id AS pid, User AS user, db AS db, State AS state,
                Info AS query, Time AS seconds
@@ -58,7 +58,7 @@ public struct MySQLDialect: SQLDialect {
         return "KILL \(id)"
     }
 
-    // MARK: User management (TI-03) — MySQL identity is `'user'@'host'`;
+ // MARK: User management — MySQL identity is `'user'@'host'`;
     // `host` defaults to `%` (any host) when nil, matching the common case.
 
     public func listUsersSQL() -> String? {

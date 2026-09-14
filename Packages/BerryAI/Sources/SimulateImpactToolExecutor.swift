@@ -1,7 +1,7 @@
 import BerryGraph
 import Foundation
 
-/// Client-executed `simulate_impact` (DI-16, docs/architecture/13 §6):
+/// Client-executed `simulate_impact`:
 /// quantifies the blast radius of changing a table against real recent query
 /// workload — reuses `WorkspaceViewModel.simulateImpact(_:)` (already backs
 /// Graph Explorer's "Quantified impact" panel) rather than duplicating it.

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Dropdown shown above the chat composer while typing an `@{...}` mention
-/// (AI-32, docs/draft/09.md) — sibling of `CommandSuggestionsView`, same row
+/// sibling of `CommandSuggestionsView`, same row
 /// style (plain Buttons, not `List(selection:)` — see that file's doc
 /// comment for why), kept as a separate view rather than sharing code since
 /// the row content differs (icon + name here, vs. usage hint + description

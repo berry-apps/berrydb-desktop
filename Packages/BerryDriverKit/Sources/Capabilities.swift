@@ -1,10 +1,10 @@
 /// Driver identifier — adding a new DBMS = adding a case + a new driver package,
-/// with no changes to core/UI (docs/architecture/05 §2).
+/// with no changes to core/UI.
 ///
-/// Shared across both driver families (docs/architecture/12 §2): `.dynamodb` goes
+/// Shared across both driver families: `.dynamodb` goes
 /// through `DatabaseDriver`/`DriverRegistry` (PartiQL dialect); `.mongodb`/`.qdrant`
 /// go through the sibling `DataSourceDriver`/`DataSourceRegistry` (BerryDataSourceKit)
-/// — one enum keeps `ConnectionConfig`/KN-01 persistence/connection sheet unified
+/// one enum keeps `ConnectionConfig`/ persistence/connection sheet unified
 /// instead of duplicating that plumbing per family.
 public enum DriverID: String, Sendable, Hashable, CaseIterable {
     case sqlite
@@ -19,7 +19,7 @@ public enum DriverID: String, Sendable, Hashable, CaseIterable {
 }
 
 /// Driver capabilities — the UI reads these to show/hide features; never
-/// if-else on the DBMS name (docs/architecture/05 §4, 04 §6).
+/// if-else on the DBMS name.
 public struct Capabilities: Sendable {
     public let transactions: Bool
     public let cancelQuery: Bool
@@ -29,8 +29,8 @@ public struct Capabilities: Sendable {
     public let processList: Bool
     public let serverSideCursor: Bool
     public let keyValueBrowser: Bool
-    /// Whether this driver can list/create/edit database users (TI-03,
-    /// docs/architecture/14). Gate is two-part, same shape as `processList`:
+ /// Whether this driver can list/create/edit database users
+ /// Gate is two-part, same shape as `processList`:
     /// `capabilities.userManagement && dialect.listUsersSQL() != nil`.
     public let userManagement: Bool
 

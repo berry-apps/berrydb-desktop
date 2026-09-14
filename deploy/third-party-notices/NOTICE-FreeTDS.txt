@@ -1,9 +1,28 @@
 BerryDB dynamically links libsybdb (FreeTDS DB-Library) to support SQL
-Server connections (docs/architecture/16). FreeTDS's core libraries
+Server connections. FreeTDS's core libraries
 (libsybdb/DB-Library, libct/CT-Library, libtds) are licensed under the GNU
-Lesser General Public License, version 2.1 — see LGPL-2.1.txt in this
+Lesser General Public License, version 2.1 - see LGPL-2.1.txt in this
 directory. This is distinct from the license covering FreeTDS's bundled
 command-line utilities (tsql, bsqldb, etc., GPLv2), which BerryDB does not
 use or distribute.
+
+FreeTDS is used unmodified, exactly as published upstream.
+
+HOW THIS SATISFIES LGPL-2.1 SECTION 6
+
+BerryDB embeds its own copy of libsybdb rather than loading one already
+present on your system, and the app is signed with the macOS hardened
+runtime, whose library validation will not load a library signed by anyone
+else. Section 6(b) therefore does not apply. BerryDB relies on 6(a) and 6(d)
+instead:
+
+  - The complete source of the work that uses the library is published under
+    the Apache License 2.0 at https://github.com/berry-apps/berrydb-desktop,
+    so you can modify libsybdb, rebuild BerryDB against it, and run the
+    result.
+
+  - The complete source of the exact FreeTDS version shipped with this build
+    is offered from the same place as the application download. See
+    VERSION below for which one that is.
 
 FreeTDS project: https://www.freetds.org/

@@ -3,7 +3,7 @@ import Foundation
 /// `Bundle.module`'s generated accessor traps if it can't find this
 /// package's resource bundle in a packaged, signed `.app` — see the same
 /// note on `berryModuleBundle` in BerryUI/Sources/Localization.swift, and
-/// docs/tests/crash.md for the real crash this caused. Checks the correct
+/// for the real crash this caused. Checks the correct
 /// packaged-app and dev-run locations first; `.module` itself is only a last
 /// resort (in practice, `swift test`, where it's already safe).
 private let driverKitModuleBundle: Bundle = {
@@ -18,10 +18,10 @@ private let driverKitModuleBundle: Bundle = {
 }()
 
 /// Driver-layer errors that can be classified — required by the conformance
-/// suite (docs/architecture/05 §7): cancel → `.cancelled`, dropped connection → `.connectionLost`.
+/// suite: cancel → `.cancelled`, dropped connection → `.connectionLost`.
 ///
 /// Payload strings are technical detail (often straight from the server, in
-/// English); the user-facing wrapper below is localized (UD-06).
+/// English); the user-facing wrapper below is localized.
 public enum DriverError: Error, Sendable {
     case connectionFailed(String)
     case connectionLost(String)
@@ -30,7 +30,7 @@ public enum DriverError: Error, Sendable {
     case notConnected
     case unsupported(String)
     /// The SSH bastion presented a host key different from the one trusted on
-    /// first use (docs/architecture/07 §4) — a possible man-in-the-middle. The
+ /// first use — a possible man-in-the-middle. The
     /// connection is refused; the UI offers to trust the new key explicitly.
     case sshHostKeyChanged(host: String, port: Int, stored: String, presented: String)
 }

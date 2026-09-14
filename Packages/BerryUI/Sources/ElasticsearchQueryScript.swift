@@ -1,7 +1,7 @@
 import BerryDataSourceKit
 import Foundation
 
-/// The Elasticsearch query DSL script format (docs/architecture/17 §5) — a
+/// The Elasticsearch query DSL script format — a
 /// JSON document that is the canonical, runnable form of an Elasticsearch
 /// query/command, the search-engine sibling of `QdrantQuery`. It is what the
 /// JSON query tab edits, what history stores verbatim, and what a saved

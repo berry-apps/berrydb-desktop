@@ -1,6 +1,6 @@
 import Foundation
 
-/// One step of an AI turn's "working" activity (docs/feature/09) — one
+/// One step of an AI turn's "working" activity — one
 /// model narration (`progress.note`) plus every tool call that ran without
 /// its own narration, in arrival order. See `AIWorkBlock` for the state
 /// machine that produces these.
@@ -28,10 +28,10 @@ public struct AIWorkStep: Identifiable, Sendable, Equatable {
     /// The only source of tool identity for this step — a step's action
     /// badges are keyed on and de-duplicated by this array alone. A
     /// separately-mutated `toolNames` list used to diverge from this exact
-    /// data (PR #112's root cause: a round-closing path updated one but not
+    /// data (a round-closing path updated one but not
     /// the other); `toolNames` below is now a read-only derivation of it.
     public var actions: [AIToolAction]
-    /// Artifacts this step's tool(s) produced (docs/feature/09) — what makes
+ /// Artifacts this step's tool(s) produced — what makes
     /// the sub-block's action badge openable.
     public var artifactRefs: [ArtifactRef]
     public internal(set) var phase: Phase
@@ -63,7 +63,7 @@ public struct AIWorkStep: Identifiable, Sendable, Equatable {
     }
 }
 
-/// One AI turn's whole "working" state machine (docs/feature/09) — the
+/// One AI turn's whole "working" state machine — the
 /// step list plus the live/settled timer. Owned by `AITurn.work`; every
 /// mutation goes through this type's own methods so a step's lifecycle
 /// (open → closed) and the block's timer (unset → set once) are each
@@ -79,7 +79,7 @@ public struct AIWorkStep: Identifiable, Sendable, Equatable {
 ///   step the instant it closes).
 /// - A bare tool call (no preceding note) never closes the open step — only
 ///   a note or a round/turn boundary does. See `toolCallStarted`'s doc
-///   comment (PR #108(a): a narration-less round used to absorb the NEXT
+///   comment (a narration-less round previously absorbed the NEXT
 ///   round's note because nothing closed it first).
 public struct AIWorkBlock: Sendable, Equatable {
     public private(set) var steps: [AIWorkStep] = []

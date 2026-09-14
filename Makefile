@@ -6,7 +6,7 @@ build:
 test:
 	swift test
 
-# Performance benchmarks against the Docker matrix (docs/architecture/01 §2).
+# Performance benchmarks against the Docker matrix.
 # Reports throughput / connect latency / memory; needs the test containers up
 # (Tests/docker/compose.yml). Override row count with BENCH_ROWS=...
 bench:
@@ -51,8 +51,8 @@ release:
 upload:
 	python3 deploy/upload-release.py
 
-# Guard the app-size + zero-runtime-deps targets (01 §2, 08 §6): fail if the
-# release .app exceeds 100 MB or links a non-system runtime.
+# Guard the app-size + zero-runtime-deps targets: fail if the
+# release .app exceeds 200 MB or links a non-system runtime.
 size:
 	sh scripts/check-size.sh
 

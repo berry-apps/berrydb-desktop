@@ -1,7 +1,7 @@
 import BerryDriverKit
 import Foundation
 
-/// SQLite introspection via sqlite_master + PRAGMA (docs/architecture/05 §5).
+/// SQLite introspection via sqlite_master + PRAGMA.
 public struct SQLiteIntrospector: Introspector {
     let connection: SQLiteConnection
     private let dialect = SQLiteDialect()
@@ -69,7 +69,7 @@ public struct SQLiteIntrospector: Introspector {
         return TableDetail(ref: ref, columns: columns, indexes: indexes, foreignKeys: foreignKeys)
     }
 
-    /// TR-04: SQLite has no catalog row-count estimate (no `ANALYZE`-free
+ /// SQLite has no catalog row-count estimate (no `ANALYZE`-free
     /// stats table), so this is an exact `COUNT(*)` rather than an estimate —
     /// strictly better than an estimate, just potentially slower on a huge
     /// table. Size comes from the `dbstat` virtual table, which needs

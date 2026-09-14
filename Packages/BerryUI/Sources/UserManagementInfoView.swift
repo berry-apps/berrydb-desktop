@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Read-only sibling of `UserManagementView` (TI-03 Phase D,
-/// docs/architecture/14) for a connection with no in-DB user system —
+/// Read-only sibling of `UserManagementView` (Phase D,
+/// for a connection with no in-DB user system
 /// DynamoDB (AWS IAM) and Qdrant (API key). A static note instead of a
 /// list/create/drop UI: there is nothing to list, nothing to reload.
 struct UserManagementInfoView: View {

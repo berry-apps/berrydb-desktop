@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// A named, reusable SQL snippet (ED-07) — docs/architecture/07 §3.
+/// A named, reusable SQL snippet
 /// Scoped to a profile when `profileID` is set, otherwise global (available
 /// from any connection). Stored locally only; never leaves the machine.
 public struct SavedQuery: Identifiable, Codable, Sendable {

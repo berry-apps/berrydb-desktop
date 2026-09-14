@@ -23,7 +23,7 @@ public struct QueryStats: Sendable {
     }
 }
 
-/// Result stream event — docs/architecture/05 §1.
+/// Result stream event
 /// Every kind of statement returns this stream (DDL/DML only emit `.complete`).
 public enum ResultEvent: Sendable {
     case columns([ColumnMeta])

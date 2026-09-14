@@ -5,13 +5,13 @@ import Testing
 @testable import BerryDriverMongo
 
 /// `MongoHelloResponse` field extraction — replica-set primary discovery v1
-/// (docs/architecture/12 §3). Fixtures below are real `hello` JSON captured
-/// from a live `mongod` this session (both a standalone and a single-node
+/// Fixtures below are real `hello` JSON captured
+/// from a live `mongod` (both a standalone and a single-node
 /// replica set, via `docker exec ... mongosh --eval "EJSON.stringify(db.hello())"`),
 /// not assumed from memory — trimmed to the fields relevant here, with the
 /// rest of the real payload's shape preserved so this exercises the same
 /// `JSONSerialization` → `BerryDocument(jsonObject:)` decoding path the
-/// pipeline-mode query UI already relies on (docs/architecture/12 §7).
+/// pipeline-mode query UI already relies on.
 @Suite("MongoHelloResponse — hello field extraction")
 struct MongoHelloResponseTests {
     private func decode(_ json: String) -> BerryDocument {
@@ -59,12 +59,9 @@ struct MongoHelloResponseTests {
         #expect(info.setName == "berryrs")
     }
 
-    /// A secondary member's `hello` (documented MongoDB shape — this exact
-    /// combination wasn't independently captured live this session, since
-    /// the Docker conformance target is a single-node replica set that is
-    /// always its own primary; the individual fields/types above were each
-    /// verified live). This is what drives the "reconnect to the named
-    /// primary" branch in `MongoWireClientTests`.
+    /// A secondary member's `hello` (documented MongoDB wire shape).
+    /// This drives the "reconnect to the named primary" branch in
+    /// `MongoWireClientTests`.
     @Test func secondaryReportsIsWritablePrimaryFalseAndNamesTheRealPrimary() {
         let json = """
         {"setName":"berryrs","setVersion":1,"isWritablePrimary":false,"secondary":true,"primary":"mongo-rs0.internal:27017","me":"mongo-rs1.internal:27017","maxWireVersion":21,"ok":1}

@@ -6,7 +6,7 @@ import Foundation
 
 /// Adapters that connect BerryCore's sink protocols to BerryStore.
 /// They live in the UI/wiring layer on purpose: core and store stay
-/// decoupled siblings (docs/architecture/04 §1).
+/// decoupled siblings.
 struct StoreHistorySink: QueryHistorySink {
     let store: BerryStore
 
@@ -27,8 +27,8 @@ struct StoreHistorySink: QueryHistorySink {
     }
 }
 
-/// Digital Twin seed (DI-08): normalizes the object list, hashes it and lets
-/// the store dedupe by digest (docs/architecture/11 §6).
+/// Digital Twin seed: normalizes the object list, hashes it and lets
+/// the store dedupe by digest.
 struct StoreSnapshotSink: SchemaSnapshotSink {
     let store: BerryStore
 

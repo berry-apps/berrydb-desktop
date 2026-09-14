@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryCore
 
-@Suite("Dialect data types (CT-05)")
+@Suite("Dialect data types")
 struct SQLTypesTests {
     @Test func postgresIncludesPgvectorAndJsonb() {
         let types = SQLTypes.types(for: .postgres)

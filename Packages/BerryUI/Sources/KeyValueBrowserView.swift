@@ -1,7 +1,7 @@
 import BerryKeyValueKit
 import SwiftUI
 
-/// Redis key browser (docs/architecture/15 §4) — the key-value sibling of
+/// Redis key browser — the key-value sibling of
 /// `CollectionTabView` (Mongo/Qdrant), but much simpler: no collections, no
 /// tabs, just a `SCAN`-paginated key list (N3: never `KEYS`) and a per-type
 /// value viewer. Shown directly as the main content when a key-value session
@@ -17,12 +17,12 @@ struct KeyValueBrowserView: View {
     let onTTL: (_ key: String) async -> TimeInterval?
     /// Preview text the user sees before confirming a write/delete — a
     /// literal redis-cli-style command string, same "always show the native
-    /// command" rule as `DataSourceCommandPreview` (docs/architecture/12 §6).
+ /// command" rule as `DataSourceCommandPreview`.
     let preview: (KeyValueChangeSet) -> String
     let onWrite: (KeyValueChangeSet) async -> String?
     /// Switches the numbered database (0–15) without reconnecting — shown
     /// only when `capabilities.numberedDatabases` (v1 gap closed:
-    /// docs/architecture/15 §5 used to require reconnecting via
+ /// used to require reconnecting via
     /// `ConnectionSheet` to change database).
     let onSelectDatabase: (Int) async -> String?
 
@@ -573,7 +573,7 @@ private struct StreamEditor: View {
             .textSelection(.enabled)
 
             // Entry deletion (XDEL) is deferred — streams are typically
-            // append-only/trimmed logs, not row-edited (docs/architecture/15 §5).
+ // append-only/trimmed logs, not row-edited.
             if canWrite {
                 AddRow(
                     placeholder1: L("Field"), placeholder2: L("Value"),

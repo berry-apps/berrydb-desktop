@@ -3,7 +3,7 @@ import BerryDriverKit
 import BerryStore
 import Foundation
 
-/// User-facing approval for an AI-proposed statement (docs/architecture/09 §6).
+/// User-facing approval for an AI-proposed statement.
 /// Rendered inline in the AI panel: the SQL is shown with [Deny]/[Run]. Writes
 /// and DDL ALWAYS prompt; a plain SELECT may auto-approve per setting.
 @MainActor
@@ -12,11 +12,11 @@ public protocol AIApprovalGate {
 }
 
 /// Snapshot of the active SQL editor tab, handed from BerryUI (which owns the
-/// editor) to be serialized for `read_current_tab` (docs/agents/architecture/09 §3.1).
+/// editor) to be serialized for `read_current_tab`.
 /// Declared here because `QueryToolExecutor` serializes it; BerryUI must not leak
 /// `EditorDocument`/`WorkspaceViewModel` across the one-way module boundary.
 public struct ActiveTabSnapshot: Sendable {
-    /// `WorkspaceTab.id` (docs/feature/08, AI-27) — defaulted so existing call
+ /// `WorkspaceTab.id` — defaulted so existing call
     /// sites that predate tab-identity exposure keep compiling unchanged.
     public let tabID: String
     public let tabTitle: String
@@ -39,12 +39,12 @@ public struct ActiveTabSnapshot: Sendable {
     }
 }
 
-/// The open editor/table panes for `get_open_tabs` (docs/agents/architecture/09 §5).
+/// The open editor/table panes for `get_open_tabs`.
 /// Panes are numbered as the UI shows them (top→bottom, left→right — "1" is the
 /// top pane) so the assistant can ask "which pane?" when a split is ambiguous.
 public struct OpenTabsSnapshot: Sendable {
     public struct Pane: Sendable {
-        /// `WorkspaceTab.id` (docs/feature/08, AI-27) — defaulted so existing
+ /// `WorkspaceTab.id` — defaulted so existing
         /// call sites that predate tab-identity exposure keep compiling unchanged.
         public let id: String
         public let number: Int
@@ -78,18 +78,18 @@ public enum AIDirectStatementResult {
 }
 
 /// Runs the gateway's tool calls locally against the current `Session`, applying
-/// every safety layer in docs/architecture/09 §4/§6: `get_schema` is metadata
+/// every safety layer in: `get_schema` is metadata
 /// only, `propose_sql` never runs, `run_sql` goes through `QueryService`
 /// (DangerGuard + auto-LIMIT + history) behind approval and returns a ≤100-row
-/// sample, and `get_sample_rows` runs only when AI-06 is opted in.
+/// sample, and `get_sample_rows` runs only when is opted in.
 @MainActor
 public final class QueryToolExecutor: AIToolExecutor {
-    /// Per-connection AI settings (AI-06/AI-07). Mutable so the panel's toggles
+ /// Per-connection AI settings. Mutable so the panel's toggles
     /// take effect on the next tool call.
     public struct Options: Sendable {
-        /// AI-06: send real row data (get_sample_rows). Opt-in per connection.
+ /// send real row data (get_sample_rows). Opt-in per connection.
         public var allowSampleRows: Bool
-        /// Auto-approve plain, safe SELECTs without a prompt (§6).
+ /// Auto-approve plain, safe SELECTs without a prompt.
         public var autoApproveSelects: Bool
 
         public init(allowSampleRows: Bool = false, autoApproveSelects: Bool = true) {
@@ -98,9 +98,9 @@ public final class QueryToolExecutor: AIToolExecutor {
         }
     }
 
-    /// Sample of a run_sql result returned to the backend (09 §4).
+ /// Sample of a run_sql result returned to the backend.
     private static let sampleLimit = 100
-    /// Fixed cap for get_sample_rows (09 §4).
+ /// Fixed cap for get_sample_rows.
     private static let sampleRowsLimit = 20
     /// Bounded list size for get_schema mode="overview" (Task 6.1/6.2): large
     /// enough for any realistic schema, small enough to keep the response —
@@ -120,13 +120,13 @@ public final class QueryToolExecutor: AIToolExecutor {
     /// create one, and that tab was always landing as "Untitled". The derived
     /// name is the only one available on that path.
     private let onPropose: (String, String?) -> Void
-    /// Tab-aware closures (docs/agents/architecture/09 §5). BerryUI supplies the
+ /// Tab-aware closures. BerryUI supplies the
     /// real ones; defaults keep the DB-only tools working without a UI.
     private let readActiveTab: () -> ActiveTabSnapshot?
     private let readOpenTabs: () -> OpenTabsSnapshot?
     private let activeTabStatements: (String) -> [String]
     private let createDebugTab: (String, String?) -> Void
-    /// AI-34 follow-up: opens a diagram directly in its own zoomable tab —
+ /// follow-up: opens a diagram directly in its own zoomable tab
     /// same underlying action as the inline chat block's "Open in Tab"
     /// button. Without this the model's only tab-creation tool was
     /// `create_debug_tab`, whose tab type has no Mermaid rendering; reused
@@ -139,7 +139,7 @@ public final class QueryToolExecutor: AIToolExecutor {
     private let listCollections: (() -> [String])?
     public var options: Options
 
-    /// AI-30 (docs/draft/09.md): local artifact persistence — nil `store`/
+ /// local artifact persistence — nil `store`/
     /// `profileID` (no store configured, or no active connection profile)
     /// makes every artifact-recording call a silent no-op, since tracking an
     /// artifact is never a reason to fail the underlying tool call.
@@ -231,7 +231,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         self.aiQueryTimeoutSeconds = queryTimeoutSeconds
     }
 
-    /// The tools this executor advertises to the gateway (docs/agents/architecture/05 §4).
+ /// The tools this executor advertises to the gateway.
     public var toolSpecs: [AIToolSpec] {
         if session == nil {
             return [
@@ -453,8 +453,8 @@ public final class QueryToolExecutor: AIToolExecutor {
         return .ok(Self.json(tabResultPayload(["proposed": true])))
     }
 
-    /// Folds the tab identity `readActiveTab()` now reports (docs/feature/08,
-    /// AI-27/28) into a propose_sql/create_debug_tab JSON result, so the
+ /// Folds the tab identity `readActiveTab()` now reports
+ /// into a propose_sql/create_debug_tab JSON result, so the
     /// assistant can say "created query in tab {xxx}" and reference it
     /// correctly on a later turn. Best-effort: a nil snapshot (e.g. the
     /// mutation landed in a tab kind `readActiveTab()` doesn't cover, such as
@@ -465,7 +465,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         payload["tab_id"] = snapshot.tabID
         payload["tab_title"] = snapshot.tabTitle
         if let pane = snapshot.pane { payload["pane"] = pane }
-        // AI-30: the tab now holds whatever propose_sql/create_debug_tab just
+ // the tab now holds whatever propose_sql/create_debug_tab just
         // wrote — record that as the artifact's next version so the bubble
         // can link to it and it survives a history reload.
         if let kind = Self.artifactKind(forTabID: snapshot.tabID),
@@ -508,7 +508,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         }
     }
 
-    // MARK: - get_sample_rows (AI-06 opt-in; the opt-in is the consent)
+ // MARK: - get_sample_rows (opt-in; the opt-in is the consent)
 
     private func sampleRows(table name: String?, lease: AIExecutionLease) async -> ToolOutcome {
         guard options.allowSampleRows else { return .denied }
@@ -528,9 +528,9 @@ public final class QueryToolExecutor: AIToolExecutor {
         }
     }
 
-    // MARK: - SQL-tab tools (docs/agents/architecture/09 — AI-17/18/19)
+ // MARK: - SQL-tab tools
 
-    /// AI-17: snapshot of the open editor tab. Metadata only, no DB access.
+ /// snapshot of the open editor tab. Metadata only, no DB access.
     private func readCurrentTab() -> ToolOutcome {
         guard let snapshot = readActiveTab() else {
             return .failed("No SQL editor tab is currently active")
@@ -547,7 +547,7 @@ public final class QueryToolExecutor: AIToolExecutor {
     }
 
     /// List every open pane, numbered as the UI shows them, so the assistant can
-    /// disambiguate a split before acting (docs/agents/architecture/09 §5).
+ /// disambiguate a split before acting.
     private func openTabsList() -> ToolOutcome {
         let panes = readOpenTabs()?.panes ?? []
         let serialized = panes.map { pane -> [String: Any] in
@@ -568,7 +568,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         ]))
     }
 
-    /// AI-17: run the tab's statements for `which` ("all"|"selection"|"cursor"),
+ /// run the tab's statements for `which` ("all"|"selection"|"cursor"),
     /// each through the same DangerGuard→approval→QueryService chain as run_sql —
     /// no shortcut past approval, and stop at the first denial or error.
     private func runTabStatements(which: String?, lease: AIExecutionLease) async -> ToolOutcome {
@@ -600,7 +600,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         return .ok(Self.json(outcome))
     }
 
-    /// AI-18: EXPLAIN the statement under the cursor as a PlanNode tree. Always
+ /// EXPLAIN the statement under the cursor as a PlanNode tree. Always
     /// asks (EXPLAIN ANALYZE actually runs the statement); classifies the original
     /// SQL so the danger level is real. Keeps raw columns/rows for the tree parser.
     private func explainQuery(analyze: Bool, lease: AIExecutionLease) async -> ToolOutcome {
@@ -610,7 +610,7 @@ public final class QueryToolExecutor: AIToolExecutor {
             return .failed("No statement under the cursor to explain")
         }
         let danger = DangerGuard.classify(sql, isProduction: session.isProduction)
-        // Same CT-04 reasoning as `approve(_:)` above: a `.typedConfirm`
+ // Same reasoning as `approve(_:)` above: a `.typedConfirm`
         // can't be satisfied by the chat's Deny/Run-only card, and letting
         // it through to QueryService's `dangerPreconfirmed: true` call below
         // would surface a second, invisible, blocking NSAlert instead.
@@ -650,7 +650,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         }
     }
 
-    /// AI-19: create a fresh debug tab with the given SQL (never reuses a tab).
+ /// create a fresh debug tab with the given SQL (never reuses a tab).
     private func createDebugTabTool(sql: String?, title: String?, lease: AIExecutionLease) -> ToolOutcome {
         guard let sql, !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .failed("create_debug_tab requires 'sql'")
@@ -660,7 +660,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         return .ok(Self.json(tabResultPayload(["created": true])))
     }
 
-    /// AI-34 follow-up. No `tabResultPayload`/artifact-linking here (unlike
+ /// follow-up. No `tabResultPayload`/artifact-linking here (unlike
     /// `createDebugTabTool` above) — `readActiveTab()`/`artifactKind(forTabID:)`
     /// only understand the SQL/Mongo/Qdrant editor tab kinds, and a Mermaid
     /// tab has no query text or run result to track as an artifact version.
@@ -698,9 +698,9 @@ public final class QueryToolExecutor: AIToolExecutor {
             .trimmingCharacters(in: CharacterSet(charactersIn: ";,()"))
     }
 
-    // MARK: - Artifacts (AI-30, docs/draft/09.md)
+ // MARK: - Artifacts
 
-    /// `WorkspaceTab.id` is `"<prefix>:<uuid>"` (docs/feature/08) — the prefix
+ /// `WorkspaceTab.id` is `"<prefix>:<uuid>"` — the prefix
     /// alone says which query/tab kind a tab is, without this package needing
     /// to see `WorkspaceTab` itself (BerryAI must not import BerryUI). Nil
     /// for every other tab kind (table/collection/tool/alterTable), which
@@ -760,7 +760,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         return (artifactID, version.versionNumber)
     }
 
-    /// AI-30: records this run_sql call as a new artifact version — onto the
+ /// records this run_sql call as a new artifact version — onto the
     /// active tab's artifact if one is open and is a query/tab kind, else a
     /// per-session ad-hoc artifact.
     private func recordRunSQLArtifact(sql: String, into payload: inout [String: Any]) {
@@ -779,7 +779,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         payload["artifact_version"] = recorded.versionNumber
     }
 
-    /// AI-30: one artifact version per `run_tab_statements` call (not per
+ /// one artifact version per `run_tab_statements` call (not per
     /// individual statement) — payload is every statement joined, so a
     /// version mirrors exactly what "run all"/"run selection" actually ran.
     /// No ad-hoc fallback: this tool inherently runs an open tab's
@@ -799,7 +799,7 @@ public final class QueryToolExecutor: AIToolExecutor {
 
     /// Looks up an artifact by id — its metadata plus the latest version, or
     /// a specific `versionNumber` if requested (the "agent can recall what it
-    /// wrote" half of AI-29/30). Read-only, local metadata only.
+ /// wrote" half). Read-only, local metadata only.
     private func getArtifact(artifactID: String?, versionNumber: String?) -> ToolOutcome {
         guard let artifactID, let uuid = UUID(uuidString: artifactID) else {
             return .failed("get_artifact requires a valid 'artifact_id'")
@@ -829,7 +829,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         return .ok(Self.json(object))
     }
 
-    /// AI-33 (docs/draft/09.md): a cheap first look at a large artifact
+ /// a cheap first look at a large artifact
     /// before reading it — size/chunk-count only, no content. Mirrors
     /// `get_schema`'s overview/ddl split: this is the "overview" half,
     /// `read_artifact_chunk` is the "ddl" (detail-on-demand) half.
@@ -854,7 +854,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         return .ok(Self.json(object))
     }
 
-    /// AI-33: one bounded chunk of a version's result — one chunk per
+ /// one bounded chunk of a version's result — one chunk per
     /// statement for `run_tab_statements`'s aggregated `{"statements":[...]}`
     /// shape (the only place a single version's result can genuinely outgrow
     /// one tool-result call: each statement is already capped by
@@ -918,12 +918,12 @@ public final class QueryToolExecutor: AIToolExecutor {
     // MARK: - Safety chain (shared by run_sql and run_tab_statements)
 
     /// DangerGuard classification + approval for one statement. Writes/DDL always
-    /// prompt; a plain safe SELECT may auto-approve (§6).
+ /// prompt; a plain safe SELECT may auto-approve.
     ///
-    /// `.typedConfirm` (CT-04 — DROP/TRUNCATE on production) is denied
+ /// `.typedConfirm` (DROP/TRUNCATE on production) is denied
     /// outright rather than routed through the chat's approval card: that
     /// card only has Deny/Run buttons, no field to type the object name, so
-    /// it cannot actually satisfy CT-04. If "Run anyway" were wired through
+ /// it cannot actually satisfy. If "Run anyway" were wired through
     /// to `QueryService.execute(dangerPreconfirmed: true)` regardless, the
     /// production-rules-never-downgrade rule there (correctly) leaves the
     /// statement classified `.typedConfirm`, so `QueryService` falls through
@@ -935,7 +935,7 @@ public final class QueryToolExecutor: AIToolExecutor {
     /// `pending_tool_ttl` gives up — this is the "AI chat hangs on
     /// thinking forever" failure mode. Denying here means the agent reports
     /// back that this statement needs to be run manually, which is also the
-    /// correct outcome for CT-04: typing the object name to confirm a
+ /// correct outcome for: typing the object name to confirm a
     /// destructive production DDL is deliberately a manual-only action.
     private func approve(_ sql: String) async -> Bool {
         let isProduction = session?.isProduction ?? false
@@ -957,7 +957,7 @@ public final class QueryToolExecutor: AIToolExecutor {
     /// this happens, confirming the stall is client-side, not a real slow
     /// query. Every later `run_sql` queues behind the same stuck connection,
     /// so the model just keeps retrying and re-hanging. Same shape of bug as
-    /// the embeddings HTTP client having no timeout (api PR #52), fixed here
+    /// the embeddings HTTP client having no timeout, fixed here
     /// via the driver's *existing* cancellation path: `execute(_:)`'s stream
     /// already calls `cancelCurrentQuery()` on cancellation
     /// (`PostgresDriverConnection.swift`), so cancelling the losing side of
@@ -1027,7 +1027,7 @@ public final class QueryToolExecutor: AIToolExecutor {
     }
 
     /// `approve(_:)` already gated this exact statement through the chat's
-    /// own card (§6) using the same `DangerGuard.classify` QueryService
+ /// own card using the same `DangerGuard.classify` QueryService
     /// recomputes internally — without `dangerPreconfirmed`, a soft
     /// data-destroying statement (DELETE/DROP/TRUNCATE, non-production)
     /// hit a SECOND, separate confirmation: QueryService's own
@@ -1036,7 +1036,7 @@ public final class QueryToolExecutor: AIToolExecutor {
     /// later one queued behind the same MainActor) stalled until the
     /// gateway's pending-tool timeout gave up. Production/no-WHERE
     /// guardrails are untouched — `dangerPreconfirmed` only downgrades the
-    /// soft-delete reasons (docs/architecture/07 §6: "production rules
+ /// soft-delete reasons ("production rules
     /// never downgrade").
     @MainActor
     private func runDatabaseQuery(_ sql: String, session: Session, lease: AIExecutionLease) async throws -> [String: Any] {
@@ -1081,7 +1081,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         value.displayString ?? NSNull()
     }
 
-    /// PlanNode is not Codable, so build the tree JSON by hand (09 §3.3).
+ /// PlanNode is not Codable, so build the tree JSON by hand.
     private static func planJSON(_ nodes: [PlanNode]) -> [[String: Any]] {
         nodes.map { ["id": $0.id, "text": $0.text, "children": planJSON($0.children)] }
     }

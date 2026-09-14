@@ -1,25 +1,25 @@
 import BerryStore
 import SwiftUI
 
-/// Saved-query library (ED-07): reusable SQL snippets, scoped to the active
+/// Saved-query library: reusable SQL snippets, scoped to the active
 /// connection or global. Open a snippet into a new editor tab, save the
 /// current editor's SQL, or delete. Local-only — nothing is uploaded.
 struct SavedQueriesView: View {
     /// Snapshot loaded when the sheet opens; refreshed after each mutation.
     @State private var queries: [SavedQuery]
     let currentSQL: String?
-    /// Opens the saved query as a linked tab (docs/ui) — like opening a file.
+ /// Opens the saved query as a linked tab — like opening a file.
     let onOpen: (SavedQuery) -> Void
     let onSave: (_ name: String, _ sql: String, _ folder: String?, _ global: Bool) -> Void
     let onDelete: (UUID) -> Void
     let onRename: (_ id: UUID, _ name: String) -> Void
     let reload: () -> [SavedQuery]
-    /// Close this tool tab (docs/ui/02 §4).
+ /// Close this tool tab.
     let onClose: () -> Void
 
     @State private var search = ""
     @State private var showSaveForm = false
-    /// In-place rename state (docs/ui).
+ /// In-place rename state.
     @State private var renamingID: UUID?
     @State private var renameDraft = ""
 

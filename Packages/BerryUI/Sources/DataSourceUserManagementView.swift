@@ -1,8 +1,8 @@
 import BerryDataSourceKit
 import SwiftUI
 
-/// User/role list for the DataSource family (TI-03 Phase C,
-/// docs/architecture/14) — the Mongo-shaped sibling of `UserManagementView`.
+/// User/role list for the DataSource family (Phase C,
+/// — the Mongo-shaped sibling of `UserManagementView`.
 /// Works off a plain `[DataSourceUserInfo]` array instead of a SQL
 /// `ResultBuffer`: Mongo has no single-text-query channel to stream results
 /// through, `listUsers()` just returns the array directly.

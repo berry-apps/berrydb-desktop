@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryCore
 
-@Suite("SQL formatter (ED-08)")
+@Suite("SQL formatter")
 struct SQLFormatterTests {
     @Test func breaksMajorClausesOntoOwnLines() {
         let out = SQLFormatter.format("select id, name from users where id = 1 order by name")
@@ -67,7 +67,7 @@ struct SQLFormatterTests {
     }
 
     /// A formatted statement must not gain spaces that break tokens the parser
-    /// reads as a unit — the whole point of the ED-08 fix.
+ /// reads as a unit — the whole point of the fix.
     @Test func formattedOutputHasNoBrokenOperators() {
         let out = SQLFormatter.format("select * from t where a>=1 and c::int=b->>'x'")
         for broken in ["> =", "< =", ": :", "- >", "| |", "> >"] {

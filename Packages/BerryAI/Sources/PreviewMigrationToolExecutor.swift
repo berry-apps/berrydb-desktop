@@ -2,7 +2,7 @@ import BerryCore
 import BerryGraph
 import Foundation
 
-/// Client-executed `preview_migration` (DI-15, docs/architecture/13 §6):
+/// Client-executed `preview_migration`:
 /// reviews a proposed new column on an existing table before it's executed —
 /// runs the same AI Schema Review analyzer the table designer uses
 /// (`WorkspaceViewModel.migrationPreview(editing:)`), reusing its existing

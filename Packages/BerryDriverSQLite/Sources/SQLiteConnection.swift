@@ -17,7 +17,7 @@ public actor SQLiteConnection: DriverConnection {
     nonisolated let handle: SQLiteHandle
     private var isClosed = false
 
-    /// Batch size pushed to the stream (principle N3 — docs/architecture/04 §4).
+ /// Batch size pushed to the stream (principle N3).
     static let batchSize = 500
 
     public init(path: String) throws {
@@ -38,7 +38,7 @@ public actor SQLiteConnection: DriverConnection {
         self.handle = SQLiteHandle(db: db)
     }
 
-    // MARK: - Execute (docs/architecture/06 · L2)
+ // MARK: - Execute
 
     public nonisolated func execute(_ sql: String) -> AsyncThrowingStream<ResultEvent, Error> {
         AsyncThrowingStream { continuation in

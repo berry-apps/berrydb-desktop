@@ -6,10 +6,10 @@ import Testing
 
 @testable import BerryGraph
 
-/// Query Analyzer end-to-end (docs/architecture/11 §7, DI-06): runs real EXPLAIN
+/// Query Analyzer end-to-end: runs real EXPLAIN
 /// against an in-process SQLite database and confirms the full-scan signal flips
 /// once a covering index exists. Deterministic — no Docker.
-@Suite("Plan harvester on SQLite (DI-06)")
+@Suite("Plan harvester on SQLite")
 struct PlanHarvesterTests {
     private func makeSession() async throws -> Session {
         DriverRegistry.register(SQLiteDriver.self)

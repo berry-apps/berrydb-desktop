@@ -1,6 +1,6 @@
 import Foundation
 
-/// In-memory Directed Schema Graph (docs/architecture/11 §5). Pure value type;
+/// In-memory Directed Schema Graph. Pure value type;
 /// pure-Swift algorithms sized for schema graphs (10²–10⁵ nodes, Q8). No UI,
 /// no network, no DB — callers feed it harvested metadata and query it.
 public struct SchemaGraph: Sendable {
@@ -73,7 +73,7 @@ public struct SchemaGraph: Sendable {
         return visited
     }
 
-    /// Blast radius (DI-04): everything that depends on `id` and would break if
+ /// Blast radius: everything that depends on `id` and would break if
     /// it were dropped — i.e. reverse reachability over dependency edges. By
     /// default follows FK and view-derivation; pass workload kinds once they are
     /// harvested to include queries that read/write the object.
@@ -195,18 +195,18 @@ public struct SchemaGraph: Sendable {
         return result
     }
 
-    /// Circular dependencies (Schema Analyzer, DI-07): SCCs of ≥2 nodes over FK
+ /// Circular dependencies (Schema Analyzer): SCCs of ≥2 nodes over FK
     /// edges — a genuine reference cycle.
     public func circularDependencies() -> [[String]] {
         stronglyConnectedComponents(following: [.references]).filter { $0.count > 1 }
     }
 
-    // MARK: - Removal (DI-15, hypothetical/preview graphs)
+ // MARK: - Removal (hypothetical/preview graphs)
 
     /// Removes a node and every edge touching it (either direction). No-op if
     /// the node doesn't exist. Used to replace part of a graph with a
     /// hypothetical version — e.g. swapping a table's columns for an edited
-    /// design before it's applied (docs/architecture/13 §5.2).
+ /// design before it's applied.
     public mutating func removeNode(_ id: String) {
         guard nodes.removeValue(forKey: id) != nil else { return }
         edges.removeAll { $0.src == id || $0.dst == id }

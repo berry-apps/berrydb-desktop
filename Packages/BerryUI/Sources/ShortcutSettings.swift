@@ -2,7 +2,7 @@ import AppKit
 import BerryStore
 import SwiftUI
 
-/// Customizable menu shortcuts (docs/ui): every remappable action, its default
+/// Customizable menu shortcuts: every remappable action, its default
 /// combo, and the persisted overrides. Editor-internal keys (⌘↩ run, ⌃Space
 /// completion, ↑↓↩⎋ in the popup) stay fixed.
 public enum ShortcutAction: String, CaseIterable, Identifiable, Sendable {
@@ -133,7 +133,7 @@ public final class ShortcutStore {
     }
 }
 
-/// The Settings pane (⌘,) for remapping shortcuts (docs/ui): click a combo to
+/// The Settings pane (⌘) for remapping shortcuts: click a combo to
 /// record the next keystroke; Esc cancels; the arrow restores the default.
 public struct ShortcutSettingsView: View {
     @AppStorage("berry.shortcutsRev") private var revision = 0

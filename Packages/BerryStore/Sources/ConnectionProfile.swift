@@ -3,13 +3,13 @@ import Foundation
 import GRDB
 
 /// Persisted connection profile — must NEVER contain a password/secret
-/// (docs/architecture/07 §2: secrets live only in the Keychain, looked up by UUID).
+/// (secrets live only in the Keychain, looked up by UUID).
 public struct ConnectionProfile: Identifiable, Hashable, Codable, Sendable {
     public var id: UUID
     public var driverID: String
     public var name: String
     public var groupName: String?
-    /// Environment label (KN-07): "production" triggers a stricter DangerGuard.
+ /// Environment label: "production" triggers a stricter DangerGuard.
     public var envColor: String?
     public var sortOrder: Int
 
@@ -21,24 +21,24 @@ public struct ConnectionProfile: Identifiable, Hashable, Codable, Sendable {
     public var port: Int?
     public var username: String?
     public var database: String?
-    /// KN-04 — raw value of `TLSMode`; defaults to `prefer`.
+ /// raw value of `TLSMode`; defaults to `prefer`.
     public var tlsMode: String
-    /// KN-04 — path to a custom CA certificate (PEM) for verifying servers.
-    /// A file path, not a secret, so it lives in the profile (07 §2).
+ /// path to a custom CA certificate (PEM) for verifying servers.
+ /// A file path, not a secret, so it lives in the profile.
     public var tlsCACertPath: String?
-    /// KN-04 — client certificate + key paths for mutual TLS.
+ /// client certificate + key paths for mutual TLS.
     public var tlsClientCertPath: String?
     public var tlsClientKeyPath: String?
 
     /// Mongo replica-set seed members beyond `host`/`port` — comma-separated
-    /// `"host:port"` entries, Mongo-only field (docs/architecture/12 §3).
+ /// `"host:port"` entries, Mongo-only field.
     /// Not a secret, so it lives in the profile like `tlsCACertPath`.
     public var mongoAdditionalHosts: String?
     /// Mongo `replicaSet=<name>` — verified against the connected primary's
     /// own `hello` `setName` at connect time.
     public var mongoReplicaSet: String?
 
-    /// Elasticsearch auth mode (docs/architecture/17 §3): `true` = API key
+ /// Elasticsearch auth mode: `true` = API key
     /// (Keychain `.elasticsearchAPIKey`), `false` = Basic (`username`/the
     /// Keychain `.database` password). A persisted flag, not an implicit
     /// "is a key stored" check — same reasoning as `sshEnabled` gating
@@ -46,7 +46,7 @@ public struct ConnectionProfile: Identifiable, Hashable, Codable, Sendable {
     /// previously stored key, not silently keep using it.
     public var elasticsearchAPIKeyEnabled: Bool
 
-    // SSH tunnel (KN-03) — secrets (password/passphrase) live in the Keychain.
+ // SSH tunnel — secrets (password/passphrase) live in the Keychain.
     public var sshEnabled: Bool
     public var sshHost: String?
     public var sshPort: Int?
@@ -54,7 +54,7 @@ public struct ConnectionProfile: Identifiable, Hashable, Codable, Sendable {
     public var sshKeyPath: String?
 
     public var createdAt: Date
-    /// Whether executed statements are logged to query history (ED-06).
+ /// Whether executed statements are logged to query history.
     public var historyEnabled: Bool
 
     public init(
@@ -114,7 +114,7 @@ public struct ConnectionProfile: Identifiable, Hashable, Codable, Sendable {
     public var driver: DriverID? { DriverID(rawValue: driverID) }
 
     /// Assemble the runtime config — secrets are passed separately from the
-    /// Keychain, in RAM (docs/architecture/07 §2).
+ /// Keychain, in RAM.
     public func makeConfig(
         password: String?,
         sshPassword: String? = nil,
@@ -135,7 +135,7 @@ public struct ConnectionProfile: Identifiable, Hashable, Codable, Sendable {
         // DynamoDB has no username/password/database — the connection sheet
         // reuses those three fields (relabeled) for AWS SigV4 credentials
         // rather than adding a parallel set of profile columns/Keychain kind
-        // for one driver (docs/architecture/12 §4 "AWS credentials" secret
+ // for one driver ("AWS credentials" secret
         // type, simplified: Access Key ID/Secret/Region instead of a new
         // ConnectionProfile field + KeychainService.SecretKind).
         let isDynamoDB = driver == .dynamodb

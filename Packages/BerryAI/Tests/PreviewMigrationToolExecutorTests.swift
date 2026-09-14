@@ -3,7 +3,7 @@ import BerryGraph
 import Testing
 @testable import BerryAI
 
-@Suite("preview_migration client tool (DI-15, docs/architecture/13 §6)")
+@Suite("preview_migration client tool")
 struct PreviewMigrationToolExecutorTests {
     private func sampleInsight() -> Insight {
         Insight(

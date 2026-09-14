@@ -1,7 +1,7 @@
 import BerryDataSourceKit
 import SwiftUI
 
-/// One Mongo shell query tab (docs/feedback/01.md item 2): script editor on
+/// One Mongo shell query tab (item 2): script editor on
 /// top, one result tab per statement below — the NoSQL sibling of
 /// `EditorTabView`.
 struct MongoShellTabView: View {
@@ -12,7 +12,7 @@ struct MongoShellTabView: View {
     let onApplyWrite: (DataSourceChangeSet) async -> DataSourceWriteOutcome
     var onRefreshSchema: (() -> Void)? = nil
     /// Fires when this editor takes focus, so the workspace activates its
-    /// split pane (ui.md 01 §4) — same as EditorTabView's onFocus. Without
+ /// split pane — same as EditorTabView's onFocus. Without
     /// this, focusedGroupID never follows a Mongo tab into a split pane, so
     /// the global Run shortcut and menu keep targeting whichever tab was
     /// last focused elsewhere instead of the one on screen.

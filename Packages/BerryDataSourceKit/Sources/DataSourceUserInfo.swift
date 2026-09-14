@@ -1,4 +1,4 @@
-/// One user/role listing row (TI-03 Phase C, docs/architecture/14) — the
+/// One user/role listing row (Phase C) — the
 /// `DataSourceConnection` sibling of the SQL side's normalized
 /// `listUsersSQL()` columns. `roles` are role names only (v1: curated
 /// built-in roles scoped to the connection's own working database — no

@@ -4,7 +4,7 @@ import Testing
 
 @testable import BerryUI
 
-@Suite("QuickOpenItem.filter (TR-02 global ⌘P quick-open)")
+@Suite("QuickOpenItem.filter (global ⌘P quick-open)")
 struct QuickOpenItemTests {
     private let objects = [
         SchemaObject(kind: .table, name: "users", database: "public"),

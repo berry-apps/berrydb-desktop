@@ -1,4 +1,4 @@
-/* Base language for DataSourceDriver-layer error wrappers (UD-06). */
+/* Base language for DataSourceDriver-layer error wrappers. */
 
 "Connection failed: %@" = "Connection failed: %@";
 "Connection lost: %@" = "Connection lost: %@";

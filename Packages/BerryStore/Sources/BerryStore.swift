@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// Local persistence (docs/architecture/07 §1/§3):
+/// Local persistence:
 /// `~/Library/Application Support/BerryDB/store.sqlite`.
 /// Versioned migrations; backup logic added at the first schema change.
 public final class BerryStore: Sendable {
@@ -114,7 +114,7 @@ public final class BerryStore: Sendable {
         }
         migrator.registerMigration("v6-ai-connection-setting") { db in
             try db.create(table: "ai_connection_setting") { t in
-                // One row per profile (AI-06/AI-07 + consent, docs/architecture/09 §6).
+ // One row per profile (+ consent).
                 t.primaryKey("profileID", .blob)
                 t.column("aiEnabled", .boolean).notNull().defaults(to: false)
                 t.column("allowSampleRows", .boolean).notNull().defaults(to: false)
@@ -124,7 +124,7 @@ public final class BerryStore: Sendable {
             }
         }
         migrator.registerMigration("v7-database-intelligence-graph") { db in
-            // Temporal DSG store (docs/architecture/11 §5/§6) — one accumulating
+ // Temporal DSG store — one accumulating
             // graph per profile with first/last-seen for time-travel.
             try db.create(table: "graph_node") { t in
                 t.column("profileID", .blob).notNull()
@@ -158,41 +158,41 @@ public final class BerryStore: Sendable {
             }
         }
         migrator.registerMigration("v8-history-toggle") { db in
-            // Per-connection query-history switch (ED-06). Existing profiles keep
+ // Per-connection query-history switch. Existing profiles keep
             // history on.
             try db.alter(table: "connection_profile") { t in
                 t.add(column: "historyEnabled", .boolean).notNull().defaults(to: true)
             }
         }
         migrator.registerMigration("v9-tls-ca-cert") { db in
-            // Custom CA certificate path for TLS verification (KN-04).
+ // Custom CA certificate path for TLS verification.
             try db.alter(table: "connection_profile") { t in
                 t.add(column: "tlsCACertPath", .text)
             }
         }
         migrator.registerMigration("v10-tls-client-cert") { db in
-            // Client certificate/key paths for mutual TLS (KN-04).
+ // Client certificate/key paths for mutual TLS.
             try db.alter(table: "connection_profile") { t in
                 t.add(column: "tlsClientCertPath", .text)
                 t.add(column: "tlsClientKeyPath", .text)
             }
         }
         migrator.registerMigration("v11-mcp-servers") { db in
-            // Per-connection enabled/trusted MCP servers, JSON arrays of ids (AI-16).
+ // Per-connection enabled/trusted MCP servers, JSON arrays of ids.
             try db.alter(table: "ai_connection_setting") { t in
                 t.add(column: "enabledMcpServers", .text).notNull().defaults(to: "[]")
                 t.add(column: "trustedMcpServers", .text).notNull().defaults(to: "[]")
             }
         }
         migrator.registerMigration("v12-mongo-replica-set") { db in
-            // Mongo-only replica-set seeds/name, v1 (docs/architecture/12 §3).
+ // Mongo-only replica-set seeds/name, v1.
             try db.alter(table: "connection_profile") { t in
                 t.add(column: "mongoAdditionalHosts", .text)
                 t.add(column: "mongoReplicaSet", .text)
             }
         }
         migrator.registerMigration("v13-recommendation-feedback") { db in
-            // User response to an AI insight — accept/dismiss/ignore (DI-26, docs/architecture/13 §5.6).
+ // User response to an AI insight — accept/dismiss/ignore.
             try db.create(table: "recommendation_feedback") { t in
                 t.primaryKey("id", .blob)
                 t.column("profileID", .blob).notNull().indexed()
@@ -202,7 +202,7 @@ public final class BerryStore: Sendable {
             }
         }
         migrator.registerMigration("v14-query-replay") { db in
-            // User-saved execution snapshots for comparing runs over time (DI-17, docs/architecture/13 §5.2).
+ // User-saved execution snapshots for comparing runs over time.
             try db.create(table: "query_replay") { t in
                 t.primaryKey("id", .blob)
                 t.column("profileID", .blob).notNull().indexed()
@@ -213,7 +213,7 @@ public final class BerryStore: Sendable {
             }
         }
         migrator.registerMigration("v15-daily-review") { db in
-            // A generated digest of Insight Panel findings, shown again on next launch (DI-23, docs/architecture/13 §5.3).
+ // A generated digest of Insight Panel findings, shown again on next launch.
             try db.create(table: "daily_review") { t in
                 t.primaryKey("id", .blob)
                 t.column("profileID", .blob).notNull().indexed()
@@ -222,7 +222,7 @@ public final class BerryStore: Sendable {
             }
         }
         migrator.registerMigration("v16-runtime-metric") { db in
-            // Instance-level health snapshot at harvest time (DI-24, docs/architecture/13 §5.5).
+ // Instance-level health snapshot at harvest time.
             try db.create(table: "runtime_metric") { t in
                 t.primaryKey("id", .blob)
                 t.column("profileID", .blob).notNull().indexed()
@@ -232,9 +232,9 @@ public final class BerryStore: Sendable {
             }
         }
         migrator.registerMigration("v17-ai-thread-message") { db in
-            // Client-authoritative chat history (Q17, docs/agents/architecture/11
-            // §7.3/§7.8) — replaces the old backend-side berry_ai_threads/
-            // berry_ai_messages. Schema matches §7.3 exactly.
+ // Client-authoritative chat history (Q17,
+ // — replaces the old backend-side berry_ai_threads/
+ // berry_ai_messages. Schema matches exactly.
             try db.create(table: "ai_thread") { t in
                 t.primaryKey("id", .blob)
                 t.column("dialect", .text).notNull()
@@ -254,7 +254,7 @@ public final class BerryStore: Sendable {
                 t.column("createdAt", .datetime).notNull()
                 t.uniqueKey(["threadID", "seq"])
             }
-            // vec0 virtual table for RAG (search_conversation, §7.5) — keyed by
+ // vec0 virtual table for RAG (search_conversation) — keyed by
             // "threadID#seq" since vec0's declared PK can't be a composite of
             // two columns. Dimension fixed at 1536 (OpenAI text-embedding-3-small,
             // the only embedding model currently wired server-side); revisit if
@@ -267,7 +267,7 @@ public final class BerryStore: Sendable {
                 """)
         }
         migrator.registerMigration("v18-ai-thread-summary-cursor") { db in
-            // Incremental client-side rolling summaries (Q17 §7.4). Nil on
+ // Incremental client-side rolling summaries (Q17). Nil on
             // existing rows means their old summary coverage is unknown; the
             // client rebuilds it once, then advances this cursor atomically
             // with each successful fold.
@@ -316,9 +316,9 @@ public final class BerryStore: Sendable {
         }
         migrator.registerMigration("v21-workspace-action") { db in
             // Bounded recent tab/pane action log for AI tab-awareness
-            // (docs/feature/08, AI-28) — NOT the UI graph itself (that stays
-            // in-memory, docs/architecture/13 §8b). Rotation caps rows per
-            // profile the same way v3's query_history does (07 §3). No
+ // NOT the UI graph itself (that stays
+ // in-memory). Rotation caps rows per
+ // profile the same way v3's query_history does. No
             // tabID column: most tab kinds' ids don't survive relaunch (see
             // WorkspaceTab.id), so this stores a human-readable description
             // instead of a raw id a later reader could be tempted to rely on.
@@ -331,7 +331,7 @@ public final class BerryStore: Sendable {
             }
         }
         migrator.registerMigration("v22-schema-object-embedding") { db in
-            // Semantic Database Search (DI-12, docs/feature/07 §13): search
+ // Semantic Database Search: search
             // tables/collections by meaning ("payment" -> invoice/billing)
             // rather than literal name. Keyed by "profileID#name" (vec0's
             // declared PK can't be composite), mirroring v17's
@@ -345,7 +345,7 @@ public final class BerryStore: Sendable {
                 """)
         }
         migrator.registerMigration("v23-query-replay-plan") { db in
-            // DI-17 (docs/architecture/13 §5.2): "Save for Replay" now also
+ // "Save for Replay" now also
             // captures the EXPLAIN ANALYZE plan tree (JSON, PlanNode shape),
             // not just durationMS, so two snapshots of the same query can be
             // compared on more than wall-clock time. Nullable: dialects
@@ -355,7 +355,7 @@ public final class BerryStore: Sendable {
             }
         }
         migrator.registerMigration("v24-artifact") { db in
-            // AI-29 (docs/draft/09.md): a durable, linkable reference to
+ // a durable, linkable reference to
             // something the AI agent created or ran, so a chat bubble can
             // point back to it and it survives a history reload/app restart.
             // Unlike saved_query, profileID is required — an artifact always
@@ -385,7 +385,7 @@ public final class BerryStore: Sendable {
             }
         }
         migrator.registerMigration("v25-editor-session-links") { db in
-            // Fixes a pre-existing gap (found while building AI-29): a
+ // Fixes a pre-existing gap (found while building): a
             // restored editor tab lost its saved_query link because
             // editor_session never carried savedQueryID — so reopening a
             // saved query (or, now, an artifact) after an app restart created
@@ -396,7 +396,7 @@ public final class BerryStore: Sendable {
             }
         }
         migrator.registerMigration("v26-ai-message-artifacts") { db in
-            // AI-31 (docs/draft/09.md): which artifacts (AI-29/30) a turn's
+ // which artifacts a turn's
             // tool calls touched, so the bubble's link survives a history
             // reload/app restart. A new nullable column, not a reuse of
             // `toolCalls` — that column is already an equality-checked
@@ -406,25 +406,25 @@ public final class BerryStore: Sendable {
             }
         }
         migrator.registerMigration("v27-elasticsearch-auth-mode") { db in
-            // Elasticsearch Basic-vs-API-key auth mode (docs/architecture/17
-            // §3) — a persisted flag, same reasoning as `historyEnabled`/
+ // Elasticsearch Basic-vs-API-key auth mode
+ // — a persisted flag, same reasoning as `historyEnabled`/
             // `sshEnabled`: existing profiles default to Basic (`false`).
             try db.alter(table: "connection_profile") { t in
                 t.add(column: "elasticsearchAPIKeyEnabled", .boolean).notNull().defaults(to: false)
             }
         }
         migrator.registerMigration("v28-ai-thread-connection-key") { db in
-            // Threads were scoped by dialect alone (Q17 §7.3), so switching
+ // Threads were scoped by dialect alone (Q17), so switching
             // between two connections sharing a dialect (e.g. two Postgres
             // servers) could surface one connection's chat history under the
             // other's. Nil on existing rows: pre-v28 threads have no known
-            // connection and stay dialect-scoped only (docs/agents/architecture/11 §7.3).
+ // connection and stay dialect-scoped only.
             try db.alter(table: "ai_thread") { t in
                 t.add(column: "connectionKey", .text)
             }
         }
         migrator.registerMigration("v29-ai-message-tree") { db in
-            // AI-35 (docs/agents/architecture/11 §7.3): editing/versioning a
+ // editing/versioning a
             // chat message. A parent-pointer tree over `ai_message` (nil
             // `parentID` = first message in the thread) — editing a message
             // inserts a sibling rather than deleting anything, so the old
@@ -462,7 +462,7 @@ public final class BerryStore: Sendable {
         return migrator
     }
 
-    // MARK: - Connection profiles (KN-01/02)
+ // MARK: - Connection profiles
 
     public func allProfiles() throws -> [ConnectionProfile] {
         try dbQueue.read { db in
@@ -478,7 +478,7 @@ public final class BerryStore: Sendable {
         }
     }
 
-    /// Delete a profile — the caller MUST also delete the Keychain item (07 §2).
+ /// Delete a profile — the caller MUST also delete the Keychain item.
     /// The key must be the UUID itself: GRDB stores UUID as a 16-byte blob,
     /// so a uuidString key would never match.
     public func deleteProfile(id: UUID) throws {
@@ -487,9 +487,9 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - Query history (ED-06)
+ // MARK: - Query history
 
-    /// Cap per profile — rotation keeps the newest rows (07 §3).
+ /// Cap per profile — rotation keeps the newest rows.
     public static let historyCapPerProfile = 10_000
 
     public func record(_ entry: QueryHistoryEntry) throws {
@@ -512,7 +512,7 @@ public final class BerryStore: Sendable {
 
     /// Query history, newest first. DB-side search (`sql LIKE`) and keyset
     /// pagination on `(startedAt, id)` so the UI can page a large history and
-    /// search the whole table, not just a client-side slice (ED-06).
+ /// search the whole table, not just a client-side slice.
     public func history(
         profileID: UUID?,
         search: String? = nil,
@@ -552,10 +552,10 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - Workspace action log (docs/feature/08, AI-28)
+ // MARK: - Workspace action log
 
     /// Cap per profile — rotation keeps the newest rows, same pattern as
-    /// query_history (07 §3).
+ /// query_history.
     public static let workspaceActionCapPerProfile = 50
 
     public func recordWorkspaceAction(_ entry: WorkspaceActionRecord) throws {
@@ -586,7 +586,7 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - Editor sessions (UD-05)
+ // MARK: - Editor sessions
 
     public func saveEditorSession(_ record: EditorSessionRecord) throws {
         try dbQueue.write { db in
@@ -609,7 +609,7 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - Saved queries (ED-07)
+ // MARK: - Saved queries
 
     public func saveSavedQuery(_ query: SavedQuery) throws {
         try dbQueue.write { db in
@@ -640,7 +640,7 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - Artifacts (AI-29, docs/draft/09.md)
+ // MARK: - Artifacts
 
     public func saveArtifact(_ artifact: Artifact) throws {
         try dbQueue.write { db in
@@ -721,7 +721,7 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - Per-connection AI settings (AI-06/AI-07, docs/architecture/09 §6)
+ // MARK: - Per-connection AI settings
 
     public func aiSetting(profileID: UUID) throws -> AIConnectionSetting? {
         try dbQueue.read { db in
@@ -735,12 +735,12 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - Database Intelligence graph (DI-01/02/08, docs/architecture/11 §5)
+ // MARK: - Database Intelligence graph
 
     /// Upserts a profile's graph elements (preserving each element's `firstSeen`)
     /// and records a snapshot. Absent elements are NOT deleted — their stale
     /// `lastSeen` marks when they disappeared, which is how the Digital Twin
-    /// reconstructs the graph as-of an earlier time (§6).
+ /// reconstructs the graph as-of an earlier time.
     public func saveGraph(
         profileID: UUID,
         nodes: [GraphNodeRecord],
@@ -770,7 +770,7 @@ public final class BerryStore: Sendable {
             }
             // Dedup by digest: only record a snapshot when the structure
             // changed, so frequent harvest-on-refresh doesn't bloat the Digital
-            // Twin timeline (docs/architecture/11 §6). Node/edge lastSeen/attrs
+ // Twin timeline. Node/edge lastSeen/attrs
             // were still upserted above, so stats stay fresh.
             let latestDigest = try GraphSnapshotRecord
                 .filter(Column("profileID") == profileID)
@@ -813,7 +813,7 @@ public final class BerryStore: Sendable {
         }
     }
 
-    /// Snapshot metadata for a profile, newest first (time-travel picker, §6).
+ /// Snapshot metadata for a profile, newest first (time-travel picker).
     public func graphSnapshots(profileID: UUID) throws -> [GraphSnapshotRecord] {
         try dbQueue.read { db in
             try GraphSnapshotRecord
@@ -823,9 +823,9 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - Recommendation feedback (DI-26)
+ // MARK: - Recommendation feedback
 
-    /// Records the user's response to an insight (DI-26).
+ /// Records the user's response to an insight.
     public func recordRecommendationFeedback(_ record: RecommendationFeedbackRecord) throws {
         try dbQueue.write { db in try record.insert(db) }
     }
@@ -850,9 +850,9 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - Query replay (DI-17)
+ // MARK: - Query replay
 
-    /// Saves a user-requested execution snapshot (DI-17).
+ /// Saves a user-requested execution snapshot.
     public func saveQueryReplaySnapshot(_ record: QueryReplaySnapshotRecord) throws {
         try dbQueue.write { db in try record.insert(db) }
     }
@@ -868,9 +868,9 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - Daily review digest (DI-23)
+ // MARK: - Daily review digest
 
-    /// Saves a generated daily review digest (DI-23).
+ /// Saves a generated daily review digest.
     public func saveDailyReview(_ record: DailyReviewRecord) throws {
         try dbQueue.write { db in try record.insert(db) }
     }
@@ -885,7 +885,7 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - Schema snapshots (DI-08 seed, docs/architecture/11 §6)
+ // MARK: - Schema snapshots (seed)
 
     /// Stores a snapshot unless the latest one for this profile already has
     /// the same digest (no schema change → no growth).
@@ -915,9 +915,9 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - Runtime metrics (DI-24)
+ // MARK: - Runtime metrics
 
-    /// Saves a batch of runtime metrics from one harvest pass (DI-24).
+ /// Saves a batch of runtime metrics from one harvest pass.
     public func saveRuntimeMetrics(_ records: [RuntimeMetricRecord]) throws {
         try dbQueue.write { db in
             for record in records { try record.insert(db) }
@@ -935,14 +935,14 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - AI chat history (Q17, docs/agents/architecture/11 §7.3)
+ // MARK: - AI chat history (Q17)
 
     public func saveAIThread(_ thread: AIThreadRecord) throws {
         try dbQueue.write { db in try thread.save(db) }
     }
 
     /// All local threads, most recently updated first. `connectionKey` scopes
-    /// to one connection's history (§7.3 v28) — always applied (nil matches
+ /// to one connection's history (v28) — always applied (nil matches
     /// only pre-v28/profileless threads, via SQL's `IS NULL`), so two
     /// connections sharing a dialect never see each other's threads.
     public func aiThreads(dialect: String? = nil, connectionKey: String? = nil) throws -> [AIThreadRecord] {
@@ -993,7 +993,7 @@ public final class BerryStore: Sendable {
     }
 
     // Async counterparts of the four methods above, used on `AISession`'s
-    // `@MainActor` send path (docs/feature/08 perf plan, item A2) so a turn's
+ // `@MainActor` send path (perf plan, item A2) so a turn's
     // SQLite reads/writes run off the main thread instead of blocking UI
     // during every send. New methods rather than overloads — GRDB's own
     // sync/async overload pair needed `@_disfavoredOverload` to disambiguate,
@@ -1054,7 +1054,7 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - AI-35: active-path message tree (editing/versioning, docs/agents/architecture/11 §7.3)
+ // MARK: -: active-path message tree (editing/versioning)
     //
     // `ai_message.parentID` (v29) forms a tree — editing a message inserts a
     // sibling rather than deleting anything, so the old reply stays
@@ -1071,7 +1071,7 @@ public final class BerryStore: Sendable {
     /// write) and was measurably slow enough on a 200-message thread to
     /// blow through a test's fixed retry budget — every point-lookup is a
     /// full GRDB/SQLite round trip, and `buildContext` calls into this on
-    /// every single turn (docs/feature/08 perf plan — the same "O(n) work
+ /// every single turn (perf plan — the same "O(n) work
     /// that compounds" class of bug that plan already fixed once here).
     private func walkActivePath(db: Database, threadID: UUID, leafID: UUID?) throws -> [AIMessageRecord] {
         guard leafID != nil else { return [] }
@@ -1316,7 +1316,7 @@ public final class BerryStore: Sendable {
     public func aiMessagesMissingEmbeddings(
         threadID: UUID, beforeSeq: Int? = nil
     ) throws -> [AIMessageRecord] {
-        // AI-35: active-path only — an edited-away message has nothing left
+ // active-path only — an edited-away message has nothing left
         // worth embedding, and would otherwise sit here forever re-offering
         // itself as "missing" every time the background backfill runs.
         let messages = try activeAIMessages(threadID: threadID)
@@ -1339,7 +1339,7 @@ public final class BerryStore: Sendable {
     }
 
     /// Cosine-nearest messages in `threadID` to `queryVector` (search_conversation,
-    /// docs/agents/architecture/11 §7.5), nearest first. vec0 has no per-thread
+ /// nearest first. vec0 has no per-thread
     /// partition index here, so this over-fetches a generous global top-K and
     /// filters/truncates to the thread client-side — correct at the message
     /// volumes a single local user accumulates, not meant to scale beyond that.
@@ -1413,7 +1413,7 @@ public final class BerryStore: Sendable {
     }
 
     /// Cosine-nearest table/collection names in this profile to
-    /// `queryVector` (search_schema, docs/feature/07 §13), nearest first.
+ /// `queryVector` (search_schema), nearest first.
     /// vec0 has no per-profile partition index here, so this over-fetches a
     /// generous global top-K and filters/truncates to the profile
     /// client-side — the same tradeoff `nearestAIMessages` makes, correct at

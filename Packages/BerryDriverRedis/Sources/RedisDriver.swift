@@ -2,7 +2,7 @@ import BerryDriverKit
 import BerryKeyValueKit
 import Valkey
 
-/// Redis/Valkey driver (docs/architecture/15) — the third contract family,
+/// Redis/Valkey driver — the third contract family,
 /// `KeyValueDriver` (BerryKeyValueKit), not `DatabaseDriver`/`DataSourceDriver`.
 ///
 /// `@available(macOS 15, *)`: `valkey-swift`'s own `Package.swift` pins
@@ -19,7 +19,7 @@ public struct RedisDriver: KeyValueDriver {
     public static let id: DriverID = .redis
     public static let displayName = "Redis"
 
-    // Capability matrix: docs/architecture/15 §2.
+ // Capability matrix:
     public static let capabilities = KeyValueCapabilities(
         write: true,
         ttl: true,

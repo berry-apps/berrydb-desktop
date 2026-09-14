@@ -8,7 +8,7 @@ private struct TestDialect: SQLDialect {
     func limitClause(_ limit: Int) -> String { "LIMIT \(limit)" }
 }
 
-/// Auto-LIMIT (ED-12) — docs/architecture/02.
+/// Auto-LIMIT
 @Suite("QueryService auto-LIMIT")
 struct QueryServiceAutoLimitTests {
     private let dialect = TestDialect()

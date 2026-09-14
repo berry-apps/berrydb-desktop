@@ -1,13 +1,13 @@
 import Foundation
 
-/// Database Semantic Graph node/edge model (docs/architecture/11 §5). V1.5
+/// Database Semantic Graph node/edge model. V1.5
 /// covers the structural graph harvested from DB metadata; workload/plan/
 /// migration nodes arrive with the harvesters (later chunk).
 public enum NodeKind: String, Sendable, Hashable, Codable {
     case database, schema, table, column, index, constraint
     case view, trigger, function
     case query, plan, migration
-    // UI-state only (docs/feature/08, AI-27) — built fresh per AI tool call
+ // UI-state only — built fresh per AI tool call
     // from live WorkspaceViewModel state + the bounded workspace_action log.
     // NEVER written via GraphStore/store.sqlite's graph_node/graph_edge
     // tables (those stay DB-schema-only so DSG analyzers iterating by
@@ -23,7 +23,7 @@ public enum EdgeKind: String, Sendable, Hashable, Codable {
     case derivesFrom    // view → source table
     // Workload / plan / migration (harvested later).
     case joins, reads, writes, usesIndex, migratedBy
-    /// UI-state only (docs/feature/08): pane → tab containment.
+ /// UI-state only: pane → tab containment.
     case hasTab
 }
 
@@ -65,7 +65,7 @@ public struct GraphEdge: Sendable, Hashable, Codable {
 }
 
 /// Deterministic node identifiers so the same object always maps to one node
-/// across refreshes (docs/architecture/11 §5/§6).
+/// across refreshes.
 public enum GraphID {
     public static func node(_ kind: NodeKind, database: String?, name: String, in container: String? = nil) -> String {
         let db = database ?? ""

@@ -1,6 +1,6 @@
 import Foundation
 
-/// TLS behaviour for network drivers (KN-04, docs/architecture/07 §4).
+/// TLS behaviour for network drivers.
 public enum TLSMode: String, Sendable, CaseIterable, Codable {
     /// Plaintext only.
     case disable
@@ -23,8 +23,8 @@ public enum TLSMode: String, Sendable, CaseIterable, Codable {
     }
 }
 
-/// SSH tunnel parameters (KN-03). Secrets (password/passphrase) live in RAM
-/// only, same rule as the database password (docs/architecture/07 §2).
+/// SSH tunnel parameters. Secrets (password/passphrase) live in RAM
+/// only, same rule as the database password.
 public struct SSHConfig: Sendable {
     public let host: String
     public let port: Int
@@ -52,7 +52,7 @@ public struct SSHConfig: Sendable {
 }
 
 /// Configuration for one connection. Secrets (password/passphrase) live in RAM
-/// only — never persist this struct with secrets (docs/architecture/07 §2).
+/// only — never persist this struct with secrets.
 public struct ConnectionConfig: Sendable {
     public let driver: DriverID
     public let name: String
@@ -68,15 +68,15 @@ public struct ConnectionConfig: Sendable {
     public let database: String?
     public let tlsMode: TLSMode
     /// Custom CA certificate (PEM) used to verify the server when `tlsMode`
-    /// verifies the certificate — for self-signed or private-CA servers (KN-04).
+ /// verifies the certificate — for self-signed or private-CA servers.
     public let caCertPath: String?
-    /// Client certificate + key (PEM) for mutual TLS (KN-04). Paths, not
+ /// Client certificate + key (PEM) for mutual TLS. Paths, not
     /// secrets; encrypted client keys aren't supported yet.
     public let clientCertPath: String?
     public let clientKeyPath: String?
     public let ssh: SSHConfig?
 
-    /// AWS SigV4 credentials — DynamoDB only (docs/architecture/12 §4). A new
+ /// AWS SigV4 credentials — DynamoDB only. A new
     /// secret shape (not user/password): access key + secret key + optional
     /// session token, scoped to a region instead of host:port.
     public let awsAccessKeyID: String?
@@ -90,15 +90,15 @@ public struct ConnectionConfig: Sendable {
     /// `"host:port"`. v1 scope: seeds are tried in order to find the
     /// primary at connect time; no background topology monitoring, no
     /// automatic reconnect if the primary changes mid-session
-    /// (docs/architecture/12 §3).
+ ///
     public let additionalHosts: [String]?
     /// `replicaSet=<name>` — verified defensively against the connected
     /// primary's own `hello` `setName` at connect time (mismatch is a hard
-    /// connect error, docs/architecture/12 §3). `nil` skips the check.
+ /// connect error). `nil` skips the check.
     public let mongoReplicaSet: String?
 
     /// Elasticsearch only — a real auth-mode field, not another
-    /// `password`-reuse hack like Qdrant's API key (docs/architecture/17 §2):
+ /// `password`-reuse hack like Qdrant's API key:
     /// self-hosted clusters default to Basic auth (`username`/`password`,
     /// already above), while Elastic Cloud/Serverless recommends or requires
     /// API keys. When set, this wins over `username`/`password` for the
@@ -158,7 +158,7 @@ public struct ConnectionConfig: Sendable {
     }
 
     /// Copy of this config pointing at a different endpoint — used to swap in
-    /// the local end of an SSH tunnel (docs/architecture/06 · L1).
+ /// the local end of an SSH tunnel.
     public func replacingEndpoint(host: String, port: Int) -> ConnectionConfig {
         ConnectionConfig(
             driver: driver, name: name, filePath: filePath,

@@ -10,13 +10,13 @@ import Testing
 @testable import BerryUI
 
 /// End-to-end at the `WorkspaceViewModel` level: connect → write → scan →
-/// get → delete (docs/architecture/15 §3/§4). Headless, mirrors
+/// get → delete. Headless, mirrors
 /// `WorkspaceMongoDataSourceTests`'s pattern for the Mongo/Qdrant side. Runs
 /// against a real local Redis/Valkey server from `BERRYDB_TEST_REDIS`,
 /// skipped cleanly when unset.
 ///
-/// `RedisDriver`/`RedisConnection` require macOS 15+ (docs/architecture/15
-/// §3) — every test guards with `if #available` rather than annotating the
+/// `RedisDriver`/`RedisConnection` require macOS 15+
+/// — every test guards with `if #available` rather than annotating the
 /// suite/test itself, since Swift Testing's macros reject combining `@Suite`/
 /// `@Test` with `@available` directly (same constraint hit in
 /// `RedisConformanceTests`).
@@ -41,8 +41,8 @@ struct WorkspaceKeyValueTests {
         let profile = ConnectionProfile(
             driverID: "redis", name: "test-redis",
             host: server.host, port: server.port,
-            // The test container has no TLS listener (docs/architecture/15
-            // §4) — ConnectionConfig's default (.prefer) would otherwise try
+ // The test container has no TLS listener
+ // — ConnectionConfig's default (.prefer) would otherwise try
             // a TLS handshake and fail, same reasoning as RedisConformanceTests.
             tlsMode: TLSMode.disable.rawValue
         )
@@ -81,7 +81,7 @@ struct WorkspaceKeyValueTests {
     /// connect time (not always 0), and `selectKeyValueDatabase` must switch
     /// the connection's live database — a key written on one DB must not be
     /// visible after switching to another, and must reappear after switching
-    /// back (docs/architecture/15 §5, live switcher).
+ /// back (live switcher).
     @Test func sessionTracksConnectDatabaseAndSelectKeyValueDatabaseSwitchesLive() async throws {
         guard #available(macOS 15, *) else { return }
         KeyValueRegistry.register(RedisDriver.self)
@@ -137,7 +137,7 @@ struct WorkspaceKeyValueTests {
         )
         await vm.connectKeyValue(profile: profile)
         #expect(vm.errorMessage == nil)
-        #expect(vm.session == nil, "SQL XOR NoSQL XOR key-value (docs/architecture/12 §7, 15 §2)")
+ #expect(vm.session == nil, "SQL XOR NoSQL XOR key-value")
         #expect(vm.keyValueSession != nil)
     }
 }

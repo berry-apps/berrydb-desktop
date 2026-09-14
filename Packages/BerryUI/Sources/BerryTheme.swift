@@ -2,11 +2,11 @@ import AppKit
 import SwiftUI
 
 /// Design tokens for the macOS-native + Spatial/Bento visual language
-/// (docs/ui/ui.md, docs/ui/DESIGN-SYSTEM.md). One source of truth for color,
+/// One source of truth for color,
 /// spacing, radius, motion, type, and metrics so every surface stays
 /// consistent — no raw hex or magic numbers scattered across views.
 public enum BerryTheme {
-    // MARK: - Color (ui.md §5) — dynamic, follows the system Light/Dark setting.
+ // MARK: - Color — dynamic, follows the system Light/Dark setting.
 
     /// Main canvas: Light #F5F5F7 · Dark #1E1E1E.
     public static let canvas = dynamic(light: 0xF5F5F7, dark: 0x1E1E1E)
@@ -44,21 +44,21 @@ public enum BerryTheme {
     // MARK: - Metrics
 
     public enum Metric {
-        /// Compact control height (ui.md §3: 22–24px).
+ /// Compact control height (22–24px).
         public static let control: CGFloat = 24
-        /// Ultra-thin split/tab header (ui.md §1: max 28px).
+ /// Ultra-thin split/tab header (max 28px).
         public static let splitHeader: CGFloat = 28
         public static let hairline: CGFloat = 1
     }
 
-    // MARK: - Motion (ui.md §3: smooth 150–200ms, never abrupt)
+ // MARK: - Motion (smooth 150–200ms, never abrupt)
 
     public enum Motion {
         public static let hover: Animation = .easeInOut(duration: 0.18)
         public static let panel: Animation = .easeInOut(duration: 0.22)
     }
 
-    // MARK: - Type (ui.md §5: SF Pro Text for UI, SF Mono for code/data)
+ // MARK: - Type (SF Pro Text for UI, SF Mono for code/data)
 
     public enum Typeface {
         /// UI label/button/title — the system font is SF Pro Text.
@@ -71,7 +71,7 @@ public enum BerryTheme {
             .system(size: size, design: .monospaced)
         }
 
-        // Compact-but-legible scale (ui.md §3) — the system default (13pt) reads
+ // Compact-but-legible scale — the system default (13pt) reads
         // a touch large for a dense DB tool, so lists/sidebar use these.
         /// Sidebar rows (connections, tables, views) — 12pt.
         public static let sidebarRow = Font.system(size: 12)

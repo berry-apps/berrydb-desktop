@@ -7,7 +7,7 @@ import NIOSSL
 import MySQLNIO
 
 /// State needed to cancel from outside the actor: MySQL cancels a query via
-/// `KILL QUERY <connection_id>` on a SECONDARY CONNECTION (docs/architecture/05 §4).
+/// `KILL QUERY <connection_id>` on a SECONDARY CONNECTION.
 final class MySQLCancelBox: @unchecked Sendable {
     private let lock = NSLock()
     private var _connectionID: UInt64?
@@ -43,7 +43,7 @@ public actor MySQLDriverConnection: DriverConnection {
         await refreshConnectionID()
     }
 
-    /// Client TLS config for the verifying modes (KN-04). A custom CA replaces
+ /// Client TLS config for the verifying modes. A custom CA replaces
     /// the trust store; verifyCA drops hostname checking for IP-reached servers.
     static func verifyingTLS(mode: TLSMode, caCertPath: String?) -> TLSConfiguration {
         var tls = TLSConfiguration.makeClientConfiguration()
@@ -54,7 +54,7 @@ public actor MySQLDriverConnection: DriverConnection {
         return tls
     }
 
-    /// Mutual TLS (KN-04): attach the client certificate chain + key when both
+ /// Mutual TLS: attach the client certificate chain + key when both
     /// paths are set. Applies to every TLS mode except `disable`.
     static func applyClientIdentity(_ tls: inout TLSConfiguration, config: ConnectionConfig) throws {
         guard let certPath = config.clientCertPath, !certPath.isEmpty,
@@ -68,9 +68,9 @@ public actor MySQLDriverConnection: DriverConnection {
             throw DriverError.connectionFailed("Missing host")
         }
         let port = config.port ?? 3306
-        // TLS per KN-04 (07 §4). MySQLNIO negotiates TLS whenever a config is
+ // TLS. MySQLNIO negotiates TLS whenever a config is
         // passed, so `prefer` and `require` behave the same here (noted in
-        // docs/architecture/05 §6). MySQL 8's caching_sha2_password needs TLS.
+ // MySQL 8's caching_sha2_password needs TLS.
         let tls: TLSConfiguration?
         switch config.tlsMode {
         case .disable:
@@ -82,7 +82,7 @@ public actor MySQLDriverConnection: DriverConnection {
             tls = configTLS
         case .verifyCA, .verifyFull:
             // Verify the chain against the system trust store or a custom CA;
-            // verifyCA additionally skips the hostname check (KN-04).
+ // verifyCA additionally skips the hostname check.
             var verifying = Self.verifyingTLS(mode: config.tlsMode, caCertPath: config.caCertPath)
             try? Self.applyClientIdentity(&verifying, config: config)
             tls = verifying
@@ -122,7 +122,7 @@ public actor MySQLDriverConnection: DriverConnection {
         }
     }
 
-    // MARK: - Execute (docs/architecture/06 · L2)
+ // MARK: - Execute
 
     public nonisolated func execute(_ sql: String) -> AsyncThrowingStream<ResultEvent, Error> {
         AsyncThrowingStream { continuation in
@@ -245,7 +245,7 @@ public actor MySQLDriverConnection: DriverConnection {
         return text.contains("1295") || text.contains("prepared statement protocol")
     }
 
-    // MARK: - Value mapping (docs/architecture/05 §3)
+ // MARK: - Value mapping
 
     static func berryValues(from row: MySQLRow) -> [BerryValue] {
         row.columnDefinitions.map { definition in
@@ -334,7 +334,7 @@ public actor MySQLDriverConnection: DriverConnection {
 
     // MARK: - Control
 
-    /// Cancel via a secondary connection: `KILL QUERY <id>` (05 §4, 06 · L6).
+ /// Cancel via a secondary connection: `KILL QUERY <id>` (06).
     public nonisolated func cancelCurrentQuery() {
         guard let connectionID = cancelBox.connectionID else { return }
         let config = cancelBox.config

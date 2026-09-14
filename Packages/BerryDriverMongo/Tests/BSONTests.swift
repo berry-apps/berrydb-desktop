@@ -8,7 +8,7 @@ import Testing
 /// `bson-corpus` conformance test suite
 /// (https://github.com/mongodb/specifications/tree/master/source/bson-corpus)
 /// — not hand-derived — same "verify against a real vector" discipline
-/// `SigV4SignerTests` used for AWS SigV4 (docs/architecture/12 §4).
+/// `SigV4SignerTests` used for AWS SigV4.
 @Suite("BSON encode/decode")
 struct BSONTests {
     private func hexData(_ hex: String) -> Data {
@@ -172,8 +172,8 @@ struct BSONTests {
         #expect(decoded == original)
     }
 
-    /// `.vector` has no native BSON type for general documents (docs/architecture/12
-    /// §3) — it's written as a plain array of doubles, and decode never
+ /// `.vector` has no native BSON type for general documents
+ /// — it's written as a plain array of doubles, and decode never
     /// re-produces `.vector` for a plain numeric array. Documented, not a bug.
     @Test func vectorEncodesAsDoubleArrayAndDoesNotRoundTrip() throws {
         let original = BerryDocument.object([("v", .vector([1.0, 2.0]))])

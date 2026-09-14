@@ -2,7 +2,7 @@ import BerryStore
 import Foundation
 
 /// Persists a `SchemaGraph` per profile and reconstructs it as-of any snapshot
-/// (docs/architecture/11 §5/§6 — the Digital Twin). Maps the graph to
+/// (the Digital Twin). Maps the graph to
 /// BerryStore's temporal rows; the store handles the SQL. Quick-open (profileless)
 /// connections aren't persisted.
 public struct GraphStore: Sendable {
@@ -13,7 +13,7 @@ public struct GraphStore: Sendable {
     }
 
     /// Records the current graph as a snapshot at `now`. Existing elements keep
-    /// their original firstSeen (temporal accumulation, §6).
+ /// their original firstSeen (temporal accumulation).
     public func persist(_ graph: SchemaGraph, profileID: UUID, now: Date) throws {
         let nodes = graph.nodes.values.map { node in
             GraphNodeRecord(
@@ -80,7 +80,7 @@ public struct GraphStore: Sendable {
     }
 
     /// Deterministic content digest (stable across runs, no crypto dep so the
-    /// module stays Linux-clean per 04 §5) — lets callers skip a redundant
+ /// module stays Linux-clean) — lets callers skip a redundant
     /// snapshot when the graph is unchanged. FNV-1a over a canonical form.
     static func digest(_ graph: SchemaGraph) -> String {
         var canonical = ""

@@ -27,7 +27,7 @@ struct QdrantConnectionTests {
         return (items, stats)
     }
 
-    // MARK: createCollection (docs/architecture/12 §5)
+ // MARK: createCollection
 
     @Test func createCollectionSendsExpectedRequest() async throws {
         let host = "qdrant-\(UUID().uuidString)".lowercased()
@@ -262,7 +262,7 @@ struct QdrantConnectionTests {
         }
     }
 
-    // MARK: write — delete (NS-08 routing)
+ // MARK: write — delete (routing)
 
     @Test func deleteWithConcreteIDDeletesByID() async throws {
         let host = "qdrant-\(UUID().uuidString)".lowercased()

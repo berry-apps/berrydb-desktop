@@ -4,7 +4,7 @@ import BerryDriverKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// CSV import (XN-05): pick a file, choose the target table, map source columns
+/// CSV import: pick a file, choose the target table, map source columns
 /// to table columns, and run. The whole import is transactional; failures are
 /// reported by source line. Small enough to fit without internal scrolling
 /// except the (bounded) mapping list.
@@ -14,7 +14,7 @@ struct ImportCSVSheet: View {
     let onImport: (_ records: [CSVParser.Record], _ table: SchemaObject,
                    _ mapping: [CSVImporter.ColumnMapping], _ batchSize: Int) async -> String
 
-    /// Close this tool tab (docs/ui/02 §4).
+ /// Close this tool tab.
     let onClose: () -> Void
 
     @State private var fileURL: URL?

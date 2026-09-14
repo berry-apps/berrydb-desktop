@@ -38,7 +38,7 @@ struct BerryStoreTests {
         let loaded = try #require(try store.allProfiles().first)
         #expect(loaded.tlsMode == TLSMode.verifyCA.rawValue)
         #expect(loaded.tlsCACertPath == "/etc/ssl/certs/internal-ca.pem")
-        // KN-04: the CA path flows into the runtime config.
+ // the CA path flows into the runtime config.
         #expect(loaded.makeConfig(password: nil).caCertPath == "/etc/ssl/certs/internal-ca.pem")
     }
 
@@ -57,7 +57,7 @@ struct BerryStoreTests {
     }
 
     @Test func persistsMongoReplicaSetFields() throws {
-        // Replica-set v1 (docs/architecture/12 §3) — additive Mongo-only
+ // Replica-set v1 — additive Mongo-only
         // fields, same pattern as tlsCACertPath.
         let store = try makeStore()
         let profile = ConnectionProfile(
@@ -107,9 +107,9 @@ struct BerryStoreTests {
     }
 
     @Test func persistsElasticsearchAPIKeyModeAndGatesTheSecret() throws {
-        // Auth mode (docs/architecture/17 §3) is a persisted flag, same
+ // Auth mode is a persisted flag, same
         // pattern as `sshEnabled` gating `SSHConfig` — the secret itself
-        // never lives on the profile (07 §2), only whether to use it.
+ // never lives on the profile, only whether to use it.
         let store = try makeStore()
         let profile = ConnectionProfile(
             driverID: "elasticsearch", name: "ES Cloud",
@@ -243,7 +243,7 @@ struct BerryStoreTests {
     }
 
     @Test func configNeverContainsStoredPassword() throws {
-        // Guarantees design 07 §2: the profile has nowhere to hold a password;
+ // Guarantees design: the profile has nowhere to hold a password;
         // the config only receives a password via the runtime parameter.
         let profile = ConnectionProfile(
             driverID: "mysql", name: "m", host: "h", port: 3306, username: "u"

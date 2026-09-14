@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import BerryStore
 
-@Suite("Query Replay (DI-17)")
+@Suite("Query Replay")
 struct QueryReplayTests {
     private func makeStore() throws -> BerryStore {
         try BerryStore(path: ":memory:")

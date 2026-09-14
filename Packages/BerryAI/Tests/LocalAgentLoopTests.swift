@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryAI
 
-@Suite("LocalAgentLoop (docs/agents/architecture/10, AI-20)")
+@Suite("LocalAgentLoop")
 struct LocalAgentLoopTests {
     @Test func parsesBareAndFencedToolCalls() {
         #expect(LocalAgentLoop.parseToolCall(#"{"tool":"get_schema","args":{}}"#)?.name == "get_schema")

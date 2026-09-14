@@ -2,10 +2,10 @@ import Foundation
 
 // Minimal MCP (Model Context Protocol) client pieces — allowlist manifest,
 // JSON-RPC 2.0 codec, line framing, and the connection abstraction. Self-written,
-// no SDK (docs/agents/architecture/08 §4). The real Process/Pipe stdio transport
-// is a follow-up gated on the App Sandbox feasibility check (§8).
+// no SDK. The real Process/Pipe stdio transport
+// is a follow-up gated on the App Sandbox feasibility check.
 
-/// One curated MCP server from the packaged allowlist (docs/agents/architecture/08 §2).
+/// One curated MCP server from the packaged allowlist.
 /// `command`/`args` are fixed — never user-editable; only BerryDB changes them via a release.
 public struct MCPServerManifest: Equatable, Sendable, Decodable {
     public let id: String
@@ -39,7 +39,7 @@ public struct MCPServerManifest: Equatable, Sendable, Decodable {
     }
 }
 
-/// Parses the packaged `mcp-allowlist.json` (docs/agents/architecture/08 §2).
+/// Parses the packaged `mcp-allowlist.json`.
 public func parseMCPAllowlist(_ data: Data) throws -> [MCPServerManifest] {
     try JSONDecoder().decode([MCPServerManifest].self, from: data)
 }
@@ -47,7 +47,7 @@ public func parseMCPAllowlist(_ data: Data) throws -> [MCPServerManifest] {
 /// `Bundle.module`'s generated accessor traps if it can't find this
 /// package's resource bundle in a packaged, signed `.app` — see the same
 /// note on `berryModuleBundle` in BerryUI/Sources/Localization.swift, and
-/// docs/tests/crash.md for the real crash this caused. Checks the correct
+/// for the real crash this caused. Checks the correct
 /// packaged-app and dev-run locations first; `.module` itself is only a last
 /// resort (in practice, `swift test`, where it's already safe).
 private let berryAIModuleBundle: Bundle = {
@@ -62,7 +62,7 @@ private let berryAIModuleBundle: Bundle = {
 }()
 
 public enum MCPAllowlist {
-    /// The curated server list bundled with BerryAI (docs/agents/architecture/08 §2).
+ /// The curated server list bundled with BerryAI.
     /// Returns [] if the resource is missing/unreadable rather than trapping.
     public static func bundled() -> [MCPServerManifest] {
         guard let url = berryAIModuleBundle.url(forResource: "mcp-allowlist", withExtension: "json"),
@@ -72,7 +72,7 @@ public enum MCPAllowlist {
     }
 }
 
-/// One tool a server exposes via `tools/list` (docs/agents/architecture/08 §4).
+/// One tool a server exposes via `tools/list`.
 public struct MCPToolSpec: Equatable, Sendable {
     public let name: String
     public let description: String
@@ -93,7 +93,7 @@ public protocol MCPServerConnection: Sendable {
     func callTool(name: String, argumentsJSON: String) async throws -> String
 }
 
-/// Minimal JSON-RPC 2.0 codec (docs/agents/architecture/08 §4). One message per line.
+/// Minimal JSON-RPC 2.0 codec. One message per line.
 public enum JSONRPC {
     /// A single-line JSON-RPC request.
     public static func encodeRequest(id: Int, method: String, params: [String: Any]) -> String {

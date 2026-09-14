@@ -2,7 +2,7 @@ import BerryCore
 import BerryDriverKit
 import SwiftUI
 
-/// Server user/role list (TI-03, docs/architecture/14): the DBMS's own
+/// Server user/role list: the DBMS's own
 /// users, with a per-row Drop action and a "New User…" sheet. Columns are
 /// normalized by the dialect to user/host/superuser/can_login. Every
 /// statement still goes through the single SQL path (N1).
@@ -14,7 +14,7 @@ struct UserManagementView: View {
     let designPreview: (UserDesign) -> [String]
     let onCreate: (UserDesign) async -> String?
 
-    /// Close this tool tab (docs/ui/02 §4).
+ /// Close this tool tab.
     let onClose: () -> Void
     @State private var dropError: String?
     @State private var droppingUser: String?

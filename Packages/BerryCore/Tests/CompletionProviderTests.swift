@@ -4,7 +4,7 @@ import Testing
 
 @testable import BerryCore
 
-@Suite("CompletionProvider (ED-03)")
+@Suite("CompletionProvider")
 struct CompletionProviderTests {
     private let objects = [
         SchemaObject(kind: .table, name: "users"),
@@ -33,7 +33,7 @@ struct CompletionProviderTests {
         #expect(suggestions.contains(.table("user_stats")))
     }
 
-    // docs/ui: subsequence match offsets for highlighting the typed chars.
+ // subsequence match offsets for highlighting the typed chars.
     @Test func matchOffsetsHighlightSubsequence() {
         #expect(CompletionProvider.matchOffsets(of: "us", in: "users") == [0, 1])
         #expect(CompletionProvider.matchOffsets(of: "ur", in: "users") == [0, 3]) // u..s..r? -> u(0) r(3)
@@ -42,7 +42,7 @@ struct CompletionProviderTests {
         #expect(CompletionProvider.matchOffsets(of: "", in: "users") == [])
     }
 
-    // ED-13: statement + transaction keywords are completable, not just DML clauses.
+ // statement + transaction keywords are completable, not just DML clauses.
     @Test func suggestsStatementAndTransactionKeywords() {
         for keyword in ["ROLLBACK", "COMMIT", "BEGIN", "TRUNCATE", "RETURNING", "ANALYZE"] {
             let prefix = String(keyword.prefix(3))
@@ -51,7 +51,7 @@ struct CompletionProviderTests {
         }
     }
 
-    // ED-13 Phase 2: dialect commands passed in are suggested as keywords.
+ // Phase 2: dialect commands passed in are suggested as keywords.
     @Test func suggestsDialectStatementsPassedIn() {
         let hits = CompletionProvider.suggestions(
             script: "PRAG", utf16Cursor: 4, objects: [],
@@ -68,7 +68,7 @@ struct CompletionProviderTests {
         #expect(CompletionProvider.Suggestion.keyword("SELECT").detail == "keyword")
     }
 
-    // docs/ui/02 §7: identifiers that survive case-folding aren't quoted;
+ // identifiers that survive case-folding aren't quoted;
     // PascalCase / special-char / leading-digit ones are.
     @Test func identifierQuotingHeuristic() {
         #expect(!CompletionProvider.identifierNeedsQuoting("users"))
@@ -96,7 +96,7 @@ struct CompletionProviderTests {
         #expect(CompletionProvider.Suggestion.routine(name: "audit_ai", kind: .trigger).detail == "trigger")
     }
 
-    // TR-01: routines/triggers live in the sidebar, never as table completions.
+ // routines/triggers live in the sidebar, never as table completions.
     @Test func excludesNonRelationalObjectsFromTableSuggestions() {
         let withRoutines = objects + [
             SchemaObject(kind: .function, name: "calc_total"),

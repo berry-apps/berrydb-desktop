@@ -1,13 +1,13 @@
 import Foundation
 
-/// Splits an SQL script into statements (ED-04: run statement at cursor /
+/// Splits an SQL script into statements (run statement at cursor /
 /// selection / whole file). Understands enough lexical structure to never
 /// split inside: 'strings' (with '' escape), "quoted identifiers",
 /// `backtick identifiers`, $$ dollar-quoted bodies $$ (incl. $tag$…$tag$),
 /// -- line comments and /* block comments */.
 ///
 /// This is intentionally lexical, not a parser — the network drivers run one
-/// statement per execute (docs/architecture/05 §1), and this is the seam
+/// statement per execute, and this is the seam
 /// that feeds them.
 public enum StatementSplitter {
     public struct Statement: Equatable, Sendable {
@@ -125,7 +125,7 @@ public enum StatementSplitter {
         return statements
     }
 
-    /// Statement containing the cursor (ED-04, ⌘↩). Falls back to the last
+ /// Statement containing the cursor (⌘↩). Falls back to the last
     /// statement before the cursor when the cursor sits between statements.
     public static func statement(at utf16Cursor: Int, in script: String) -> Statement? {
         let all = split(script)

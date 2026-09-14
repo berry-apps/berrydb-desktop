@@ -1,8 +1,8 @@
 import BerryDriverKit
 import Foundation
 
-/// Declarative new-user definition for the user designer (TI-03) —
-/// docs/architecture/14 §Architecture. Mirrors `TableDesign`'s shape: the
+/// Declarative new-user definition for the user designer
+/// Mirrors `TableDesign`'s shape: the
 /// form edits this model, the dialect renders DDL, the SQL preview is ALWAYS
 /// shown before applying, and apply runs through the single QueryService
 /// path (N1).
@@ -10,7 +10,7 @@ import Foundation
 /// v1 scope: create only (no edit-existing-user mode — password rotation and
 /// per-grant revoke are separate per-row actions in the user list, not part
 /// of this sheet), database-level grants only (no per-table/per-column, no
-/// role membership) — docs/architecture/14 §"Deferred".
+/// role membership).
 public struct UserGrantDesign: Sendable, Equatable, Identifiable {
     public var id = UUID()
     public var privilege: String

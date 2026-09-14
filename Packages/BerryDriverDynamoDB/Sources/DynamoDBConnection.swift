@@ -2,7 +2,7 @@ import BerryDriverKit
 import Foundation
 
 /// Cancellation state reachable from outside the actor — same reasoning as
-/// `PostgresCancelBox`/`QdrantCancelBox` (docs/architecture/05 §4):
+/// `PostgresCancelBox`/`QdrantCancelBox`:
 /// `cancelCurrentQuery()` must work while the actor is busy awaiting HTTP.
 private final class DynamoDBCancelBox: @unchecked Sendable {
     private let lock = NSLock()
@@ -17,7 +17,7 @@ private final class DynamoDBCancelBox: @unchecked Sendable {
 public actor DynamoDBConnection: DriverConnection {
     public nonisolated let id = UUID()
 
-    private nonisolated let client: DynamoDBHTTPClient
+    private let client: DynamoDBHTTPClient
     private nonisolated let cancelBox = DynamoDBCancelBox()
     private var isClosed = false
 
@@ -29,7 +29,7 @@ public actor DynamoDBConnection: DriverConnection {
 
     init(config: ConnectionConfig, session: URLSession = URLSession(configuration: .ephemeral)) async throws {
         self.client = try DynamoDBHTTPClient(config: config, session: session)
-        // Fail fast (KN-06 "Test connection" expectation, same reasoning as
+ // Fail fast ("Test connection" expectation, same reasoning as
         // QdrantDriver.connect()) — an HTTP client has no TCP-handshake-time
         // failure the way Postgres/MySQL do.
         guard await client.ping() else {
@@ -37,7 +37,7 @@ public actor DynamoDBConnection: DriverConnection {
         }
     }
 
-    // MARK: - Execute (docs/architecture/06 · L2, 12 §4)
+ // MARK: - Execute
 
     public nonisolated func execute(_ sql: String) -> AsyncThrowingStream<ResultEvent, Error> {
         AsyncThrowingStream { continuation in
@@ -60,10 +60,10 @@ public actor DynamoDBConnection: DriverConnection {
             // mechanism — PartiQL has no BEGIN/COMMIT/ROLLBACK statement at
             // all. `ChangeSet.apply` (BerryCore, untouched) still wraps every
             // run in that text because `capabilities.transactions == true`
-            // (required to match docs/architecture/05 §4's table exactly).
+ // (required to match's table exactly).
             // Treated as a client-side no-op: no network call, no real
             // atomicity or rollback — a documented gap, not a silent lie.
-            // See docs/architecture/12 §4 "Trạng thái hiện thực".
+ // See
             continuation.yield(.complete(QueryStats(rowsAffected: nil, duration: .zero)))
             continuation.finish()
         case .select:
@@ -76,7 +76,7 @@ public actor DynamoDBConnection: DriverConnection {
         }
     }
 
-    /// Follows every `NextToken` page (docs/architecture/05 §4
+ /// Follows every `NextToken` page
     /// `serverSideCursor` — sequential paging, no seek) and streams batches
     /// of ≤1000 rows (N3). Columns are established from the union of
     /// attribute names in the FIRST non-empty page; a later page introducing
@@ -115,7 +115,7 @@ public actor DynamoDBConnection: DriverConnection {
     }
 
     /// Singleton INSERT/UPDATE/DELETE — DynamoDB PartiQL can only ever touch
-    /// one item per statement (docs/architecture/12 §4), so there is never a
+ /// one item per statement, so there is never a
     /// second page to follow.
     private func runWrite(
         sql: String, continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
@@ -127,7 +127,7 @@ public actor DynamoDBConnection: DriverConnection {
             _ = try await client.executeStatement(rewritten, nextToken: nil, limit: nil)
             // No rowsAffected: ExecuteStatement reports no count for writes
             // (Items is only populated by RETURNING, which ChangeSet never
-            // requests) — same "not exposed" precedent as Postgres (05 §6);
+ // requests) — same "not exposed" precedent as Postgres;
             // the UI shows "OK" + duration.
             continuation.yield(.complete(QueryStats(rowsAffected: nil, duration: clock.now - started)))
             continuation.finish()
@@ -160,7 +160,7 @@ public actor DynamoDBConnection: DriverConnection {
     // MARK: - Control
 
     /// Client-side only (capabilities.cancelQuery == false, matching
-    /// docs/architecture/05 §4's "❌ chỉ hủy phía client") — DynamoDB has no
+ /// — DynamoDB has no
     /// server-side query-cancel API. Cancelling the Task stops the
     /// pagination loop / aborts the in-flight HTTP request; it does not (and
     /// architecturally cannot) tell DynamoDB to stop evaluating server-side.
@@ -169,7 +169,7 @@ public actor DynamoDBConnection: DriverConnection {
     }
 
     /// DynamoDB has no database/schema concept (multipleDatabases == false,
-    /// 05 §4) — same posture as SQLite's single-database-per-connection.
+ /// — same posture as SQLite's single-database-per-connection.
     public func setDatabase(_ name: String) async throws {
         throw DriverError.unsupported("DynamoDB has no database/schema concept — each table is independent")
     }

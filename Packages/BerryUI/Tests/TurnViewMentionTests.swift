@@ -6,12 +6,12 @@ import Testing
 
 @testable import BerryUI
 
-/// A user's own bubble linkifying `@{Name}` (AI-32, docs/draft/09.md) —
+/// A user's own bubble linkifying `@{Name}`
 /// `TurnView.styledMessageText` re-resolves each already-sent mention span
 /// against the same candidate list the composer's autocomplete used, since
 /// the bubble only stored the literal text, not which item was chosen.
 @MainActor
-@Suite("TurnView mention rendering (AI-32)")
+@Suite("TurnView mention rendering")
 struct TurnViewMentionTests {
     private let artifact = Artifact(profileID: UUID(), kind: .editorTab, title: "Top customers")
     private let object = SchemaObject(kind: .table, name: "orders", database: nil)

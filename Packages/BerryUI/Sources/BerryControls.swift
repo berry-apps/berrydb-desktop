@@ -1,12 +1,12 @@
 import AppKit
 import SwiftUI
 
-/// Reusable macOS-native building blocks that carry the ui.md language:
+/// Reusable macOS-native building blocks that carry the language:
 /// vibrancy backgrounds, compact buttons with smooth hover, Bento cards, and a
 /// hairline divider that lights up on hover for panel resizing. Presentation
 /// only — no app logic.
 
-// MARK: - Vibrancy background (ui.md §2)
+// MARK: - Vibrancy background
 
 /// Semi-transparent system material for sidebars/panels — matches the OS
 /// vibrancy instead of a flat opaque fill.
@@ -28,7 +28,7 @@ struct VisualEffectBackground: NSViewRepresentable {
     }
 }
 
-// MARK: - Compact button (ui.md §3: 22–24px, 6px radius, 150–200ms hover)
+// MARK: - Compact button (22–24px, 6px radius, 150–200ms hover)
 
 struct CompactButtonStyle: ButtonStyle {
     var prominent = false
@@ -51,7 +51,7 @@ struct CompactButtonStyle: ButtonStyle {
                 .padding(.horizontal, BerryTheme.Space.md)
                 .background(fill, in: RoundedRectangle(cornerRadius: BerryTheme.Radius.control))
                 .contentShape(RoundedRectangle(cornerRadius: BerryTheme.Radius.control))
-                // Fade when disabled so it's distinct from enabled (docs/ui/03).
+ // Fade when disabled so it's distinct from enabled.
                 .opacity(isEnabled ? (configuration.isPressed ? 0.85 : 1) : 0.4)
                 .onHover { hovering = $0 }
                 .animation(BerryTheme.Motion.hover, value: hovering)
@@ -74,11 +74,11 @@ extension ButtonStyle where Self == CompactButtonStyle {
     static var compactRun: CompactButtonStyle { CompactButtonStyle(prominent: true) }
 }
 
-// MARK: - Icon action button (ui.md §3, docs/ui/01 §3)
+// MARK: - Icon action button
 
 /// Small icon action button with a smooth rounded hover fill and no accent
 /// background — the shared look for header and editor exec clusters. With
-/// `showsLabel` the button widens to fit its title (docs/ui label mode).
+/// `showsLabel` the button widens to fit its title (label mode).
 struct IconButtonStyle: ButtonStyle {
     var size: CGFloat = 13
     var showsLabel = false
@@ -103,7 +103,7 @@ struct IconButtonStyle: ButtonStyle {
             configuration.label
                 .font(.system(size: size))
                 // Custom button styles don't auto-dim when disabled — fade the
-                // icon so disabled vs enabled is obvious (docs/ui/03).
+ // icon so disabled vs enabled is obvious.
                 .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.3)
                 .padding(.horizontal, showsLabel ? 6 : 0)
                 .frame(minWidth: 24)
@@ -126,7 +126,7 @@ extension ButtonStyle where Self == IconButtonStyle {
 }
 
 /// Label style for action buttons that shows the icon always and the title only
-/// in label mode (docs/ui): users can switch between compact icons and
+/// in label mode: users can switch between compact icons and
 /// icon + text without the views changing shape logic.
 struct IconOrTitledLabelStyle: LabelStyle {
     var showsTitle: Bool
@@ -142,7 +142,7 @@ struct IconOrTitledLabelStyle: LabelStyle {
     }
 }
 
-// MARK: - Bento card (ui.md §4)
+// MARK: - Bento card
 
 private struct BentoCard: ViewModifier {
     var padding: CGFloat = BerryTheme.Space.md
@@ -156,13 +156,13 @@ private struct BentoCard: ViewModifier {
 
 extension View {
     /// Wrap content in a neutral Bento box (8px radius, soft gray fill) so it
-    /// reads as distinct from the data grid (ui.md §4).
+ /// reads as distinct from the data grid.
     func bentoCard(padding: CGFloat = BerryTheme.Space.md) -> some View {
         modifier(BentoCard(padding: padding))
     }
 }
 
-// MARK: - Hover row highlight (ui.md §3)
+// MARK: - Hover row highlight
 
 private struct HoverHighlight: ViewModifier {
     var cornerRadius: CGFloat
@@ -181,13 +181,13 @@ private struct HoverHighlight: ViewModifier {
 
 extension View {
     /// Smooth background highlight on hover for rows, chips, and icon buttons
-    /// (ui.md §3). `cornerRadius` matches the host shape (0 for full-width rows).
+ /// `cornerRadius` matches the host shape (0 for full-width rows).
     func hoverHighlight(cornerRadius: CGFloat = 0) -> some View {
         modifier(HoverHighlight(cornerRadius: cornerRadius))
     }
 }
 
-// MARK: - Resize divider (ui.md §1)
+// MARK: - Resize divider
 
 /// A 1px neutral divider that turns macOS-blue on hover — the handle between
 /// split panels. `axis` is the divider's own orientation.

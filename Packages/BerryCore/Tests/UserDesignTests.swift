@@ -23,7 +23,7 @@ private struct UnsupportedDialect: SQLDialect {
     // No overrides — inherits the protocol's `nil` defaults, matching SQLite.
 }
 
-@Suite("User designer DDL (TI-03)")
+@Suite("User designer DDL")
 struct UserDesignTests {
     private let dialect = TestDialect()
 

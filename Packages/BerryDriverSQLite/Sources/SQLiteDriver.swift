@@ -5,7 +5,7 @@ public struct SQLiteDriver: DatabaseDriver {
     public static let id: DriverID = .sqlite
     public static let displayName = "SQLite"
 
-    // Capability matrix: docs/architecture/05 §4.
+ // Capability matrix:
     public static let capabilities = Capabilities(
         transactions: true,
         cancelQuery: true,          // sqlite3_interrupt

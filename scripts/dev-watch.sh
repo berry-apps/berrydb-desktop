@@ -48,9 +48,9 @@ build_and_run() {
         launch_app
     else
         local errors=$(echo "$OUTPUT" | grep -c "error:")
-        echo "\033[31m✘ build FAILED (${errors} lỗi)\033[0m"
+        echo "\033[31m✘ build FAILED (${errors} errors)\033[0m"
         echo "$OUTPUT" | grep -E "error:" | head -10
-        notify "FAILED" "${errors} lỗi biên dịch — app giữ phiên bản cũ"
+        notify "FAILED" "${errors} compilation error(s) — keeping previous build"
         # Keep the previous app running so the last good state stays visible.
     fi
 }
@@ -61,7 +61,7 @@ cleanup() {
 }
 trap cleanup INT TERM
 
-echo "BerryDB dev watch — theo dõi: ${WATCH_PATHS[*]} (Ctrl-C để dừng)"
+echo "BerryDB dev watch — watching: ${WATCH_PATHS[*]} (Ctrl-C to stop)"
 build_and_run
 
 if command -v fswatch >/dev/null 2>&1; then
@@ -77,7 +77,7 @@ else
         sleep 1
         CHANGED=$(find "${WATCH_PATHS[@]}" -name '*.swift' -newer "$STAMP" 2>/dev/null | head -1)
         if [ -n "$CHANGED" ]; then
-            echo "— thay đổi: $CHANGED"
+            echo "— changed: $CHANGED"
             touch "$STAMP"
             build_and_run
         fi

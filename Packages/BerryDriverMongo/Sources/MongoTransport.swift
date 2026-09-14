@@ -4,8 +4,8 @@ import Network
 
 /// Byte-level transport for the MongoDB wire protocol — abstracted so tests
 /// can substitute a scripted fake instead of a real socket (mirrors how
-/// `QdrantStubURLProtocol` substitutes for `URLSession`, docs/architecture/12
-/// §10). `MongoWireClient` is the only caller; it owns all framing.
+/// `QdrantStubURLProtocol` substitutes for `URLSession`,
+/// `MongoWireClient` is the only caller; it owns all framing.
 protocol MongoTransport: Sendable {
     func connect() async throws
     func send(_ data: Data) async throws
@@ -27,8 +27,8 @@ protocol MongoTransport: Sendable {
 /// drivers: MongoDB's wire protocol has no in-band "try TLS, fall back to
 /// plaintext on the same connection" negotiation the way Postgres's
 /// `SSLRequest` byte does, so "prefer" cannot be honored as designed —
-/// documented deviation (docs/architecture/12 §3 "Trạng thái hiện thực").
-/// Custom CA / client cert (KN-04) are not wired in yet, same not-yet-done
+/// documented deviation.
+/// Custom CA / client cert are not wired in yet, same not-yet-done
 /// bucket as SRV DNS lookup and x.509 client-cert auth.
 final class MongoSocketTransport: MongoTransport, @unchecked Sendable {
     private let connection: NWConnection
@@ -60,7 +60,7 @@ final class MongoSocketTransport: MongoTransport, @unchecked Sendable {
                     // sense for a long-lived app, but not for a one-shot
                     // "connect now" driver call. Empirically found: a bad
                     // host/port otherwise hung indefinitely instead of
-                    // failing fast (KN-06 "Test connection" expectation, same
+ // failing fast ("Test connection" expectation, same
                     // as every other driver). Treat it as a hard failure and
                     // stop retrying.
                     connection.cancel()

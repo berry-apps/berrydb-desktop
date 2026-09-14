@@ -2,11 +2,11 @@ import BerryDataSourceKit
 import Foundation
 
 /// Pure BSON binary <-> `BerryDocument` codec — no networking
-/// (docs/architecture/12 §3 "Trạng thái hiện thực"). Hand-rolled per the BSON
+/// Hand-rolled per the BSON
 /// spec (bsonspec.org); encode/decode verified against MongoDB's own
 /// `bson-corpus` conformance vectors (`BSONTests`) rather than derived by
 /// hand, same "verify against a real vector" discipline as `SigV4Signer`
-/// (docs/architecture/12 §4).
+///
 ///
 /// Deliberately narrower than the full BSON type system: types with no
 /// `BerryDocument` case or no realistic use in a document a BerryDB user
@@ -117,7 +117,7 @@ enum BSON {
         case .vector(let floats):
             // No general-document BSON vector type — widen to an array of
             // doubles (lossy Float -> Double). Decode never re-produces
-            // `.vector` for a plain numeric array (docs/architecture/12 §3):
+ // `.vector` for a plain numeric array:
             // this is a one-way write path, not a round-trip.
             data.append(TypeByte.array)
             appendCString(name, &data)
@@ -285,7 +285,7 @@ enum BSON {
     /// byte + packed vector data. Only float32 (dtype 0x27) decodes to
     /// `.vector`; other dtypes (int8/packed-bit quantized vectors) fall back
     /// to `.binary` via the caller — narrow, best-effort support, not a goal
-    /// of this driver (Mongo vector search is out of NS-01/02/03 scope).
+ /// of this driver (Mongo vector search is out of scope).
     private static func decodeVectorSubtype(_ payload: Data) -> [Float]? {
         let bytes = [UInt8](payload)
         guard bytes.count >= 2, bytes[0] == 0x27 else { return nil }

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import BerryStore
 
-@Suite("Artifacts (AI-29, docs/draft/09.md)")
+@Suite("Artifacts")
 struct ArtifactTests {
     private func makeStore() throws -> BerryStore {
         try BerryStore(path: ":memory:")

@@ -46,7 +46,7 @@ struct MongoOpMsgTests {
         // Hand-build a message with a kind-1 section (identifier "docs" + one
         // document) FOLLOWED by the kind-0 body — exercises the "skip
         // unused section kinds without corrupting the rest of the parse"
-        // path (MongoOpMsg §"only kind 0 is built, kind 1 is still parsed").
+ // path (MongoOpMsg).
         var payload = Data()
         payload.append(BSON.uint32LE(0)) // flagBits
 

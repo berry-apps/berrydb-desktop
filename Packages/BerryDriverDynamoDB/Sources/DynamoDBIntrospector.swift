@@ -1,14 +1,14 @@
 import BerryDriverKit
 import Foundation
 
-/// Introspection via `ListTables`/`DescribeTable` (docs/architecture/05 §5,
-/// 12 §4) — DynamoDB has no catalog to query with SQL, so every method here
+/// Introspection via `ListTables`/`DescribeTable`
+/// — DynamoDB has no catalog to query with SQL, so every method here
 /// is one or two REST calls instead of a query.
 public struct DynamoDBIntrospector: Introspector {
     let client: DynamoDBHTTPClient
 
     /// DynamoDB has no database/schema concept — table names are global per
-    /// region (multipleDatabases == false, docs/architecture/05 §4). A single
+ /// region (multipleDatabases == false). A single
     /// synthetic entry follows the exact precedent SQLite already set for the
     /// same capability flag (`SQLiteIntrospector.databases() → [DatabaseInfo(name: "main")]`)
     /// rather than an empty list — `objects(in:)` below ignores whatever
@@ -27,7 +27,7 @@ public struct DynamoDBIntrospector: Introspector {
     /// other attribute is per-item schema-flexible, so there is nothing to
     /// declare. BOTH the partition key and the (optional) sort key are
     /// marked `isPrimaryKey: true` — ChangeSet's generated WHERE clause ANDs
-    /// together every `isPrimaryKey` column (docs/architecture/06 · L3), and
+ /// together every `isPrimaryKey` column, and
     /// DynamoDB's own PartiQL UPDATE/DELETE require WHERE to equate the FULL
     /// primary key (verified against dynamodb-local: a partition-key-only
     /// WHERE on a table with a sort key fails with "Where clause does not
@@ -60,7 +60,7 @@ public struct DynamoDBIntrospector: Introspector {
     /// Best-effort pseudo-DDL synthesized from `KeySchema`/`AttributeDefinitions`
     /// — DynamoDB has no `SHOW CREATE TABLE`/`pg_get_*def()` equivalent to
     /// read back, so unlike the SQL drivers this is NOT authoritative; the
-    /// comment header says so explicitly (TR-03, docs/architecture/12 §4).
+ /// comment header says so explicitly.
     public func ddl(of object: SchemaObject) async throws -> String {
         let table = try await client.describeTable(name: object.name)
         let keySchema = (table["KeySchema"] as? [[String: Any]]) ?? []
@@ -75,14 +75,14 @@ public struct DynamoDBIntrospector: Introspector {
         return """
         -- Synthesized from KeySchema/AttributeDefinitions — best-effort, NOT authoritative.
         -- DynamoDB has no DDL to read back; non-key attributes are per-item schema-flexible
-        -- and are not listed here (docs/architecture/12 §4).
+        -- and are not listed here.
         CREATE TABLE "\(object.name)" (
         \(lines.joined(separator: ",\n"))
         )
         """
     }
 
-    /// TR-04: `DescribeTable`'s response already carries `ItemCount` (AWS
+ /// `DescribeTable`'s response already carries `ItemCount` (AWS
     /// updates this ~every 6 hours, not realtime — a coarser estimate than
     /// Postgres/MySQL's catalog stats, but it's what the API exposes with no
     /// extra call) and `TableSizeBytes`. No storage-engine concept; DynamoDB

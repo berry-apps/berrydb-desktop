@@ -2,7 +2,7 @@ import BerryDriverKit
 import Foundation
 
 /// Introspection via `sys.objects`/`sys.columns`/`sys.indexes`
-/// (docs/architecture/05 §4). For SQL Server, `SchemaObject`'s `database`
+/// For SQL Server, `SchemaObject`'s `database`
 /// field means SCHEMA (namespace, e.g. `dbo`) — same convention
 /// `PostgresIntrospector` uses for Postgres schemas.
 public struct SQLServerIntrospector: Introspector {
@@ -38,7 +38,7 @@ public struct SQLServerIntrospector: Introspector {
             return SchemaObject(kind: objectKind, name: name, database: schemaName)
         }
 
-        // Functions & procedures (TR-01). type: 'P' = procedure, 'FN'/'TF'/'IF' = functions.
+ // Functions & procedures. type: 'P' = procedure, 'FN'/'TF'/'IF' = functions.
         let routineRows = try await connection.queryAll(
             """
             SELECT s.name, o.name, o.type
@@ -56,7 +56,7 @@ public struct SQLServerIntrospector: Introspector {
             return SchemaObject(kind: trimmedKind == "P" ? .procedure : .function, name: name, database: schemaName)
         }
 
-        // Triggers (TR-01).
+ // Triggers.
         let triggerRows = try await connection.queryAll(
             """
             SELECT s.name, tr.name
@@ -151,7 +151,7 @@ public struct SQLServerIntrospector: Introspector {
         return TableDetail(ref: ref, columns: columns, indexes: indexes, foreignKeys: foreignKeys)
     }
 
-    /// TR-04: `sys.dm_db_partition_stats` for an estimated row count (cheap —
+ /// `sys.dm_db_partition_stats` for an estimated row count (cheap
     /// no table scan, matches Postgres's own `n_live_tup` estimate
     /// reasoning), `sys.partitions` reserved-page count × 8KB for size (index
     /// pages + data, same "table + indexes" scope Postgres's
@@ -199,7 +199,7 @@ public struct SQLServerIntrospector: Introspector {
             return lines.joined()
         default:
             // No SHOW CREATE TABLE — rebuild basic DDL from the catalog, same
-            // "enough for TR-03 view/copy, full DDL is CT-01's job" scope
+ // "enough for view/copy, full DDL is's job" scope
             // `PostgresIntrospector.ddl` documents for its own table case.
             let detail = try await tableDetail(TableRef(database: schema, name: object.name))
             var lines: [String] = []

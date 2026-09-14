@@ -1,6 +1,6 @@
 import BerryDriverKit
 
-/// Dialect-specific statement/command keywords for autocompletion (ED-13).
+/// Dialect-specific statement/command keywords for autocompletion.
 /// Generic statements (SELECT, transactions, DDL, SHOW/ANALYZE…) live in
 /// `CompletionProvider.keywords`; this holds only commands unique to one engine,
 /// so completion matches the connected DBMS.

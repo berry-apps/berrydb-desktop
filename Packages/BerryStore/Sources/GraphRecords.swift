@@ -1,10 +1,10 @@
 import Foundation
 import GRDB
 
-/// Persisted DSG rows (docs/architecture/11 §5). Temporal: `firstSeen`/`lastSeen`
+/// Persisted DSG rows. Temporal: `firstSeen`/`lastSeen`
 /// track when each element appeared and was last confirmed, so the Digital Twin
-/// (§6) reconstructs the graph as-of any snapshot without storing a full copy
-/// each time. Local only; never leaves the machine (07 §3). BerryStore owns
+/// reconstructs the graph as-of any snapshot without storing a full copy
+/// each time. Local only; never leaves the machine. BerryStore owns
 /// these row types; BerryGraph maps its `SchemaGraph` to/from them.
 public struct GraphNodeRecord: Codable, Sendable, FetchableRecord, PersistableRecord {
     public var profileID: UUID

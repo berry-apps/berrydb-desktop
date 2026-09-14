@@ -5,10 +5,10 @@ import Testing
 @testable import BerryAI
 @testable import BerryUI
 
-/// Bounded recent-actions log (docs/feature/08, AI-28) + the in-memory UI
-/// graph snapshot (AI-27) — both new, deliberately narrow additions: only tab
+/// Bounded recent-actions log + the in-memory UI
+/// graph snapshot — both new, deliberately narrow additions: only tab
 /// opened/closed/pane-split are logged, and nothing is persisted beyond the
-/// cap (docs/architecture/13 §8b's rejected DI-18 explains why).
+/// cap ('s rejected explains why).
 @MainActor
 @Suite("Workspace action log + UI graph snapshot")
 struct WorkspaceActionLogTests {

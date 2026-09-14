@@ -2,7 +2,7 @@ import Testing
 
 @testable import BerryUI
 
-@Suite("Command Palette (DI-22)")
+@Suite("Command Palette")
 struct CommandPaletteEntryTests {
     private func entries() -> [CommandPaletteEntry] {
         [
@@ -94,7 +94,7 @@ struct CommandPaletteEntryTests {
     }
 
     /// Every built-in entry needs a non-empty, unique `action` id — it's the
-    /// only thing `perform_ui_action` (DI-22 §5.3) has to address an entry by,
+ /// only thing `perform_ui_action` has to address an entry by,
     /// since `title` is localized and can't serve as a stable identifier.
     @Test func everyBuiltEntryHasAUniqueNonEmptyActionID() {
         let actions = WorkspaceMenuActions(

@@ -3,12 +3,12 @@ import Testing
 
 @testable import BerryAI
 
-/// On-device smoke test for the Apple Foundation Models provider (AI-20).
+/// On-device smoke test for the Apple Foundation Models provider.
 /// Never fails CI: it reports availability, and only when Apple Intelligence is
 /// actually available does it run one real completion. Result is written to
 /// /tmp/berrydb-apple.txt so it can be read after running:
 ///   swift test --filter AppleFoundationSmoke
-@Suite("Apple Foundation Models (AI-20) smoke")
+@Suite("Apple Foundation Models smoke")
 struct AppleFoundationSmokeTests {
     struct NoTools: AIToolExecutor {
         func execute(_ call: AIToolCall) async -> ToolOutcome { .ok("{}") }
@@ -30,7 +30,7 @@ struct AppleFoundationSmokeTests {
             report += "Apple Intelligence not available on this machine.\n"
             report += "Enable it: System Settings > Apple Intelligence & Siri (needs macOS 26 + Apple Silicon), then re-run.\n"
         }
-        // Streaming (AI-20): confirm we get progressive deltas, not one blob.
+ // Streaming: confirm we get progressive deltas, not one blob.
         if available {
             do {
                 var deltas = 0

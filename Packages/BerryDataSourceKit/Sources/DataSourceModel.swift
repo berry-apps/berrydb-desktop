@@ -16,7 +16,7 @@ public struct CollectionRef: Sendable, Hashable, Identifiable {
 
 /// Query shapes native to each `DataSourceDriver` — no shared SQL-like
 /// surface exists across document/vector stores, so this stays a closed
-/// per-driver enum rather than a generic string (docs/architecture/12 §2).
+/// per-driver enum rather than a generic string.
 public enum DataSourceQuery: Sendable {
     case mongoFind(collection: String, filter: BerryDocument, projection: BerryDocument?, limit: Int?)
     case mongoAggregate(collection: String, pipeline: [BerryDocument])
@@ -26,12 +26,12 @@ public enum DataSourceQuery: Sendable {
     case qdrantSearch(collection: String, vector: [Float], filter: BerryDocument?, topK: Int, scoreThreshold: Double?)
     case qdrantScroll(collection: String, filter: BerryDocument?, pageToken: String?)
     /// Query DSL search, bounded by `from`/`size` — the ES analogue of
-    /// `.qdrantSearch`'s bounded top-K (docs/architecture/17 §2). `query`
+ /// `.qdrantSearch`'s bounded top-K. `query`
     /// `.null` (or an empty object) means "match everything", same
     /// empty-means-match-all convention as `.mongoFind`'s `filter`.
     case esSearch(index: String, query: BerryDocument, from: Int, size: Int)
     /// Point-in-Time + `search_after` deep pagination — the ES analogue of
-    /// `.qdrantScroll`'s offset-token paging (docs/architecture/17 §2): one
+ /// `.qdrantScroll`'s offset-token paging: one
     /// page per call, `pageToken` opaquely carries the open PIT id plus the
     /// last hit's sort values forward.
     case esScroll(index: String, query: BerryDocument, pageToken: String?)
@@ -60,7 +60,7 @@ public struct DataSourceStats: Sendable {
 
 /// Write request — the document/vector-store analogue of `ChangeSet`
 /// (BerryCore): always previewed in the native command shape before being
-/// applied (DL-03/04 principle, docs/architecture/12 §6).
+/// applied (principle).
 public enum DataSourceChangeSet: Sendable {
     case insert(collection: String, document: BerryDocument)
     /// Grid-driven edit: the row's exact `_id`/point-id is already known.
@@ -76,7 +76,7 @@ public enum DataSourceChangeSet: Sendable {
     /// filter rather than a known id.
     case deleteByFilter(collection: String, filter: BerryDocument, multi: Bool)
     /// `drop()` — removes the entire collection. Always requires typed
-    /// confirmation (docs/feedback/02.md Group C) since there is no filter
+ /// confirmation (Group C) since there is no filter
     /// concept to scope the blast radius the way deleteMany has one.
     case dropCollection(collection: String)
     /// `createIndex(keys, options)` — non-destructive, always `.safe`.

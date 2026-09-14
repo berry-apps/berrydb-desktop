@@ -5,7 +5,7 @@ import Testing
 
 @testable import BerryUI
 
-@Suite("ArtifactMentionItem.filter (AI-32 composer @{...} mention)")
+@Suite("ArtifactMentionItem.filter (composer @{...} mention)")
 struct ArtifactMentionItemTests {
     private let artifacts = [
         Artifact(profileID: UUID(), kind: .editorTab, title: "Top customers"),

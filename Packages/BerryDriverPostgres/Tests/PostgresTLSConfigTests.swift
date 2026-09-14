@@ -5,8 +5,8 @@ import Testing
 
 @testable import BerryDriverPostgres
 
-/// TLS verification modes (KN-04) — pure config, no server needed.
-@Suite("Postgres TLS config (KN-04)")
+/// TLS verification modes — pure config, no server needed.
+@Suite("Postgres TLS config")
 struct PostgresTLSConfigTests {
     @Test func verifyFullChecksTheHostname() {
         let tls = PostgresDriverConnection.verifyingTLS(mode: .verifyFull, caCertPath: nil)
@@ -27,7 +27,7 @@ struct PostgresTLSConfigTests {
         }
     }
 
-    // KN-04 mutual TLS: a real (openssl-generated) client cert + key load into
+ // mutual TLS: a real (openssl-generated) client cert + key load into
     // the certificate chain and private key.
     @Test func clientIdentityLoadsFromPEM() throws {
         let dir = NSTemporaryDirectory() + "berry_mtls_\(UUID().uuidString)"

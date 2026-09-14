@@ -1,8 +1,8 @@
 import BerryDataSourceKit
 import Foundation
 
-/// Native-command preview for a `DataSourceChangeSet` (DL-03/04 sibling,
-/// docs/architecture/12 §6/§7) — shown before every write via
+/// Native-command preview for a `DataSourceChangeSet` (sibling,
+/// — shown before every write via
 /// `WorkspaceViewModel.applyDataSourceWrite`, same "preview then apply" rule
 /// as SQL's `ChangeSet.statements()`. Pseudo-mongosh for Mongo; the literal
 /// REST method/path/JSON body for Qdrant.

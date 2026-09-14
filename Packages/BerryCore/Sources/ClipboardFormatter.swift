@@ -1,7 +1,7 @@
 import BerryDriverKit
 import Foundation
 
-/// Copy-as builders (DL-07): selection → CSV / JSON / SQL INSERT / Markdown.
+/// Copy-as builders: selection → CSV / JSON / SQL INSERT / Markdown.
 /// Pure string builders so every format is unit-testable.
 public enum ClipboardFormatter {
     public static func csv(columns: [ColumnMeta], rows: [[BerryValue]]) -> String {
@@ -20,7 +20,7 @@ public enum ClipboardFormatter {
 
     /// Multi-row INSERT via the session dialect — pastes straight back into
     /// any SQL editor (values rendered by the same literal engine as
-    /// ChangeSet, docs/architecture/06 · L3).
+ /// ChangeSet).
     public static func sqlInserts(
         table: TableRef,
         columns: [ColumnMeta],

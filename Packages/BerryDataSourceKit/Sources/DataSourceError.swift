@@ -3,7 +3,7 @@ import Foundation
 /// `Bundle.module`'s generated accessor traps if it can't find this
 /// package's resource bundle in a packaged, signed `.app` — see the same
 /// note on `berryModuleBundle` in BerryUI/Sources/Localization.swift, and
-/// docs/tests/crash.md for the real crash this caused. Checks the correct
+/// for the real crash this caused. Checks the correct
 /// packaged-app and dev-run locations first; `.module` itself is only a last
 /// resort (in practice, `swift test`, where it's already safe).
 private let dataSourceKitModuleBundle: Bundle = {

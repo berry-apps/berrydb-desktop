@@ -3,7 +3,7 @@ import BerryDriverKit
 import SwiftUI
 
 /// Bridge that lets detached-tab windows reach the main workspace's view model
-/// (docs/ui/01 D1). One workspace per app for now (04 §3), so a single weak
+/// (D1). One workspace per app for now, so a single weak
 /// reference is enough; the window looks its tab up by id.
 @MainActor
 public final class DetachedWorkspace {
@@ -12,7 +12,7 @@ public final class DetachedWorkspace {
     private init() {}
 }
 
-/// One tab moved into its own independent window (docs/ui/01 D1). The content
+/// One tab moved into its own independent window (D1). The content
 /// is backed by the SAME document/session as the main window — it's the tab
 /// relocated, not a copy. Closing the window closes the tab.
 public struct DetachedTabWindow: View {
@@ -52,6 +52,8 @@ public struct DetachedTabWindow: View {
                 catalog: viewModel.catalog,
                 transaction: viewModel.transaction,
                 onPersist: { viewModel.persistEditor(document) },
+                availableProfiles: viewModel.profiles,
+                onAttachProfile: { profile in Task { await viewModel.connect(profile: profile) } },
                 onSaveQueryReplay: { sql, durationMS in await viewModel.saveQueryReplay(sql: sql, durationMS: durationMS) }
             )
         case .table(let state):

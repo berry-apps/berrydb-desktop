@@ -2,7 +2,7 @@ import AppKit
 import BerryCore
 import SwiftUI
 
-/// Backup manager tab (docs/feature/04), Navicat-style: an icon toolbar
+/// Backup manager tab: an icon toolbar
 /// (New Backup / Restore / Delete / Reveal / Refresh) over the list of a
 /// connection's past backups. New Backup opens the object-selection sheet;
 /// Restore runs the selected backup (`.sql` dump or Mongo/Qdrant bundle).
@@ -12,6 +12,7 @@ struct BackupManagerView: View {
 
     @State private var selection: BackupFile.ID?
     @State private var showNewBackup = false
+    @State private var showRestoreDumpSheet = false
     @State private var confirmRestore = false
     @State private var isRestoring = false
     @State private var status: String?
@@ -48,6 +49,9 @@ struct BackupManagerView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { viewModel.refreshBackups() }
         .sheet(isPresented: $showNewBackup) { newBackupSheet }
+        .sheet(isPresented: $showRestoreDumpSheet) {
+            RestoreDumpSheet(session: viewModel.session, dataSourceSession: viewModel.dataSourceSession, onDismiss: { showRestoreDumpSheet = false })
+        }
         .confirmationDialog(
             L("Restore this backup? Existing objects may be overwritten."),
             isPresented: $confirmRestore, titleVisibility: .visible
@@ -66,6 +70,9 @@ struct BackupManagerView: View {
             }
             toolButton(L("Restore"), "arrow.up.doc", enabled: selectedFile != nil && !isRestoring) {
                 confirmRestore = true
+            }
+            toolButton(L("Restore from File…"), "arrow.counterclockwise.circle", enabled: !isRestoring && (viewModel.session != nil || viewModel.dataSourceSession != nil)) {
+                showRestoreDumpSheet = true
             }
             toolButton(L("Delete"), "trash", enabled: selectedFile != nil) {
                 if let file = selectedFile { viewModel.deleteBackup(file); selection = nil }

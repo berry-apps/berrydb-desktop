@@ -3,13 +3,13 @@ import SwiftUI
 /// Actions the workspace publishes to the macOS menu bar. The window fills this
 /// in and exposes it via `.focusedSceneValue`; `WorkspaceCommands` reads it so
 /// every feature has a real menu-bar home with a keyboard shortcut, instead of
-/// hiding behind toolbar chevrons (ui.md §3, UD-06).
+/// hiding behind toolbar chevrons.
 public struct WorkspaceMenuActions {
     // State that gates menu items.
     public var hasSession: Bool
     /// True when a query tab can be opened right now: a SQL session, OR a
     /// Mongo `dataSourceSession` (Qdrant stays out — it has no shell-script
-    /// "New Query" concept in this plan, docs/architecture/12 §7). Gates
+ /// "New Query" concept in this plan). Gates
     /// "New SQL Tab" so Mongo users can reach `newQueryTab()` via menu/⌘T,
     /// not just by double-clicking a collection in the sidebar.
     public var canOpenQueryTab: Bool
@@ -20,7 +20,7 @@ public struct WorkspaceMenuActions {
     public var hasIntelligence: Bool
     public var canImport: Bool
     public var processListSupported: Bool
-    /// User & permission management (TI-03, docs/architecture/14).
+ /// User & permission management.
     public var userManagementSupported: Bool
     public var focusedTabIsEditor: Bool
     /// True for `.editor` OR `.mongoShell` tabs — gates Run/Save SQL, which
@@ -38,21 +38,22 @@ public struct WorkspaceMenuActions {
     public var toggleComment: () -> Void
     public var saveCurrentSQL: () -> Void
     public var splitEditor: () -> Void
-    /// Soft data-deletion warnings switch (docs/ui) — production rules stay on.
+ /// Soft data-deletion warnings switch — production rules stay on.
     public var warnsOnDataDeletion: Bool
     public var toggleDeleteWarnings: () -> Void
-    /// Label mode for icon action buttons (docs/ui).
+ /// Label mode for icon action buttons.
     public var showsButtonLabels: Bool
     public var toggleButtonLabels: () -> Void
     public var showHistory: () -> Void
     public var showSavedQueries: () -> Void
     public var showInsights: () -> Void
     public var showGraphExplorer: () -> Void
-    /// Time Machine Timeline (docs/feature/07 §1, DI-08).
+ /// Time Machine Timeline.
     public var showTimeline: () -> Void
     public var unlockIntelligence: () -> Void
     public var newTable: () -> Void
     public var importCSV: () -> Void
+    public var importSQL: () -> Void
     public var showProcesses: () -> Void
     public var showUsers: () -> Void
     public var refreshSchema: () -> Void
@@ -62,10 +63,12 @@ public struct WorkspaceMenuActions {
     /// Backup manager (feature/04) — enabled for any session (SQL dump, or a
     /// Mongo/Qdrant bundle).
     public var backup: () -> Void
-    /// Global quick-open (TR-02): fuzzy-search tables/views/collections from
+    /// Restore database from dump or backup file
+    public var restoreDump: () -> Void
+ /// Global quick-open: fuzzy-search tables/views/collections from
     /// anywhere, not just via the sidebar's own filter field.
     public var goToTable: () -> Void
-    /// Global command palette (DI-22, ⌘K): fuzzy-search and run a workspace
+ /// Global command palette (⌘K): fuzzy-search and run a workspace
     /// action from anywhere.
     public var commandPalette: () -> Void
 
@@ -100,6 +103,7 @@ public struct WorkspaceMenuActions {
         unlockIntelligence: @escaping () -> Void,
         newTable: @escaping () -> Void,
         importCSV: @escaping () -> Void,
+        importSQL: @escaping () -> Void = {},
         showProcesses: @escaping () -> Void,
         showUsers: @escaping () -> Void,
         refreshSchema: @escaping () -> Void,
@@ -107,6 +111,7 @@ public struct WorkspaceMenuActions {
         disconnect: @escaping () -> Void,
         toggleAI: @escaping () -> Void,
         backup: @escaping () -> Void,
+        restoreDump: @escaping () -> Void = {},
         goToTable: @escaping () -> Void,
         commandPalette: @escaping () -> Void
     ) {
@@ -140,6 +145,7 @@ public struct WorkspaceMenuActions {
         self.unlockIntelligence = unlockIntelligence
         self.newTable = newTable
         self.importCSV = importCSV
+        self.importSQL = importSQL
         self.showProcesses = showProcesses
         self.showUsers = showUsers
         self.refreshSchema = refreshSchema
@@ -147,6 +153,7 @@ public struct WorkspaceMenuActions {
         self.disconnect = disconnect
         self.toggleAI = toggleAI
         self.backup = backup
+        self.restoreDump = restoreDump
         self.goToTable = goToTable
         self.commandPalette = commandPalette
     }
@@ -167,7 +174,7 @@ public extension FocusedValues {
 public struct WorkspaceCommands: Commands {
     @FocusedValue(\.workspaceMenu) private var actions
     /// Bumped by ShortcutStore on every remap so the menu rebuilds with the
-    /// user's combos (docs/ui shortcut editor).
+ /// user's combos (shortcut editor).
     @AppStorage("berry.shortcutsRev") private var shortcutsRev = 0
 
     public init() {}
@@ -198,13 +205,13 @@ public struct WorkspaceCommands: Commands {
             Button(L("New SQL Tab")) { actions?.newSQLTab() }
                 .keyboardShortcut(combo(.newSQLTab))
                 .disabled(actions?.canOpenQueryTab != true)
-            Button(L("Open SQLite File…")) { actions?.openFile() }
+            Button(L("Open Database or SQL File…")) { actions?.openFile() }
                 .keyboardShortcut("o", modifiers: .command)
             Divider()
         }
 
         CommandMenu(L("Query")) {
-            // One exec action (docs/ui): Run executes every statement in the
+ // One exec action: Run executes every statement in the
             // active editor.
             Button(L("Run")) { actions?.runAll() }
                 .keyboardShortcut(combo(.run))
@@ -245,6 +252,9 @@ public struct WorkspaceCommands: Commands {
                 .disabled(actions?.hasSession != true)
             Button(L("Import CSV…")) { actions?.importCSV() }
                 .disabled(actions?.canImport != true)
+            Button(L("Import SQL File…")) { actions?.importSQL() }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .disabled(actions?.hasSession != true)
             if actions?.processListSupported == true {
                 Button(L("Processes")) { actions?.showProcesses() }
             }
@@ -253,6 +263,8 @@ public struct WorkspaceCommands: Commands {
             }
             Divider()
             Button(L("Backup…")) { actions?.backup() }
+                .disabled(actions?.hasAnySession != true)
+            Button(L("Restore Database from File…")) { actions?.restoreDump() }
                 .disabled(actions?.hasAnySession != true)
             Divider()
             Button(L("Refresh Schema")) { actions?.refreshSchema() }

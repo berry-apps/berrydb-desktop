@@ -1,7 +1,7 @@
 import BerryTunnel
 import Foundation
 
-/// UI-facing entry point for the SSH known-hosts pin (docs/architecture/07 §4).
+/// UI-facing entry point for the SSH known-hosts pin.
 /// BerryUI doesn't depend on BerryTunnel directly, so the "trust the changed
 /// key" action is exposed here on the standard store.
 public enum SSHTrust {

@@ -31,6 +31,8 @@ def process_image(input_path, output_path):
     print(f"Saved transparent icon to {output_path}")
 
 if __name__ == '__main__':
-    input_image = "/Users/tan/idea/berrydb/image.png"
-    output_image = "/Users/tan/idea/berrydb/icons/app-icon-1024.png"
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    input_image = sys.argv[1] if len(sys.argv) > 1 else str(root / "deploy" / "icon-1024.png")
+    output_image = sys.argv[2] if len(sys.argv) > 2 else str(root / "icons" / "app-icon-1024.png")
     process_image(input_image, output_image)

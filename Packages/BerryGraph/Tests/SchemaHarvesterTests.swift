@@ -9,9 +9,9 @@ import Testing
 
 @testable import BerryGraph
 
-/// Harvests the DSG from a real schema on the Docker matrix (DI-01). Skips
+/// Harvests the DSG from a real schema on the Docker matrix. Skips
 /// cleanly when the server env var is unset.
-@Suite("SchemaHarvester on Postgres (DI-01)", .enabled(if: TestServer.postgres != nil))
+@Suite("SchemaHarvester on Postgres", .enabled(if: TestServer.postgres != nil))
 struct SchemaHarvesterPostgresTests {
     private func openSession(isProduction: Bool = false) async throws -> Session {
         DriverRegistry.register(PostgresDriver.self)
@@ -112,7 +112,7 @@ struct SchemaHarvesterPostgresTests {
     }
 }
 
-@Suite("SchemaHarvester on MySQL (DI-01)", .enabled(if: TestServer.mysql != nil))
+@Suite("SchemaHarvester on MySQL", .enabled(if: TestServer.mysql != nil))
 struct SchemaHarvesterMySQLTests {
     private func exec(_ sql: String, on session: Session) async throws {
         for try await _ in session.connection.execute(sql) {}

@@ -8,7 +8,7 @@ import Testing
 
 /// Runs against a real Elasticsearch from `BERRYDB_TEST_ELASTICSEARCH`
 /// (`host:port`, see Tests/docker/compose.yml); skipped when the env var is
-/// unset (docs/architecture/17 §6, CLAUDE.md · Build & test).
+/// unset (see Tests/docker/compose.yml).
 @Suite("Elasticsearch driver conformance", .enabled(if: ElasticsearchTestServer.elasticsearch != nil))
 struct ElasticsearchConformanceTests {
     private var server: ElasticsearchTestServer { ElasticsearchTestServer.elasticsearch! }
@@ -196,7 +196,7 @@ struct ElasticsearchConformanceTests {
         #expect(await connection.ping() == false)
     }
 
-    // MARK: DataSourceDriver entry point (docs/architecture/17 §2)
+ // MARK: DataSourceDriver entry point
 
     @Test func driverConnectSucceedsAgainstAReachableServer() async throws {
         let driver = ElasticsearchDriver()

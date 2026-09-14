@@ -4,14 +4,14 @@ import Foundation
 
 /// The key-value sibling of `Session` (BerryCore) / `DataSourceSession` — one
 /// active `KeyValueDriver` connection per workspace, mutually exclusive with
-/// both (docs/architecture/15 §2): connecting to one tears down the others.
+/// both: connecting to one tears down the others.
 /// No `kind` field like `DataSourceSession` — Redis has no document/vector
 /// split, just one shape.
 public struct KeyValueSession: Sendable, Identifiable {
     public let id: UUID
     /// Saved profile this session was opened from — mirrors `Session.profileID`.
     public let profileID: UUID?
-    /// Production label (KN-07) — read from the profile at connect time.
+ /// Production label — read from the profile at connect time.
     public let isProduction: Bool
     public let connection: any KeyValueConnection
     public let capabilities: KeyValueCapabilities
@@ -20,11 +20,10 @@ public struct KeyValueSession: Sendable, Identifiable {
     /// `DataSourceSession.displayName`.
     public let displayName: String
     /// The numbered database (Redis/Valkey: 0–15) selected at connect time
-    /// via `ConnectionSheet` — `KeyValueBrowserView`'s live switcher (§4
-    /// "Chưa làm" turned "xong") initializes from this so it reflects the DB
-    /// the connection actually opened on, not always 0.
+    /// via `ConnectionSheet` — `KeyValueBrowserView`'s live switcher
+    /// initializes from this so it reflects the DB the connection actually opened on, not always 0.
     public let database: Int
-    /// Non-nil when the connection runs through an SSH tunnel (KN-03).
+ /// Non-nil when the connection runs through an SSH tunnel.
     public let tunnel: SSHTunnel?
 
     public init(

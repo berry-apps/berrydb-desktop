@@ -87,7 +87,7 @@ struct AIWorkBlockTests {
         #expect(block.steps[0].narration == "Let me look. Focusing on users.")
     }
 
-    /// PR #112's exact regression: a note-triggered close must carry every
+    /// Regression guard: a note-triggered close must carry every
     /// field (narration + actions + artifacts) onto the frozen step, not
     /// just the ones a separate reconciliation pass remembered to copy.
     @Test func nTnT_twoStepsEachWithItsOwnNarrationAndAction() {
@@ -104,7 +104,7 @@ struct AIWorkBlockTests {
         #expect(block.steps[1].actions.map(\.name) == ["run_sql"])
     }
 
-    /// PR #107's fix, true by construction: a bare tool call (no preceding
+    /// Regression guard: a bare tool call (no preceding
     /// note) still opens/attaches to a step immediately, with empty
     /// narration, visible while the tool runs.
     @Test func tAlone_oneStepWithEmptyNarrationAndOneAction() {
@@ -116,7 +116,7 @@ struct AIWorkBlockTests {
         #expect(block.steps[0].actions.map(\.name) == ["get_schema"])
     }
 
-    /// PR #108(a)'s exact regression: a bare tool call must NOT leave
+    /// Regression guard: a bare tool call must NOT leave
     /// `openIndex` dangling on a finished, narration-less step — the next
     /// note must open its own fresh step, not land on the old one.
     @Test func tNthenT_bareCallDoesNotAbsorbTheNextNotesStep() {
@@ -132,7 +132,7 @@ struct AIWorkBlockTests {
         #expect(block.steps[1].actions.map(\.name) == ["run_sql"])
     }
 
-    /// §2.3's deliberate merge: the wire cannot distinguish "one round
+ /// A deliberate merge: the wire cannot distinguish "one round
     /// batched two calls" from "two consecutive un-narrated rounds" (no
     /// round id on `tool.call`, strictly serial dispatch) — two bare calls
     /// merge into one step as the honest response to that ambiguity.
@@ -157,8 +157,8 @@ struct AIWorkBlockTests {
     }
 
     /// Every close trigger must produce an identical frozen step from an
-    /// identical prefix — the direct fix for PR #112 (a round-closing path
-    /// that forgot to carry `actions`/`artifactRefs` onto the frozen step).
+    /// identical prefix (ensures round-closing carries
+    /// `actions`/`artifactRefs` onto the frozen step).
     @Test func everyCloseTriggerProducesTheSameFrozenStep() {
         func stepAfterClosing(_ close: (inout AIWorkBlock, Date) -> Void) -> AIWorkStep {
             var block = AIWorkBlock()

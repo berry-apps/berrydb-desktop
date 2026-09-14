@@ -1,15 +1,15 @@
 import BerryDriverKit
 import Foundation
 
-/// Declarative table definition for the table designer (CT-01/02/03) —
-/// docs/architecture/06 · L3. The form edits this model; the dialect renders
-/// DDL; the SQL preview is ALWAYS shown before applying (CT-01), and apply
+/// Declarative table definition for the table designer
+/// The form edits this model; the dialect renders
+/// DDL; the SQL preview is ALWAYS shown before applying, and apply
 /// runs through the single QueryService path (N1).
 ///
 /// Scope: this generates CREATE TABLE for a NEW table plus its indexes and
 /// foreign keys — the portable subset shared by SQLite/Postgres/MySQL. Editing
 /// an existing table via ALTER (dialect-divergent, SQLite especially) is a
-/// separate follow-up noted in docs/architecture/06.
+/// separate follow-up noted
 
 public enum ForeignKeyAction: String, Sendable, Equatable, CaseIterable {
     case noAction = "NO ACTION"
@@ -105,7 +105,7 @@ public struct TableDesign: Sendable, Equatable {
     }
 
     /// Reconstructs a design from an introspected table (used for the SQL
-    /// export DDL header, XN-03). Column types come from `declaredType`, so the
+ /// export DDL header). Column types come from `declaredType`, so the
     /// generated CREATE mirrors the source schema.
     public init(detail: TableDetail) {
         self.init(
@@ -212,7 +212,7 @@ public struct TableDesign: Sendable, Equatable {
             && index.columns.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
     }
 
-    // MARK: - Apply (docs/architecture/06 · L3)
+ // MARK: - Apply
 
     /// Runs the generated DDL through the single SQL path (N1), inside a
     /// transaction when the driver supports it. Returns statements executed.
@@ -226,7 +226,7 @@ public struct TableDesign: Sendable, Equatable {
             for try await _ in QueryService.execute(
                 sql, on: session, autoLimit: nil,
                 // The SQL preview the user just approved IS the confirmation
-                // (06 · L3) — don't stack a second delete dialog, and never
+ // (06) — don't stack a second delete dialog, and never
                 // block a headless run on an alert.
                 dangerPreconfirmed: true
             ) {}

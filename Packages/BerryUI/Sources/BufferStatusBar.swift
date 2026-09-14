@@ -3,7 +3,7 @@ import BerryCore
 import SwiftUI
 
 /// Status line under a result grid — shared by table tabs and editor results.
-/// It merges status, readonly reason, errors, and pending changes actions into a single compact line (docs/ui).
+/// It merges status, readonly reason, errors, and pending changes actions into a single compact line.
 struct BufferStatusBar: View {
     let buffer: ResultBuffer
     var showsProductionBadge = false
@@ -130,7 +130,7 @@ struct BufferStatusBar: View {
     }
 }
 
-/// Persistent visual warning for production connections (KN-07).
+/// Persistent visual warning for production connections.
 struct ProductionBadge: View {
     var body: some View {
         Text(verbatim: "PROD")

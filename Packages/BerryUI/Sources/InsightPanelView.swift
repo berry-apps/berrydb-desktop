@@ -1,20 +1,20 @@
 import BerryGraph
 import SwiftUI
 
-/// Insight Panel (docs/architecture/11 §7, DI-09): shows the offline analyzers'
+/// Insight Panel: shows the offline analyzers'
 /// findings grouped by severity. Each finding can reveal its table in the
 /// sidebar, and — when it carries a `suggestedSQL` — open that fix in a new
 /// editor tab, where it still goes through preview + DangerGuard (N1). Nothing
 /// runs automatically.
 struct InsightPanelView: View {
     let load: () async -> [Insight]
-    /// Yesterday's-to-today digest (AI-28/DI-23) — a stale snapshot (up to
+ /// Yesterday's-to-today digest — a stale snapshot (up to
     /// ~20h old) computed once per day from the same analyzers as `load`,
     /// nil until the first one has been generated for this profile.
     let dailyReview: () -> DailyReviewSummary?
     let onReveal: (String) -> Void
     let onOpenSQL: (String) -> Void
-    /// Records that the user applied/dismissed an insight (DI-26) — id is
+ /// Records that the user applied/dismissed an insight — id is
     /// `Insight.id`, stable across refreshes so repeat feedback accumulates.
     let onApply: (String) -> Void
     let onDismissInsight: (String) -> Void
@@ -50,7 +50,7 @@ struct InsightPanelView: View {
         .task { await refresh() }
     }
 
-    /// Database Architecture Score (docs/feature/07 §10) — computed live from
+ /// Database Architecture Score — computed live from
     /// the same `insights` this panel already loaded, not a separate fetch.
     /// Deliberately just Overall/Schema/Index/Performance: those are the only
     /// categories with any real analyzer behind them (see
@@ -83,7 +83,7 @@ struct InsightPanelView: View {
         isLoading = false
     }
 
-    /// AI-28: today's health snapshot — same severities as the list below,
+ /// today's health snapshot — same severities as the list below,
     /// just pre-bucketed as of the last time it was generated.
     private func dailyReviewSection(_ summary: DailyReviewSummary) -> some View {
         VStack(alignment: .leading, spacing: 6) {

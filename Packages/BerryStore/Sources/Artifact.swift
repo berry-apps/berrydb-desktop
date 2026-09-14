@@ -5,7 +5,7 @@ import GRDB
 /// editor tab it wrote, or a schema object (table/view/trigger/function) it
 /// touched — so a chat bubble can link back to it and the user (or the agent
 /// itself) can reopen/inspect it later, even after conversation history is
-/// reloaded from disk (docs/draft/09.md, AI-29).
+/// reloaded from disk.
 public struct Artifact: Identifiable, Codable, Sendable, Equatable {
     public enum Kind: String, Codable, Sendable {
         case editorTab
@@ -68,7 +68,7 @@ extension Artifact: FetchableRecord, PersistableRecord {
 /// One run/edit of a query-shaped `Artifact` (`.editorTab`/`.mongoShell`/
 /// `.qdrantQuery`) — a new version is appended each time the agent (or the
 /// user) reruns it, so the artifact's own identity/link never changes but
-/// the full history stays traceable (docs/draft/09.md).
+/// the full history stays traceable.
 public struct ArtifactVersion: Identifiable, Codable, Sendable {
     public var id: UUID
     public var artifactID: UUID

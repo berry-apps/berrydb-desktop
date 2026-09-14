@@ -1,63 +1,58 @@
-# CI per docs/architecture/08 §5.
-# v1: build + full unit/conformance-SQLite suite on macOS.
-# Runs on a self-hosted runner (Tan's own Mac, registered 2026-07-28) instead
-# of GitHub-hosted macos-* runners — those are metered/billed per-minute at a
-# 10x multiplier for macOS, self-hosted is free. Uses whatever Xcode/Swift
-# toolchain is already selected on that machine (no version pin needed here —
-# it's the same toolchain used for local development, kept current there).
-# Bonus: unlike GitHub-hosted macOS runners, this one has Docker available
-# (docker ps works), so the driver matrix vs real Postgres/MySQL (previously
-# blocked, see old TODO here) could move into this workflow later instead of
-# needing a separate Linux job — not wired up yet, just newly possible.
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+    paths:
+      - "App/**"
+      - "Packages/**"
+      - "Tests/**"
+      - "Package.swift"
+      - ".github/workflows/ci.yml"
   pull_request:
+    branches:
+      - main
+    paths:
+      - "App/**"
+      - "Packages/**"
+      - "Tests/**"
+      - "Package.swift"
+      - ".github/workflows/ci.yml"
 
-# One self-hosted runner, no concurrency = pushes queue behind each other
-# instead of running in parallel. Cancel a still-running check for the same
-# branch/PR once a newer push supersedes it, so the queue doesn't fill up
-# with runs nobody's waiting on anymore (chốt 2026-07-28).
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build-and-test:
-    runs-on: [self-hosted, macOS]
-    timeout-minutes: 30
+    name: Build & Test (macOS)
+    runs-on: macos-15
+    timeout-minutes: 25
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Build
-        run: swift build
-      - name: Test
-        run: swift test
-      - name: Report app size (docs/architecture/01 §2)
-        # No longer fails the build — the app is at 52MB, over the 50MB
-        # target, and that's a product/bloat question to look into
-        # separately, not something CI should block PRs on (chốt 2026-07-28).
-        # Still built and reported so the size stays visible over time.
-        # Release is a whole-module-optimized build (~3.5min here, much
-        # slower than debug) purely for this size number — only worth
-        # paying for once code actually lands on main, not on every PR
-        # push (chốt 2026-07-28).
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FreeTDS dependency
         run: |
-          swift build -c release
-          scripts/make_app.sh release
-          SIZE=$(du -sm dist/BerryDB.app | cut -f1)
-          echo "BerryDB.app size: ${SIZE} MB"
-      - name: Clean build artifacts
-        # This runner is Tan's own Mac, not an ephemeral GitHub-hosted VM (see
-        # header comment) — nothing resets its disk between runs, so .build
-        # (SPM's build cache, 2.5G+ observed for just this one repo) and
-        # dist/ accumulate indefinitely across every push/PR without an
-        # explicit clean. Runs even when Build/Test failed (`if: always()`)
-        # so a red run doesn't also leave its artifacts behind forever.
-        # Trades away incremental-build caching between CI runs for bounded
-        # disk usage — worth it on a disk-constrained personal machine;
-        # revisit if full rebuilds start meaningfully slowing CI down.
-        if: always()
-        run: rm -rf .build dist
+          brew install freetds
+
+      - name: Check Swift toolchain
+        run: |
+          swift --version
+
+      - name: Setup CI Keychain
+        run: |
+          security create-keychain -p "" ci.keychain 2>/dev/null || true
+          security set-keychain-settings -lut 21600 ci.keychain
+          security unlock-keychain -p "" ci.keychain
+          security list-keychains -d user -s ci.keychain $(security list-keychains -d user | tr -d '"' | tr '\n' ' ')
+
+      - name: Build BerryDB
+        run: |
+          swift build -c debug
+
+      - name: Run Test Suite
+        run: |
+          swift test

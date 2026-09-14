@@ -1,10 +1,10 @@
 import Foundation
 
-// Apple Foundation Models on-device provider (docs/agents/architecture/10, AI-20).
+// Apple Foundation Models on-device provider.
 // Gated on canImport so the package still builds on toolchains without the
 // framework (it needs Xcode 27 / macOS 26). The FoundationModels branch is
 // written against the WWDC-2025 API and MUST be verified on a real Apple
-// Intelligence device before shipping (doc 10 §8).
+// Intelligence device before shipping (doc).
 
 #if canImport(FoundationModels)
 import FoundationModels
@@ -52,7 +52,7 @@ public struct AppleFoundationProvider: LocalCompletionProvider {
         throw Self.unavailable
     }
 
-    /// Streamed generation (AI-20): yields text deltas so the panel fills
+ /// Streamed generation: yields text deltas so the panel fills
     /// progressively instead of waiting for the whole reply.
     public func stream(prompt: String) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in

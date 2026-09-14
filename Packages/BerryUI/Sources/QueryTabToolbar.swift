@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Shared "new query tab" toolbar shell (docs/feedback/01.md #2): the Run/
+/// Shared "new query tab" toolbar shell (#2): the Run/
 /// Stop button pattern, spacing, padding, and background are identical
 /// across every connection type's query tab (SQL/Mongo/Qdrant) — only the
 /// connection-type-specific extras (Explain/Format for SQL, mode picker/Save

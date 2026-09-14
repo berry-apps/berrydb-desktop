@@ -3,8 +3,8 @@ import Testing
 
 @testable import BerryGraph
 
-/// Database Persona dispatch (DI-27, docs/architecture/13 §5.7).
-@Suite("Database Persona (DI-27)")
+/// Database Persona dispatch.
+@Suite("Database Persona")
 struct DatabasePersonaTests {
     /// A table with no primary key and no columns nullable-appropriate — would
     /// trip `schema.missing_pk`/`schema.all_nullable` under the relational rules.

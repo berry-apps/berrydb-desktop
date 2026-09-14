@@ -27,7 +27,7 @@ private final class StubTransport: AITransport, @unchecked Sendable {
     func embedInputs() -> [String] { lock.withLock { _embedInputs } }
 }
 
-@Suite("search_schema client tool (docs/feature/07 §13)")
+@Suite("search_schema client tool")
 struct SchemaSearchToolExecutorTests {
     private func makeStore() -> BerryStore {
         try! BerryStore(path: ":memory:")

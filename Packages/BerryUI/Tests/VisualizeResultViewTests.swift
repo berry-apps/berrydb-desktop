@@ -4,7 +4,7 @@ import Testing
 @testable import BerryUI
 
 @MainActor
-@Suite("Visualize Result (docs/feature/07 §8)")
+@Suite("Visualize Result")
 struct VisualizeResultViewTests {
     @Test func extractsLabelValuePairsAcrossNumericRepresentations() {
         let rows: [[BerryValue]] = [

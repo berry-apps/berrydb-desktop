@@ -1,0 +1,203 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, without the leading v (e.g. 1.0.3)"
+        required: true
+        type: string
+      dry_run:
+        description: "Build, sign and notarize, but publish nothing"
+        required: false
+        default: true
+        type: boolean
+
+# Only what creating a GitHub Release needs. The default token is broader.
+permissions:
+  contents: write
+
+concurrency:
+  group: berrydb-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: "Build, Sign, Notarize & Publish"
+    if: github.repository == 'berry-apps/berrydb-desktop'
+    runs-on: macos-15
+    # Two notarytool round-trips dominate this job and Apple's queue is not
+    # predictable. ci.yml's 25 minutes is not enough.
+    timeout-minutes: 90
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      dry_run: ${{ steps.version.outputs.dry_run }}
+
+    steps:
+      - name: "Checkout source"
+        uses: actions/checkout@v4
+
+      - name: "Resolve version and mode"
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            DRY_RUN=false
+          else
+            VERSION="${{ inputs.version }}"
+            DRY_RUN="${{ inputs.dry_run }}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$DRY_RUN" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION (dry_run=$DRY_RUN)"
+
+      - name: "Select Xcode 26"
+        # Not the fix for anything -- the packaging failure this was first added
+        # for turned out to be make_app.sh stripping a signature, and it failed
+        # under Xcode 26.3 too. It stays because the green dry run ran on 26.3,
+        # and shipping on a toolchain other than the verified one is a change
+        # nobody chose.
+        #
+        # Bounded to major 26 rather than "newest installed": the image gains
+        # Xcode versions over time, and floating onto an untested major is the
+        # kind of drift a release pipeline should not have.
+        run: |
+          set -eu
+          SELECTED=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$SELECTED" ] || { echo "no Xcode 26 on this image" >&2; exit 1; }
+          sudo xcode-select -s "$SELECTED"
+          echo "selected $SELECTED"
+          xcodebuild -version
+
+      - name: "Install FreeTDS dependency"
+        run: brew install freetds
+
+      - name: "Run the test suite"
+        run: swift test
+
+      - name: "Import the signing certificate"
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Never `set -x` in this step: GitHub masks a secret's exact value in
+          # logs, but not the decoded bytes or anything derived from them.
+          set -eu
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          # Disable the idle auto-lock, or the keychain re-locks part-way through
+          # a long notarization wait.
+          security set-keychain-settings -lut 3600 build.keychain
+          printf '%s' "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k build.keychain \
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          # Without this, codesign blocks on a GUI authorization prompt nobody can
+          # answer and the job dies on timeout with no error explaining why.
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning build.keychain
+
+      - name: "Build, sign, notarize and package"
+        env:
+          BERRYDB_VERSION: ${{ steps.version.outputs.version }}
+          SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APP_SPEC_PASSWORD: ${{ secrets.APP_SPEC_PASSWORD }}
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+          SU_PUBLIC_ED_KEY: ${{ vars.SU_PUBLIC_ED_KEY }}
+          SU_FEED_URL: ${{ vars.SU_FEED_URL }}
+          BERRYDB_BACKEND_URL: ${{ vars.BERRYDB_BACKEND_URL }}
+          BERRYDB_LICENSE_PUBLIC_KEY: ${{ vars.BERRYDB_LICENSE_PUBLIC_KEY }}
+        run: bash deploy/release.sh "${{ steps.version.outputs.version }}"
+
+      - name: "Check app size and runtime dependencies"
+        # SKIP_BUILD=1 checks the bundle release.sh just signed, rather than
+        # building a different one.
+        run: SKIP_BUILD=1 sh scripts/check-size.sh
+
+      - name: "Fetch the FreeTDS source for LGPL 6(a)/6(d)"
+        # BerryDB embeds its own libsybdb and is signed with library validation on,
+        # so LGPL 6(b) does not apply. 6(a)/6(d) instead oblige us to offer the
+        # library's complete source from the same place as the download. The
+        # version is pinned, and check-size.sh has already failed the build if the
+        # embedded library is not that version.
+        run: |
+          set -eu
+          VERSION=$(tr -d '[:space:]' < deploy/freetds-version.txt)
+          TARBALL="freetds-${VERSION}.tar.bz2"
+          curl -fsSL -o "dist/$TARBALL" "https://www.freetds.org/files/stable/$TARBALL"
+          # A truncated or error-page download would silently ship a useless
+          # "source offer", so check it is really an archive.
+          tar -tjf "dist/$TARBALL" >/dev/null
+          echo "fetched $TARBALL ($(du -h "dist/$TARBALL" | cut -f1))"
+
+      - name: "Verify the artifact is signed, notarized and stapled"
+        run: |
+          set -eu
+          DMG="dist/BerryDB-${{ steps.version.outputs.version }}.dmg"
+          codesign --verify --strict --verbose=2 "$DMG"
+          xcrun stapler validate "$DMG"
+          test -s deploy/last-release.json
+          SIG=$(python3 -c "import json;print(json.load(open('deploy/last-release.json'))['edSignature'])")
+          test -n "$SIG" || { echo "empty edSignature — refusing to publish" >&2; exit 1; }
+          echo "signature present, ${#SIG} chars"
+
+      - name: "Upload the dry-run artifact"
+        if: steps.version.outputs.dry_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: berrydb-dryrun-${{ steps.version.outputs.version }}
+          path: dist/BerryDB-${{ steps.version.outputs.version }}.dmg
+          # A public repository's artifacts are downloadable by anyone. Keep a
+          # non-production build around for as short a time as is useful.
+          retention-days: 3
+
+      - name: "Publish to R2 and refresh the appcast"
+        if: steps.version.outputs.dry_run != 'true'
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          DOWNLOAD_BASE_URL: ${{ vars.DOWNLOAD_BASE_URL }}
+        run: |
+          set -eu
+          # The runner's python3 is Homebrew-managed, so a global pip install is
+          # refused under PEP 668 with "externally-managed-environment". A venv
+          # is the supported way to get boto3 here, and it leaves the system
+          # Python alone.
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet -r deploy/requirements.txt
+          "$RUNNER_TEMP/venv/bin/python" deploy/upload-release.py
+
+      - name: "Create the GitHub Release"
+        if: steps.version.outputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(tr -d '[:space:]' < deploy/freetds-version.txt)
+          gh release create "v${{ steps.version.outputs.version }}" \
+            "dist/BerryDB-${{ steps.version.outputs.version }}.dmg" \
+            "dist/freetds-${VERSION}.tar.bz2" \
+            --title "BerryDB ${{ steps.version.outputs.version }}" \
+            --generate-notes
+
+  deploy-webapp:
+    name: "Update the website version"
+    needs: release
+    if: needs.release.outputs.dry_run != 'true'
+    uses: ./.github/workflows/deploy-webapp.yml
+    with:
+      version: ${{ needs.release.outputs.version }}
+    # No `secrets:` key, deliberately. deploy-webapp.yml uses no secrets and runs
+    # on the self-hosted runner; `secrets: inherit` would hand it the signing
+    # identity and the Sparkle private key in order to deploy some HTML.

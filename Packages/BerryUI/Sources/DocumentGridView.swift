@@ -3,7 +3,7 @@ import BerryDataSourceKit
 import SwiftUI
 
 /// Result grid for `DataSourceResultBuffer` — the NoSQL/vector sibling of
-/// `DataGridView` (docs/architecture/12 §7). NSTableView-backed for the same
+/// `DataGridView`. NSTableView-backed for the same
 /// virtualization reasoning (N3, large result sets) — not a plain SwiftUI
 /// List/Table. Columns are the union of top-level `.object` keys in the
 /// buffer's first batch (`DataSourceResultBuffer.columns`); a cell whose

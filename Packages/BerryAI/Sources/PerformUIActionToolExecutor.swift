@@ -18,7 +18,7 @@ public struct UIActionEntry {
     }
 }
 
-/// Client-executed `perform_ui_action` (DI-22, docs/architecture/13 §5.3):
+/// Client-executed `perform_ui_action`:
 /// AI Command Palette NL routing — maps a natural-language request onto one
 /// of the same actions already reachable from ⌘K / the menu bar. Harmless by
 /// construction: it can only invoke an existing UI action, never read or

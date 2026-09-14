@@ -1,13 +1,13 @@
 import BerryDriverKit
 import Foundation
 
-/// Index analysis over the DSG + harvested stats (docs/architecture/11 §7,
-/// DI-05): unused non-unique indexes (safe to drop) and tables scanned
+/// Index analysis over the DSG + harvested stats
+/// unused non-unique indexes (safe to drop) and tables scanned
 /// sequentially far more than by index. Pure — reads only the graph + stats.
 public enum IndexAdvisor {
     /// A table needs at least this many sequential scans over this many rows
     /// before "frequent seq scan" is worth flagging (heuristic — the real fix
-    /// needs the workload, DI-06).
+ /// needs the workload).
     static let minSeqScans = 100
     static let minRows = 1000
 

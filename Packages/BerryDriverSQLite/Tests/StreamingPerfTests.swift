@@ -5,7 +5,7 @@ import Testing
 @testable import BerryDriverSQLite
 
 /// M1 spike: 1M rows must stream through the driver in batches fast enough
-/// to feed a 60fps grid (docs/architecture/01 §2, 08 §1). Gated behind
+/// to feed a 60fps grid. Gated behind
 /// BERRYDB_PERF so regular runs stay fast; the nightly perf job sets it.
 @Suite("Streaming perf spike (1M rows)", .enabled(if: ProcessInfo.processInfo.environment["BERRYDB_PERF"] != nil))
 struct StreamingPerfTests {

@@ -6,9 +6,9 @@ import WebKit
 /// measured and fed back so the block sizes to its content instead of a fixed box.
 struct MermaidBlock: View {
     let source: String
-    /// AI-34: opens this diagram as its own workspace tab — the compact chat
+ /// opens this diagram as its own workspace tab — the compact chat
     /// block stays fixed-size/non-interactive; zoom lives in the tab instead
-    /// (docs/architecture/02 AI-34 — tab, not a modal, matching the house
+ /// (tab, not a modal, matching the house
     /// convention every other former-sheet tool already follows).
     var onOpenInTab: (String) -> Void = { _ in }
     @Environment(\.colorScheme) private var colorScheme
@@ -54,7 +54,7 @@ private struct MermaidWebView: NSViewRepresentable {
     let source: String
     let isDark: Bool
     @Binding var height: CGFloat
-    /// AI-34: the tab preview passes `true` so the page scrolls instead of
+ /// the tab preview passes `true` so the page scrolls instead of
     /// clipping once `zoom` scales the diagram past the viewport; the inline
     /// chat block leaves this `false` and never calls `setZoom`, so its
     /// existing fixed-to-content sizing is untouched.
@@ -124,7 +124,7 @@ private struct MermaidWebView: NSViewRepresentable {
     }
 
     private static func html(source: String, isDark: Bool, zoomable: Bool, zoom: Double) -> String {
-        // AI-34: the tab preview pans by dragging the diagram itself instead
+ // the tab preview pans by dragging the diagram itself instead
         // of scrolling the page — overflow stays hidden (no scrollbar
         // chrome) in both modes, and `.mermaid` is absolutely centered so
         // mouse-drag / trackpad-wheel deltas can move it with a translate.
@@ -300,7 +300,7 @@ private struct MermaidWebView: NSViewRepresentable {
     }
 }
 
-/// AI-34: a chat-rendered diagram opened into its own tab (`WorkspaceViewModel
+/// a chat-rendered diagram opened into its own tab (`WorkspaceViewModel
 /// .openMermaidDiagram`, `WorkspaceTab.mermaidDiagram`) — the room a small
 /// chat bubble can't give, with real zoom controls instead of the compact
 /// block's fixed-to-content sizing.
@@ -374,8 +374,7 @@ struct MermaidTabView: View {
         // claiming the pane, so the WKWebView below gets squeezed down to a
         // tiny AppKit-default size — the diagram then overflows THAT tiny
         // viewport and shows a scrollbar despite visibly empty space around
-        // the whole block (reported live: "chiều cao bị co lại... còn nhiều
-        // khoảng trống").
+        // the whole block, causing the diagram height to collapse unnecessarily.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

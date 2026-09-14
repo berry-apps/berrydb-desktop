@@ -16,7 +16,7 @@ struct PartiQLDialectTests {
     /// Verified against dynamodb-local: `SELECT * FROM "T" LIMIT 10` fails
     /// with `ValidationException: Unsupported clause: LIMIT` — PartiQL SELECT
     /// has no LIMIT clause in its grammar at all, so this MUST be a no-op,
-    /// not just a style choice (docs/architecture/12 §4).
+ /// not just a style choice.
     @Test func limitClauseIsANoOp() {
         #expect(dialect.limitClause(1000) == "")
     }

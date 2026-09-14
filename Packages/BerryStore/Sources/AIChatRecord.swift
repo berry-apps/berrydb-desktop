@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 
 /// A locally-owned chat thread — client is the source of truth (Q17,
-/// docs/agents/architecture/11 §7.3), scoped by dialect + `connectionKey`
+/// scoped by dialect + `connectionKey`
 /// (v28) so switching between two connections that share a dialect (e.g. two
 /// Postgres servers) can't surface one connection's history under another's.
 public struct AIThreadRecord: Codable, Sendable, Equatable, FetchableRecord, PersistableRecord, Identifiable {
@@ -20,7 +20,7 @@ public struct AIThreadRecord: Codable, Sendable, Equatable, FetchableRecord, Per
     /// once before incremental folding can begin.
     public var summaryThroughSeq: Int?
     /// The current tip of the active path through this thread's message tree
-    /// (AI-35, v29) — walking `AIMessageRecord.parentID` back from here to
+ /// (v29) — walking `AIMessageRecord.parentID` back from here to
     /// `nil` is the transcript actually shown/appended to. Nil only for a
     /// thread with no messages yet.
     public var activeLeafMessageID: UUID?
@@ -56,11 +56,11 @@ public struct AIMessageRecord: Codable, Sendable, Equatable, FetchableRecord, Pe
     public var toolCalls: String?
     public var toolCallID: String?
     public var createdAt: Date
-    /// Which artifacts (AI-29/30) this turn's tool calls touched, JSON-encoded
-    /// (AI-31, v26) — nil for a turn that didn't touch one, or one persisted
+ /// Which artifacts this turn's tool calls touched, JSON-encoded
+ /// (v26) — nil for a turn that didn't touch one, or one persisted
     /// before this column existed.
     public var artifactsJSON: String?
-    /// The message this one continues from (AI-35, v29) — nil for the first
+ /// The message this one continues from (v29) — nil for the first
     /// message in a thread. Editing a message inserts a NEW row with the
     /// SAME `parentID` as the one being edited (a sibling), so the original
     /// and its whole downstream subtree stay reachable rather than being
@@ -172,7 +172,7 @@ public struct AIPendingInteractionRecord:
 
 /// The rough `/report` text, kept purely local until the user explicitly
 /// consents to send it (plus optional recent context) for backend refinement
-/// (docs/agents/architecture Task 4.1 pre-refinement consent gate). Lives
+/// (Task 4.1 pre-refinement consent gate). Lives
 /// outside `ai_message`/`ai_message_embedding` for the same reason
 /// `AIPendingInteractionRecord` does: it must never enter chat RAG, rolling
 /// summaries, search results, or a report attachment. One row per thread — a

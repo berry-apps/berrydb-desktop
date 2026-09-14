@@ -2,7 +2,7 @@ import BerryCore
 import BerryDriverKit
 import SwiftUI
 
-/// "New Backup" sheet for a SQL connection (docs/feature/04) — presented from the
+/// "New Backup" sheet for a SQL connection — presented from the
 /// Backup manager. Pick a name, which objects, and structure/data; writes a
 /// `.sql` dump into the connection's managed backups directory.
 struct BackupSheet: View {

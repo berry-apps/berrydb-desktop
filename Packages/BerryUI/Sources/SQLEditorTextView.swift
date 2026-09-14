@@ -2,32 +2,32 @@ import AppKit
 import BerryCore
 import SwiftUI
 
-/// SQL editor text view (ED-01/02) — M2 slice: NSTextView with a lightweight
+/// SQL editor text view — M2 slice: NSTextView with a lightweight
 /// lexical highlighter. The view is deliberately isolated behind this file so
-/// the CodeEditSourceEditor/tree-sitter upgrade (docs/architecture/03 §2)
+/// the CodeEditSourceEditor/tree-sitter upgrade
 /// swaps one representable without touching the rest of the editor UI.
 struct SQLEditorTextView: NSViewRepresentable {
     @Binding var text: String
     let onCursorMove: (Int) -> Void
-    /// Reports the full selection so the Run action can honor it (docs/ui).
+ /// Reports the full selection so the Run action can honor it.
     var onSelectionChange: ((NSRange) -> Void)?
     let onRunCurrent: (NSRange?) -> Void
     let onRunAll: () -> Void
-    /// One-shot format trigger (ED-08): when this value changes, pretty-print in
+ /// One-shot format trigger: when this value changes, pretty-print in
     /// place, preserving the caret/selection.
     var formatRequestID: Int = 0
-    /// One-shot ⌘/ trigger (docs/ui) — toggles line comments on the selection.
+ /// One-shot ⌘/ trigger — toggles line comments on the selection.
     var commentToggleRequestID: Int = 0
-    /// Completion source (ED-03): (script, utf16Cursor) → popup rows, already
+ /// Completion source: (script, utf16Cursor) → popup rows, already
     /// ranked and dialect-quoted by the caller.
     var completionItems: ((String, Int) -> [CompletionItem])?
-    /// Called when this editor takes keyboard focus (ui.md 01 §4) so the
+ /// Called when this editor takes keyboard focus so the
     /// workspace can activate its split pane.
     var onFocus: (() -> Void)?
-    /// One-shot: when true, this editor grabs keyboard focus (docs/ui/03) so a
+ /// One-shot: when true, this editor grabs keyboard focus so a
     /// freshly split/opened pane gets the caret. `onDidFocus` clears it.
     var pendingFocus = false
-    /// (ED-07) Applied once, alongside `pendingFocus`, to pre-select a saved-
+ /// Applied once, alongside `pendingFocus`, to pre-select a saved-
     /// query snippet's placeholder instead of just placing the caret.
     var pendingSelection: NSRange?
     var onDidFocus: (() -> Void)?
@@ -49,7 +49,7 @@ struct SQLEditorTextView: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         // Don't accept drops — otherwise dragging a workspace tab over the editor
         // gets inserted as text; the pane's SwiftUI drop handles tab moves/splits
-        // (docs/ui/03). The editor never needs drag-in text.
+ // The editor never needs drag-in text.
         textView.unregisterDraggedTypes()
         textView.delegate = context.coordinator
         wireCallbacks(textView)
@@ -72,7 +72,7 @@ struct SQLEditorTextView: NSViewRepresentable {
         guard let textView = context.coordinator.textView as? RunnableTextView else { return }
         // Re-wire every update: the run closures capture `session`, which is nil
         // on the first render of a tab built before its connection is live. Left
-        // stale, ⌘R (which RunnableTextView claims before the menu, ED-04) fires
+ // stale, ⌘R (which RunnableTextView claims before the menu) fires
         // against a nil session and silently no-ops on those tabs.
         wireCallbacks(textView)
         if textView.string != text {
@@ -101,7 +101,7 @@ struct SQLEditorTextView: NSViewRepresentable {
     }
 
     /// Point the text view's run/focus callbacks at the CURRENT representable, so
-    /// they never keep a stale `session`/`document` from the first render (ED-04).
+ /// they never keep a stale `session`/`document` from the first render.
     private func wireCallbacks(_ textView: RunnableTextView) {
         textView.onRunCurrent = { [weak textView] in
             guard let textView else { return }
@@ -113,7 +113,7 @@ struct SQLEditorTextView: NSViewRepresentable {
     }
 
     /// Move keyboard focus to this editor when a new pane/tab requested it
-    /// (docs/ui/03). Deferred until the view is in a window; clears the request
+ /// Deferred until the view is in a window; clears the request
     /// once focus lands so it only fires once.
     private func grabFocusIfNeeded(_ textView: NSTextView) {
         guard pendingFocus else { return }
@@ -137,19 +137,19 @@ struct SQLEditorTextView: NSViewRepresentable {
         /// Coalesces re-highlighting: re-lexing the whole document on every
         /// keystroke stalls typing, so we debounce until the user pauses.
         private var highlightTask: Task<Void, Never>?
-        /// Last-seen value of the parent's format trigger (ED-08).
+ /// Last-seen value of the parent's format trigger.
         var lastFormatID = 0
-        /// Last-seen value of the ⌘/ trigger (docs/ui).
+ /// Last-seen value of the ⌘/ trigger.
         var lastCommentToggleID = 0
         /// Previous document length, to tell insertion from deletion for
-        /// auto-completion (ui.md 01 §5).
+ /// auto-completion.
         var lastTextLength = 0
 
         init(_ parent: SQLEditorTextView) {
             self.parent = parent
         }
 
-        /// Pretty-print in place (ED-08): the selection when one exists, else the
+ /// Pretty-print in place: the selection when one exists, else the
         /// whole document. Runs through `insertText` so it's a single undo step
         /// and the caret/selection stays put instead of jumping to the top.
         func performFormat() {
@@ -183,7 +183,7 @@ struct SQLEditorTextView: NSViewRepresentable {
         }
 
         /// Toggle `-- ` comments on the lines covered by the selection (⌘/,
-        /// docs/ui). Replaces only the touched line block, so it's one undo
+ /// Replaces only the touched line block, so it's one undo
         /// step and the rest of the document keeps its state.
         func performToggleComment() {
             guard let textView else { return }
@@ -210,7 +210,7 @@ struct SQLEditorTextView: NSViewRepresentable {
             scheduleHighlight(textView)
 
             // Accepting a completion also changes the text — don't immediately
-            // re-open the popup on that change (docs/ui/03).
+ // re-open the popup on that change.
             if let runnable = textView as? RunnableTextView, runnable.didAcceptCompletion {
                 runnable.didAcceptCompletion = false
                 popup.hide()
@@ -236,7 +236,7 @@ struct SQLEditorTextView: NSViewRepresentable {
             parent.onSelectionChange?(textView.selectedRange())
         }
 
-        // MARK: Completion (ED-03) — custom floating popup (docs/ui spec):
+ // MARK: Completion — custom floating popup:
         // dark themed rows with icons, blue selection, yellow match highlight,
         // ↑ ↓ ↩ ⇥ ⎋ keyboard navigation routed from the text view.
 
@@ -305,20 +305,6 @@ struct SQLEditorTextView: NSViewRepresentable {
 
         // MARK: Lexical highlighting (M2 slice — tree-sitter swap later)
 
-        private static let keywordRegex: NSRegularExpression = {
-            let pattern = "\\b(" + CompletionProvider.keywords
-                .flatMap { $0.split(separator: " ").map(String.init) }
-                .uniqued()
-                .joined(separator: "|")
-                + ")\\b"
-            return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
-        }()
-        private static let stringRegex = try! NSRegularExpression(pattern: "'(?:[^']|'')*'")
-        private static let commentRegex = try! NSRegularExpression(
-            pattern: "--[^\\n]*|/\\*(?:.|\\n)*?\\*/"
-        )
-        private static let numberRegex = try! NSRegularExpression(pattern: "\\b\\d+(?:\\.\\d+)?\\b")
-
         /// Debounced re-highlight — the latest keystroke wins, so a fast typist
         /// pays for one lex after they pause, not one per character.
         private func scheduleHighlight(_ textView: NSTextView) {
@@ -326,7 +312,7 @@ struct SQLEditorTextView: NSViewRepresentable {
             highlightTask = Task { [weak self, weak textView] in
                 // nanoseconds, not Task.sleep(for:) — confirmed Swift
                 // runtime crash risk in release builds (swiftlang/swift#86204,
-                // #84793; docs/tests/crash.md), not a style choice.
+ // #84793), not a style choice.
                 try? await Task.sleep(nanoseconds: 120_000_000)
                 guard !Task.isCancelled, let self, let textView else { return }
                 self.highlight(textView)
@@ -335,36 +321,18 @@ struct SQLEditorTextView: NSViewRepresentable {
 
         func highlight(_ textView: NSTextView) {
             guard let storage = textView.textStorage else { return }
-            let fullRange = NSRange(location: 0, length: storage.length)
-            let text = storage.string as NSString
-
-            storage.beginEditing()
-            storage.removeAttribute(.foregroundColor, range: fullRange)
-            storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: fullRange)
-
-            func apply(_ regex: NSRegularExpression, _ color: NSColor) {
-                regex.enumerateMatches(in: text as String, range: fullRange) { match, _, _ in
-                    if let range = match?.range {
-                        storage.addAttribute(.foregroundColor, value: color, range: range)
-                    }
-                }
-            }
-            apply(Self.numberRegex, .systemPurple)
-            apply(Self.keywordRegex, .systemBlue)
-            apply(Self.stringRegex, .systemRed)
-            apply(Self.commentRegex, .systemGreen)
-            storage.endEditing()
+            SQLSyntaxHighlighter.highlight(storage)
         }
     }
 }
 
-/// NSTextView that turns ⌘↩ / ⇧⌘↩ into run actions (ED-04) and routes
-/// navigation keys to the completion popup while it is open (docs/ui spec).
+/// NSTextView that turns ⌘↩ / ⇧⌘↩ into run actions and routes
+/// navigation keys to the completion popup while it is open.
 final class RunnableTextView: NSTextView {
     var onRunCurrent: (() -> Void)?
     var onRunAll: (() -> Void)?
     /// Set when the user accepts a completion so the editor doesn't immediately
-    /// re-open the popup on the resulting text change (docs/ui/03).
+ /// re-open the popup on the resulting text change.
     var didAcceptCompletion = false
     /// The coordinator's floating completion popup; keys route here when open.
     weak var completionPopup: CompletionPopupController?
@@ -372,7 +340,7 @@ final class RunnableTextView: NSTextView {
     var onManualComplete: (() -> Void)?
     /// Fires when this editor takes keyboard focus, so the workspace can mark its
     /// pane active — clicking/typing into a split pane must make it the focused
-    /// one (ui.md 01 §4), which a SwiftUI tap gesture can't see through the
+ /// one, which a SwiftUI tap gesture can't see through the
     /// AppKit text view.
     var onBecomeFirstResponder: (() -> Void)?
 
@@ -404,7 +372,7 @@ final class RunnableTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
-        // Keyboard-first popup interaction (docs/ui spec): arrows navigate,
+ // Keyboard-first popup interaction: arrows navigate,
         // ↩/⇥ accept, ⎋ dismisses; everything else keeps typing (live filter).
         if let popup = completionPopup, popup.isVisible {
             switch event.keyCode {
@@ -437,14 +405,14 @@ final class RunnableTextView: NSTextView {
             }
             return true
         }
-        // ⌘R → run the current statement (ED-04), same action as ⌘↩.
+ // ⌘R → run the current statement, same action as ⌘↩.
         if event.keyCode == 15, // kVK_ANSI_R
            event.modifierFlags.contains(.command),
            !event.modifierFlags.contains(.shift) {
             onRunCurrent?()
             return true
         }
-        // ⌃Space → completion popup (ED-03).
+ // ⌃Space → completion popup.
         if event.keyCode == 49, event.modifierFlags.contains(.control) {   // kVK_Space
             onManualComplete?()
             return true

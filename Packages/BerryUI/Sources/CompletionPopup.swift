@@ -2,7 +2,7 @@ import AppKit
 import BerryCore
 import SwiftUI
 
-/// One row of the custom completion popup (docs/ui spec): what the row shows,
+/// One row of the custom completion popup: what the row shows,
 /// what accepting it inserts (may be dialect-quoted), and its type metadata.
 struct CompletionItem: Equatable {
     let display: String
@@ -22,7 +22,7 @@ final class CompletionPopupModel {
     var selectedIndex = 0
 }
 
-/// Floating autocomplete panel under the text caret (docs/ui spec): rounded,
+/// Floating autocomplete panel under the text caret: rounded,
 /// shadowed, scrollable; blue selection, yellow highlight on matched chars.
 /// A non-activating panel — the editor keeps keyboard focus and routes
 /// ↑ ↓ ↩ ⇥ ⎋ here while the popup is visible.
@@ -96,7 +96,7 @@ final class CompletionPopupController {
     }
 }
 
-/// The scrollable suggestion list (docs/ui spec): icon + label with matched
+/// The scrollable suggestion list: icon + label with matched
 /// characters in yellow + muted detail; selected row solid blue with white text.
 private struct CompletionListView: View {
     let model: CompletionPopupModel
@@ -148,7 +148,7 @@ private struct CompletionListView: View {
     }
 
     /// The typed characters light up yellow inside each suggestion (fuzzy-match
-    /// scanability, docs/ui spec).
+ /// scanability, spec).
     private func highlightedLabel(_ text: String, selected: Bool) -> Text {
         let offsets = Set(CompletionProvider.matchOffsets(of: model.query, in: text))
         var attributed = AttributedString()

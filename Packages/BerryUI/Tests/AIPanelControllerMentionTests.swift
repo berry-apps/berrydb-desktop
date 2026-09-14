@@ -4,14 +4,14 @@ import Testing
 
 @testable import BerryUI
 
-/// `AIPanelController.artifactMentionQuery` (AI-32, docs/draft/09.md) — the
+/// `AIPanelController.artifactMentionQuery` — the
 /// trigger-detection half of the `@` mention autocomplete, separate from
 /// `ArtifactMentionItemTests`' coverage of the candidate-filtering half.
 /// Changed 2026-07-31 from requiring "@{" to a bare "@" (matching the
 /// Slack/Notion convention users expected) plus a word-boundary guard so an
 /// "@" embedded mid-word (an email address, "foo@bar") doesn't false-trigger.
 @MainActor
-@Suite("AIPanelController mention trigger (AI-32)")
+@Suite("AIPanelController mention trigger")
 struct AIPanelControllerMentionTests {
     private func makeController() -> AIPanelController {
         let client = LicenseClient(baseURL: URL(string: "https://example.invalid")!)

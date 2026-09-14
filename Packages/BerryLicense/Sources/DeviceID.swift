@@ -2,9 +2,9 @@ import CryptoKit
 import Foundation
 import IOKit
 
-/// Stable, privacy-preserving device identifier (docs/architecture/10 §5).
+/// Stable, privacy-preserving device identifier.
 /// `device_hash = SHA-256(salt ‖ hardware UUID)` — the backend counts devices
-/// (≤3, TM-02) without ever seeing the raw machine id.
+/// (≤3) without ever seeing the raw machine id.
 public enum DeviceID {
     public static let defaultSalt = "berrydb.device.v1"
 

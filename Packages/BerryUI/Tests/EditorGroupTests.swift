@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryUI
 
-/// Editor groups = the VS Code-style unlimited split (ui.md §1). Each group is
+/// Editor groups = the VS Code-style unlimited split. Each group is
 /// an independent pane over its own subset of the open tabs.
 @MainActor
 @Suite("Editor groups (split panes)")
@@ -30,7 +30,7 @@ struct EditorGroupTests {
 
         #expect(vm.groups.count == 2)
         // Split opens a NEW independent tab, not a second view of the active one
-        // that would edit in lock-step (docs/ui/03 §1).
+ // that would edit in lock-step.
         #expect(vm.groups[1].tabIDs.count == 1)
         #expect(vm.groups[1].tabIDs != [bID])
         #expect(vm.tabs.count == 3)
@@ -82,7 +82,7 @@ struct EditorGroupTests {
         }
     }
 
-    // docs/ui/02 §4: tools open as singleton tabs, not modals.
+ // tools open as singleton tabs, not modals.
     @Test func openToolCreatesASingletonTab() throws {
         let vm = try WorkspaceViewModel(storePath: tempPath("groups"))
         vm.openTool(.history)
@@ -95,7 +95,7 @@ struct EditorGroupTests {
         #expect(vm.activeTabID == "tool:processes")
     }
 
-    // docs/ui/01 D2: dropping a tab on a pane edge splits a new pane off it.
+ // D2: dropping a tab on a pane edge splits a new pane off it.
     @Test func droppingATabOnAnEdgeSplitsANewColumn() throws {
         let vm = try WorkspaceViewModel(storePath: tempPath("groups"))
         vm.newEditorTab(text: "a")
@@ -135,7 +135,7 @@ struct EditorGroupTests {
         #expect(vm.layoutRows[0].groupIDs.count == 2)             // g0 survives (has b)
     }
 
-    // docs/ui/03: dragging a pane's only tab out closes that pane (standard).
+ // dragging a pane's only tab out closes that pane (standard).
     @Test func draggingTheLastTabOutClosesTheSourcePane() throws {
         let vm = try WorkspaceViewModel(storePath: tempPath("groups"))
         vm.newEditorTab(text: "a")     // g0 = [a]

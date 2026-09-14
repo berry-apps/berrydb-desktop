@@ -1,7 +1,7 @@
 import BerryDriverKit
 import Foundation
 
-/// DynamoDB `AttributeValue` JSON ↔ `BerryValue` — docs/architecture/05 §3
+/// DynamoDB `AttributeValue` JSON ↔ `BerryValue`
 /// (no lossy coercion), verified against real `AttributeValue` shapes
 /// returned by dynamodb-local (`{"S":..}`, `{"N":".."}`, `{"BOOL":..}`,
 /// `{"NULL":true}`, `{"B":"<base64>"}`, `{"M":{...}}`, `{"L":[...]}`,
@@ -11,7 +11,7 @@ enum DynamoDBWire {
     /// entry) → `BerryValue`. `M`/`L`/`SS`/`NS`/`BS` have no direct
     /// `BerryValue` case (schemaless nested structure, not a SQL type) so
     /// they render as `.json` text for display — same treatment Postgres
-    /// gives `jsonb` (05 §3).
+ /// gives `jsonb`.
     static func berryValue(from attribute: [String: Any]) -> BerryValue {
         if let s = attribute["S"] as? String { return .text(s) }
         if let n = attribute["N"] as? String { return numberValue(n) }
@@ -49,7 +49,7 @@ enum DynamoDBWire {
 
     /// Best-effort DynamoDB type tag for a column, from the first row that
     /// carries a value for it — `ColumnMeta.declaredType` is allowed to stay
-    /// empty for computed/absent cases (05 §1).
+ /// empty for computed/absent cases.
     static func declaredType(of name: String, firstBatch: [[String: Any]]) -> String {
         for item in firstBatch {
             if let attribute = item[name] as? [String: Any], let tag = attribute.keys.first {
@@ -66,13 +66,13 @@ enum DynamoDBWire {
         return .decimal(n)
     }
 
-    // MARK: - Plain JSON conversion for M/L display (05 §3 — display only)
+ // MARK: - Plain JSON conversion for M/L display (display only)
 
     /// `M`/`L` unwrap into plain JSON for readability. Numbers deeper than
     /// the top level fall back to `Double` when they do not fit `Int64` —
     /// unlike the top-level `.decimal` path, this can lose precision on
     /// >15-digit numbers nested inside a map/list; acceptable for a
-    /// display-only JSON preview, called out in docs/architecture/12 §4.
+ /// display-only JSON preview, called out
     private static func plainJSONValue(_ attribute: [String: Any]) -> Any {
         if let s = attribute["S"] as? String { return s }
         if let n = attribute["N"] as? String { return Int64(n) ?? Double(n).map { $0 as Any } ?? (n as Any) }

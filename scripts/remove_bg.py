@@ -8,8 +8,7 @@ def remove_white_bg(image_path, output_path):
     for item in data:
         r, g, b, a = item
         
-        # We consider a pixel "white background" if it's very bright and unsaturated.
-        # Since the user wants the white background removed, we will be aggressive with pure white.
+        # Aggressively remove near-pure white background pixels.
         if r > 240 and g > 240 and b > 240:
             new_data.append((255, 255, 255, 0)) # Fully transparent
         elif r > 210 and g > 210 and b > 210 and abs(r-g) < 15 and abs(g-b) < 15:
@@ -32,6 +31,9 @@ def remove_white_bg(image_path, output_path):
     print(f"Removed white background and saved to {output_path}")
 
 if __name__ == "__main__":
-    input_image = "/Users/tan/idea/berrydb/image.png"
-    output_image = "/Users/tan/idea/berrydb/icons/app-icon-1024.png"
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    input_image = sys.argv[1] if len(sys.argv) > 1 else str(root / "deploy" / "icon-1024.png")
+    output_image = sys.argv[2] if len(sys.argv) > 2 else str(root / "icons" / "app-icon-1024.png")
     remove_white_bg(input_image, output_image)

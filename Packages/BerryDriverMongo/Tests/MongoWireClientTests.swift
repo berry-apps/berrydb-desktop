@@ -237,7 +237,7 @@ struct MongoWireClientTests {
         #expect(page.cursorID == 0)
     }
 
-    // MARK: - Explicit collection creation (docs/architecture/12 §3)
+ // MARK: - Explicit collection creation
 
     @Test func createCollectionSendsCreateCommand() async throws {
         let transport = MongoStubTransport(handlers: [
@@ -343,11 +343,11 @@ struct MongoWireClientTests {
         #expect(n == 3)
     }
 
-    // MARK: - Replica-set v1: seeds -> primary discovery (docs/architecture/12 §3)
+ // MARK: - Replica-set v1: seeds -> primary discovery
     //
     // Field names/values (isWritablePrimary/primary/setName) verified live
-    // against `docker-mongo-1` (standalone) and a throwaway `mongod --replSet
-    // ... --bind_ip_all` this session — see `MongoHelloResponseTests` for the
+    // against `docker-mongo-1` (standalone) and a containerized `mongod --replSet
+    // ... --bind_ip_all` — see `MongoHelloResponseTests` for the
     // captured JSON. These tests exercise the seed-iteration/reconnect LOGIC
     // (which Docker can't: a single-node replica set is always its own
     // primary, so the real container never takes the reconnect branch — see

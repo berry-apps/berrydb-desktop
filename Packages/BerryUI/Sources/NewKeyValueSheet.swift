@@ -1,10 +1,10 @@
 import BerryKeyValueKit
 import SwiftUI
 
-/// Create a new string key (docs/architecture/15 §4) — v1 write scope is
+/// Create a new string key — v1 write scope is
 /// string SET/DEL/EXPIRE only (`KeyValueChangeSet`), same reasoning
 /// `NewCollectionSheet` documents for its own scope: small enough to fit
-/// without internal scrolling (UD-07). The generated command is always shown
+/// without internal scrolling. The generated command is always shown
 /// before Create, same rule as `UserDesignerSheet`/`TableDesignerSheet`.
 struct NewKeyValueSheet: View {
     let preview: (KeyValueChangeSet) -> String

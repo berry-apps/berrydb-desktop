@@ -1,9 +1,9 @@
 import BerryDriverKit
 import Foundation
 
-/// Convention Memory analyzer (DI-21, docs/architecture/13 §5.2) — mines the
+/// Convention Memory analyzer — mines the
 /// current DSG for an established index-naming convention, so
-/// SchemaAnalyzer/MigrationPreviewAnalyzer (DI-07/15) can flag newly-added
+/// SchemaAnalyzer/MigrationPreviewAnalyzer can flag newly-added
 /// indexes that break it. Pure — reads only the harvested graph.
 public enum ConventionMemory {
     /// True when at least 2 indexes follow the canonical
@@ -18,7 +18,7 @@ public enum ConventionMemory {
         return conformingCount >= 2 && conformingCount * 2 >= judged.count
     }
 
-    /// "Database Memory" (docs/feature/07 §12): whether the convention held
+ /// "Database Memory": whether the convention held
     /// across the schema's own recent history, not just its current shape —
     /// a convention seen in only today's snapshot could be coincidental
     /// (e.g. right after one large migration that happened to match); one
@@ -45,7 +45,7 @@ public enum ConventionMemory {
     /// when a convention is established (otherwise there's no established
     /// convention to compare against, so return []). severity .info, category
     /// .schema, id "schema.naming_convention.<indexName>". `history` is an
-    /// optional bounded window of prior snapshots (docs/feature/07 §12,
+ /// optional bounded window of prior snapshots
     /// "Database Memory") — when supplied, requires the convention to hold
     /// across most of that history too, not just the current snapshot alone.
     public static func namingMismatches(_ graph: SchemaGraph, history: [SchemaGraph] = []) -> [Insight] {

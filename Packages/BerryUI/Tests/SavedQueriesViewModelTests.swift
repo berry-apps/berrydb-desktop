@@ -45,7 +45,7 @@ private struct FakeMongoDriver: DataSourceDriver {
     }
 }
 
-/// Saved queries (ED-07) at the `WorkspaceViewModel` level: opening, linking,
+/// Saved queries at the `WorkspaceViewModel` level: opening, linking,
 /// renaming, and re-saving. Covers both the pre-existing `.editor` (SQL)
 /// branches — which had no test coverage anywhere before this task, even
 /// though this task edits them — and the new `.mongoShell` branches added by

@@ -80,7 +80,7 @@ struct DynamoDBWireTests {
         }
     }
 
-    // MARK: - row(from:columnOrder:) — column alignment (05 §1 ResultEvent contract)
+ // MARK: - row(from:columnOrder:) — column alignment (ResultEvent contract)
 
     @Test func rowFillsMissingAttributesWithNull() {
         let item: [String: Any] = ["Artist": ["S": "Acme"]]
@@ -89,7 +89,7 @@ struct DynamoDBWireTests {
     }
 
     @Test func rowDropsAttributesNotInColumnOrder() {
-        // Known limitation (docs/architecture/12 §4): a later page can
+ // Known limitation: a later page can
         // introduce an attribute the first page never announced — it's
         // dropped rather than corrupting the fixed column alignment.
         let item: [String: Any] = ["Artist": ["S": "Acme"], "Unexpected": ["S": "surprise"]]

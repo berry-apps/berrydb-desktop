@@ -4,12 +4,12 @@ import BerryDriverKit
 import SwiftUI
 
 /// Result grid — NSTableView wrapped in NSViewRepresentable because SwiftUI
-/// Table cannot handle large tables (docs/architecture/03 §2, target 1M rows at 60fps).
+/// Table cannot handle large tables (target 1M rows at 60fps).
 /// View-based + virtualized: NSTableView only materializes visible rows.
 ///
-/// Editing (DL-03/04/05): when `isEditable`, cells accept inline edits and a
+/// Editing: when `isEditable`, cells accept inline edits and a
 /// right-click menu offers Set NULL / Delete Row; every action only STAGES a
-/// change via the callbacks — nothing touches the DBMS here (06 · L3).
+/// change via the callbacks — nothing touches the DBMS here (06).
 public struct DataGridView: NSViewRepresentable {
     private let buffer: ResultBuffer
     var isEditable: Bool = false
@@ -22,20 +22,20 @@ public struct DataGridView: NSViewRepresentable {
     /// Paste clipboard rows as staged inserts; the handler reads NSPasteboard
     /// itself (mirrors how `onCopy` already writes to it via `GridCopy.copy`).
     var onPasteRows: (() -> Void)?
-    /// Copy-as menu (DL-07); formats are filtered by the host view.
+ /// Copy-as menu; formats are filtered by the host view.
     var copyFormats: [GridCopyFormat] = []
     var onCopy: (([Int], GridCopyFormat) -> Void)?
-    /// Locally staged insert rows appended below the buffer (DL-04); their
+ /// Locally staged insert rows appended below the buffer; their
     /// values come exclusively through `overlay`.
     var appendedRowCount: Int = 0
-    /// Column-header sort (DL-02): (columnName, ascending).
+ /// Column-header sort: (columnName, ascending).
     var onSort: ((String, Bool) -> Void)?
-    /// Cell viewer (DL-06), opened from the context menu.
+ /// Cell viewer, opened from the context menu.
     var onViewCell: ((Int, Int) -> Void)?
-    /// FK jump (DL-08): given a column index, returns the referenced table
+ /// FK jump: given a column index, returns the referenced table
     /// name when that column is a foreign key (for the menu title), else nil.
     var foreignKeyTarget: ((Int) -> String?)?
-    /// FK jump (DL-08): open the referenced row for (row, columnIndex).
+ /// FK jump: open the referenced row for (row, columnIndex).
     var onJumpToReference: ((Int, Int) -> Void)?
 
     public init(buffer: ResultBuffer) {
@@ -169,7 +169,7 @@ public struct DataGridView: NSViewRepresentable {
                 column.width = 140
                 column.minWidth = 40
                 if parent?.onSort != nil {
-                    // Header-click sort (DL-02) via the standard sort-descriptor flow.
+ // Header-click sort via the standard sort-descriptor flow.
                     column.sortDescriptorPrototype = NSSortDescriptor(key: meta.name, ascending: true)
                 }
                 tableView.addTableColumn(column)
@@ -230,7 +230,7 @@ public struct DataGridView: NSViewRepresentable {
             cell.isBordered = false
             cell.drawsBackground = false
 
-            // Appended (inserted) rows live only in the overlay (DL-04).
+ // Appended (inserted) rows live only in the overlay.
             let isAppended = row >= buffer.rowCount
             let staged = parent.overlay?(row, columnIndex)
             let value = staged ?? (isAppended ? .null : buffer.rows[row][columnIndex])
@@ -240,7 +240,7 @@ public struct DataGridView: NSViewRepresentable {
                 cell.stringValue = text
                 cell.textColor = staged != nil ? .systemOrange : .labelColor
             } else {
-                // NULL is clearly distinguished from an empty string (DL-05).
+ // NULL is clearly distinguished from an empty string.
                 cell.stringValue = "NULL"
                 cell.textColor = staged != nil ? .systemOrange : .tertiaryLabelColor
             }
@@ -269,7 +269,7 @@ extension DataGridView.Coordinator: NSMenuDelegate {
         menu.removeAllItems()
         guard let parent, let tableView, tableView.clickedRow >= 0 else { return }
 
-        // Cell viewer (DL-06) — every grid.
+ // Cell viewer — every grid.
         if parent.onViewCell != nil {
             let view = NSMenuItem(
                 title: String(localized: "View Cell…", bundle: berryModuleBundle),
@@ -280,7 +280,7 @@ extension DataGridView.Coordinator: NSMenuDelegate {
             menu.addItem(.separator())
         }
 
-        // FK jump (DL-08) — only when the clicked column is a foreign key.
+ // FK jump — only when the clicked column is a foreign key.
         if tableView.clickedColumn >= 0,
            let referenced = parent.foreignKeyTarget?(tableView.clickedColumn) {
             let jump = NSMenuItem(
@@ -292,7 +292,7 @@ extension DataGridView.Coordinator: NSMenuDelegate {
             menu.addItem(.separator())
         }
 
-        // Copy-as (DL-07) — available on every grid, table tabs and editor
+ // Copy-as — available on every grid, table tabs and editor
         // results alike.
         for (index, format) in parent.copyFormats.enumerated() {
             let item = NSMenuItem(title: format.title, action: #selector(copyAction(_:)), keyEquivalent: "")

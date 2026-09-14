@@ -1,7 +1,7 @@
 import Foundation
 
-/// A 0–100 health score computed from the Insight Panel's own findings (DI-09)
-/// — no new data source, no DBMS access (docs/feature/07 §10, "Database
+/// A 0–100 health score computed from the Insight Panel's own findings
+/// no new data source, no DBMS access ("Database
 /// Architecture Score"). Deliberately narrower than the feature doc's mockup:
 /// that pictures Performance/Security/Maintainability/Schema/Index/Storage
 /// sub-scores, but only `Insight.Category` (schema/index/query) has any real

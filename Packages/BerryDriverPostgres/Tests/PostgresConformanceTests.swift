@@ -78,7 +78,7 @@ struct PostgresConformanceTests {
     }
 
     @Test func backendPIDIsAvailableForCancel() async throws {
-        // Precondition of the cancel path (05 §4): the pid must be captured
+ // Precondition of the cancel path: the pid must be captured
         // right after connect, otherwise cancelCurrentQuery is a silent no-op.
         let conn = try await harness.makeConnection() as! PostgresDriverConnection
         #expect(conn.debugBackendPID != nil)
@@ -103,7 +103,7 @@ struct PostgresConformanceTests {
 
     // n_live_tup only updates after ANALYZE (autovacuum hasn't run yet on a
     // freshly-inserted table) — ANALYZE explicitly so the estimate is
-    // deterministic instead of racing autovacuum (TR-04).
+ // deterministic instead of racing autovacuum.
     @Test func tableStatsReflectsRowsSizeAndComment() async throws {
         let conn = try await harness.makeConnection()
         defer { Task { await conn.close() } }
@@ -190,7 +190,7 @@ struct PostgresConformanceTests {
         try await harness.exec(conn, ["DROP TABLE \(child)", "DROP TABLE \(parent)"])
     }
 
-    // TR-01: functions, procedures and triggers surface in the object tree.
+ // functions, procedures and triggers surface in the object tree.
     @Test func introspectsRoutinesAndTriggers() async throws {
         let conn = try await harness.makeConnection()
         defer { Task { await conn.close() } }
@@ -236,7 +236,7 @@ struct PostgresConformanceTests {
 
     @Test func processListRunsAndKillGuardsID() async throws {
         let dialect = PostgresDialect()
-        // The kill statement only accepts a numeric pid (TI-01).
+ // The kill statement only accepts a numeric pid.
         #expect(dialect.killSessionSQL(id: "123") == "SELECT pg_terminate_backend(123)")
         #expect(dialect.killSessionSQL(id: "1; DROP TABLE x") == nil)
         #expect(dialect.killSessionSQL(id: "") == nil)

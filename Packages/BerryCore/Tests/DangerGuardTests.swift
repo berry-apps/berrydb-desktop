@@ -5,7 +5,7 @@ import Testing
 
 @testable import BerryCore
 
-@Suite("DangerGuard (07 §6)")
+@Suite("DangerGuard")
 struct DangerGuardTests {
     @Test func updateWithoutWhereNeedsConfirm() {
         #expect(DangerGuard.classify("UPDATE users SET a = 1", isProduction: false)
@@ -23,7 +23,7 @@ struct DangerGuardTests {
     @Test func deleteWithoutWhereNeedsConfirm() {
         #expect(DangerGuard.classify("DELETE FROM logs", isProduction: false)
             == .confirm(.deleteWithoutWhere))
-        // A targeted DELETE still warns — it removes data (docs/ui), just with
+ // A targeted DELETE still warns — it removes data, just with
         // the softer, batchable confirm.
         #expect(DangerGuard.classify("DELETE FROM logs WHERE id < 5", isProduction: false)
             == .confirm(.deleteData))
@@ -59,7 +59,7 @@ struct DangerGuardTests {
         #expect(DangerGuard.classify("TRUNCATE TABLE orders", isProduction: true)
             == .typedConfirm(objectName: "orders", reason: .truncateOnProduction))
         // Off production, destructive DDL gets the soft (batchable) confirm
-        // instead of the typed gate (docs/ui).
+ // instead of the typed gate.
         #expect(DangerGuard.classify("DROP TABLE tmp", isProduction: false) == .confirm(.dropObject))
         #expect(DangerGuard.classify("TRUNCATE t", isProduction: false) == .confirm(.truncateTable))
     }

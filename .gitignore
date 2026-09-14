@@ -27,3 +27,15 @@ __pycache__/
 .pnpm-store/
 berrydb-admin/
 venv/
+
+# Local IDE and AI agent files
+.claude/
+.superpowers/
+.mcp.json
+CLAUDE.md
+
+# Scratch and test files
+test_icon.swift
+image.png
+test_processed.png
+!deploy/.env.example

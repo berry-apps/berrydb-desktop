@@ -3,7 +3,7 @@ import Foundation
 /// Tree-shaped value for schema-less data (Mongo documents, Qdrant point
 /// payloads) — deliberately separate from `BerryValue` (BerryDriverKit),
 /// which is shaped for tabular cells, not nested documents
-/// (docs/architecture/12 §2). No information-losing coercion: unrecognized
+/// No information-losing coercion: unrecognized
 /// shapes stay representable rather than being flattened or dropped.
 public indirect enum BerryDocument: Sendable, Hashable {
     case null
@@ -20,7 +20,7 @@ public indirect enum BerryDocument: Sendable, Hashable {
     case vector([Float])
     case array([BerryDocument])
     /// Ordered key/value pairs — preserves field order for display, unlike
-    /// `[String: BerryDocument]` (docs/architecture/12 §2).
+ /// `[String: BerryDocument]`.
     case object([(String, BerryDocument)])
 
     public static func == (lhs: BerryDocument, rhs: BerryDocument) -> Bool {

@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// One executed statement (ED-06) — docs/architecture/07 §3.
+/// One executed statement
 /// Privacy: per-profile recording can be disabled; a one-tap "clear all"
 /// wipes the table.
 public struct QueryHistoryEntry: Identifiable, Codable, Sendable {
@@ -40,8 +40,8 @@ extension QueryHistoryEntry: FetchableRecord, PersistableRecord {
     public static let databaseTableName = "query_history"
 }
 
-/// Lightweight schema snapshot — the Digital Twin seed (DI-08,
-/// docs/architecture/11 §6): object list + digest per refresh; consecutive
+/// Lightweight schema snapshot — the Digital Twin seed
+/// object list + digest per refresh; consecutive
 /// identical digests are skipped so the store only grows on real change.
 public struct SchemaSnapshotRecord: Identifiable, Codable, Sendable {
     public var id: UUID
@@ -50,7 +50,7 @@ public struct SchemaSnapshotRecord: Identifiable, Codable, Sendable {
     /// SHA-256 of the normalized payload — dedupe key.
     public var digest: String
     /// JSON: [{kind, name, database}] — compact by design; richer harvests
-    /// (columns, stats) arrive with V1.5 (DI-01).
+ /// (columns, stats) arrive with V1.5.
     public var payload: String
 
     public init(id: UUID = UUID(), profileID: UUID?, takenAt: Date, digest: String, payload: String) {
@@ -66,7 +66,7 @@ extension SchemaSnapshotRecord: FetchableRecord, PersistableRecord {
     public static let databaseTableName = "schema_snapshot"
 }
 
-/// Unsaved editor tab content, restored on reconnect (UD-05 — docs/architecture/07 §3).
+/// Unsaved editor tab content, restored on reconnect.
 /// The record id IS the EditorDocument id, so save/restore round-trips 1:1.
 public struct EditorSessionRecord: Identifiable, Codable, Sendable {
     public var id: UUID

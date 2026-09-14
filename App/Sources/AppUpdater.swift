@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-/// Auto-update entry point (docs/architecture/10 §3). Sparkle is a binary
+/// Auto-update entry point. Sparkle is a binary
 /// framework that only works from a signed `.app` bundle, so the default
 /// SwiftPM build (tests, `swift run`, the size guard) ships WITHOUT it and the
 /// menu is a no-op. A release build adds the Sparkle SPM product (see

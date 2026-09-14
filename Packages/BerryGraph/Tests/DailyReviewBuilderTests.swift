@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import BerryGraph
 
-@Suite("Daily Review Builder (DI-23)")
+@Suite("Daily Review Builder")
 struct DailyReviewBuilderTests {
     @Test func isDueWhenLastGeneratedAtIsNil() {
         let now = Date()

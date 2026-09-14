@@ -4,8 +4,8 @@ import Testing
 
 @testable import BerryGraph
 
-/// Deterministic analyzers over the DSG (docs/architecture/11 §7, DI-05/07).
-@Suite("Schema Analyzer (DI-07)")
+/// Deterministic analyzers over the DSG.
+@Suite("Schema Analyzer")
 struct SchemaAnalyzerTests {
     private func table(_ name: String, attrs: [String: String] = [:]) -> GraphNode {
         GraphNode(id: "tbl:\(name)", kind: .table, name: name, attrs: attrs)
@@ -102,7 +102,7 @@ struct SchemaAnalyzerTests {
     }
 }
 
-@Suite("Index Advisor (DI-05)")
+@Suite("Index Advisor")
 struct IndexAdvisorTests {
     private func index(_ name: String, table: String, unused: Bool, unique: Bool) -> (GraphNode, GraphEdge) {
         let node = GraphNode(id: "idx:\(name)", kind: .index, name: name,

@@ -1,7 +1,7 @@
 import Testing
 @testable import BerryAI
 
-@Suite("perform_ui_action client tool (DI-22)")
+@Suite("perform_ui_action client tool")
 struct PerformUIActionToolExecutorTests {
     @MainActor
     @Test func performsTheMatchingEnabledAction() async {

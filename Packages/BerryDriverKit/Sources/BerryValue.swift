@@ -1,6 +1,6 @@
 import Foundation
 
-/// Intermediate type system — docs/architecture/05 §3.
+/// Intermediate type system
 /// Principle: no lossy coercion. DECIMAL is kept verbatim; unfamiliar types
 /// fall into `.unknown` with the type name instead of crashing or mis-rounding.
 public enum BerryValue: Sendable, Hashable {
@@ -24,7 +24,7 @@ extension BerryValue {
         return false
     }
 
-    /// Display string for grid/copy. NULL returns nil so the UI can style it separately (DL-05).
+ /// Display string for grid/copy. NULL returns nil so the UI can style it separately.
     public var displayString: String? {
         switch self {
         case .null:
@@ -54,7 +54,7 @@ extension BerryValue {
 
     private static let timestampFormat = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 
-    /// Numeric value for charting (Visualize Result, docs/feature/07 §8) —
+ /// Numeric value for charting (Visualize Result)
     /// nil for anything that isn't actually a number. Never coerces text/
     /// dates/etc. (N4-style: no lossy guessing), and DECIMAL parses
     /// best-effort since it's stored verbatim as a string.

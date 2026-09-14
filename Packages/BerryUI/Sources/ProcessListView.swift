@@ -2,7 +2,7 @@ import BerryCore
 import BerryDriverKit
 import SwiftUI
 
-/// Server process/activity list (TI-01): the running sessions on the server,
+/// Server process/activity list: the running sessions on the server,
 /// with a per-row Kill action. Columns are normalized by the dialect to
 /// pid/user/db/state/query/seconds. Read-only otherwise; every statement still
 /// goes through the single SQL path (N1).
@@ -11,7 +11,7 @@ struct ProcessListView: View {
     let onReload: () -> Void
     let onKill: (String) async -> String?
 
-    /// Close this tool tab (docs/ui/02 §4).
+ /// Close this tool tab.
     let onClose: () -> Void
     @State private var killError: String?
     @State private var killingPID: String?

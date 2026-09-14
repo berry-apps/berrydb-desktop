@@ -6,7 +6,7 @@ import Testing
 
 /// `WorkspaceViewModel.activeTabSnapshot()`/`activeEditorStatements(for:)` for
 /// `.qdrantQuery`/`.elasticsearchQuery` tabs — the AI `read_current_tab`/
-/// `run_tab_statements` tools' data path (docs/architecture/17 §5). Before
+/// `run_tab_statements` tools' data path. Before
 /// this fix both switches only handled `.editor`/`.mongoShell`, falling to
 /// `default: nil`/`[]` for a Qdrant or Elasticsearch query tab — the AI could
 /// propose a query into one of these tabs but could never read it back or run

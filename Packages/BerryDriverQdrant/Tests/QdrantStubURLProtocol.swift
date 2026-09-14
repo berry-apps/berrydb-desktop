@@ -1,6 +1,6 @@
 import Foundation
 
-/// In-process HTTP stub — no real network, no Docker (docs/architecture/12 §10
+/// In-process HTTP stub — no real network, no Docker
 /// task scope: "pure unit tests with a stubbed URLProtocol/URLSession").
 /// Handlers are keyed by request host so concurrently-running `@Test`s (Swift
 /// Testing parallelizes by default) never share mutable state: each test uses

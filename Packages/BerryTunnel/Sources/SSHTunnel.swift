@@ -16,11 +16,11 @@ func tunnelTrace(_ message: @autoclosure () -> String) {
     }
 }
 
-/// SSH tunnel (KN-03, docs/architecture/06 · L1): connects to a bastion via
+/// SSH tunnel: connects to a bastion via
 /// Citadel and exposes a local 127.0.0.1 port; every accepted local socket is
 /// piped through an SSH direct-tcpip channel to the target host.
 ///
-/// Host keys are pinned trust-on-first-use (docs/architecture/07 §4): the first
+/// Host keys are pinned trust-on-first-use: the first
 /// key seen for a bastion is recorded; a later mismatch hard-fails the connect
 /// (`DriverError.sshHostKeyChanged`) as MITM protection.
 public final class SSHTunnel: Sendable {
@@ -56,7 +56,7 @@ public final class SSHTunnel: Sendable {
             throw error
         } catch {
             // A host-key mismatch surfaces as a generic handshake failure; turn
-            // it into the precise, actionable error (07 §4).
+ // it into the precise, actionable error.
             if let mismatch = validator.mismatch {
                 throw DriverError.sshHostKeyChanged(
                     host: ssh.host, port: ssh.port,
@@ -144,7 +144,7 @@ public final class SSHTunnel: Sendable {
         return .passwordBased(username: ssh.username, password: password)
     }
 
-    /// Public-key auth from an OpenSSH private key (KN-04, 07 §4). ed25519 (the
+ /// Public-key auth from an OpenSSH private key. ed25519 (the
     /// modern default) and RSA are supported; ECDSA can't be parsed by the SSH
     /// library yet, so it gets a clear message rather than a cryptic failure.
     static func keyAuth(pem: String, ssh: SSHConfig) throws -> SSHAuthenticationMethod {
@@ -169,7 +169,7 @@ public final class SSHTunnel: Sendable {
                 let key = try Insecure.RSA.PrivateKey(sshRsa: pem, decryptionKey: passphrase)
                 // rsa-sha2-512/256 (RFC 8332) first, falling back to legacy
                 // ssh-rsa (SHA-1) — OpenSSH 8.8+ rejects ssh-rsa by default, so
-                // plain .rsa(...) fails against any stock modern server (KN-03).
+ // plain.rsa(...) fails against any stock modern server.
                 return .rsaSHA2(username: ssh.username, privateKey: key)
             } else if keyType == .ecdsaP256 || keyType == .ecdsaP384 || keyType == .ecdsaP521 {
                 // Citadel can't parse OpenSSH ECDSA keys — our own parser
@@ -211,6 +211,36 @@ public final class SSHTunnel: Sendable {
     /// temp directory and removed immediately after, success or failure.
     /// Re-encrypts with the SAME passphrase (empty if none) so the key's
     /// security posture is unchanged — only the container format changes.
+    /// Environment variable the askpass helper echoes back to ssh-keygen.
+    static let passphraseEnvKey = "BERRYDB_SSH_KEY_PASSPHRASE"
+
+    /// Arguments for an in-place ssh-keygen format conversion.
+    ///
+    /// **The passphrase is deliberately not here.** It used to be passed as
+    /// `-N <pass> -P <pass>`, and command-line arguments are readable by every
+    /// process running as the same user — `ps -ax -o args` prints them in full.
+    /// That downgraded a passphrase the app otherwise keeps in the Keychain to
+    /// something any local process could scrape while ssh-keygen ran. It now
+    /// travels through the environment instead, which `ps` does not expose.
+    /// Re-adding `-N` or `-P` here reintroduces that leak.
+    static func conversionArguments(keyPath: String) -> [String] {
+        // -p rewrite in place, -o force the new OpenSSH format.
+        ["-p", "-o", "-f", keyPath]
+    }
+
+    /// Environment for the conversion: the askpass helper, and the passphrase it
+    /// will echo. Inherits the caller's environment so ssh-keygen still finds its
+    /// usual configuration.
+    static func conversionEnvironment(askpassPath: String, passphrase: String) -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["SSH_ASKPASS"] = askpassPath
+        // Without this, ssh-keygen consults SSH_ASKPASS only when there is no TTY
+        // and DISPLAY is set. Needs OpenSSH 8.4 or newer; macOS 14 ships 9.x.
+        env["SSH_ASKPASS_REQUIRE"] = "force"
+        env[passphraseEnvKey] = passphrase
+        return env
+    }
+
     private static func normalizeToOpenSSH(_ pem: String, passphrase: String?) throws -> String {
         guard !pem.hasPrefix("-----BEGIN OPENSSH PRIVATE KEY-----") else { return pem }
         // Not a PEM private key at all (empty file, public key pasted by
@@ -229,11 +259,17 @@ public final class SSHTunnel: Sendable {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: keyFile.path)
 
         let pass = passphrase ?? ""
+
+        // ssh-keygen reads the passphrase from this helper rather than from -N/-P.
+        // The helper holds no secret itself: it echoes an environment variable.
+        let askpass = tempDir.appendingPathComponent("askpass.sh")
+        try "#!/bin/sh\nprintf %s \"$\(passphraseEnvKey)\"\n".write(to: askpass, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: askpass.path)
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
-        // -p rewrite in place, -o force new OpenSSH format, -N/-P new/old
-        // passphrase (same value both ways — this only changes the format).
-        process.arguments = ["-p", "-o", "-f", keyFile.path, "-N", pass, "-P", pass]
+        process.arguments = conversionArguments(keyPath: keyFile.path)
+        process.environment = conversionEnvironment(askpassPath: askpass.path, passphrase: pass)
         let stderrPipe = Pipe()
         process.standardError = stderrPipe
         process.standardOutput = Pipe()

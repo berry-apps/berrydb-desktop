@@ -28,7 +28,7 @@ public actor RedisConnection: KeyValueConnection {
         // Postgres-style "try TLS, fall back to plaintext on the same
         // connection" byte — TLS (if used) must be the first byte of the
         // socket, same limitation already documented for Mongo
-        // (docs/architecture/12 §3 point 1). `.disable` → plaintext; every
+ // (point 1). `.disable` → plaintext; every
         // other `TLSMode` value enables TLS with default trust (no custom
         // CA/client cert yet, same v1 scope as Qdrant/Mongo's own TLS gaps).
         if config.tlsMode != .disable {
@@ -43,7 +43,7 @@ public actor RedisConnection: KeyValueConnection {
         self.client = client
         self.runTask = Task { await client.run() }
 
-        // Fail fast on a bad host/port — same "Test connection" (KN-06)
+ // Fail fast on a bad host/port — same "Test connection"
         // expectation every driver follows.
         do {
             _ = try await client.ping()
@@ -57,12 +57,12 @@ public actor RedisConnection: KeyValueConnection {
         try await client.select(index: index)
     }
 
-    /// Batches over the collection-shaped types (N3, docs/architecture/05 §1:
+ /// Batches over the collection-shaped types (N3,:
     /// "never buffer a full result set" — batches of 500-1000). Applies to
     /// `get()`'s hash/list/set/sortedSet/stream reads AND to `scan()`'s
     /// own page size. A key with more members than this shows only the
     /// first batch — no truncation indicator yet in `KeyValueValue` (v1 gap,
-    /// docs/architecture/15 §5), but this is a strict improvement over
+ /// but this is a strict improvement over
     /// pulling an unbounded collection (a hash/list/set/zset/stream can
     /// hold millions of entries in real Redis usage) into memory in one shot.
     private static let maxCollectionMembers = 1000
@@ -196,7 +196,7 @@ public actor RedisConnection: KeyValueConnection {
     public nonisolated func cancelCurrentQuery() {
         // No in-flight query state to cancel — every KeyValueConnection
         // method is a single, already-fast RESP round trip (capabilities
-        // table docs/architecture/15 §2 does not claim cancelQuery).
+ // table does not claim cancelQuery).
     }
 
     public func ping() async -> Bool {

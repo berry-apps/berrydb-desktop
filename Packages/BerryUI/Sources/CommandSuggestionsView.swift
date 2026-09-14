@@ -2,7 +2,7 @@ import BerryAI
 import SwiftUI
 
 /// Dropdown shown above the chat composer while typing a "/" command
-/// (docs/superpowers/specs/2026-07-27-chat-command-dropdown-design.md).
+///
 /// Row style mirrors `QuickOpenView.swift`: plain Buttons, not
 /// `List(selection:)` — a competing tap handler on `List` rows is a known
 /// bug class in this codebase (see that file's doc comment for why).

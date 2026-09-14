@@ -11,7 +11,7 @@ import Testing
 
 /// End-to-end at the `WorkspaceViewModel` level: connect → list collections →
 /// open a collection tab → run a query → see results in the buffer → insert →
-/// delete (docs/architecture/12 §7). Headless, mirrors `WorkspaceGraphTests`'
+/// delete. Headless, mirrors `WorkspaceGraphTests`'
 /// pattern for the SQL side. Runs against real `mongo:7`/`qdrant` containers
 /// from `Tests/docker/compose.yml`, skipped cleanly when the env vars are unset.
 private struct AllowAllDataSourceWrites: DataSourceWriteConfirming {
@@ -44,8 +44,8 @@ struct WorkspaceMongoDataSourceTests {
             host: server.host, port: server.port,
             username: server.username, database: server.database,
             // The test container speaks plain TCP — tlsMode defaults to
-            // .prefer, which both drivers treat as "use TLS" (docs/architecture/12
-            // §3: TLS is a binary on/off, not a prefer/require spectrum).
+ // prefer, which both drivers treat as "use TLS"
+ // TLS is a binary on/off, not a prefer/require spectrum).
             tlsMode: TLSMode.disable.rawValue
         )
         KeychainService.savePassword(server.password, kind: .database, profileID: profile.id)
@@ -59,7 +59,7 @@ struct WorkspaceMongoDataSourceTests {
         let name = "berry_ui_conf_\(UUID().uuidString.prefix(8))"
         let ref = CollectionRef(database: server.database, name: name)
         // `.document` collections open a Mongo shell tab, not a `.collection`
-        // tab (docs/architecture/12 §7, Task 8's `openCollection` split) — the
+ // tab (Task 8's `openCollection` split) — the
         // tab is pre-seeded with a `find({}).limit(50)` that has already run
         // once by the time `openCollection` returns control here.
         vm.openCollection(ref)
@@ -96,7 +96,7 @@ struct WorkspaceMongoDataSourceTests {
     /// collections and — unlike SQL's "New Table…" — there was previously no
     /// explicit UI action to create one (Mongo's implicit
     /// creation-via-insert covers it only once you already have a tab open on
-    /// a name). `createCollection` (docs/architecture/12 §3) is the explicit
+ /// a name). `createCollection` is the explicit
     /// fix: runs the `create` admin command up front, `refreshCollections()`
     /// picks it up, then the usual insert/query flow works exactly as above.
     /// Leaves the created (now non-empty, then re-emptied) collection behind
@@ -154,7 +154,7 @@ struct WorkspaceMongoDataSourceTests {
         #expect(vm.dataSourceSession == nil)
     }
 
-    /// Aggregation-pipeline mode (docs/architecture/12 §7 query UI): a Mongo
+ /// Aggregation-pipeline mode (query UI): a Mongo
     /// shell tab's `db.<coll>.aggregate([...])` statement resolves to
     /// `.mongoAggregate` (`MongoShellResolver`, Task 6) — this exercises that
     /// path end-to-end against a real `mongod`, not just the pure
@@ -258,7 +258,7 @@ struct WorkspaceQdrantDataSourceTests {
     private var server: QdrantTestServer { QdrantTestServer.qdrant! }
 
     /// Qdrant collection DELETION still has no driver-level surface (out of
-    /// scope for this task, docs/architecture/12 §5) — teardown still goes
+ /// scope for this task) — teardown still goes
     /// directly over the base REST API, same as `QdrantConformanceTests`.
     /// Creation no longer needs this workaround: `connectListInsertQueryDeleteRoundTrip`
     /// below creates its throwaway collection through `WorkspaceViewModel.createCollection`
@@ -306,8 +306,8 @@ struct WorkspaceQdrantDataSourceTests {
         #expect(!vm.collections.contains { $0.name == name })
 
         // The gap this covers: Qdrant has NO implicit creation-on-insert the
-        // way Mongo does, so before `createCollection` (docs/architecture/12
-        // §5) there was no in-app way to get from zero collections to one.
+ // way Mongo does, so before `createCollection`
+ // there was no in-app way to get from zero collections to one.
         let createError = await vm.createCollection(
             CollectionRef(name: name),
             options: .object([("vectorSize", .int(4)), ("distance", .string("Cosine"))])
@@ -346,7 +346,7 @@ struct WorkspaceQdrantDataSourceTests {
         #expect(vm.dataSourceSession == nil)
     }
 
-    /// Score-threshold and payload-filter wiring (docs/architecture/12 §7
+ /// Score-threshold and payload-filter wiring
     /// query UI): both were always `nil` from `CollectionTabState.run()`
     /// before this task — this exercises both real `.qdrantSearch` params
     /// end-to-end against a real Qdrant, not just the pure branching already

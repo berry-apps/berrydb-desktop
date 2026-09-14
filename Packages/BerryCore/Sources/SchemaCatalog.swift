@@ -1,12 +1,12 @@
 import BerryDriverKit
 import Foundation
 
-/// Per-Session metadata cache (TR-05) — the source for the sidebar and
-/// autocomplete; many readers, one writer, hence an actor (docs/architecture/04 §4).
+/// Per-Session metadata cache — the source for the sidebar and
+/// autocomplete; many readers, one writer, hence an actor.
 public actor SchemaCatalog {
     private let session: Session
     private var cachedObjects: [SchemaObject]?
-    /// Digital Twin seed (DI-08): every refresh feeds the snapshot sink.
+ /// Digital Twin seed: every refresh feeds the snapshot sink.
     private let snapshotSink: (any SchemaSnapshotSink)?
 
     public init(session: Session, snapshotSink: (any SchemaSnapshotSink)? = nil) {
@@ -28,7 +28,7 @@ public actor SchemaCatalog {
         try await session.connection.introspector.tableDetail(ref)
     }
 
-    /// TR-04 quick-info panel — not cached (unlike `objects`/`tableDetail`
+ /// quick-info panel — not cached (unlike `objects`/`tableDetail`
     /// via the catalog's normal flow): row count/size are meant to be
     /// refreshed on demand, not stale from the last schema load.
     public func tableStats(_ ref: TableRef) async throws -> TableStats {

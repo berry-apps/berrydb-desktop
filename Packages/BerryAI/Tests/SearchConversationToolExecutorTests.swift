@@ -27,13 +27,13 @@ private final class StubTransport: AITransport, @unchecked Sendable {
     func embedInputs() -> [String] { lock.withLock { _embedInputs } }
 }
 
-@Suite("search_conversation client tool (Q17 §7.5)")
+@Suite("search_conversation client tool")
 struct SearchConversationToolExecutorTests {
     private func makeStore() -> BerryStore {
         try! BerryStore(path: ":memory:")
     }
 
-    /// AI-35: `SearchConversationToolExecutor` now reads the ACTIVE path —
+ /// `SearchConversationToolExecutor` now reads the ACTIVE path
     /// unlike `AISession.send`'s real flow, these tests seed messages
     /// directly via `appendAIMessage`, so this chains each one's `parentID`
     /// and advances the thread's `activeLeafMessageID` the same way

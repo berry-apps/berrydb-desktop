@@ -1,6 +1,6 @@
 import Foundation
 
-/// Lightweight SQL pretty-printer (ED-08). Token-based, dialect-agnostic:
+/// Lightweight SQL pretty-printer. Token-based, dialect-agnostic:
 /// puts major clauses on their own lines, indents parenthesised groups, and
 /// preserves strings/comments/identifiers verbatim. Not a full reformatter —
 /// it makes hand-written and generated SQL readable without reordering logic.

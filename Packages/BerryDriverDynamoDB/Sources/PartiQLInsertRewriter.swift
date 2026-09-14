@@ -1,13 +1,13 @@
 import Foundation
 
 /// `ChangeSet` (BerryCore, untouched — out of scope to modify per
-/// docs/architecture/12 task scope) always generates INSERT as
+/// task scope) always generates INSERT as
 /// `INSERT INTO <table> ("col1", "col2") VALUES (<lit1>, <lit2>)` — valid
 /// generic SQL, but NOT valid DynamoDB PartiQL. Verified against
 /// dynamodb-local: that exact shape is rejected with
 /// `ValidationException: Statement wasn't well formed`. DynamoDB PartiQL only
 /// supports `INSERT INTO <table> VALUE {'col1': lit1, 'col2': lit2}`
-/// (singular VALUE, a map/tuple literal — docs/architecture/12 §4).
+/// (singular VALUE, a map/tuple literal).
 ///
 /// This rewriter recognizes ChangeSet's exact deterministic shape (it fully
 /// controls what `quoteIdentifier`/`literal` produce, so the shape is known
@@ -153,8 +153,8 @@ enum PartiQLInsertRewriter {
         return quoted.dropFirst().dropLast().replacingOccurrences(of: "\"\"", with: "\"")
     }
 
-    /// PartiQL tuple keys are single-quoted strings (docs/architecture/12
-    /// §4) — same `''` escaping rule as PartiQL string literals generally.
+ /// PartiQL tuple keys are single-quoted strings
+ /// — same `''` escaping rule as PartiQL string literals generally.
     private static func singleQuoted(_ raw: String) -> String {
         "'" + raw.replacingOccurrences(of: "'", with: "''") + "'"
     }

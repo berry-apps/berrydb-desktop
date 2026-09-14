@@ -10,7 +10,7 @@ private struct TestDialect: SQLDialect {
     func limitClause(_ limit: Int) -> String { "LIMIT \(limit)" }
 }
 
-@Suite("Table designer DDL (CT-01/02/03)")
+@Suite("Table designer DDL")
 struct TableDesignTests {
     private let dialect = TestDialect()
 

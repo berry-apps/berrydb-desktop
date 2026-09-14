@@ -4,7 +4,7 @@ import Foundation
 @testable import BerryDriverMongo
 
 /// In-process fake `MongoTransport` — no real socket, no Docker
-/// (docs/architecture/12 §10 task scope: "pure unit tests, no network"). Same
+/// (task scope: "pure unit tests, no network"). Same
 /// role as `QdrantStubURLProtocol`, adapted to the wire-protocol shape:
 /// `MongoOpMsg.decodeReply` happens to parse a REQUEST just as well as a
 /// reply (identical header+section framing either direction), so `send`

@@ -1,17 +1,17 @@
 import BerryDriverKit
 import Foundation
 
-/// Export formats (XN-01/02/03). XLSX (XN-04) is a later phase.
+/// Export formats. XLSX is a later phase.
 public enum ExportFormat: Sendable {
     case csv(delimiter: String = ",", header: Bool = true, encoding: String.Encoding = .utf8)
     case jsonArray
     case ndjson
-    /// INSERT statements (XN-03) — multi-row VALUES batched at `batchSize`,
+ /// INSERT statements — multi-row VALUES batched at `batchSize`,
     /// optionally prefixed with a DDL header (CREATE TABLE …).
     case sqlInsert(table: TableRef, dialect: any SQLDialect, batchSize: Int = 100, ddlHeader: String? = nil)
 }
 
-/// Streaming exporter (docs/architecture/06 · L5): rows are encoded and
+/// Streaming exporter: rows are encoded and
 /// appended to the file batch by batch — RAM stays flat regardless of result
 /// size (principle N3).
 public enum ExportEngine {
@@ -141,7 +141,7 @@ struct CSVRowEncoder: RowEncoder {
     mutating func begin(columns: [ColumnMeta]) -> Data? {
         columnNames = columns.map(\.name)
         var out = Data()
-        // UTF-16 LE BOM up front so Excel reads non-ASCII correctly (XN-01).
+ // UTF-16 LE BOM up front so Excel reads non-ASCII correctly.
         if encoding == .utf16 { out.append(contentsOf: [0xFF, 0xFE]) }
         if includeHeader, !columnNames.isEmpty {
             out.append(data(columnNames.map(escape).joined(separator: delimiter) + "\n"))
@@ -152,7 +152,7 @@ struct CSVRowEncoder: RowEncoder {
     func encode(row: [BerryValue]) -> Data {
         let line = row.map { value -> String in
             // NULL exports as an empty unquoted field — distinguishable from
-            // the quoted empty string "" (DL-05 carried into exports).
+ // the quoted empty string "" (carried into exports).
             guard let text = value.displayString else { return "" }
             return escape(text)
         }
@@ -207,7 +207,7 @@ struct NDJSONRowEncoder: RowEncoder {
     func end() -> Data? { nil }
 }
 
-/// INSERT-statement encoder (XN-03): buffers up to `batchSize` rows into one
+/// INSERT-statement encoder: buffers up to `batchSize` rows into one
 /// multi-row `INSERT … VALUES (…),(…)` statement — RAM stays flat because the
 /// buffer never exceeds one batch (principle N3). Values render through the
 /// dialect's literal escaping, the same safe path as ChangeSet.

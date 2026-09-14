@@ -2,12 +2,12 @@ import BerryDataSourceKit
 import BerryDriverKit
 import SwiftUI
 
-/// Global quick-open palette (TR-02, ⌘P): fuzzy-search tables/views/
+/// Global quick-open palette (⌘P): fuzzy-search tables/views/
 /// collections and jump straight to one, reachable from anywhere in the
 /// window instead of requiring the sidebar's own filter field to have focus.
 /// Uses plain Buttons (not `List(selection:)`) for the rows — a competing
 /// custom tap handler on a `List` row is exactly the click-to-select bug
-/// fixed in WorkspaceView's sidebar (docs/feedback/01.md #1); Buttons avoid
+/// fixed in WorkspaceView's sidebar (#1); Buttons avoid
 /// that class of bug entirely.
 struct QuickOpenView: View {
     let objects: [SchemaObject]

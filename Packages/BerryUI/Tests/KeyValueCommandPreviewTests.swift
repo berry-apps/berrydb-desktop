@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryUI
 
-@Suite("KeyValueCommandPreview (docs/architecture/15 §4)")
+@Suite("KeyValueCommandPreview")
 struct KeyValueCommandPreviewTests {
     @Test func setWithNoTTL() {
         #expect(KeyValueCommandPreview.render(.set(key: "foo", value: "bar", ttl: nil)) == "SET foo bar")

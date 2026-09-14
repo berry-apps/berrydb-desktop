@@ -9,7 +9,7 @@ func makeIsolatedKnownHosts() -> KnownHostsStore {
     KnownHostsStore(fileURL: URL(fileURLWithPath: NSTemporaryDirectory() + "berry-kh-\(UUID().uuidString)"))
 }
 
-@Suite("KnownHostsStore TOFU (docs/architecture/07 §4)")
+@Suite("KnownHostsStore TOFU")
 struct KnownHostsTests {
     @Test func firstUseRecordsAndAccepts() {
         let store = makeIsolatedKnownHosts()

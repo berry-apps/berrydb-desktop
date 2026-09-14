@@ -2,11 +2,11 @@ import Foundation
 
 /// What kind of non-tabular data a `DataSourceDriver` holds — UI reads this to
 /// pick a query surface (filter/pipeline builder vs. vector search form),
-/// never if-else on `DriverID` (docs/architecture/12 §2, 04 §6).
+/// never if-else on `DriverID`.
 public enum DataSourceKind: String, Sendable, Hashable {
     case document
     case vector
-    /// Elasticsearch (docs/architecture/17 §2) — Query DSL + Document APIs, a
+ /// Elasticsearch — Query DSL + Document APIs, a
     /// distinct shape from Mongo's shell syntax and Qdrant's vector search:
     /// its own tab/query surface, not a reuse of `.document`.
     case search
@@ -14,9 +14,9 @@ public enum DataSourceKind: String, Sendable, Hashable {
 
 /// `DataSourceDriver` capabilities — sibling of `Capabilities` (BerryDriverKit),
 /// same anti-bloat principle: UI shows/hides features by flag, not by name
-/// (docs/architecture/12 §2).
+///
 public struct DataSourceCapabilities: Sendable {
-    /// Insert/update/delete via `DataSourceChangeSet` (§ write model).
+ /// Insert/update/delete via `DataSourceChangeSet` (model).
     public let write: Bool
     /// Vector similarity search (`.qdrantSearch`-style queries).
     public let vectorSearch: Bool
@@ -24,13 +24,13 @@ public struct DataSourceCapabilities: Sendable {
     /// to a real `DescribeTable`-style catalog.
     public let inferredSchemaOnly: Bool
     /// Whether the Users tab shows a static, read-only note instead of real
-    /// user management (TI-03 Phase D, docs/architecture/14) — for a data
+ /// user management (Phase D) — for a data
     /// source with no in-DB user system, e.g. Qdrant (API-key auth). Mongo
     /// leaves this false: it gets real user/role management (Phase C), not a
     /// static note.
     public let userManagementInfo: Bool
     /// Whether this driver can list/create/drop users via
-    /// `DataSourceConnection`'s TI-03 Phase C methods (docs/architecture/14)
+ /// `DataSourceConnection`'s Phase C methods
     /// — the `DataSourceDriver` sibling of `Capabilities.userManagement`.
     /// Mongo only; mutually exclusive in practice with `userManagementInfo`.
     public let userManagement: Bool

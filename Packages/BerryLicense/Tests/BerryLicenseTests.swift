@@ -7,7 +7,7 @@ import Testing
 @Suite("BerryLicense (M5)")
 struct BerryLicenseTests {
     // A real license blob signed by berrydb-backend's built-in dev key, plus
-    // that key — proves Rust-signs / Swift-verifies interop (docs/architecture/10 §3).
+ // that key — proves Rust-signs / Swift-verifies interop.
     static let realToken =
         "eyJwbGFuIjoicHJvIiwiZW1haWwiOiJkZXZAYmVycnlkYi5sb2NhbCIsImRldmljZV9oYXNoIjoic21va2UtZGV2aWNlIiwiZXhwIjoxODE1NzQ2NzQ3LCJpc3N1ZWRfYXQiOjE3ODQyMTA3NDgsImZhbGxiYWNrX3ZlciI6IjEuMCJ9.rCNmLF6Rtcndk9lMmHnX0qcjNrWZpjPjVMBGDBD1rQpnlPafc5mYlcVAlms2O8bQ36TKG_Xh06r_cu_shKB_AQ"
 
@@ -136,7 +136,7 @@ struct BerryLicenseTests {
     }
 
     // MARK: - Revocation (a `refreshNow()` failure must not silently leave a
-    // revoked license showing "active" — see docs/architecture/10 §3 · L8)
+ // revoked license showing "active")
 
     @Test func planRequiredIsADefinitiveRejection() {
         #expect(LicenseManager.isDefinitiveRejection(APIError(code: "plan_required", message: "")))

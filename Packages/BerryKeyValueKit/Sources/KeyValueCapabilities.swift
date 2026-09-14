@@ -1,7 +1,7 @@
 /// `KeyValueDriver` capabilities — sibling of `Capabilities` (BerryDriverKit)
 /// and `DataSourceCapabilities` (BerryDataSourceKit), same anti-bloat
 /// principle: UI shows/hides features by flag, never by driver name
-/// (docs/architecture/04 §6, 15 §2).
+///
 public struct KeyValueCapabilities: Sendable {
     public let write: Bool
     public let ttl: Bool

@@ -4,7 +4,7 @@ import Testing
 
 @testable import BerryCore
 
-@Suite("ExportEngine (XN-01/02) & ClipboardFormatter (DL-07)")
+@Suite("ExportEngine & ClipboardFormatter")
 struct ExportEngineTests {
     private let columns = [
         ColumnMeta(name: "id", declaredType: "INTEGER"),
@@ -100,7 +100,7 @@ struct ExportEngineTests {
         #expect(parsed?.isEmpty == true)
     }
 
-    // MARK: DL-07 copy-as
+ // MARK: copy-as
 
     private struct TestDialect: SQLDialect {
         func quoteIdentifier(_ identifier: String) -> String { "\"\(identifier)\"" }
@@ -118,7 +118,7 @@ struct ExportEngineTests {
             + "\n(1, 'O''Brien', NULL);")
     }
 
-    // MARK: XN-03 SQL export
+ // MARK: SQL export
 
     @Test func sqlExportBatchesRowsIntoMultiRowInserts() async throws {
         let url = tempURL("sql")

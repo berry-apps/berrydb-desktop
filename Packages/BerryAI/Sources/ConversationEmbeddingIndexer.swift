@@ -8,8 +8,8 @@ public enum AIConversationPolicy {
     public static let summaryThreshold = 20
     public static let recentWindow = 8
     /// Backend hard cap on the client-built context sent with `POST
-    /// /v1/agent/threads/{id}/messages` (docs/guide/q17-ai-chat-local-storage.md
-    /// §6): 64 messages / 256 KiB. `AISession.buildContext` (Task 7.1) stays
+ /// v1/agent/threads/{id}/messages`
+ /// 64 messages / 256 KiB. `AISession.buildContext` (Task 7.1) stays
     /// under this with a margin so the turn's own outgoing text/tool schemas
     /// still fit.
     public static let contextMessageHardCap = 64

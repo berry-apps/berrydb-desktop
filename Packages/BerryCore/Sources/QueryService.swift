@@ -3,14 +3,14 @@ import Foundation
 
 /// The app's single SQL execution path (principle N1) — grid, editor,
 /// designer, import, and the future AI agent all go through here, so
-/// auto-LIMIT, DangerGuard, and history only need one hook (docs/architecture/04 §6).
+/// auto-LIMIT, DangerGuard, and history only need one hook.
 public enum QueryService {
-    /// Default LIMIT for SELECTs without a LIMIT (ED-12).
+ /// Default LIMIT for SELECTs without a LIMIT.
     public static let defaultAutoLimit = 1000
 
-    /// History sink (ED-06) — wired once at startup by the app layer.
+ /// History sink — wired once at startup by the app layer.
     nonisolated(unsafe) private static var _historySink: (any QueryHistorySink)?
-    /// Danger confirmation gate (07 §6) — wired once by the UI layer.
+ /// Danger confirmation gate — wired once by the UI layer.
     nonisolated(unsafe) private static var _dangerConfirmer: (any DangerConfirmer)?
     private static let sinkLock = NSLock()
 
@@ -24,8 +24,8 @@ public enum QueryService {
         set { sinkLock.lock(); defer { sinkLock.unlock() }; _dangerConfirmer = newValue }
     }
 
-    /// User switch for the soft data-deletion confirms (docs/ui) — production
-    /// rules (07 §6) are NOT affected by this.
+ /// User switch for the soft data-deletion confirms — production
+ /// rules are NOT affected by this.
     nonisolated(unsafe) private static var _confirmsDataDeletion = true
     public static var confirmsDataDeletion: Bool {
         get { sinkLock.lock(); defer { sinkLock.unlock() }; return _confirmsDataDeletion }
@@ -48,8 +48,8 @@ public enum QueryService {
         }
     }
 
-    /// SELECT an entire table for the grid (DL-01) with optional filter/sort
-    /// (DL-02) — generated via dialect, with auto-LIMIT.
+ /// SELECT an entire table for the grid with optional filter/sort
+ /// generated via dialect, with auto-LIMIT.
     public static func selectAll(
         table: TableRef,
         on session: Session,
@@ -65,7 +65,7 @@ public enum QueryService {
         }
     }
 
-    // MARK: - Danger gate (07 §6) + history instrumentation (ED-06)
+ // MARK: - Danger gate + history instrumentation
 
     /// Pass-through stream that (1) gates dangerous statements behind the
     /// confirmer and (2) reports the outcome to the history sink. One hook
@@ -79,12 +79,12 @@ public enum QueryService {
         makeInner: @escaping @Sendable () -> AsyncThrowingStream<ResultEvent, Error>
     ) -> AsyncThrowingStream<ResultEvent, Error> {
         let profileID = session.profileID
-        // ED-06: also honor the connection's history switch, not just the
+ // also honor the connection's history switch, not just the
         // per-call opt-out used by background harvesters.
         let shouldRecord = recordHistory && session.recordHistory
-        // Soft data-deletion confirms (docs/ui): skipped when the user turned
+ // Soft data-deletion confirms: skipped when the user turned
         // them off, or when the whole run was already confirmed in one summary
-        // dialog. Production rules (07 §6) never downgrade.
+ // dialog. Production rules never downgrade.
         let classified = DangerGuard.classify(sql, isProduction: session.isProduction)
         let danger: DangerLevel
         if case .confirm(let reason) = classified, reason.isSoftDataDeletion,
@@ -103,9 +103,9 @@ public enum QueryService {
                 var sawRows = false
 
                 func report(_ status: ExecutedStatement.Status, error: String? = nil) {
-                    // Background metadata harvesters (stats, EXPLAIN plans — DI-01/06)
-                    // opt out so they don't masquerade as user history (11 §4);
-                    // ED-06 lets a connection disable history entirely.
+ // Background metadata harvesters (stats, EXPLAIN plans)
+ // opt out so they don't masquerade as user history;
+ // lets a connection disable history entirely.
                     guard shouldRecord else { return }
                     historySink?.record(ExecutedStatement(
                         profileID: profileID,
@@ -156,7 +156,7 @@ public enum QueryService {
         }
     }
 
-    // MARK: - Auto-LIMIT (ED-12)
+ // MARK: - Auto-LIMIT
 
     /// Add a LIMIT to a single SELECT that has none. Simple token-level check;
     /// the tree-sitter parser in M2 will replace this detection.

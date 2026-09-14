@@ -1,5 +1,5 @@
-/// Schema description types — introspection results (docs/architecture/05 §5),
-/// fed into SchemaCatalog to serve the sidebar (TR-01) and autocomplete (ED-03).
+/// Schema description types — introspection results,
+/// fed into SchemaCatalog to serve the sidebar and autocomplete.
 
 public struct DatabaseInfo: Sendable, Hashable {
     public let name: String
@@ -14,8 +14,8 @@ public enum SchemaObjectKind: String, Sendable, Hashable {
     case trigger
     case index
 
-    /// Whether the object holds rows and can open in a data grid (DL-01).
-    /// Routines and triggers are DDL-only in the sidebar (TR-01).
+ /// Whether the object holds rows and can open in a data grid.
+ /// Routines and triggers are DDL-only in the sidebar.
     public var isRelational: Bool { self == .table || self == .view }
 }
 
@@ -103,7 +103,7 @@ public struct TableDetail: Sendable {
     }
 }
 
-/// Best-effort quick-info stats for a table (TR-04). `estimatedRowCount` is a
+/// Best-effort quick-info stats for a table. `estimatedRowCount` is a
 /// cheap catalog estimate where the DBMS tracks one (Postgres/MySQL/DynamoDB),
 /// an exact `COUNT(*)` for SQLite (no catalog estimate available there). Any
 /// field the DBMS doesn't support/expose is nil — the UI shows "—" for it,

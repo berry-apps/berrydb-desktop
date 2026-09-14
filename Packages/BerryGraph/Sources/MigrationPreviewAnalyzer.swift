@@ -2,10 +2,10 @@ import BerryCore
 import BerryDriverKit
 import Foundation
 
-/// Runs the Schema/Index Analyzer rule engine (DI-06/07) against a
+/// Runs the Schema/Index Analyzer rule engine against a
 /// hypothetical version of the DSG where one table's design has been replaced
-/// by an edited `TableDesign` — before any DDL runs (DI-15 "Migration Preview
-/// Analyzer", docs/architecture/13 §5.2). Pure — never touches the DBMS; the
+/// by an edited `TableDesign` — before any DDL runs ("Migration Preview
+/// Analyzer"). Pure — never touches the DBMS; the
 /// caller supplies the already-harvested graph (e.g. from `GraphStore`).
 public enum MigrationPreviewAnalyzer {
     /// Aggregate risk for a set of findings, for a one-line "Overall Risk"

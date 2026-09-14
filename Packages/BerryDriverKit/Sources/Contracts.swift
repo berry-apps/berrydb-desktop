@@ -1,6 +1,6 @@
 import Foundation
 
-/// Driver contract — docs/architecture/05 §1.
+/// Driver contract
 public protocol DatabaseDriver: Sendable {
     static var id: DriverID { get }
     static var displayName: String { get }
@@ -12,7 +12,7 @@ public protocol DatabaseDriver: Sendable {
 }
 
 /// One physical connection. Actor: one connection = one sequential command
-/// queue — matching the nature of DB protocols (docs/architecture/04 §4).
+/// queue — matching the nature of DB protocols.
 public protocol DriverConnection: Actor {
     nonisolated var id: UUID { get }
 
@@ -21,7 +21,7 @@ public protocol DriverConnection: Actor {
     /// creates and returns the stream; the real work runs in a Task on the actor.
     nonisolated func execute(_ sql: String) -> AsyncThrowingStream<ResultEvent, Error>
 
-    /// Cancel the running query — mechanism is DBMS-specific (docs/architecture/05 §4).
+ /// Cancel the running query — mechanism is DBMS-specific.
     /// `nonisolated` because it must be callable WHILE the actor is busy running a query.
     nonisolated func cancelCurrentQuery()
 
@@ -31,14 +31,14 @@ public protocol DriverConnection: Actor {
     func close() async
 }
 
-/// Introspection metadata — the source for SchemaCatalog (docs/architecture/05 §5).
+/// Introspection metadata — the source for SchemaCatalog.
 public protocol Introspector: Sendable {
     func databases() async throws -> [DatabaseInfo]
     func objects(in database: String?) async throws -> [SchemaObject]
     func tableDetail(_ ref: TableRef) async throws -> TableDetail
-    /// Quick-info panel stats (TR-04) — separate from `tableDetail` since it's
+ /// Quick-info panel stats — separate from `tableDetail` since it's
     /// a distinct, best-effort query (or REST call) per driver, not part of
-    /// the column/index/FK introspection every other TR-01/03 feature needs.
+ /// the column/index/FK introspection every other feature needs.
     func tableStats(_ ref: TableRef) async throws -> TableStats
     func ddl(of object: SchemaObject) async throws -> String
 }

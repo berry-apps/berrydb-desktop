@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Fraction math for a resizable split (ui.md §1). Pure and testable — the view
+/// Fraction math for a resizable split. Pure and testable — the view
 /// only owns the `@State` array and the gestures.
 enum SplitMath {
     /// Equal fractions for `count` panes.
@@ -51,7 +51,7 @@ enum SplitMath {
 }
 
 /// A drag-resizable stack of panes with hover-highlighting 1px dividers
-/// (ui.md §1): drag a boundary to resize, double-click it to collapse the pane
+/// drag a boundary to resize, double-click it to collapse the pane
 /// before it. Replaces VSplitView/HSplitView so the divider can follow the
 /// macOS language (neutral hairline → accent blue on hover).
 struct ResizableSplit<Content: View>: View {

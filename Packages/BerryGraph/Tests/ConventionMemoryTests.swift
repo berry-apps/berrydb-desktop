@@ -4,7 +4,7 @@ import Testing
 
 @testable import BerryGraph
 
-@Suite("Convention Memory (DI-21)")
+@Suite("Convention Memory")
 struct ConventionMemoryTests {
     private func table(_ name: String) -> GraphNode {
         GraphNode(id: "tbl:\(name)", kind: .table, name: name)
@@ -107,7 +107,7 @@ struct ConventionMemoryTests {
         #expect(ConventionMemory.namingMismatches(gNotEstablished).isEmpty)
     }
 
-    // MARK: - Database Memory (docs/feature/07 §12): history-mining
+ // MARK: - Database Memory: history-mining
 
     private func establishedConventionGraph() -> SchemaGraph {
         var g = SchemaGraph()

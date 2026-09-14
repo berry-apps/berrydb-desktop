@@ -1,4 +1,4 @@
-/* Vietnamese (UD-06). Every key in en.lproj must exist here too. */
+/* Vietnamese. Every key in en.lproj must exist here too. */
 
 "New Connection…" = "Kết nối mới…";
 "Open SQLite File…" = "Mở file SQLite…";
@@ -76,7 +76,7 @@
 "Save Connection" = "Lưu kết nối";
 "Update" = "Cập nhật";
 
-/* TLS & SSH (KN-03/KN-04) */
+/* TLS & SSH */
 "TLS" = "TLS";
 "Off" = "Tắt";
 "Prefer (no verify)" = "Ưu tiên (không xác minh)";
@@ -111,7 +111,7 @@
 "Pick a table from the sidebar, or open an SQL tab (⌘T)" = "Chọn bảng ở sidebar, hoặc mở tab SQL (⌘T)";
 "%lld affected" = "%lld dòng bị tác động";
 
-/* History viewer (ED-06) */
+/* History viewer */
 "History" = "Lịch sử";
 "Search history" = "Tìm trong lịch sử";
 "Search saved queries" = "Tìm truy vấn đã lưu";
@@ -122,7 +122,7 @@
 "Close" = "Đóng";
 "Insert into new SQL tab" = "Chèn vào tab SQL mới";
 
-/* Grid editing (M3, DL-03/04/05) */
+/* Grid editing (M3) */
 "%lld pending change(s)" = "%lld thay đổi chưa áp dụng";
 "Discard" = "Hủy thay đổi";
 "Review & Apply…" = "Xem SQL & Áp dụng…";
@@ -134,7 +134,7 @@
 "Delete %lld row(s)" = "Xóa %lld dòng";
 "Paste Rows" = "Dán dòng";
 
-/* Copy-as & export (DL-07, XN-01/02) */
+/* Copy-as & export */
 "Copy as CSV" = "Chép dạng CSV";
 "Copy as JSON" = "Chép dạng JSON";
 "Copy as Markdown" = "Chép dạng Markdown";
@@ -155,7 +155,7 @@
 "Reload" = "Tải lại";
 "Exported %lld rows" = "Đã xuất %lld dòng";
 
-/* Insert row & filter (DL-02/04) */
+/* Insert row & filter */
 "Add Row" = "Thêm dòng";
 "filter…" = "điều kiện lọc…";
 "Filter rows" = "Lọc dòng";
@@ -167,7 +167,7 @@
 "is null" = "là null";
 "is not null" = "không null";
 
-/* DangerGuard alerts (07 §6) */
+/* DangerGuard alerts */
 "Run Statement" = "Chạy câu lệnh";
 "UPDATE without WHERE — every row will be modified." = "UPDATE không có WHERE — TOÀN BỘ dòng sẽ bị sửa.";
 "DELETE without WHERE — every row will be deleted." = "DELETE không có WHERE — TOÀN BỘ dòng sẽ bị xóa.";
@@ -176,7 +176,7 @@
 "TRUNCATE on a PRODUCTION connection." = "TRUNCATE trên kết nối PRODUCTION.";
 "Type “%@” to confirm.\n\n%@" = "Gõ “%1$@” để xác nhận.\n\n%2$@";
 
-/* Cell viewer & EXPLAIN (DL-06, ED-09) */
+/* Cell viewer & EXPLAIN */
 "View Cell…" = "Xem cell…";
 "Text" = "Văn bản";
 "JSON" = "JSON";
@@ -185,7 +185,7 @@
 "Stage Change" = "Ghi vào thay đổi chờ";
 "Explain" = "Explain";
 
-/* SQL formatting & saved queries (ED-08, ED-07) */
+/* SQL formatting & saved queries */
 "Name this query to save it" = "Đặt tên để lưu truy vấn";
 "Save SQL" = "Lưu SQL";
 "Format" = "Định dạng";
@@ -200,16 +200,16 @@
 "Open in Editor" = "Mở trong trình soạn thảo";
 "Delete" = "Xóa";
 
-/* FK jump (DL-08) */
+/* FK jump */
 "Jump to %@" = "Nhảy tới %@";
 
-/* Manual transactions (ED-11) */
+/* Manual transactions */
 "Auto-commit" = "Tự động commit";
 "In transaction" = "Đang trong giao dịch";
 "Commit" = "Commit";
 "Rollback" = "Rollback";
 
-/* Table designer (CT-01/02/03) */
+/* Table designer */
 "New Table…" = "Bảng mới…";
 "New Table" = "Bảng mới";
 "table_name" = "tên_bảng";
@@ -235,7 +235,7 @@
 "ON UPDATE" = "ON UPDATE";
 "Create Table" = "Tạo bảng";
 
-/* SQL export (XN-03) */
+/* SQL export */
 "Export SQL…" = "Xuất SQL…";
 "Export SQL" = "Xuất SQL";
 "Rows per INSERT" = "Số dòng mỗi INSERT";
@@ -282,7 +282,7 @@
 "This license could not be read — it may be corrupted. Try activating again with your key or restoring by email." = "Không đọc được license này — có thể đã bị hỏng. Hãy thử kích hoạt lại bằng key hoặc khôi phục qua email.";
 "This license was signed with a key this app doesn't recognize — it may have been issued for a different environment. Try activating again, or contact support if this keeps happening." = "License này được ký bằng khóa mà app không nhận ra — có thể đã được cấp cho môi trường khác. Hãy thử kích hoạt lại, hoặc liên hệ hỗ trợ nếu vẫn còn lỗi.";
 
-/* CSV import (XN-05) */
+/* CSV import */
 "Import CSV…" = "Nhập CSV…";
 "Import CSV" = "Nhập CSV";
 "Choose File…" = "Chọn tệp…";
@@ -300,7 +300,7 @@
 "Imported %lld rows" = "Đã nhập %lld dòng";
 "Import failed at line %lld: %@" = "Nhập thất bại tại dòng %lld: %@";
 
-/* Process list (TI-01) */
+/* Process list */
 "Processes" = "Tiến trình";
 "No active processes" = "Không có tiến trình nào";
 "Running server sessions appear here" = "Các phiên đang chạy trên server hiện ở đây";
@@ -314,7 +314,7 @@
 "%lld processes" = "%lld tiến trình";
 "Cannot terminate this session" = "Không thể kết thúc phiên này";
 
-/* AI assistant (AI-01/07/08, docs/architecture/09) */
+/* AI assistant */
 "AI Assistant" = "Trợ lý AI";
 "No connection" = "Chưa kết nối";
 "Connect to a database to use the AI assistant." = "Kết nối tới một cơ sở dữ liệu để dùng trợ lý AI.";
@@ -396,14 +396,14 @@
 "DROP on a production database" = "DROP trên cơ sở dữ liệu production";
 "TRUNCATE on a production database" = "TRUNCATE trên cơ sở dữ liệu production";
 
-/* SSH host key change (07 §4) */
+/* SSH host key change */
 "SSH host key changed" = "Khóa host SSH đã thay đổi";
 "Trust New Key & Reconnect" = "Tin khóa mới & Kết nối lại";
 "The host key for this server differs from the one you trusted before. Continue only if you expected this — for example, the server was reinstalled. Otherwise the connection may be intercepted." = "Khóa host của server này khác với khóa bạn đã tin trước đây. Chỉ tiếp tục nếu bạn dự đoán điều này — ví dụ server vừa được cài lại. Nếu không, kết nối có thể đang bị xen giữa.";
 "Trusted:" = "Đã tin:";
 "New:" = "Mới:";
 
-/* Insight Panel (DI-09, docs/architecture/11 §7) */
+/* Insight Panel */
 "Insights" = "Phân tích";
 "Database Insights" = "Phân tích cơ sở dữ liệu";
 "Refresh" = "Làm mới";
@@ -419,7 +419,7 @@
 "Index" = "Index";
 "Performance" = "Hiệu năng";
 
-/* Graph Explorer (DI-02/04, docs/architecture/11 §5) */
+/* Graph Explorer */
 "Graph Explorer" = "Bản đồ quan hệ";
 "No graph yet" = "Chưa có đồ thị";
 "Connect and refresh the schema to build the dependency graph." = "Kết nối và làm mới schema để dựng đồ thị phụ thuộc.";
@@ -436,9 +436,9 @@
 "total calls" = "tổng lượt gọi";
 "No recent queries in history touch this table." = "Không có query gần đây nào trong lịch sử chạm tới bảng này.";
 
-/* Time Machine Timeline (DI-08, docs/feature/07 §1) */
+/* Time Machine Timeline */
 "Time Machine" = "Time Machine";
-"Schema change history (DI-08)" = "Lịch sử thay đổi schema (DI-08)";
+"Schema change history" = "Lịch sử thay đổi schema";
 "Not enough history yet" = "Chưa đủ lịch sử";
 "Time Machine needs at least two recorded schema snapshots — keep refreshing the schema as it evolves." = "Time Machine cần ít nhất 2 snapshot schema đã ghi lại — tiếp tục refresh schema khi nó thay đổi.";
 "nodes" = "nút";
@@ -450,7 +450,7 @@
 "table" = "bảng";
 "index" = "index";
 
-/* Visualize Result (docs/feature/07 §8, AI SQL Copilot) */
+/* Visualize Result (AI SQL Copilot) */
 "Visualize Result" = "Trực quan hóa kết quả";
 "Not enough data to visualize" = "Chưa đủ dữ liệu để trực quan hóa";
 "Run a query with at least two columns and one numeric value." = "Chạy một query có ít nhất 2 cột và 1 giá trị số.";
@@ -462,7 +462,7 @@
 "No numeric values in this column" = "Không có giá trị số nào trong cột này";
 "Pick a different Y column." = "Chọn cột Y khác.";
 
-/* App menu — auto-update (docs/architecture/10 §3) */
+/* App menu — auto-update */
 "Check for Updates…" = "Kiểm tra cập nhật…";
 
 /* AI composer — queued message strip */
@@ -479,13 +479,13 @@
 "Intelligence" = "Phân tích";
 "More" = "Thêm";
 
-/* Insight Panel — Query Analyzer (DI-06) */
+/* Insight Panel — Query Analyzer */
 "Analyzing schema and recent queries…" = "Đang phân tích schema và truy vấn gần đây…";
 
 /* Tier Intelligence gating (Q15) */
 "Unlock Intelligence…" = "Mở khóa Intelligence…";
 
-/* TLS mode caption (07 §4 security hardening) */
+/* TLS mode caption (security hardening) */
 "Encrypted, but the server's certificate isn't checked. Use “Verify certificate” for production." = "Đã mã hóa nhưng không kiểm tra chứng chỉ máy chủ. Dùng “Xác minh chứng chỉ” cho production.";
 
 /* Accessibility labels for icon-only controls (M7 a11y pass) */
@@ -494,7 +494,7 @@
 "Send" = "Gửi";
 "AI settings" = "Cài đặt AI";
 
-/* Single exec + delete warnings + saved-query files (docs/ui) */
+/* Single exec + delete warnings + saved-query files */
 "Warn Before Deleting Data" = "Cảnh báo trước khi xóa dữ liệu";
 "This DELETE will remove data." = "Lệnh DELETE này sẽ xóa dữ liệu.";
 "DROP removes the object and its data." = "DROP xóa đối tượng và toàn bộ dữ liệu của nó.";
@@ -531,7 +531,7 @@
 "Reset & Quit" = "Xóa & Thoát";
 "This permanently deletes all saved queries, connection profiles, and AI chat history on this Mac. This cannot be undone." = "Thao tác này xóa vĩnh viễn toàn bộ query đã lưu, kết nối, và lịch sử chat AI trên máy này. Không thể hoàn tác.";
 
-/* Navicat-style result tabs (docs/ui) */
+/* Result tabs */
 "Message" = "Thông báo";
 "Summary" = "Tổng quan";
 "Result %lld" = "Kết quả %lld";
@@ -541,7 +541,7 @@
 "Succeeded" = "Thành công";
 "Failed" = "Thất bại";
 
-/* Working block action status + detail (docs/feature/09) */
+/* Working block action status + detail */
 "Running" = "Đang chạy";
 "Completed" = "Hoàn tất";
 "Denied" = "Bị từ chối";
@@ -569,7 +569,7 @@
 "Trust server" = "Tin cậy máy chủ này";
 "Sub-agent" = "Tác nhân con";
 
-/* Mongo/Qdrant workspace UI (docs/architecture/12 §7) */
+/* Mongo/Qdrant workspace UI */
 "API Key" = "API Key";
 "View Document…" = "Xem tài liệu…";
 "Insert…" = "Thêm…";
@@ -608,7 +608,7 @@
 "method" = "phương thức";
 "operator" = "toán tử";
 
-// AI conversation history sidebar (AI-21, feature/02)
+// AI conversation history sidebar (feature/02)
 "Conversation history" = "Lịch sử hội thoại";
 "No saved conversations" = "Chưa có hội thoại nào được lưu";
 "Delete conversation" = "Xóa hội thoại";
@@ -660,7 +660,7 @@
 "Deselect All" = "Bỏ chọn tất cả";
 "Collections" = "Collections";
 
-// Backup manager (feature/04, Navicat-style)
+// Backup manager
 "New Backup" = "Tạo backup";
 "Objects" = "Đối tượng";
 "Show in Finder" = "Hiện trong Finder";
@@ -676,7 +676,7 @@
 "BerryDB will send this text to the AI service to turn it into a clear report. It's processed transiently for refinement only — nothing is stored on the server until you approve the final report." = "BerryDB sẽ gửi nội dung này đến dịch vụ AI để biên soạn thành báo cáo rõ ràng. Nội dung chỉ được xử lý tạm thời để chỉnh sửa — không có gì được lưu trên máy chủ cho đến khi bạn duyệt báo cáo cuối cùng.";
 "Refine with AI" = "Nhờ AI chỉnh sửa";
 
-// Report confirmation card (Q17 §7.7) — editable draft + report_ready_token (Task 11)
+// Report confirmation card (Q17) — editable draft + report_ready_token (Task 11)
 "Review this report" = "Xem lại báo cáo này";
 "Attach recent conversation for context" = "Đính kèm hội thoại gần đây làm ngữ cảnh";
 "Confirm Report" = "Xác nhận báo cáo";
@@ -712,17 +712,17 @@
 "This AI request expired. Ask the agent to try again." = "Yêu cầu AI này đã hết hạn. Hãy yêu cầu agent thử lại.";
 "The saved AI request could not be restored safely." = "Không thể khôi phục yêu cầu AI đã lưu một cách an toàn.";
 
-/* TI-03 Phase D: read-only user-management info (docs/architecture/14) */
+/* Phase D: read-only user-management info */
 "Access to this table is managed via AWS IAM — manage users and permissions in the AWS Console." = "Quyền truy cập bảng này được quản lý qua AWS IAM — quản lý user và quyền trong AWS Console.";
 "This connection authenticates with an API key — there is no separate database user system to manage." = "Kết nối này xác thực bằng API key — không có hệ thống user riêng trong database để quản lý.";
 
-/* TI-03 Phase C: DataSource-family user management (docs/architecture/14) */
+/* Phase C: DataSource-family user management */
 "New User" = "Tạo user";
 "Roles (optional)" = "Vai trò (tùy chọn)";
 "Command Preview" = "Xem trước lệnh";
 "Couldn't load users" = "Không thể tải danh sách user";
 
-/* AI-20 follow-up: prepareSend() found nowhere to route a turn (Apple-Intelligence-only access with on-device off, and no real license to fall back to) */
+/* follow-up: prepareSend() found nowhere to route a turn (Apple-Intelligence-only access with on-device off, and no real license to fall back to) */
 "Editing needs cloud AI — on-device doesn't support it yet. Add a trial, license, or credit in License settings to edit this message." = "Sửa tin nhắn cần AI đám mây — on-device chưa hỗ trợ. Vào phần License để thêm bản dùng thử, license hoặc nạp tiền, rồi sửa lại tin nhắn này.";
 "On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on above, or add a trial, license, or credit in License settings to use cloud AI instead." = "AI on-device đang tắt, và bạn chưa có bản dùng thử hay license cho AI đám mây. Bật lại on-device ở trên, hoặc vào phần License để thêm bản dùng thử, license hoặc nạp tiền.";
 "Use Free On-Device Instead" = "Dùng On-Device miễn phí thay thế";

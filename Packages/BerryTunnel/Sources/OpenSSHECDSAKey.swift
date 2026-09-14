@@ -2,7 +2,7 @@ import Crypto
 import Foundation
 
 /// Parses UNENCRYPTED OpenSSH ECDSA private keys (P-256/384/521) — the piece
-/// Citadel's own key loader doesn't cover (KN-03, docs/architecture/07 §4).
+/// Citadel's own key loader doesn't cover.
 /// Format: openssh-key-v1 (magic, cipher, kdf, one pubkey blob, one privkey
 /// blob with check ints, key type, curve, point Q, scalar d, comment, padding).
 enum OpenSSHECDSAKey {

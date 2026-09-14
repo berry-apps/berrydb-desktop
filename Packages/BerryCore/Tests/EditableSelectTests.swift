@@ -2,7 +2,7 @@ import Testing
 
 @testable import BerryCore
 
-/// Single-table SELECT detection for editable query results (docs/ui/01 D4a).
+/// Single-table SELECT detection for editable query results (D4a).
 @Suite("EditableSelect (D4a)")
 struct EditableSelectTests {
     @Test func plainSingleTableSelectsAreEditable() {

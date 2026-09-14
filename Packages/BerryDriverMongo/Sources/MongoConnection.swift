@@ -3,7 +3,7 @@ import BerryDriverKit
 import Foundation
 
 /// Cancellation state reachable from outside the actor (same reasoning as
-/// `QdrantCancelBox`, docs/architecture/12 §5): `cancelCurrentQuery()` must
+/// `QdrantCancelBox`): `cancelCurrentQuery()` must
 /// work while the actor is busy awaiting an in-flight `getMore`.
 private final class MongoCancelBox: @unchecked Sendable {
     private let lock = NSLock()
@@ -27,7 +27,7 @@ public actor MongoConnection: DataSourceConnection {
     private nonisolated let database: String
     private var isClosed = false
 
-    /// N3 (docs/architecture/12 §2): 500-1000 documents per batch — used both
+ /// N3: 500-1000 documents per batch — used both
     /// as the `batchSize` sent to `find`/`aggregate`/`getMore` (so mongod
     /// itself pages results, never a full-result buffer on our side) and as
     /// the size of each `.items` chunk yielded to callers.
@@ -39,7 +39,7 @@ public actor MongoConnection: DataSourceConnection {
     }
 
     /// Performs the TCP connect + `hello` handshake + SCRAM auth — the
-    /// "Test connection" (KN-06) fail-fast point `MongoDriver.connect` calls
+ /// "Test connection" fail-fast point `MongoDriver.connect` calls
     /// before returning.
     func open() async throws {
         try await client.connect()
@@ -59,7 +59,7 @@ public actor MongoConnection: DataSourceConnection {
         try await client.createCollection(database: database, collection: ref.name)
     }
 
-    // MARK: - Query (NS-01/02, docs/architecture/12 §3)
+ // MARK: - Query
 
     public nonisolated func query(_ request: DataSourceQuery) -> AsyncThrowingStream<DataSourceEvent, Error> {
         AsyncThrowingStream { continuation in
@@ -179,7 +179,7 @@ public actor MongoConnection: DataSourceConnection {
         return .connectionFailed(error.localizedDescription)
     }
 
-    // MARK: - Write (docs/architecture/12 §6)
+ // MARK: - Write
 
     public func write(_ change: DataSourceChangeSet) async throws -> DataSourceWriteResult {
         guard !isClosed else { throw DataSourceError.notConnected }
@@ -218,7 +218,7 @@ public actor MongoConnection: DataSourceConnection {
     /// `$set` — a partial-field update (leaves every field not in `patch`
     /// untouched), matching "patch" semantics rather than a full document
     /// replacement. A caller wanting whole-document replacement is out of
-    /// this v1 scope (documented gap, docs/architecture/12 §3).
+ /// this v1 scope (documented gap).
     private func update(collection: String, id: BerryDocument, patch: BerryDocument) async throws -> DataSourceWriteResult {
         let filter = BerryDocument.object([("_id", id)])
         let setDoc = BerryDocument.object([("$set", patch)])
@@ -226,9 +226,9 @@ public actor MongoConnection: DataSourceConnection {
         return DataSourceWriteResult(affectedCount: count)
     }
 
-    /// An empty/missing id is the "no filter" delete case (NS-08,
+ /// An empty/missing id is the "no filter" delete case
     /// `DataSourceDangerGuard`) — the caller already confirmed via the danger
-    /// gate (DL-03/04) before this runs; here it just decides `{}`
+ /// gate before this runs; here it just decides `{}`
     /// (deleteMany-everything) vs. an `_id` equality filter (deleteOne).
     private func delete(collection: String, id: BerryDocument) async throws -> DataSourceWriteResult {
         let classification = DataSourceDangerGuard.classify(.delete(collection: collection, id: id))
@@ -256,7 +256,7 @@ public actor MongoConnection: DataSourceConnection {
         return DataSourceWriteResult(affectedCount: count)
     }
 
-    // MARK: - User management (TI-03 Phase C, docs/architecture/14)
+ // MARK: - User management (Phase C)
 
     public func listUsers() async throws -> [DataSourceUserInfo] {
         guard !isClosed else { throw DataSourceError.notConnected }

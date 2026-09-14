@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryUI
 
-/// Pure grouping logic (docs/architecture/12 §7) — no Docker, always runs.
+/// Pure grouping logic — no Docker, always runs.
 @Suite("DataSourceTree grouping")
 struct DataSourceTreeTests {
     @Test func mongoLikeCollectionsShareOneDatabaseGroup() {

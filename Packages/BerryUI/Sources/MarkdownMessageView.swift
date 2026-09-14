@@ -9,7 +9,7 @@ struct MarkdownMessageView: View {
     // Whether THIS message is still the one actively streaming — see the
     // `onChange(of: isStreaming)` below for why this matters.
     var isStreaming: Bool = false
-    /// AI-34: opens a mermaid block's diagram as its own zoomable tab.
+ /// opens a mermaid block's diagram as its own zoomable tab.
     var onOpenMermaidInTab: (String) -> Void = { _ in }
     // Cached so `body` re-evaluating for reasons unrelated to THIS message's
     // text (e.g. another turn streaming in — @Observable invalidates the
@@ -37,7 +37,7 @@ struct MarkdownMessageView: View {
     // Removing this throttle is what produced the reported "stream time
     // compounds the longer it runs" hang: `ChatMarkdown.parse` rescans the
     // whole accumulated string, so parsing per token is quadratic in final
-    // length. A 191-event reasoning trace (docs/tests/crash.md) saturated the
+ // length. A 191-event reasoning trace saturated the
     // MainActor badly enough that the client was still draining buffered
     // events 14s after the backend had already sent `message.complete`.
     @State private var pendingParse: Task<Void, Never>?
@@ -65,7 +65,7 @@ struct MarkdownMessageView: View {
             guard pendingParse == nil else { return }
             pendingParse = Task {
                 // nanoseconds, not Task.sleep(for:) — the latter crashes in
-                // release builds (this exact file/line: docs/tests/crash.md,
+ // release builds (this exact file/line:,
                 // EXC_CRASH/SIGABRT, "freed pointer was not the last
                 // allocation" in swift_task_dealloc) when multiple modules
                 // in the same binary generate different Clock-generic

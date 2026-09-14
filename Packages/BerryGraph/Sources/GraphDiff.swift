@@ -1,6 +1,6 @@
 import Foundation
 
-/// Structural difference between two DSG snapshots (docs/architecture/11 §6):
+/// Structural difference between two DSG snapshots:
 /// what appeared and what disappeared. Powers "what changed since last week?"
 /// and before/after-migration views. Edge identity is (src, dst, kind).
 public struct GraphDiff: Sendable, Equatable {

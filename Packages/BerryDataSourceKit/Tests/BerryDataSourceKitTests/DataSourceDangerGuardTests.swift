@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryDataSourceKit
 
-@Suite("DataSourceDangerGuard (12 §6, NS-08)")
+@Suite("DataSourceDangerGuard")
 struct DataSourceDangerGuardTests {
     @Test func deleteWithNullIDNeedsConfirm() {
         let change = DataSourceChangeSet.delete(collection: "points", id: .null)

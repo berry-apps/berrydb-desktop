@@ -10,7 +10,7 @@ import Testing
 /// (`BERRYDB_TEST_SSH`, format host:port:user:pass) plus the Postgres
 /// container reached THROUGH the tunnel via docker-network DNS.
 /// Skipped when the env var is unset.
-@Suite("SSH tunnel (KN-03)", .enabled(if: TestServer.ssh != nil && TestServer.postgres != nil))
+@Suite("SSH tunnel", .enabled(if: TestServer.ssh != nil && TestServer.postgres != nil))
 struct SSHTunnelTests {
     private func makeSSHConfig() -> SSHConfig {
         let server = TestServer.ssh!

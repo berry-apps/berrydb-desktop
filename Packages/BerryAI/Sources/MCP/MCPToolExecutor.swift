@@ -1,7 +1,7 @@
 import BerryCore
 import Foundation
 
-/// Approval for one MCP tool call (docs/agents/architecture/08 §6). MCP tools are
+/// Approval for one MCP tool call. MCP tools are
 /// black boxes — no DangerGuard classification is possible — so unless the user
 /// has trusted the server, every call prompts. Distinct from the SQL AIApprovalGate.
 @MainActor
@@ -10,7 +10,7 @@ public protocol MCPApprovalGate {
 }
 
 /// Routes `mcp:<server>:<tool>` calls to the right connected MCP server and
-/// advertises those servers' tools (docs/agents/architecture/08 §5). Namespacing
+/// advertises those servers' tools. Namespacing
 /// keeps MCP tools from colliding with the built-in SQL/graph/skill tools.
 ///
 /// Tools are fetched once (via `tools/list`) when a server is enabled and passed
@@ -38,7 +38,7 @@ public final class MCPToolExecutor: AIToolExecutor {
         self.gate = gate
     }
 
-    /// Spawns each enabled allowlisted server and caches its `tools/list` (§5).
+ /// Spawns each enabled allowlisted server and caches its `tools/list`.
     /// A server that fails to launch/handshake is skipped, not fatal.
     public func connect(_ manifests: [MCPServerManifest], enabled: Set<String>) async {
         for manifest in manifests where enabled.contains(manifest.id) && servers[manifest.id] == nil {
@@ -98,7 +98,7 @@ public final class MCPToolExecutor: AIToolExecutor {
             return .failed("No enabled MCP server '\(serverID)'")
         }
         let argumentsJSON = Self.argumentsJSON(call.args)
-        // MCP tools are black boxes — always ask unless the server is trusted (§6).
+ // MCP tools are black boxes — always ask unless the server is trusted.
         if call.approval == "always", gate == nil {
             return .denied
         }

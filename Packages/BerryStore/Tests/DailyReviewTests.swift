@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import BerryStore
 
-@Suite("Daily Review Store (DI-23)")
+@Suite("Daily Review Store")
 struct DailyReviewTests {
     private func makeStore() throws -> BerryStore {
         try BerryStore(path: ":memory:")

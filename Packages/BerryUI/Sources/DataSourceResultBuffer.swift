@@ -3,7 +3,7 @@ import Foundation
 import Observation
 
 /// Result buffer for `DocumentGridView` — the `DataSourceEvent` analogue of
-/// `ResultBuffer` (BerryCore, docs/architecture/12 §7): drains the driver's
+/// `ResultBuffer` (BerryCore): drains the driver's
 /// batched stream (500-1000 items, N3) one MainActor hop per batch.
 @MainActor
 @Observable
@@ -18,7 +18,7 @@ public final class DataSourceResultBuffer {
     /// Union of top-level `.object` keys seen in the FIRST non-empty batch
     /// only — a later batch introducing a new key outside that set is a
     /// known, documented gap (same shape as the DynamoDB driver's own
-    /// column-union limitation, docs/architecture/12 §7/§4), not solved here.
+ /// column-union limitation), not solved here.
     public private(set) var columns: [String] = []
     public private(set) var items: [BerryDocument] = []
     public private(set) var stats: DataSourceStats?

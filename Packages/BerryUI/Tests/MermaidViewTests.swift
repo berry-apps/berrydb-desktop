@@ -42,35 +42,40 @@ struct MermaidViewTests {
     }
 
     private struct Harness: View {
-        let onProxy: (ScrollViewProxy) -> Void
         var body: some View {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        Color.clear.frame(height: 3000).id("top")
-                        MermaidBlock(source: sample).id("diagram")
-                        Color.clear.frame(height: 3000).id("bottom")
-                    }
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    MermaidBlock(source: sample).id("diagram")
                 }
-                .frame(width: 500, height: 300)
-                .onAppear { onProxy(proxy) }
             }
+            .frame(width: 500, height: 300)
         }
     }
 
     @Test func diagramMeasuresItsRealHeightEvenWhenFirstLaidOutAtZeroSize() async throws {
-        var proxy: ScrollViewProxy?
-        let hosting = NSHostingView(rootView: Harness(onProxy: { proxy = $0 }))
+        let hosting = NSHostingView(rootView: Harness())
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
             styleMask: [.titled], backing: .buffered, defer: false
         )
         window.contentView = hosting
-        window.makeKeyAndOrderFront(nil)
+        // Deliberately NOT ordered on screen. `makeKeyAndOrderFront` put a real
+        // window on the developer's display for the length of the run — titled but
+        // with no close or resize control, because the style mask omits them — and
+        // stole keyboard focus while it was there. `backing: .buffered, defer: false`
+        // already allocates the backing store at init, so the view tree has a window
+        // and a valid geometry context without being visible, and WebKit still lays
+        // the page out — checked by running this test with the window never ordered
+        // in. The polling loop below, not this layout call, is what the measurement
+        // ultimately waits on.
+        hosting.layoutSubtreeIfNeeded()
 
-        for _ in 0..<10 { try await Task.sleep(nanoseconds: 50_000_000) }
-        proxy?.scrollTo("diagram", anchor: .center)
-        for _ in 0..<60 { try await Task.sleep(nanoseconds: 50_000_000) }
+        for _ in 0..<60 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if let webView = findWebView(hosting), webView.frame.height > 100 {
+                break
+            }
+        }
 
         let webView = try #require(findWebView(hosting))
         #expect(webView.frame.height > 100, "diagram stuck at the near-zero measurement floor: \(webView.frame.height)")

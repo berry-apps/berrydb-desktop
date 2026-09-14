@@ -1,0 +1,1518 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BerryDB 🫐 — The Native Database Client Built for macOS Speed</title>
+  <meta name="description" content="Ultra-fast, native macOS database manager built strictly with Swift 6 and AppKit. Zero Electron bloat. Supports PostgreSQL, MySQL, SQLite, SQL Server, Redis, ClickHouse, DuckDB and AI SQL Copilot." />
+  <meta name="keywords" content="BerryDB, macOS database client, postgresql mac client, mysql client mac, sqlite viewer mac, redis client mac, native mac database, fast sql editor macos, BerryHub" />
+  <meta name="author" content="Berry Apps" />
+  <meta name="theme-color" content="#080B13" />
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="public/images/favicon.png" />
+  <link rel="apple-touch-icon" href="public/images/berrydb-logo.png" />
+
+  <!-- Anti-FOUC Theme Script: Default to DARK MODE -->
+  <script>
+    (function() {
+      const theme = localStorage.getItem('berry_theme');
+      if (theme === 'light') {
+        document.documentElement.classList.remove('dark');
+      } else {
+        document.documentElement.classList.add('dark');
+      }
+    })();
+  </script>
+
+  <!-- Canonical URL -->
+  <link rel="canonical" href="https://db.berryhub.app" />
+
+  <!-- OpenGraph / Facebook / LinkedIn / Discord -->
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://db.berryhub.app" />
+  <meta property="og:site_name" content="BerryHub — Native macOS Apps Ecosystem" />
+  <meta property="og:title" content="BerryDB 🫐 — The Native Database Client Built for macOS Speed" />
+  <meta property="og:description" content="Sub-second startup, streaming 1M+ rows at 60fps, AI SQL Copilot, and Apple Keychain security. Zero Electron." />
+  <meta property="og:image" content="https://db.berryhub.app/public/images/og-preview.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="BerryDB Native macOS Database Manager" />
+  <meta property="og:locale" content="en_US" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:url" content="https://db.berryhub.app" />
+  <meta name="twitter:title" content="BerryDB 🫐 — The Native Database Client for macOS" />
+  <meta name="twitter:description" content="Pure Swift 6 & AppKit DataGrid. 60fps streaming, zero Electron, AI SQL Copilot, Keychain enclave security." />
+  <meta name="twitter:image" content="https://db.berryhub.app/public/images/og-preview.png" />
+
+  <!-- Schema.org JSON-LD Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "BerryDB",
+    "operatingSystem": "macOS 14.0+",
+    "applicationCategory": "DeveloperApplication",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "description": "Ultra-fast native macOS database client built with Swift 6 and AppKit. Zero Electron.",
+    "url": "https://db.berryhub.app",
+    "downloadUrl": "https://download-db.berryhub.app/BerryDB-latest.dmg",
+    "image": "https://db.berryhub.app/public/images/berrydb-logo.png",
+    "author": {
+      "@type": "Organization",
+      "name": "Berry Apps",
+      "url": "https://berryhub.app"
+    }
+  }
+  </script>
+
+  <!-- Google Fonts: Inter & Plus Jakarta Sans & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            display: ['"Plus Jakarta Sans"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            berry: {
+              50: '#fff1f2',
+              100: '#ffe4e6',
+              200: '#fecdd3',
+              300: '#fda4af',
+              400: '#fb7185',
+              500: '#f43f5e', // Berry Logo Crimson/Rose
+              600: '#e11d48',
+              700: '#be123c',
+              800: '#9f1239',
+              900: '#881337',
+              950: '#4c0519',
+            },
+            accent: {
+              50: '#ecfdf5',
+              100: '#d1fae5',
+              500: '#10b981', // Emerald DataGrid Accent
+              600: '#059669',
+              700: '#047857',
+            },
+            dark: {
+              bg: '#080B13',
+              surface: '#0D121F',
+              card: '#0E1424',
+              cardHover: '#141C30',
+              border: '#1E293B',
+              muted: '#94A3B8',
+            }
+          },
+          boxShadow: {
+            'glow-berry': '0 0 40px -10px rgba(225, 29, 72, 0.45)',
+            'glow-berry-lg': '0 0 60px -15px rgba(225, 29, 72, 0.55)',
+            'glow-emerald': '0 0 40px -10px rgba(16, 185, 129, 0.4)',
+            'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.08)',
+            'glass-dark': '0 8px 32px 0 rgba(0, 0, 0, 0.55)',
+          },
+          animation: {
+            'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            'float': 'float 6s ease-in-out infinite',
+            'float-slow': 'float 8s ease-in-out infinite 1s',
+          },
+          keyframes: {
+            float: {
+              '0%, 100%': { transform: 'translateY(0px)' },
+              '50%': { transform: 'translateY(-10px)' },
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Glassmorphism custom styling */
+    .glass-light {
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(225, 29, 72, 0.15);
+    }
+    .dark .glass-dark {
+      background: rgba(14, 20, 36, 0.92);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .glass-nav {
+      background: rgba(255, 255, 255, 0.88);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+    .dark .glass-nav {
+      background: rgba(8, 11, 19, 0.92);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+    /* Mesh Gradients */
+    .hero-glow-bg {
+      background: radial-gradient(circle at 50% 20%, rgba(225, 29, 72, 0.18) 0%, rgba(16, 185, 129, 0.12) 35%, transparent 70%);
+    }
+    .dark .hero-glow-bg {
+      background: radial-gradient(circle at 50% 20%, rgba(225, 29, 72, 0.22) 0%, rgba(14, 20, 36, 0.6) 45%, transparent 75%);
+    }
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(100, 116, 139, 0.25);
+      border-radius: 9999px;
+    }
+    .dark ::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.2);
+    }
+    .kbd-tag {
+      box-shadow: 0 2px 0 rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.4);
+    }
+    .dark .kbd-tag {
+      box-shadow: 0 2px 0 rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.15);
+    }
+  </style>
+</head>
+
+<body class="bg-[#FCFAF9] dark:bg-dark-bg text-slate-800 dark:text-slate-100 font-sans antialiased transition-colors duration-300 selection:bg-berry-500 selection:text-white">
+
+  <!-- ==================== HEADER ==================== -->
+  <header class="fixed top-0 left-0 right-0 z-50 transition-all duration-300 glass-nav border-b border-slate-200/80 dark:border-slate-800/80">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      
+      <!-- Brand Logo with official AppIcon -->
+      <a href="/" class="flex items-center gap-3 group">
+        <img src="public/images/berrydb-logo.png" alt="BerryDB Logo" class="w-10 h-10 rounded-2xl shadow-glow-berry transition-transform group-hover:scale-105 duration-200 object-contain" />
+        <div class="flex flex-col">
+          <div class="flex items-center gap-2">
+            <span class="font-display font-extrabold text-lg sm:text-xl tracking-tight text-slate-900 dark:text-white leading-none">
+              BerryDB
+            </span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500/10 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 font-mono font-semibold border border-rose-500/20">macOS 14+</span>
+          </div>
+          <span class="text-[10px] text-slate-500 dark:text-slate-400 font-medium tracking-wide">Native Database Client</span>
+        </div>
+      </a>
+
+      <!-- Desktop Navigation -->
+      <nav class="hidden lg:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-300">
+        <a href="#features" class="hover:text-berry-600 dark:hover:text-berry-400 transition">Features</a>
+        <a href="#engines" class="hover:text-berry-600 dark:hover:text-berry-400 transition">Supported DBs</a>
+        <a href="#ai-assistant" class="hover:text-berry-600 dark:hover:text-berry-400 transition">AI Copilot</a>
+        <a href="#benchmarks" class="hover:text-berry-600 dark:hover:text-berry-400 transition">Benchmarks</a>
+        <a href="docs.html" class="hover:text-berry-600 dark:hover:text-berry-400 transition flex items-center gap-1 font-semibold text-rose-600 dark:text-rose-400">
+          <span>Docs</span>
+          <span class="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 font-semibold">New</span>
+        </a>
+
+        <!-- Ecosystem Links Divider -->
+        <span class="w-px h-4 bg-slate-200 dark:bg-slate-800"></span>
+
+        <!-- BerryShot Link -->
+        <a href="https://shot.berryhub.app" target="_blank" rel="noopener" class="text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 px-2.5 py-1.5 rounded-lg transition flex items-center gap-1.5" title="Explore BerryShot - Native Screen Utility & AI Studio">
+          <span>🍓</span>
+          <span>BerryShot</span>
+        </a>
+
+        <!-- BerryHub Portal -->
+        <a href="https://berryhub.app" target="_blank" rel="noopener" class="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 px-2.5 py-1.5 rounded-lg transition flex items-center gap-1" title="BerryHub macOS Apps Portal">
+          <i data-lucide="globe" class="w-3.5 h-3.5"></i>
+          <span>BerryHub</span>
+        </a>
+      </nav>
+
+      <!-- Right Utility Actions -->
+      <div class="flex items-center gap-2 sm:gap-3">
+        <!-- Theme Toggle Button -->
+        <button id="themeToggleBtn" onclick="toggleTheme()" type="button" aria-label="Toggle Dark/Light Mode" class="w-9 h-9 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700/80 transition shadow-sm cursor-pointer">
+          <svg class="w-4 h-4 hidden dark:block text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path></svg>
+          <svg class="w-4 h-4 block dark:hidden text-slate-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
+        </button>
+
+        <!-- GitHub -->
+        <a href="https://github.com/berry-apps/berrydb-desktop" target="_blank" rel="noopener" class="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 transition">
+          <i data-lucide="github" class="w-4 h-4"></i>
+          <span>GitHub</span>
+        </a>
+
+        <!-- Download CTA -->
+        <a href="https://download-db.berryhub.app/BerryDB-latest.dmg" class="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-berry-600 via-rose-500 to-berry-700 hover:from-berry-700 hover:to-rose-600 shadow-glow-berry transition duration-200 transform hover:-translate-y-0.5">
+          <i data-lucide="download" class="w-4 h-4"></i>
+          <span>Download</span>
+        </a>
+
+        <!-- Mobile Menu Toggle Button -->
+        <button id="mobileMenuBtn" aria-label="Open Mobile Menu" class="lg:hidden w-9 h-9 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition">
+          <i data-lucide="menu" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+    </div>
+
+    <!-- Mobile Drawer Menu -->
+    <div id="mobileMenuDrawer" class="lg:hidden hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-dark-bg/95 backdrop-blur-xl px-4 py-5 space-y-3 shadow-xl transition-all">
+      <div class="grid grid-cols-2 gap-2 text-xs">
+        <a href="#features" class="mobile-nav-link p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 font-medium text-slate-700 dark:text-slate-200">Features</a>
+        <a href="#engines" class="mobile-nav-link p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 font-medium text-slate-700 dark:text-slate-200">Supported DBs</a>
+        <a href="#ai-assistant" class="mobile-nav-link p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 font-medium text-slate-700 dark:text-slate-200">AI Copilot</a>
+        <a href="#benchmarks" class="mobile-nav-link p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 font-medium text-slate-700 dark:text-slate-200">Benchmarks</a>
+        <a href="#gallery" class="mobile-nav-link p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 font-medium text-slate-700 dark:text-slate-200">UI Gallery</a>
+        <a href="docs.html" class="mobile-nav-link p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950 font-bold text-emerald-600 dark:text-emerald-400">Documentation</a>
+      </div>
+
+      <!-- Berry Ecosystem Mobile Section -->
+      <div class="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+        <span class="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Berry Ecosystem</span>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <a href="https://shot.berryhub.app" target="_blank" rel="noopener" class="flex items-center gap-2 p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 font-semibold">
+            <span>🍓</span>
+            <span>BerryShot</span>
+          </a>
+          <a href="https://berryhub.app" target="_blank" rel="noopener" class="flex items-center gap-2 p-2.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 font-semibold">
+            <i data-lucide="globe" class="w-4 h-4"></i>
+            <span>BerryHub</span>
+          </a>
+        </div>
+      </div>
+    </div>
+
+    </div>
+  </header>
+
+
+  <!-- ==================== HERO SECTION ==================== -->
+  <section class="relative pt-32 pb-20 md:pt-40 md:pb-28 overflow-hidden hero-glow-bg">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center relative z-10">
+      
+      <!-- Announcement Pill Badge -->
+      <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/80 border border-emerald-200 dark:border-emerald-800/80 text-emerald-700 dark:text-emerald-300 text-xs font-semibold mb-8 animate-pulse-slow shadow-sm">
+        <span class="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-ping"></span>
+        <span>BerryDB v1.0.2 is Live</span>
+        <span class="text-slate-400 dark:text-slate-600">•</span>
+        <span class="text-slate-600 dark:text-slate-400 font-normal">Pure Swift 6 & AppKit Architecture</span>
+        <i data-lucide="arrow-right" class="w-3.5 h-3.5 text-emerald-500"></i>
+      </div>
+
+      <!-- Main Headline -->
+      <h1 class="font-display text-4xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white max-w-5xl mx-auto leading-[1.12]">
+        The Native Database Client Built for <span class="text-transparent bg-clip-text bg-gradient-to-r from-emerald-500 via-berry-500 to-accent-500">macOS Speed.</span>
+      </h1>
+
+      <!-- Subtitle -->
+      <p class="mt-6 text-base sm:text-xl text-slate-600 dark:text-slate-300 max-w-3xl mx-auto font-normal leading-relaxed">
+        Sub-second launch, smooth 60fps streaming for <strong>1,000,000+ rows</strong>, built-in <strong>AI SQL Copilot</strong>, and Apple Keychain Enclave security. Zero Electron bloat.
+      </p>
+
+      <!-- Primary CTA Actions -->
+      <div class="mt-10 flex flex-wrap items-center justify-center gap-4">
+        <a href="https://download-db.berryhub.app/BerryDB-latest.dmg" class="flex items-center gap-2.5 px-7 py-4 rounded-2xl text-sm sm:text-base font-bold text-white bg-gradient-to-r from-berry-600 via-emerald-600 to-berry-500 hover:from-berry-700 hover:to-emerald-700 shadow-glow-berry-lg transform hover:-translate-y-1 transition duration-200">
+          <i data-lucide="apple" class="w-5 h-5"></i>
+          <span>Download for macOS</span>
+          <span class="text-xs px-2 py-0.5 rounded-full bg-white/20 font-mono">v1.0.2</span>
+        </a>
+
+        <a href="docs.html" class="flex items-center gap-2 px-6 py-4 rounded-2xl text-sm sm:text-base font-semibold text-slate-700 dark:text-slate-200 bg-white/80 dark:bg-dark-card border border-slate-200 dark:border-slate-700/80 hover:bg-slate-50 dark:hover:bg-slate-800 shadow-sm hover:shadow transition duration-200">
+          <i data-lucide="book-open" class="w-4 h-4 text-emerald-500"></i>
+          <span>Read Documentation</span>
+        </a>
+      </div>
+
+      <!-- Quick Platform Specs -->
+      <div class="mt-4 text-xs text-slate-500 dark:text-slate-400 flex items-center justify-center gap-4 flex-wrap">
+        <span class="flex items-center gap-1.5"><i data-lucide="check-circle" class="w-3.5 h-3.5 text-emerald-500"></i> macOS 14.0 Sonoma & 15.0 Sequoia</span>
+        <span class="flex items-center gap-1.5"><i data-lucide="check-circle" class="w-3.5 h-3.5 text-emerald-500"></i> Apple Silicon (M1/M2/M3/M4)</span>
+        <span class="flex items-center gap-1.5"><i data-lucide="shield-check" class="w-3.5 h-3.5 text-emerald-500"></i> Notarized by Apple</span>
+      </div>
+
+      <!-- ==================== HERO SCREENSHOT PREVIEW ==================== -->
+      <div class="mt-14 relative max-w-6xl mx-auto">
+        <div class="relative rounded-2xl md:rounded-3xl p-2 bg-gradient-to-b from-slate-200/80 via-slate-100/40 to-white dark:from-slate-700/70 dark:via-slate-800/40 dark:to-dark-card shadow-2xl border border-white/60 dark:border-slate-700/60">
+          
+          <!-- Mac Window Bar -->
+          <div class="h-10 px-4 rounded-t-xl md:rounded-t-2xl bg-slate-100/90 dark:bg-[#0B0F1A] border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="w-3 h-3 rounded-full bg-rose-500/90 inline-block"></span>
+              <span class="w-3 h-3 rounded-full bg-amber-500/90 inline-block"></span>
+              <span class="w-3 h-3 rounded-full bg-emerald-500/90 inline-block"></span>
+              <span class="ml-3 text-xs font-medium text-slate-500 dark:text-slate-400">BerryDB Studio • Production Cluster (PostgreSQL 16 & Redis)</span>
+            </div>
+            <div class="flex items-center gap-2 text-xs text-slate-400 dark:text-slate-500 font-mono">
+              <span class="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium">AppKit NSTableView Engine</span>
+            </div>
+          </div>
+
+          <!-- Screenshot Display Area -->
+          <div class="relative rounded-b-xl md:rounded-b-2xl overflow-hidden group cursor-pointer" onclick="openLightbox('public/images/Capture-1786694680.png', 'BerryDB Studio: Workspace with Connections, Multi-tab Editor and Live Data Grid')">
+            <img src="public/images/Capture-1786694680.png" alt="BerryDB Workspace" class="w-full h-auto object-cover transform group-hover:scale-[1.01] transition duration-500 shadow-inner" />
+            
+            <!-- Live Interactive Badge Overlays -->
+            <div class="absolute top-4 left-4 hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/90 dark:bg-[#0E1424]/90 backdrop-blur-md shadow-md border border-slate-200/80 dark:border-slate-700/80 text-xs font-semibold text-slate-800 dark:text-slate-200">
+              <i data-lucide="zap" class="w-3.5 h-3.5 text-emerald-500"></i>
+              <span>Virtualized Grid: 1,000,000 Rows @ 60 FPS</span>
+            </div>
+
+            <div class="absolute bottom-4 right-4 flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-950/80 text-white text-xs font-medium backdrop-blur-md border border-white/10 group-hover:bg-emerald-600 transition">
+              <i data-lucide="maximize-2" class="w-3.5 h-3.5"></i>
+              <span>Click to view full resolution</span>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Floating Decorative Feature Cards -->
+        <div class="hidden lg:block absolute -bottom-6 -left-8 p-4 rounded-2xl bg-white/95 dark:bg-[#0E1424]/95 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800 shadow-2xl max-w-xs text-left animate-float">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 dark:border-emerald-500/30 flex items-center justify-center">
+              <i data-lucide="sparkles" class="w-5 h-5"></i>
+            </div>
+            <div>
+              <h4 class="text-xs font-bold text-slate-900 dark:text-white">AI SQL Copilot</h4>
+              <p class="text-[11px] text-slate-500 dark:text-slate-400">Natural language to SQL, optimize slow joins</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="hidden lg:block absolute -top-6 -right-8 p-4 rounded-2xl bg-white/95 dark:bg-[#0E1424]/95 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800 shadow-2xl max-w-xs text-left animate-float-slow">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-indigo-500/10 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 dark:border-indigo-500/30 flex items-center justify-center">
+              <i data-lucide="key-round" class="w-5 h-5"></i>
+            </div>
+            <div>
+              <h4 class="text-xs font-bold text-slate-900 dark:text-white">Apple Keychain Enclave</h4>
+              <p class="text-[11px] text-slate-500 dark:text-slate-400">Hardware encrypted credentials & SSH tunnels</p>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Trust Metrics Bar -->
+      <div class="mt-16 grid grid-cols-2 md:grid-cols-4 gap-6 max-w-4xl mx-auto pt-8 border-t border-slate-200/80 dark:border-slate-800">
+        <div class="text-center">
+          <div class="font-display text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white">&lt; 150ms</div>
+          <div class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">Lightning Cold Launch</div>
+        </div>
+        <div class="text-center">
+          <div class="font-display text-2xl sm:text-3xl font-extrabold text-emerald-600 dark:text-emerald-400">&lt; 50 MB</div>
+          <div class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">RAM Footprint (0 Electron)</div>
+        </div>
+        <div class="text-center">
+          <div class="font-display text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white">10+ Engines</div>
+          <div class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">Postgres, MySQL, SQLite, Redis...</div>
+        </div>
+        <div class="text-center">
+          <div class="font-display text-2xl sm:text-3xl font-extrabold text-indigo-600 dark:text-indigo-400">100% Native</div>
+          <div class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">Swift 6 & AppKit Engine</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ==================== SUPPORTED ENGINES GRID ==================== -->
+  <section id="engines" class="py-16 md:py-24 bg-white/70 dark:bg-[#0B0F1A] border-y border-emerald-100/60 dark:border-slate-800/80 relative">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="text-center max-w-3xl mx-auto mb-14">
+        <span class="text-xs font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/80 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-800/80">
+          Universal Database Support
+        </span>
+        <h2 class="mt-4 font-display text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white tracking-tight">
+          One Native Client for All Your Databases
+        </h2>
+        <p class="mt-3 text-slate-600 dark:text-slate-400 text-sm sm:text-base">
+          Engineered with modular driver packages conforming to strict performance suites.
+        </p>
+      </div>
+
+      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 sm:gap-6">
+        
+        <!-- Engine: PostgreSQL -->
+        <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-blue-500/50 hover:-translate-y-1 transition duration-200 flex flex-col items-center text-center group">
+          <div class="w-12 h-12 rounded-xl bg-blue-500/10 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 border border-blue-500/20 dark:border-blue-500/30 flex items-center justify-center mb-3 group-hover:scale-110 transition shadow-sm">
+            <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"></path><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"></path></svg>
+          </div>
+          <h3 class="font-bold text-sm text-slate-900 dark:text-white">PostgreSQL</h3>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">v12-16+, Citus, Cockroach</p>
+          <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60">Native Driver</span>
+        </div>
+
+        <!-- Engine: MySQL / MariaDB -->
+        <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-amber-500/50 hover:-translate-y-1 transition duration-200 flex flex-col items-center text-center group">
+          <div class="w-12 h-12 rounded-xl bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/20 dark:border-amber-500/30 flex items-center justify-center mb-3 group-hover:scale-110 transition shadow-sm">
+            <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"></rect><rect width="20" height="8" x="2" y="14" rx="2" ry="2"></rect><line x1="6" x2="6.01" y1="6" y2="6"></line><line x1="6" x2="6.01" y1="18" y2="18"></line></svg>
+          </div>
+          <h3 class="font-bold text-sm text-slate-900 dark:text-white">MySQL & MariaDB</h3>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">8.4+ caching_sha2</p>
+          <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/60">KILL Guard</span>
+        </div>
+
+        <!-- Engine: SQLite -->
+        <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-cyan-500/50 hover:-translate-y-1 transition duration-200 flex flex-col items-center text-center group">
+          <div class="w-12 h-12 rounded-xl bg-cyan-500/10 dark:bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20 dark:border-cyan-500/30 flex items-center justify-center mb-3 group-hover:scale-110 transition shadow-sm">
+            <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="m3 15 2 2 4-4"></path></svg>
+          </div>
+          <h3 class="font-bold text-sm text-slate-900 dark:text-white">SQLite 3</h3>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">File, Memory, WAL mode</p>
+          <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-cyan-50 dark:bg-cyan-950/60 text-cyan-700 dark:text-cyan-300 border border-cyan-200/60 dark:border-cyan-800/60">libsqlite3 C-Direct</span>
+        </div>
+
+        <!-- Engine: SQL Server -->
+        <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-rose-500/50 hover:-translate-y-1 transition duration-200 flex flex-col items-center text-center group">
+          <div class="w-12 h-12 rounded-xl bg-rose-500/10 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/20 dark:border-rose-500/30 flex items-center justify-center mb-3 group-hover:scale-110 transition shadow-sm">
+            <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+          </div>
+          <h3 class="font-bold text-sm text-slate-900 dark:text-white">Microsoft SQL Server</h3>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">T-SQL, Azure SQL</p>
+          <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200/60 dark:border-rose-800/60">Full Schemas</span>
+        </div>
+
+        <!-- Engine: Redis -->
+        <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-red-500/50 hover:-translate-y-1 transition duration-200 flex flex-col items-center text-center group">
+          <div class="w-12 h-12 rounded-xl bg-red-500/10 dark:bg-red-500/20 text-red-600 dark:text-red-400 border border-red-500/20 dark:border-red-500/30 flex items-center justify-center mb-3 group-hover:scale-110 transition shadow-sm">
+            <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+          </div>
+          <h3 class="font-bold text-sm text-slate-900 dark:text-white">Redis & Valkey</h3>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">Key-Value, Hashes, TTL</p>
+          <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-red-50 dark:bg-red-950/60 text-red-700 dark:text-red-300 border border-red-200/60 dark:border-red-800/60">Live Explorer</span>
+        </div>
+
+        <!-- Engine: ClickHouse -->
+        <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-yellow-500/50 hover:-translate-y-1 transition duration-200 flex flex-col items-center text-center group">
+          <div class="w-12 h-12 rounded-xl bg-yellow-500/10 dark:bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 border border-yellow-500/20 dark:border-yellow-500/30 flex items-center justify-center mb-3 group-hover:scale-110 transition shadow-sm">
+            <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><path d="M18 17V9"></path><path d="M13 17V5"></path><path d="M8 17v-3"></path></svg>
+          </div>
+          <h3 class="font-bold text-sm text-slate-900 dark:text-white">ClickHouse</h3>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">OLAP Big Data Streams</p>
+          <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-yellow-50 dark:bg-yellow-950/60 text-yellow-700 dark:text-yellow-300 border border-yellow-200/60 dark:border-yellow-800/60">High Throughput</span>
+        </div>
+
+        <!-- Engine: DuckDB -->
+        <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-orange-500/50 hover:-translate-y-1 transition duration-200 flex flex-col items-center text-center group">
+          <div class="w-12 h-12 rounded-xl bg-orange-500/10 dark:bg-orange-500/20 text-orange-600 dark:text-orange-400 border border-orange-500/20 dark:border-orange-500/30 flex items-center justify-center mb-3 group-hover:scale-110 transition shadow-sm">
+            <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"></path><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 9h18"></path><path d="M3 15h18"></path></svg>
+          </div>
+          <h3 class="font-bold text-sm text-slate-900 dark:text-white">DuckDB</h3>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">Parquet & Analytics</p>
+          <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-orange-50 dark:bg-orange-950/60 text-orange-700 dark:text-orange-300 border border-orange-200/60 dark:border-orange-800/60">Fast In-Process</span>
+        </div>
+
+        <!-- Engine: Qdrant Vector -->
+        <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-purple-500/50 hover:-translate-y-1 transition duration-200 flex flex-col items-center text-center group">
+          <div class="w-12 h-12 rounded-xl bg-purple-500/10 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 border border-purple-500/20 dark:border-purple-500/30 flex items-center justify-center mb-3 group-hover:scale-110 transition shadow-sm">
+            <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"></rect><rect width="6" height="6" x="9" y="9" rx="1"></rect><path d="M15 2v2"></path><path d="M15 20v2"></path><path d="M2 15h2"></path><path d="M2 9h2"></path><path d="M20 15h2"></path><path d="M20 9h2"></path><path d="M9 2v2"></path><path d="M9 20v2"></path></svg>
+          </div>
+          <h3 class="font-bold text-sm text-slate-900 dark:text-white">Qdrant Vector DB</h3>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">Embeddings & Payloads</p>
+          <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200/60 dark:border-purple-800/60">Vector Search</span>
+        </div>
+
+        <!-- Engine: Elasticsearch -->
+        <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-teal-500/50 hover:-translate-y-1 transition duration-200 flex flex-col items-center text-center group">
+          <div class="w-12 h-12 rounded-xl bg-teal-500/10 dark:bg-teal-500/20 text-teal-600 dark:text-teal-400 border border-teal-500/20 dark:border-teal-500/30 flex items-center justify-center mb-3 group-hover:scale-110 transition shadow-sm">
+            <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" x2="16.65" y1="21" y2="16.65"></line></svg>
+          </div>
+          <h3 class="font-bold text-sm text-slate-900 dark:text-white">Elasticsearch</h3>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">JSON Indices & Cluster</p>
+          <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-teal-50 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300 border border-teal-200/60 dark:border-teal-800/60">Cluster Status</span>
+        </div>
+
+        <!-- Engine: SSH Tunneling -->
+        <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-emerald-500/50 hover:-translate-y-1 transition duration-200 flex flex-col items-center text-center group">
+          <div class="w-12 h-12 rounded-xl bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 dark:border-emerald-500/30 flex items-center justify-center mb-3 group-hover:scale-110 transition shadow-sm">
+            <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg>
+          </div>
+          <h3 class="font-bold text-sm text-slate-900 dark:text-white">SSH Bastion Tunnel</h3>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">Private VPC & Key Auth</p>
+          <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">Zero Leak</span>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ==================== INTERACTIVE FEATURE TABS SHOWCASE ==================== -->
+  <section id="features" class="py-20 md:py-28 relative">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="text-center max-w-3xl mx-auto mb-14">
+        <span class="text-xs font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/80 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-800/80">
+          Core Capabilities
+        </span>
+        <h2 class="mt-4 font-display text-3xl sm:text-5xl font-bold text-slate-900 dark:text-white tracking-tight">
+          Engineered for Daily Engineering Workflows
+        </h2>
+        <p class="mt-4 text-slate-600 dark:text-slate-400 text-sm sm:text-base">
+          Explore the exact interfaces and tools built into BerryDB.
+        </p>
+      </div>
+
+      <!-- Feature Tab Controls -->
+      <div class="flex items-center justify-center gap-2 flex-wrap mb-10">
+        <button onclick="switchFeatureTab(0)" id="tabBtn-0" class="feature-tab-btn px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center gap-2 bg-emerald-600 text-white shadow-glow-berry">
+          <i data-lucide="table" class="w-4 h-4"></i>
+          <span>Streaming DataGrid</span>
+        </button>
+
+        <button onclick="switchFeatureTab(1)" id="tabBtn-1" class="feature-tab-btn px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center gap-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700">
+          <i data-lucide="sparkles" class="w-4 h-4"></i>
+          <span>AI SQL Copilot</span>
+        </button>
+
+        <button onclick="switchFeatureTab(2)" id="tabBtn-2" class="feature-tab-btn px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center gap-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700">
+          <i data-lucide="key" class="w-4 h-4"></i>
+          <span>Connection Manager</span>
+        </button>
+
+        <button onclick="switchFeatureTab(3)" id="tabBtn-3" class="feature-tab-btn px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center gap-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700">
+          <i data-lucide="git-fork" class="w-4 h-4"></i>
+          <span>Schema & Structure</span>
+        </button>
+
+        <button onclick="switchFeatureTab(4)" id="tabBtn-4" class="feature-tab-btn px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center gap-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700">
+          <i data-lucide="gauge" class="w-4 h-4"></i>
+          <span>Query Plan & Profiler</span>
+        </button>
+      </div>
+
+      <!-- Feature Tab Content Panes -->
+      <div class="rounded-3xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-xl overflow-hidden p-6 md:p-10">
+        
+        <!-- Tab 0: Streaming DataGrid -->
+        <div id="tabContent-0" class="feature-content-pane grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+          <div class="lg:col-span-5 space-y-5 text-left">
+            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 dark:bg-emerald-500/20 border border-emerald-500/20 dark:border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
+              <i data-lucide="zap" class="w-3.5 h-3.5"></i>
+              <span>Hardware-Accelerated Grid</span>
+            </div>
+            <h3 class="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+              Instant 60fps Scrolling for Millions of Rows
+            </h3>
+            <p class="text-slate-600 dark:text-slate-300 text-sm leading-relaxed">
+              Unlike web-view based clients that freeze when fetching large datasets, BerryDB utilizes pure AppKit <code class="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-mono text-xs">NSTableView</code> view reuse. Load 1,000,000 rows with instantaneous sorting, filtering, inline editing, and binary image inspection.
+            </p>
+            <div class="space-y-2.5 text-xs text-slate-600 dark:text-slate-300">
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-emerald-500"></i>
+                <span>Direct in-cell editing with transactional rollbacks</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-emerald-500"></i>
+                <span>Instant column filter, search, and type-aware sorting</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-emerald-500"></i>
+                <span>Multi-format export: CSV, JSON, Parquet, SQL INSERTs</span>
+              </div>
+            </div>
+          </div>
+          <div class="lg:col-span-7">
+            <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-2xl group cursor-pointer" onclick="openLightbox('public/images/Screenshot-FDADEF7C-75A2-479E-832F-386FA3974B33.png', 'BerryDB High Performance DataGrid with Column Filtering')">
+              <img src="public/images/Screenshot-FDADEF7C-75A2-479E-832F-386FA3974B33.png" alt="BerryDB DataGrid" class="w-full h-auto object-cover group-hover:scale-[1.02] transition duration-300" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 1: AI SQL Copilot -->
+        <div id="tabContent-1" class="feature-content-pane hidden grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+          <div class="lg:col-span-5 space-y-5 text-left">
+            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/10 dark:bg-purple-500/20 border border-purple-500/20 dark:border-purple-500/30 text-purple-600 dark:text-purple-400 text-xs font-semibold">
+              <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+              <span>Context-Aware Intelligence</span>
+            </div>
+            <h3 class="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+              Write Complex Queries with Natural Language
+            </h3>
+            <p class="text-slate-600 dark:text-slate-300 text-sm leading-relaxed">
+              BerryDB features an embedded AI assistant that understands your database schema, relations, foreign keys, and indexes. Ask in plain English or Vietnamese to generate queries, optimize joins, fix syntax bugs, or generate dummy test data.
+            </p>
+            <div class="space-y-2.5 text-xs text-slate-600 dark:text-slate-300">
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-purple-500"></i>
+                <span>Strict privacy mode: Only schema metadata is sent, zero table rows</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-purple-500"></i>
+                <span>Supports Claude 3.5, OpenAI GPT-4o, and Gemini 2.0</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-purple-500"></i>
+                <span>1-click SQL insert into active editor with formatted indentation</span>
+              </div>
+            </div>
+          </div>
+          <div class="lg:col-span-7">
+            <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-2xl group cursor-pointer" onclick="openLightbox('public/images/Screenshot-9E1F8A3F-0E70-4F56-90AD-E3B6CC9DA071.png', 'BerryDB AI SQL Copilot Assistant in Action')">
+              <img src="public/images/Screenshot-9E1F8A3F-0E70-4F56-90AD-E3B6CC9DA071.png" alt="BerryDB AI Assistant" class="w-full h-auto object-cover group-hover:scale-[1.02] transition duration-300" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Connection Manager -->
+        <div id="tabContent-2" class="feature-content-pane hidden grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+          <div class="lg:col-span-5 space-y-5 text-left">
+            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 dark:bg-blue-500/20 border border-blue-500/20 dark:border-blue-500/30 text-blue-600 dark:text-blue-400 text-xs font-semibold">
+              <i data-lucide="shield-check" class="w-3.5 h-3.5"></i>
+              <span>Apple Keychain Enclave</span>
+            </div>
+            <h3 class="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+              Secure Profiles, SSH Jump Hosts & SSL Certificates
+            </h3>
+            <p class="text-slate-600 dark:text-slate-300 text-sm leading-relaxed">
+              Organize multiple environments (Production, Staging, Local) into color-coded groups. Passwords and private keys are never stored in plaintext — they live exclusively inside the macOS Secure Enclave Keychain.
+            </p>
+            <div class="space-y-2.5 text-xs text-slate-600 dark:text-slate-300">
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-blue-500"></i>
+                <span>SSH Tunneling with private key, agent, or password auth</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-blue-500"></i>
+                <span>Mutual TLS (mTLS) with Root CA and Client Certificates</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-blue-500"></i>
+                <span>Safe Production Read-Only mode with dangerous query prompt</span>
+              </div>
+            </div>
+          </div>
+          <div class="lg:col-span-7">
+            <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-2xl group cursor-pointer" onclick="openLightbox('public/images/Screenshot-C676D002-6AEF-4B29-91FD-45B2D417D483.png', 'BerryDB Connection Profile Configuration & Security Settings')">
+              <img src="public/images/Screenshot-C676D002-6AEF-4B29-91FD-45B2D417D483.png" alt="BerryDB Connections" class="w-full h-auto object-cover group-hover:scale-[1.02] transition duration-300" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Schema & Structure -->
+        <div id="tabContent-3" class="feature-content-pane hidden grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+          <div class="lg:col-span-5 space-y-5 text-left">
+            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 dark:bg-amber-500/20 border border-amber-500/20 dark:border-amber-500/30 text-amber-600 dark:text-amber-400 text-xs font-semibold">
+              <i data-lucide="git-fork" class="w-3.5 h-3.5"></i>
+              <span>Visual Schema Designer</span>
+            </div>
+            <h3 class="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+              Visual Table Structure & Relationship Editor
+            </h3>
+            <p class="text-slate-600 dark:text-slate-300 text-sm leading-relaxed">
+              Inspect and alter columns, data types, indexes, foreign keys, triggers, and table partitions. Preview generated DDL migration scripts before committing changes.
+            </p>
+            <div class="space-y-2.5 text-xs text-slate-600 dark:text-slate-300">
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-amber-500"></i>
+                <span>Visual index creator: B-Tree, GIN, GiST, Fulltext</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-amber-500"></i>
+                <span>Foreign key cascade, restrict, and set-null rule manager</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-amber-500"></i>
+                <span>Live DDL change preview with 1-click execution</span>
+              </div>
+            </div>
+          </div>
+          <div class="lg:col-span-7">
+            <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-2xl group cursor-pointer" onclick="openLightbox('public/images/Screenshot-C07EBF19-E582-4E57-AC61-7B020C5921B5.png', 'BerryDB Table Structure & Index Editor')">
+              <img src="public/images/Screenshot-C07EBF19-E582-4E57-AC61-7B020C5921B5.png" alt="BerryDB Schema Designer" class="w-full h-auto object-cover group-hover:scale-[1.02] transition duration-300" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 4: Query Plan & Profiler -->
+        <div id="tabContent-4" class="feature-content-pane hidden grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+          <div class="lg:col-span-5 space-y-5 text-left">
+            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-500/10 dark:bg-rose-500/20 border border-rose-500/20 dark:border-rose-500/30 text-rose-600 dark:text-rose-400 text-xs font-semibold">
+              <i data-lucide="gauge" class="w-3.5 h-3.5"></i>
+              <span>Visual Execution Plan</span>
+            </div>
+            <h3 class="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+              Visual EXPLAIN & Bottleneck Diagnostics
+            </h3>
+            <p class="text-slate-600 dark:text-slate-300 text-sm leading-relaxed">
+              Understand query execution bottlenecks with visual node trees for Seq Scans, Index Scans, Hash Joins, and Sort operations. Pinpoint slow queries before they hit production.
+            </p>
+            <div class="space-y-2.5 text-xs text-slate-600 dark:text-slate-300">
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-rose-500"></i>
+                <span>Cost & Timing breakdown for every execution stage</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-rose-500"></i>
+                <span>Missing index recommendations powered by AI heuristics</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <i data-lucide="check" class="w-4 h-4 text-rose-500"></i>
+                <span>Cancel running query instantly via native server socket protocols</span>
+              </div>
+            </div>
+          </div>
+          <div class="lg:col-span-7">
+            <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-2xl group cursor-pointer" onclick="openLightbox('public/images/Screenshot-47E670EA-CE85-45EA-A846-4B55A9AA58CD.png', 'BerryDB Visual Query Plan and Execution Metrics')">
+              <img src="public/images/Screenshot-47E670EA-CE85-45EA-A846-4B55A9AA58CD.png" alt="BerryDB Query Plan" class="w-full h-auto object-cover group-hover:scale-[1.02] transition duration-300" />
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ==================== NATIVE POWER BENTO GRID ==================== -->
+  <section class="py-20 md:py-28 relative bg-[#FCFAF9] dark:bg-[#080B13]">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="text-center max-w-3xl mx-auto mb-16">
+        <span class="text-xs font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/80 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-800/80">
+          Architecture & Engineering
+        </span>
+        <h2 class="mt-4 font-display text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white tracking-tight">
+          Why Native macOS Matters for Databases
+        </h2>
+        <p class="mt-4 text-slate-600 dark:text-slate-400 text-base">
+          Built strictly with Swift 6 and AppKit — zero Electron bloat, zero background memory hogging.
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        
+        <!-- Bento Card 1: Swift 6 Concurrency -->
+        <div class="p-8 rounded-3xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-emerald-500/50 hover:-translate-y-1 transition-all duration-300 relative overflow-hidden group flex flex-col justify-between">
+          <div class="space-y-4">
+            <div class="w-12 h-12 rounded-2xl bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 dark:border-emerald-500/30 flex items-center justify-center group-hover:scale-110 transition shadow-sm">
+              <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"></rect><rect width="6" height="6" x="9" y="9" rx="1"></rect><path d="M15 2v2"></path><path d="M15 20v2"></path><path d="M2 15h2"></path><path d="M2 9h2"></path><path d="M20 15h2"></path><path d="M20 9h2"></path><path d="M9 2v2"></path><path d="M9 20v2"></path></svg>
+            </div>
+            <h3 class="text-xl font-bold text-slate-900 dark:text-white">Swift 6 Structured Concurrency</h3>
+            <p class="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+              Every query executes in an isolated Actor thread. Heavy analytical queries never freeze your UI or block query editor typing.
+            </p>
+          </div>
+          <div class="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs text-emerald-600 dark:text-emerald-400 font-semibold">
+            <span>Async/Await Pipeline</span>
+            <i data-lucide="arrow-right" class="w-4 h-4 group-hover:translate-x-1 transition"></i>
+          </div>
+        </div>
+
+        <!-- Bento Card 2: Instant Query Cancel -->
+        <div class="p-8 rounded-3xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-rose-500/50 hover:-translate-y-1 transition-all duration-300 relative overflow-hidden group flex flex-col justify-between">
+          <div class="space-y-4">
+            <div class="w-12 h-12 rounded-2xl bg-rose-500/10 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/20 dark:border-rose-500/30 flex items-center justify-center group-hover:scale-110 transition shadow-sm">
+              <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"></polygon><line x1="12" x2="12" y1="8" y2="12"></line><line x1="12" x2="12.01" y1="16" y2="16"></line></svg>
+            </div>
+            <h3 class="text-xl font-bold text-slate-900 dark:text-white">Real Socket Query Cancellation</h3>
+            <p class="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+              Accidentally ran a heavy Cartesian join? Stop it immediately using native <code class="text-xs font-mono">pg_cancel_backend</code> and MySQL <code class="text-xs font-mono">KILL QUERY</code> sockets without disconnecting your session.
+            </p>
+          </div>
+          <div class="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs text-rose-600 dark:text-rose-400 font-semibold">
+            <span>Zero Server Hang</span>
+            <i data-lucide="arrow-right" class="w-4 h-4 group-hover:translate-x-1 transition"></i>
+          </div>
+        </div>
+
+        <!-- Bento Card 3: Memory Efficiency -->
+        <div class="p-8 rounded-3xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-cyan-500/50 hover:-translate-y-1 transition-all duration-300 relative overflow-hidden group flex flex-col justify-between">
+          <div class="space-y-4">
+            <div class="w-12 h-12 rounded-2xl bg-cyan-500/10 dark:bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20 dark:border-cyan-500/30 flex items-center justify-center group-hover:scale-110 transition shadow-sm">
+              <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 7h1a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-2"></path><path d="M6 7H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h1"></path><path d="m11 7-3 5h4l-3 5"></path><line x1="22" x2="22" y1="11" y2="13"></line></svg>
+            </div>
+            <h3 class="text-xl font-bold text-slate-900 dark:text-white">50MB Tiny Memory Footprint</h3>
+            <p class="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+              No Chromium rendering engine, no embedded Node.js runtimes. Keep dozens of database connections open without draining your MacBook's battery.
+            </p>
+          </div>
+          <div class="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs text-cyan-600 dark:text-cyan-400 font-semibold">
+            <span>Battery Efficient</span>
+            <i data-lucide="arrow-right" class="w-4 h-4 group-hover:translate-x-1 transition"></i>
+          </div>
+        </div>
+
+        <!-- Bento Card 4: Hardware Security -->
+        <div class="p-8 rounded-3xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-amber-500/50 hover:-translate-y-1 transition-all duration-300 relative overflow-hidden group flex flex-col justify-between">
+          <div class="space-y-4">
+            <div class="w-12 h-12 rounded-2xl bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/20 dark:border-amber-500/30 flex items-center justify-center group-hover:scale-110 transition shadow-sm">
+              <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            </div>
+            <h3 class="text-xl font-bold text-slate-900 dark:text-white">Keychain Enclave Security</h3>
+            <p class="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+              Passwords, connection URLs, and SSH keys are encrypted with hardware-level security via the Apple Keychain Enclave. Zero plain-text config files.
+            </p>
+          </div>
+          <div class="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs text-amber-600 dark:text-amber-400 font-semibold">
+            <span>Secure Enclave</span>
+            <i data-lucide="arrow-right" class="w-4 h-4 group-hover:translate-x-1 transition"></i>
+          </div>
+        </div>
+
+        <!-- Bento Card 5: Smart SQL Formatting -->
+        <div class="p-8 rounded-3xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-purple-500/50 hover:-translate-y-1 transition-all duration-300 relative overflow-hidden group flex flex-col justify-between">
+          <div class="space-y-4">
+            <div class="w-12 h-12 rounded-2xl bg-purple-500/10 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 border border-purple-500/20 dark:border-purple-500/30 flex items-center justify-center group-hover:scale-110 transition shadow-sm">
+              <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 16 4-4-4-4"></path><path d="m6 8-4 4 4 4"></path><path d="m14.5 4-5 16"></path></svg>
+            </div>
+            <h3 class="text-xl font-bold text-slate-900 dark:text-white">Smart SQL Autocomplete & Linting</h3>
+            <p class="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+              Type-ahead completions for schemas, tables, columns, aliases, and SQL keywords. Auto-formatting with 1-click customizable dialect rules.
+            </p>
+          </div>
+          <div class="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs text-purple-600 dark:text-purple-400 font-semibold">
+            <span>Productivity Booster</span>
+            <i data-lucide="arrow-right" class="w-4 h-4 group-hover:translate-x-1 transition"></i>
+          </div>
+        </div>
+
+        <!-- Bento Card 6: Sparkle Auto-Updates -->
+        <div class="p-8 rounded-3xl bg-white dark:bg-[#0E1424] border border-slate-200/90 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-teal-500/50 hover:-translate-y-1 transition-all duration-300 relative overflow-hidden group flex flex-col justify-between">
+          <div class="space-y-4">
+            <div class="w-12 h-12 rounded-2xl bg-teal-500/10 dark:bg-teal-500/20 text-teal-600 dark:text-teal-400 border border-teal-500/20 dark:border-teal-500/30 flex items-center justify-center group-hover:scale-110 transition shadow-sm">
+              <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M8 16H3v5"></path></svg>
+            </div>
+            <h3 class="text-xl font-bold text-slate-900 dark:text-white">Seamless Sparkle 2 Auto-Updates</h3>
+            <p class="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+              Cryptographically signed with Ed25519 signatures. Get new database drivers and performance patches with a 1-click background restart.
+            </p>
+          </div>
+          <div class="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs text-teal-600 dark:text-teal-400 font-semibold">
+            <span>Ed25519 Verified</span>
+            <i data-lucide="arrow-right" class="w-4 h-4 group-hover:translate-x-1 transition"></i>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ==================== BENCHMARKS COMPARISON SECTION ==================== -->
+  <section id="benchmarks" class="py-20 md:py-28 bg-white/70 dark:bg-[#0B0F1A] border-y border-emerald-100/60 dark:border-slate-800/80 relative">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="text-center max-w-3xl mx-auto mb-16">
+        <span class="text-xs font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/80 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-800/80">
+          Performance Benchmarks
+        </span>
+        <h2 class="mt-4 font-display text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white tracking-tight">
+          How BerryDB Compares to Legacy GUI Clients
+        </h2>
+        <p class="mt-4 text-slate-600 dark:text-slate-400 text-sm sm:text-base">
+          Real measurements on Apple Silicon M3 Pro (macOS 14.5).
+        </p>
+      </div>
+
+      <div class="overflow-x-auto rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-md">
+        <table class="w-full text-left text-xs sm:text-sm">
+          <thead class="bg-slate-100/90 dark:bg-[#080B13] text-slate-900 dark:text-white font-bold border-b border-slate-200 dark:border-slate-800">
+            <tr>
+              <th class="py-4 px-5">Metric / Feature</th>
+              <th class="py-4 px-5 text-emerald-600 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/40 border-x border-emerald-200/60 dark:border-emerald-900/60 font-extrabold">BerryDB</th>
+              <th class="py-4 px-5 text-slate-600 dark:text-slate-300">Legacy Cross-Platform</th>
+              <th class="py-4 px-5 text-slate-600 dark:text-slate-300">Java / JVM Tools</th>
+              <th class="py-4 px-5 text-slate-600 dark:text-slate-300">Generic macOS Tools</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-200/70 dark:divide-slate-800/70 bg-white dark:bg-[#0E1424] text-slate-700 dark:text-slate-300">
+            
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+              <td class="py-3.5 px-5 font-semibold text-slate-900 dark:text-white">Cold Launch Time</td>
+              <td class="py-3.5 px-5 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50/30 dark:bg-emerald-950/20 border-x border-emerald-200/40 dark:border-emerald-900/40">&lt; 150 ms (Instant)</td>
+              <td class="py-3.5 px-5 text-slate-500">~2,400 ms</td>
+              <td class="py-3.5 px-5 text-slate-500">~5,800 ms (Java JVM)</td>
+              <td class="py-3.5 px-5">~350 ms</td>
+            </tr>
+
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+              <td class="py-3.5 px-5 font-semibold text-slate-900 dark:text-white">Idle Memory Usage</td>
+              <td class="py-3.5 px-5 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50/30 dark:bg-emerald-950/20 border-x border-emerald-200/40 dark:border-emerald-900/40">48 MB</td>
+              <td class="py-3.5 px-5 text-slate-500">280 MB</td>
+              <td class="py-3.5 px-5 text-slate-500">850 MB+</td>
+              <td class="py-3.5 px-5">95 MB</td>
+            </tr>
+
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+              <td class="py-3.5 px-5 font-semibold text-slate-900 dark:text-white">1M Rows Virtual Scroll</td>
+              <td class="py-3.5 px-5 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50/30 dark:bg-emerald-950/20 border-x border-emerald-200/40 dark:border-emerald-900/40">60 FPS Smooth</td>
+              <td class="py-3.5 px-5 text-slate-500">Laggy / Truncates</td>
+              <td class="py-3.5 px-5 text-slate-500">Out of Memory (OOM)</td>
+              <td class="py-3.5 px-5">55 FPS</td>
+            </tr>
+
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+              <td class="py-3.5 px-5 font-semibold text-slate-900 dark:text-white">AI SQL Copilot</td>
+              <td class="py-3.5 px-5 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50/30 dark:bg-emerald-950/20 border-x border-emerald-200/40 dark:border-emerald-900/40"><i data-lucide="check-circle-2" class="w-4 h-4 inline text-emerald-500"></i> Built-in Native</td>
+              <td class="py-3.5 px-5 text-slate-400"><i data-lucide="x" class="w-4 h-4 inline text-slate-400"></i> No</td>
+              <td class="py-3.5 px-5 text-slate-500">Plugin required</td>
+              <td class="py-3.5 px-5 text-slate-400"><i data-lucide="x" class="w-4 h-4 inline text-slate-400"></i> Paid Addon</td>
+            </tr>
+
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+              <td class="py-3.5 px-5 font-semibold text-slate-900 dark:text-white">Technology Stack</td>
+              <td class="py-3.5 px-5 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50/30 dark:bg-emerald-950/20 border-x border-emerald-200/40 dark:border-emerald-900/40">Swift 6 + AppKit</td>
+              <td class="py-3.5 px-5 text-slate-500">C++ / Qt</td>
+              <td class="py-3.5 px-5 text-slate-500">Java / Eclipse SWT</td>
+              <td class="py-3.5 px-5">Objective-C / Swift</td>
+            </tr>
+
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+              <td class="py-3.5 px-5 font-semibold text-slate-900 dark:text-white">Credential Storage</td>
+              <td class="py-3.5 px-5 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50/30 dark:bg-emerald-950/20 border-x border-emerald-200/40 dark:border-emerald-900/40">Apple Keychain Enclave</td>
+              <td class="py-3.5 px-5 text-slate-500">Custom Cipher</td>
+              <td class="py-3.5 px-5 text-slate-500">Plaintext / Master Pass</td>
+              <td class="py-3.5 px-5">macOS Keychain</td>
+            </tr>
+
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ==================== HIGH-RES GALLERY SECTION ==================== -->
+  <section id="gallery" class="py-20 md:py-28 relative bg-[#FCFAF9] dark:bg-[#080B13]">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="text-center max-w-3xl mx-auto mb-14">
+        <span class="text-xs font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/80 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-800/80">
+          Visual Showcase
+        </span>
+        <h2 class="mt-4 font-display text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white tracking-tight">
+          High-Resolution Interface Gallery
+        </h2>
+        <p class="mt-3 text-slate-600 dark:text-slate-400 text-sm sm:text-base">
+          Click any screenshot below to inspect detailed typography, data layouts, and modal inspectors.
+        </p>
+      </div>
+
+      <!-- Gallery Grid -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        
+        <!-- Gallery Item 1 -->
+        <div class="gallery-card group rounded-2xl overflow-hidden bg-white dark:bg-[#0E1424] border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-emerald-500/60 transition-all duration-300 cursor-pointer" onclick="openLightbox('public/images/Capture-1786694680.png', 'BerryDB Main Studio Workspace')">
+          <div class="aspect-video relative overflow-hidden bg-slate-950">
+            <img src="public/images/Capture-1786694680.png" alt="Workspace View" class="w-full h-full object-cover group-hover:scale-105 transition duration-500" loading="lazy" />
+            <div class="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-3">
+              <span class="text-white text-xs font-medium flex items-center gap-1.5"><i data-lucide="zoom-in" class="w-3.5 h-3.5"></i> Inspect View</span>
+            </div>
+          </div>
+          <div class="p-5 text-left bg-slate-50/70 dark:bg-[#0E1424] border-t border-slate-200/80 dark:border-slate-800">
+            <div class="flex items-center justify-between">
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Workspace & Query Hub</h4>
+              <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">Studio</span>
+            </div>
+            <p class="text-xs text-slate-600 dark:text-slate-400 mt-1.5 leading-relaxed">Multi-tab query editor, connection tree hierarchy, and live status bar.</p>
+          </div>
+        </div>
+
+        <!-- Gallery Item 2 -->
+        <div class="gallery-card group rounded-2xl overflow-hidden bg-white dark:bg-[#0E1424] border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-emerald-500/60 transition-all duration-300 cursor-pointer" onclick="openLightbox('public/images/Screenshot-FDADEF7C-75A2-479E-832F-386FA3974B33.png', 'Streaming Data Grid with Cell Editors')">
+          <div class="aspect-video relative overflow-hidden bg-slate-950">
+            <img src="public/images/Screenshot-FDADEF7C-75A2-479E-832F-386FA3974B33.png" alt="DataGrid View" class="w-full h-full object-cover group-hover:scale-105 transition duration-500" loading="lazy" />
+            <div class="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-3">
+              <span class="text-white text-xs font-medium flex items-center gap-1.5"><i data-lucide="zoom-in" class="w-3.5 h-3.5"></i> Inspect View</span>
+            </div>
+          </div>
+          <div class="p-5 text-left bg-slate-50/70 dark:bg-[#0E1424] border-t border-slate-200/80 dark:border-slate-800">
+            <div class="flex items-center justify-between">
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Streaming Data Grid</h4>
+              <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-800">Data View</span>
+            </div>
+            <p class="text-xs text-slate-600 dark:text-slate-400 mt-1.5 leading-relaxed">Inline cell edits, foreign key links, and rapid column sorting.</p>
+          </div>
+        </div>
+
+        <!-- Gallery Item 3 -->
+        <div class="gallery-card group rounded-2xl overflow-hidden bg-white dark:bg-[#0E1424] border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-emerald-500/60 transition-all duration-300 cursor-pointer" onclick="openLightbox('public/images/Screenshot-9E1F8A3F-0E70-4F56-90AD-E3B6CC9DA071.png', 'Embedded AI Assistant and SQL Generation')">
+          <div class="aspect-video relative overflow-hidden bg-slate-950">
+            <img src="public/images/Screenshot-9E1F8A3F-0E70-4F56-90AD-E3B6CC9DA071.png" alt="AI Copilot" class="w-full h-full object-cover group-hover:scale-105 transition duration-500" loading="lazy" />
+            <div class="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-3">
+              <span class="text-white text-xs font-medium flex items-center gap-1.5"><i data-lucide="zoom-in" class="w-3.5 h-3.5"></i> Inspect View</span>
+            </div>
+          </div>
+          <div class="p-5 text-left bg-slate-50/70 dark:bg-[#0E1424] border-t border-slate-200/80 dark:border-slate-800">
+            <div class="flex items-center justify-between">
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">AI SQL Copilot</h4>
+              <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-100 dark:bg-purple-950 text-purple-600 dark:text-purple-300 border border-purple-200 dark:border-purple-800">Intelligence</span>
+            </div>
+            <p class="text-xs text-slate-600 dark:text-slate-400 mt-1.5 leading-relaxed">Turn natural speech questions into syntactically valid relational SQL.</p>
+          </div>
+        </div>
+
+        <!-- Gallery Item 4 -->
+        <div class="gallery-card group rounded-2xl overflow-hidden bg-white dark:bg-[#0E1424] border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-emerald-500/60 transition-all duration-300 cursor-pointer" onclick="openLightbox('public/images/Screenshot-C676D002-6AEF-4B29-91FD-45B2D417D483.png', 'Connection Dialog with SSL and SSH Tunneling')">
+          <div class="aspect-video relative overflow-hidden bg-slate-950">
+            <img src="public/images/Screenshot-C676D002-6AEF-4B29-91FD-45B2D417D483.png" alt="Connection Config" class="w-full h-full object-cover group-hover:scale-105 transition duration-500" loading="lazy" />
+            <div class="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-3">
+              <span class="text-white text-xs font-medium flex items-center gap-1.5"><i data-lucide="zoom-in" class="w-3.5 h-3.5"></i> Inspect View</span>
+            </div>
+          </div>
+          <div class="p-5 text-left bg-slate-50/70 dark:bg-[#0E1424] border-t border-slate-200/80 dark:border-slate-800">
+            <div class="flex items-center justify-between">
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Database Profiles & SSH</h4>
+              <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">Security</span>
+            </div>
+            <p class="text-xs text-slate-600 dark:text-slate-400 mt-1.5 leading-relaxed">Configure Bastion hosts, port forwarding, and SSL certificates.</p>
+          </div>
+        </div>
+
+        <!-- Gallery Item 5 -->
+        <div class="gallery-card group rounded-2xl overflow-hidden bg-white dark:bg-[#0E1424] border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-emerald-500/60 transition-all duration-300 cursor-pointer" onclick="openLightbox('public/images/Screenshot-C07EBF19-E582-4E57-AC61-7B020C5921B5.png', 'Visual Table Schema Structure & Index Editor')">
+          <div class="aspect-video relative overflow-hidden bg-slate-950">
+            <img src="public/images/Screenshot-C07EBF19-E582-4E57-AC61-7B020C5921B5.png" alt="Schema Editor" class="w-full h-full object-cover group-hover:scale-105 transition duration-500" loading="lazy" />
+            <div class="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-3">
+              <span class="text-white text-xs font-medium flex items-center gap-1.5"><i data-lucide="zoom-in" class="w-3.5 h-3.5"></i> Inspect View</span>
+            </div>
+          </div>
+          <div class="p-5 text-left bg-slate-50/70 dark:bg-[#0E1424] border-t border-slate-200/80 dark:border-slate-800">
+            <div class="flex items-center justify-between">
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Table Structure & DDL</h4>
+              <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-100 dark:bg-amber-950 text-amber-600 dark:text-amber-300 border border-amber-200 dark:border-amber-800">Schema</span>
+            </div>
+            <p class="text-xs text-slate-600 dark:text-slate-400 mt-1.5 leading-relaxed">Design columns, foreign keys, and indexes with instant DDL generation.</p>
+          </div>
+        </div>
+
+        <!-- Gallery Item 6 -->
+        <div class="gallery-card group rounded-2xl overflow-hidden bg-white dark:bg-[#0E1424] border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-xl dark:hover:border-emerald-500/60 transition-all duration-300 cursor-pointer" onclick="openLightbox('public/images/Screenshot-47E670EA-CE85-45EA-A846-4B55A9AA58CD.png', 'Visual Execution Plan and Performance Breakdown')">
+          <div class="aspect-video relative overflow-hidden bg-slate-950">
+            <img src="public/images/Screenshot-47E670EA-CE85-45EA-A846-4B55A9AA58CD.png" alt="Query Plan" class="w-full h-full object-cover group-hover:scale-105 transition duration-500" loading="lazy" />
+            <div class="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-3">
+              <span class="text-white text-xs font-medium flex items-center gap-1.5"><i data-lucide="zoom-in" class="w-3.5 h-3.5"></i> Inspect View</span>
+            </div>
+          </div>
+          <div class="p-5 text-left bg-slate-50/70 dark:bg-[#0E1424] border-t border-slate-200/80 dark:border-slate-800">
+            <div class="flex items-center justify-between">
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Query Execution Profiler</h4>
+              <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-300 border border-rose-200 dark:border-rose-800">Profiler</span>
+            </div>
+            <p class="text-xs text-slate-600 dark:text-slate-400 mt-1.5 leading-relaxed">Visual stage costs, node execution times, and index hit metrics.</p>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ==================== KEYBOARD SHORTCUTS CHEATSHEET ==================== -->
+  <section id="shortcuts" class="py-20 md:py-28 bg-[#F8FAFC] dark:bg-[#0B0F1A] border-b border-slate-200/60 dark:border-slate-800/70 relative">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="text-center max-w-3xl mx-auto mb-16">
+        <span class="text-xs font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/80 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-800/80">
+          Pro Shortcuts
+        </span>
+        <h2 class="mt-4 font-display text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white tracking-tight">
+          Engineered for Fast Keyboard Navigation
+        </h2>
+        <p class="mt-4 text-slate-600 dark:text-slate-400 text-sm sm:text-base">
+          Never lift your fingers off the keyboard while navigating schemas and executing queries.
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        
+        <!-- Shortcut 1 -->
+        <div class="p-6 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-lg dark:hover:border-slate-700 transition-all duration-200">
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-1.5">
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">⌘</kbd>
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-lg font-mono font-bold text-sm shadow-glow-berry border border-emerald-400/50">R</kbd>
+            </div>
+            <i data-lucide="play" class="w-5 h-5 text-emerald-500"></i>
+          </div>
+          <h3 class="font-bold text-base text-slate-900 dark:text-white">Execute Query</h3>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Run active query block or highlighted SQL statement immediately.</p>
+        </div>
+
+        <!-- Shortcut 2 -->
+        <div class="p-6 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-lg dark:hover:border-slate-700 transition-all duration-200">
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-1.5">
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">⌘</kbd>
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-lg font-mono font-bold text-sm shadow-glow-berry border border-emerald-400/50">K</kbd>
+            </div>
+            <i data-lucide="command" class="w-5 h-5 text-emerald-500"></i>
+          </div>
+          <h3 class="font-bold text-base text-slate-900 dark:text-white">Quick Command Palette</h3>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Search tables, switch connections, and jump to procedures instantly.</p>
+        </div>
+
+        <!-- Shortcut 3 -->
+        <div class="p-6 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-lg dark:hover:border-slate-700 transition-all duration-200">
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-1.5">
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">⌘</kbd>
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-lg font-mono font-bold text-sm shadow-glow-berry border border-emerald-400/50">E</kbd>
+            </div>
+            <i data-lucide="gauge" class="w-5 h-5 text-emerald-500"></i>
+          </div>
+          <h3 class="font-bold text-base text-slate-900 dark:text-white">Visual EXPLAIN Plan</h3>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Generate execution node tree and diagnose slow index scans.</p>
+        </div>
+
+        <!-- Shortcut 4 -->
+        <div class="p-6 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-lg dark:hover:border-slate-700 transition-all duration-200">
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-1.5">
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">⌘</kbd>
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">⌥</kbd>
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">F</kbd>
+            </div>
+            <i data-lucide="align-left" class="w-5 h-5 text-slate-400"></i>
+          </div>
+          <h3 class="font-bold text-base text-slate-900 dark:text-white">Format SQL Query</h3>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Auto-indent keywords, joins, and nested subqueries cleanly.</p>
+        </div>
+
+        <!-- Shortcut 5 -->
+        <div class="p-6 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-lg dark:hover:border-slate-700 transition-all duration-200">
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-1.5">
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">⌘</kbd>
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">T</kbd>
+            </div>
+            <i data-lucide="plus" class="w-5 h-5 text-slate-400"></i>
+          </div>
+          <h3 class="font-bold text-base text-slate-900 dark:text-white">New Editor Tab</h3>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Open a clean SQL scratchpad connected to current active database.</p>
+        </div>
+
+        <!-- Shortcut 6 -->
+        <div class="p-6 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-lg dark:hover:border-slate-700 transition-all duration-200">
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-1.5">
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">⌘</kbd>
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">.</kbd>
+            </div>
+            <i data-lucide="octagon-alert" class="w-5 h-5 text-rose-500"></i>
+          </div>
+          <h3 class="font-bold text-base text-slate-900 dark:text-white">Cancel Running Query</h3>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Send kill signal immediately to release server backend locks.</p>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ==================== DOWNLOAD CTA BANNER ==================== -->
+  <section class="py-20 md:py-24 relative overflow-hidden bg-gradient-to-b from-slate-900 via-slate-950 to-slate-950 text-white text-center">
+    <!-- Glow Backdrop -->
+    <div class="absolute -top-40 left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-emerald-500/20 rounded-full blur-3xl pointer-events-none"></div>
+
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 space-y-8">
+      
+      <div class="w-16 h-16 rounded-3xl bg-gradient-to-tr from-berry-600 via-emerald-500 to-accent-500 mx-auto flex items-center justify-center shadow-glow-berry-lg">
+        <i data-lucide="database" class="w-8 h-8 text-white"></i>
+      </div>
+
+      <h2 class="font-display text-3xl sm:text-5xl font-extrabold tracking-tight text-white">
+        Upgrade to Modern Native Database Performance
+      </h2>
+
+      <p class="text-slate-300 text-sm sm:text-base max-w-2xl mx-auto leading-relaxed">
+        Free to download and explore. Built for developers who value instant responsiveness, battery life, and zero bloat.
+      </p>
+
+      <div class="flex flex-wrap items-center justify-center gap-4 pt-2">
+        <a href="https://download-db.berryhub.app/BerryDB-latest.dmg" class="flex items-center gap-3 px-8 py-4 rounded-2xl text-base font-bold text-white bg-gradient-to-r from-berry-600 via-emerald-600 to-berry-500 hover:from-berry-700 hover:to-emerald-700 shadow-glow-berry-lg transform hover:-translate-y-1 transition duration-200">
+          <i data-lucide="download" class="w-5 h-5"></i>
+          <span>Download BerryDB.dmg</span>
+          <span class="text-xs px-2 py-0.5 rounded-full bg-white/20 font-mono">v1.0.2</span>
+        </a>
+
+        <a href="docs.html" class="flex items-center gap-2 px-6 py-4 rounded-2xl text-base font-semibold text-slate-200 bg-slate-800/80 hover:bg-slate-700 border border-slate-700 transition">
+          <i data-lucide="book-open" class="w-4 h-4 text-emerald-400"></i>
+          <span>Documentation</span>
+        </a>
+      </div>
+
+      <div class="text-xs text-slate-400 font-mono pt-2">
+        SHA-256 Verified • Apple Silicon (M1/M2/M3/M4) • Sparkle 2 Auto-Updates
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ==================== FOOTER ==================== -->
+  <footer class="py-12 bg-[#FCFAF9] dark:bg-[#080B13] border-t border-slate-200/80 dark:border-slate-800 text-slate-600 dark:text-slate-400 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <!-- Berry Ecosystem Highlight Strip -->
+      <div class="mb-12 p-6 sm:p-8 rounded-3xl bg-white dark:bg-dark-card border border-slate-200 dark:border-slate-800/80 shadow-sm">
+        <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+          <div>
+            <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold uppercase tracking-wider mb-2">
+              <span>Berry Ecosystem</span>
+            </div>
+            <h3 class="font-display font-bold text-lg text-slate-900 dark:text-white">Part of the Berry Native macOS Ecosystem</h3>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-xl">
+              High-performance, lightweight native macOS apps designed with Swift 6 and modern Apple frameworks.
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-3 w-full md:w-auto">
+            <!-- BerryShot Link -->
+            <a href="https://shot.berryhub.app" target="_blank" rel="noopener" class="flex-1 sm:flex-none flex items-center gap-3 p-3 sm:px-4 sm:py-3 rounded-2xl bg-slate-50 dark:bg-slate-800/80 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-slate-200 dark:border-slate-700/80 transition group">
+              <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-rose-500 to-berry-500 text-white flex items-center justify-center text-sm shadow-sm group-hover:scale-105 transition">
+                🍓
+              </div>
+              <div class="text-left">
+                <span class="block text-xs font-bold text-slate-900 dark:text-white group-hover:text-rose-600 dark:group-hover:text-rose-400">BerryShot</span>
+                <span class="block text-[10px] text-slate-500">Screen Capture & AI Studio</span>
+              </div>
+            </a>
+
+            <!-- BerryHub Link -->
+            <a href="https://berryhub.app" target="_blank" rel="noopener" class="flex-1 sm:flex-none flex items-center gap-3 p-3 sm:px-4 sm:py-3 rounded-2xl bg-slate-50 dark:bg-slate-800/80 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 border border-slate-200 dark:border-slate-700/80 transition group">
+              <div class="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition">
+                <i data-lucide="globe" class="w-4 h-4"></i>
+              </div>
+              <div class="text-left">
+                <span class="block text-xs font-bold text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400">BerryHub</span>
+                <span class="block text-[10px] text-slate-500">Apps & Tools Portal</span>
+              </div>
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Footer Multi-Column Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-8 py-8 border-b border-slate-200 dark:border-slate-800/80 text-xs">
+        
+        <!-- Col 1: Brand -->
+        <div class="space-y-3 md:col-span-1">
+          <div class="flex items-center gap-2.5">
+            <img src="public/images/berrydb-logo.png" alt="BerryDB" class="w-8 h-8 rounded-xl object-contain shadow-sm" />
+            <span class="font-display font-bold text-base text-slate-900 dark:text-white">BerryDB</span>
+          </div>
+          <p class="text-slate-500 dark:text-slate-400 leading-relaxed">
+            Ultra-fast native macOS database client with Swift 6, AppKit DataGrid, and AI SQL Copilot. Zero Electron.
+          </p>
+          <p class="text-[11px] text-slate-400 dark:text-slate-500">
+            Crafted for speed & elegance by <a href="https://github.com/quangtaned" target="_blank" class="hover:text-rose-500 transition font-medium">@quangtaned</a> & <a href="https://github.com/trungdv96" target="_blank" class="hover:text-rose-500 transition font-medium">@trungdv96</a>.
+          </p>
+        </div>
+
+        <!-- Col 2: Products Ecosystem -->
+        <div class="space-y-2.5">
+          <span class="font-display font-bold text-xs uppercase tracking-wider text-slate-900 dark:text-white block">Ecosystem</span>
+          <ul class="space-y-2">
+            <li><a href="https://berryhub.app" target="_blank" rel="noopener" class="hover:text-indigo-500 transition flex items-center gap-1.5"><i data-lucide="globe" class="w-3.5 h-3.5 text-indigo-500"></i><span>BerryHub.app</span></a></li>
+            <li><a href="https://shot.berryhub.app" target="_blank" rel="noopener" class="hover:text-rose-500 transition flex items-center gap-1.5"><span>🍓</span><span>BerryShot App</span></a></li>
+            <li><a href="https://db.berryhub.app" class="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1.5"><i data-lucide="database" class="w-3.5 h-3.5 text-emerald-500"></i><span>BerryDB (Active)</span></a></li>
+          </ul>
+        </div>
+
+        <!-- Col 3: Resources & Docs -->
+        <div class="space-y-2.5">
+          <span class="font-display font-bold text-xs uppercase tracking-wider text-slate-900 dark:text-white block">Resources</span>
+          <ul class="space-y-2">
+            <li><a href="docs.html" class="hover:text-emerald-500 transition flex items-center gap-1.5"><i data-lucide="book-open" class="w-3.5 h-3.5"></i><span>Documentation</span></a></li>
+            <li><a href="https://github.com/berry-apps/berrydb-desktop" target="_blank" rel="noopener" class="hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5"><i data-lucide="github" class="w-3.5 h-3.5"></i><span>GitHub Repository</span></a></li>
+            <li><a href="https://download-db.berryhub.app/BerryDB-latest.dmg" class="hover:text-emerald-500 transition flex items-center gap-1.5"><i data-lucide="download" class="w-3.5 h-3.5"></i><span>Download .DMG</span></a></li>
+            <li><a href="docs.html#shortcuts-ref" class="hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5"><i data-lucide="command" class="w-3.5 h-3.5"></i><span>Hotkeys Cheatsheet</span></a></li>
+          </ul>
+        </div>
+
+        <!-- Col 4: Community & Support -->
+        <div class="space-y-2.5">
+          <span class="font-display font-bold text-xs uppercase tracking-wider text-slate-900 dark:text-white block">Connect & Support</span>
+          <ul class="space-y-2.5">
+            <li>
+              <a href="mailto:info@berryhub.app" class="flex items-center gap-2 hover:text-emerald-500 transition">
+                <i data-lucide="mail" class="w-4 h-4 text-emerald-500"></i>
+                <span>info@berryhub.app</span>
+              </a>
+            </li>
+            <li>
+              <a href="https://t.me/berryecosystem" target="_blank" rel="noopener" class="flex items-center gap-2 hover:text-sky-500 transition">
+                <svg class="w-4 h-4 text-sky-500 fill-current" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/></svg>
+                <span>Telegram: @berryecosystem</span>
+              </a>
+            </li>
+            <li>
+              <a href="https://x.com/berryecosystem" target="_blank" rel="noopener" class="flex items-center gap-2 hover:text-slate-900 dark:hover:text-white transition">
+                <svg class="w-3.5 h-3.5 text-slate-800 dark:text-slate-200 fill-current" viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+                <span>Follow on X: @berryecosystem</span>
+              </a>
+            </li>
+          </ul>
+        </div>
+
+      </div>
+
+      <!-- Bottom Copyright Bar -->
+      <div class="pt-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-slate-400 dark:text-slate-500">
+        <span>© 2026 Berry Apps Ecosystem. Pure Swift 6 & AppKit Native Architecture.</span>
+        <div class="flex items-center gap-4">
+          <a href="https://berryhub.app" target="_blank" rel="noopener" class="hover:text-emerald-500 transition">berryhub.app</a>
+          <span>•</span>
+          <a href="https://ko-fi.com/dautay" target="_blank" rel="noopener" class="hover:text-emerald-500 transition">Support Berry Team</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+
+  <!-- ==================== LIGHTBOX MODAL ==================== -->
+  <div id="lightboxModal" class="fixed inset-0 z-50 bg-black/90 backdrop-blur-xl hidden flex-col items-center justify-center p-4 sm:p-6 opacity-0 transition-opacity duration-300">
+    <button onclick="closeLightbox()" class="absolute top-5 right-5 text-white/80 hover:text-white p-2 rounded-full bg-white/10 hover:bg-white/20 transition z-10">
+      <i data-lucide="x" class="w-6 h-6"></i>
+    </button>
+    <div class="max-w-6xl max-h-[85vh] flex flex-col items-center">
+      <img id="lightboxImg" src="" alt="Zoomed Screenshot" class="max-w-full max-h-[75vh] object-contain rounded-xl shadow-2xl border border-white/10" />
+      <p id="lightboxCaption" class="text-slate-200 text-sm font-medium mt-4 text-center px-4"></p>
+    </div>
+  </div>
+
+
+  <!-- ==================== JAVASCRIPT LOGIC ==================== -->
+  <script>
+    // Robust Dark / Light Theme Logic
+    const htmlEl = document.documentElement;
+
+    function applyTheme(theme) {
+      if (theme === 'light') {
+        htmlEl.classList.remove('dark');
+        localStorage.setItem('berry_theme', 'light');
+      } else {
+        htmlEl.classList.add('dark');
+        localStorage.setItem('berry_theme', 'dark');
+      }
+    }
+
+    window.toggleTheme = function() {
+      const isDark = htmlEl.classList.contains('dark');
+      applyTheme(isDark ? 'light' : 'dark');
+    };
+
+    const savedTheme = localStorage.getItem('berry_theme') || 'dark';
+    applyTheme(savedTheme);
+
+    const themeToggleBtn = document.getElementById('themeToggleBtn');
+    if (themeToggleBtn) {
+      themeToggleBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        window.toggleTheme();
+      });
+    }
+
+    // Safe Lucide Icons Initialization
+    function initIcons() {
+      if (window.lucide && typeof lucide.createIcons === 'function') {
+        lucide.createIcons();
+      }
+    }
+    initIcons();
+    document.addEventListener('DOMContentLoaded', initIcons);
+    window.addEventListener('load', initIcons);
+
+    // Mobile Menu Toggle
+    const mobileMenuBtn = document.getElementById('mobileMenuBtn');
+    const mobileMenuDrawer = document.getElementById('mobileMenuDrawer');
+    if (mobileMenuBtn && mobileMenuDrawer) {
+      mobileMenuBtn.addEventListener('click', () => {
+        mobileMenuDrawer.classList.toggle('hidden');
+      });
+      document.querySelectorAll('.mobile-nav-link').forEach(l => {
+        l.addEventListener('click', () => {
+          mobileMenuDrawer.classList.add('hidden');
+        });
+      });
+    }
+
+    // Feature Tabs Switching
+    function switchFeatureTab(index) {
+      const allPanes = document.querySelectorAll('.feature-content-pane');
+      const allBtns = document.querySelectorAll('.feature-tab-btn');
+
+      allPanes.forEach((pane, i) => {
+        if (i === index) {
+          pane.classList.remove('hidden');
+        } else {
+          pane.classList.add('hidden');
+        }
+      });
+
+      allBtns.forEach((btn, i) => {
+        if (i === index) {
+          btn.className = 'feature-tab-btn px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center gap-2 bg-emerald-600 text-white shadow-glow-berry';
+        } else {
+          btn.className = 'feature-tab-btn px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center gap-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700';
+        }
+      });
+
+      initIcons();
+    }
+
+    // Lightbox Modal Functions
+    const lightboxModal = document.getElementById('lightboxModal');
+    const lightboxImg = document.getElementById('lightboxImg');
+    const lightboxCaption = document.getElementById('lightboxCaption');
+
+    function openLightbox(src, caption) {
+      lightboxImg.src = src;
+      lightboxCaption.textContent = caption || '';
+      lightboxModal.classList.remove('hidden');
+      setTimeout(() => {
+        lightboxModal.classList.remove('opacity-0');
+      }, 10);
+    }
+
+    function closeLightbox() {
+      lightboxModal.classList.add('opacity-0');
+      setTimeout(() => {
+        lightboxModal.classList.add('hidden');
+        lightboxImg.src = '';
+      }, 300);
+    }
+
+    lightboxModal.addEventListener('click', (e) => {
+      if (e.target === lightboxModal || e.target.tagName === 'IMG') {
+        closeLightbox();
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !lightboxModal.classList.contains('hidden')) {
+        closeLightbox();
+      }
+    });
+</body>
+</html>

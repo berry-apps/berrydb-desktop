@@ -1,7 +1,7 @@
 import BerryDataSourceKit
 import SwiftUI
 
-/// One Qdrant query tab (docs/feature/03): a hybrid Form/JSON editor on top, the
+/// One Qdrant query tab: a hybrid Form/JSON editor on top, the
 /// result grid below — the vector sibling of `MongoShellTabView`. Reads stream
 /// into the grid; writes (upsert/delete points) go through `onApplyWrite` so the
 /// danger-gate/confirm is never bypassed.

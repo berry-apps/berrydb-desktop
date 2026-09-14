@@ -3,17 +3,17 @@ import BerryDataSourceKit
 import Foundation
 import Observation
 
-/// State of one collection/point-collection tab (docs/architecture/12 §7) —
+/// State of one collection/point-collection tab
 /// the `DataSourceQuery` sibling of `TableTabState`. Unlike `TableTabState`,
 /// writes are NOT staged locally: insert/update/delete are single-shot,
 /// funneled through `WorkspaceViewModel.applyDataSourceWrite` (native-command
-/// preview + confirm, docs/architecture/12 §6), then the tab just reloads.
+/// preview + confirm), then the tab just reloads.
 ///
 /// Qdrant-only (`.vector`) since Task 8 routed `.document` collections to
 /// `MongoShellTabState`/`MongoShellTabView` instead.
 @MainActor
 @Observable
-public final class CollectionTabState: @MainActor Identifiable {
+public final class CollectionTabState: @preconcurrency Identifiable {
     public let ref: CollectionRef
     public let kind: DataSourceKind
     public let buffer = DataSourceResultBuffer()
@@ -94,7 +94,7 @@ public final class CollectionTabState: @MainActor Identifiable {
         ))
     }
 
-    /// The canonical Qdrant query JSON (docs/feature/03) so the history entry is
+ /// The canonical Qdrant query JSON so the history entry is
     /// runnable — replaying it opens a Qdrant query tab with the exact query,
     /// unlike the old readable-description form which could not re-run.
     private static func describe(_ query: DataSourceQuery) -> String {
@@ -142,7 +142,7 @@ public final class CollectionTabState: @MainActor Identifiable {
         return Double(trimmed)
     }
 
-    // MARK: - Edit-in-place support (docs/architecture/12 §7)
+ // MARK: - Edit-in-place support
 
     /// The write-model id for a returned document — Mongo carries it in
     /// `_id`; Qdrant's driver folds it into a top-level `id` field

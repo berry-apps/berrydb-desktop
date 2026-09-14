@@ -4,9 +4,9 @@ import Testing
 
 @testable import BerryGraph
 
-/// Query Analyzer (docs/architecture/11 §7, DI-06) — pure plan parsing +
+/// Query Analyzer — pure plan parsing +
 /// aggregation, deterministic and offline (no database).
-@Suite("Query plan parser (DI-06)")
+@Suite("Query plan parser")
 struct QueryPlanParserTests {
     @Test func postgresSeqScanIsFullScan() {
         let plan = QueryPlanParser.parse(rows: [
@@ -53,7 +53,7 @@ struct QueryPlanParserTests {
     }
 }
 
-@Suite("Query analyzer aggregation (DI-06)")
+@Suite("Query analyzer aggregation")
 struct QueryPlanAnalyzerTests {
     private func fullScan(_ table: String) -> QueryPlan {
         QueryPlan(scans: [.init(table: table, usesIndex: false)])
@@ -83,7 +83,7 @@ struct QueryPlanAnalyzerTests {
     }
 }
 
-@Suite("Plan harvester candidate filter (DI-06)")
+@Suite("Plan harvester candidate filter")
 struct PlanHarvesterCandidateTests {
     @Test func keepsDistinctSelectsAndSkipsTheRest() {
         let result = PlanHarvester.candidates([

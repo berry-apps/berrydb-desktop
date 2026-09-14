@@ -52,7 +52,7 @@ struct AIChatTests {
         #expect(messages.map(\.content) == ["first", "second"])
     }
 
-    /// AI-31 (docs/draft/09.md, v26): a message's artifact links must
+ /// (v26): a message's artifact links must
     /// round-trip so a chat bubble's link survives a history reload/restart —
     /// nil for a message that never touched an artifact.
     @Test func artifactsJSONRoundTripsAndDefaultsToNilForOlderRows() throws {
@@ -75,7 +75,7 @@ struct AIChatTests {
         #expect(messages[1].artifactsJSON == nil)
     }
 
-    /// docs/feature/08 perf plan (item A2): the async counterparts used on
+ /// perf plan (item A2): the async counterparts used on
     /// `AISession`'s main-actor send path must return identical data to
     /// their sync originals.
     @Test func asyncThreadAndMessageMethodsMatchTheirSyncCounterparts() async throws {
@@ -98,7 +98,7 @@ struct AIChatTests {
         #expect(try messages == store.aiMessages(threadID: t1.id))
     }
 
-    /// `AISession.buildContext`'s bounded fetch (docs/feature/08 perf follow-up):
+ /// `AISession.buildContext`'s bounded fetch (perf follow-up):
     /// the last N non-interaction messages, oldest first, without touching
     /// anything older — the whole point is never reading a long thread's full
     /// history just for its tail.
@@ -185,7 +185,7 @@ struct AIChatTests {
             content: "hello", createdAt: Date()
         )
         try store.appendAIMessage(message)
-        // AI-35: aiMessagesMissingEmbeddings reads the active path.
+ // aiMessagesMissingEmbeddings reads the active path.
         try store.setActiveLeafMessage(threadID: thread.id, messageID: message.id)
         #expect(try store.saveAIMessageEmbeddingIfMessageExists(
             threadID: thread.id, seq: 0, vector: Array(vector.dropLast())
@@ -200,7 +200,7 @@ struct AIChatTests {
         let store = try makeStore()
         let thread = AIThreadRecord(dialect: "postgres", createdAt: Date(), updatedAt: Date())
         try store.saveAIThread(thread)
-        // AI-35: aiMessagesMissingEmbeddings now reads the ACTIVE path, so
+ // aiMessagesMissingEmbeddings now reads the ACTIVE path, so
         // this setup has to chain parentID + advance the thread's leaf the
         // same way persistTurn does, not just insert flat rows.
         var previous: UUID?
@@ -252,7 +252,7 @@ struct AIChatTests {
         #expect(results[0].distance < results[1].distance)
     }
 
-    // MARK: - AI-35: message tree (edit/version)
+ // MARK: -: message tree (edit/version)
 
     /// A real pre-v29 → v29 upgrade: builds a database through v28 only,
     /// seeds it exactly like an existing user's thread (no parentID/

@@ -8,8 +8,8 @@ private struct QuoteDialect: SQLDialect {
     func limitClause(_ limit: Int) -> String { "LIMIT \(limit)" }
 }
 
-/// ALTER TABLE diffing (CT-01/02/03).
-@Suite("TableAlteration (CT-01/02/03)")
+/// ALTER TABLE diffing.
+@Suite("TableAlteration")
 struct TableAlterationTests {
     private let dialect = QuoteDialect()
 

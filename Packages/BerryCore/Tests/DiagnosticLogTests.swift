@@ -5,7 +5,7 @@ import Testing
 
 /// `DiagnosticLog` exists because `NSLog`-per-event is unusable for the AI
 /// streaming path: one turn emitted 681 `tool.arg_delta` plus 191 `reasoning`
-/// lines (docs/tests/crash.md), which floods the terminal and cannot be copied
+/// lines, which floods the terminal and cannot be copied
 /// out of it. Two requirements follow — write to a file, and coalesce repeated
 /// events into one counted line instead of printing each.
 @Suite("DiagnosticLog (file sink + event coalescing)")

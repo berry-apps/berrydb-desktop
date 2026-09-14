@@ -17,7 +17,7 @@ public actor SQLServerConnection: DriverConnection {
     private let config: ConnectionConfig
     private var isClosed = false
 
-    /// N3 (docs/architecture/04 §4): 500 rows per batch.
+ /// N3: 500 rows per batch.
     static let batchSize = 500
 
     public init(config: ConnectionConfig) async throws {
@@ -38,7 +38,7 @@ public actor SQLServerConnection: DriverConnection {
         }
     }
 
-    // MARK: - Execute (docs/architecture/06 · L2)
+ // MARK: - Execute
 
     public nonisolated func execute(_ sql: String) -> AsyncThrowingStream<ResultEvent, Error> {
         AsyncThrowingStream { continuation in

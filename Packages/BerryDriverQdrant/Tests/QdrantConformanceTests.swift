@@ -8,7 +8,7 @@ import Testing
 
 /// Runs against a real Qdrant from `BERRYDB_TEST_QDRANT` (`host:port`, see
 /// Tests/docker/compose.yml); skipped when the env var is unset
-/// (docs/architecture/12 §10, CLAUDE.md · Build & test).
+/// (see Tests/docker/compose.yml).
 @Suite("Qdrant driver conformance", .enabled(if: QdrantTestServer.qdrant != nil))
 struct QdrantConformanceTests {
     private var server: QdrantTestServer { QdrantTestServer.qdrant! }
@@ -23,9 +23,9 @@ struct QdrantConformanceTests {
 
     /// Collections are created/torn down directly over the base REST API —
     /// the driver deliberately has no `createCollection` (out of scope,
-    /// docs/architecture/12 §5: BerryDB connects to collections the user
+ /// BerryDB connects to collections the user
     /// already has, same anti-bloat stance as "no data modeler for document
-    /// stores", §1).
+ /// stores").
     private func createCollection(_ name: String, vectorSize: Int = 4) async throws {
         var req = URLRequest(url: URL(string: "http://\(server.host):\(server.port)/collections/\(name)")!)
         req.httpMethod = "PUT"
@@ -131,7 +131,7 @@ struct QdrantConformanceTests {
             _ = try await connection.write(.insert(collection: name, document: document))
         }
 
-        // NS-08: an empty/missing id means "no filter" -> delete everything,
+ // an empty/missing id means "no filter" -> delete everything,
         // the same structural risk SQL DangerGuard flags for DELETE w/o WHERE.
         let result = try await connection.write(.delete(collection: name, id: .null))
         #expect(result.affectedCount == 2)
@@ -176,7 +176,7 @@ struct QdrantConformanceTests {
         #expect(await connection.ping() == false)
     }
 
-    // MARK: DataSourceDriver entry point (docs/architecture/12 §2/§8)
+ // MARK: DataSourceDriver entry point
 
     @Test func driverConnectSucceedsAgainstAReachableServer() async throws {
         let driver = QdrantDriver()

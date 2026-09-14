@@ -2,9 +2,9 @@ import BerryDataSourceKit
 import SwiftUI
 
 /// One collection/point-collection tab: query params + result grid + write
-/// actions (docs/architecture/12 §7), all funneled through
+/// actions, all funneled through
 /// `onWrite` (`WorkspaceViewModel.applyDataSourceWrite`) so nothing bypasses
-/// the native-command preview/confirm (§6). Mirrors `TableTabView`'s shape,
+/// the native-command preview/confirm. Mirrors `TableTabView`'s shape,
 /// simplified: writes are single-shot, not staged (see `CollectionTabState`).
 struct CollectionTabView: View {
     @Bindable var state: CollectionTabState
@@ -16,7 +16,7 @@ struct CollectionTabView: View {
     @State private var showInsertSheet = false
     @State private var writeError: String?
 
-    /// Label mode for the exec cluster (docs/ui) — shared app-wide setting,
+ /// Label mode for the exec cluster — shared app-wide setting,
     /// matches `EditorTabView`/`MongoShellTabView`'s toolbar.
     @AppStorage("berry.showButtonLabels") private var showButtonLabels = false
 

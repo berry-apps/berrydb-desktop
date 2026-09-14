@@ -1,7 +1,7 @@
 import BerryDriverKit
 import Foundation
 
-/// Query Analyzer (docs/architecture/11 §7, DI-06): turns parsed EXPLAIN plans
+/// Query Analyzer: turns parsed EXPLAIN plans
 /// of the recent workload into insights. The signal is a full table scan — a
 /// query that reads an entire table without an index — aggregated per table so
 /// one hot table doesn't produce a wall of near-identical findings.

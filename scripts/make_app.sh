@@ -2,7 +2,7 @@
 # Package dist/BerryDB.app from the SwiftPM binary.
 # Version/build and the Sparkle feed come from the environment so the release
 # pipeline (deploy/release.sh) can stamp them; signing + notarization happen in
-# deploy/release.sh (docs/architecture/08 §6, 10 §3).
+# deploy/release.sh.
 set -eu
 
 CONFIG="${1:-release}"
@@ -12,12 +12,12 @@ APP="dist/BerryDB.app"
 # Release identity — overridable from .env / the environment.
 VERSION="${BERRYDB_VERSION:-0.1.0}"
 BUILD="${BERRYDB_BUILD:-1}"
-# Sparkle appcast feed (docs/architecture/10 §3). The public EdDSA key is
+# Sparkle appcast feed. The public EdDSA key is
 # embedded only when set, so dev/unsigned bundles don't advertise a feed.
-SU_FEED_URL="${SU_FEED_URL:-https://berryshot-download.notex.work/appcast.xml}"
+SU_FEED_URL="${SU_FEED_URL:-https://download-db.berryhub.app/appcast.xml}"
 SU_PUBLIC_ED_KEY="${SU_PUBLIC_ED_KEY:-}"
 
-[ -x "$BIN" ] || { echo "Chưa build: chạy 'swift build -c ${CONFIG}' trước" >&2; exit 1; }
+[ -x "$BIN" ] || { echo "Not built yet: run 'swift build -c ${CONFIG}' first" >&2; exit 1; }
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
@@ -36,23 +36,36 @@ BIN_DIR="$(dirname "$BIN")"
 # in deploy/release.sh (release) regardless — but noisy, hence this
 # before-every-call wrapper instead of a single strip per file.
 quiet_install_name_tool() {
-    eval "target=\${$#}"
-    codesign --remove-signature "$target" 2>/dev/null || true
-    install_name_tool "$@"
+    # Do NOT strip the signature first. Measured on the CI runner against
+    # Homebrew's arm64_sequoia FreeTDS bottle: untouched, install_name_tool
+    # succeeds; after codesign --remove-signature it fails with "link edit
+    # information does not fill the __LINKEDIT segment"; after an ad-hoc
+    # re-sign it succeeds again. __LINKEDIT is internally consistent in all
+    # three, so that message names the wrong thing. The arm64_tahoe bottle of
+    # the same FreeTDS version does not reproduce it, which is why this only
+    # ever failed in CI.
+    #
+    # Stripping only ever bought a quieter log, since the finished app is
+    # signed at the end of this script or by the release pipeline regardless.
+    # So keep the file intact and drop the expected warning from stderr
+    # instead, preserving install_name_tool's exit status.
+    # `|| true` on the filter: when the only output was the expected warning,
+    # grep matches nothing and exits 1, which under `set -e` would kill the
+    # script that is merely trying to keep its log tidy.
+    err="$(install_name_tool "$@" 2>&1 >/dev/null)"
+    if [ -n "$err" ]; then
+        printf '%s\n' "$err" | grep -v 'invalidate the code signature' >&2 || true
+    fi
 }
 
-# ---- Embed non-system dylib deps (FreeTDS/SQL Server, docs/architecture/16 §1) --
-# The FreeTDS DB-Library driver (LGPL — must link dynamically, not statically,
-# 16 §"Bổ sung phiên sau") pulls in libsybdb + OpenSSL from Homebrew via
-# absolute /opt/homebrew paths. Those don't exist on an end user's Mac, and
-# even if they did, hardened runtime's library validation (on by default —
-# deploy/BerryDB.entitlements has no exception) refuses to load a dylib not
-# signed by our own Developer ID. Same fix already used for Sparkle.framework
-# below: embed a real copy into Contents/Frameworks and re-point every
-# reference at @rpath — release.sh's own `codesign --deep` on the finished
-# app re-signs everything found there with our identity (deploy/README.md's
-# "Ghi chú": that's what actually satisfies library validation, no
-# entitlement loosening needed).
+# ---- Embed non-system dylib deps (FreeTDS/SQL Server) -------------------------
+# The FreeTDS DB-Library driver (LGPL — dynamically linked) pulls in libsybdb +
+# OpenSSL from Homebrew via absolute /opt/homebrew paths. Those don't exist on an
+# end user's Mac, and even if they did, hardened runtime's library validation
+# (on by default without entitlement exceptions) refuses to load a dylib not
+# signed by our Developer ID. Embed a real copy into Contents/Frameworks and
+# repoint references at @rpath — release.sh's own `codesign --deep` on the finished
+# app re-signs everything found there with our identity, satisfying library validation.
 # Note: deliberately using `for x in $(cmd)` below, not `cmd | while read`.
 # A pipe puts the loop body in a subshell, and EMBEDDED_FREETDS/
 # EMBEDDED_OPENSSL are set from inside embed_nonsystem_dep — including when
@@ -106,13 +119,27 @@ done
 # none). Deliberately NOT Homebrew's own freetds COPYING.txt — that file is
 # GPLv2, which covers FreeTDS's bundled command-line tools (tsql, bsqldb,
 # ...), not the libsybdb/DB-Library we actually link. The library itself is
-# LGPL 2.1 (confirmed against FreeTDS's own project docs, docs/architecture/
-# 16 §1) — vendored verbatim from gnu.org in deploy/third-party-notices/ so
+# LGPL 2.1 (confirmed against FreeTDS's own project docs,
+#) — vendored verbatim from gnu.org in deploy/third-party-notices/ so
 # packaging doesn't depend on Homebrew shipping the right file, or on
 # network access at build time.
 if [ "$EMBEDDED_FREETDS" = 1 ]; then
     cp deploy/third-party-notices/NOTICE-FreeTDS.txt "$APP/Contents/Resources/NOTICE-FreeTDS.txt"
     cp deploy/third-party-notices/LGPL-2.1.txt "$APP/Contents/Resources/LGPL-2.1.txt"
+    # LGPL 6(a)/6(d) oblige us to offer the source of the exact library version
+    # shipped, so the notice has to name it. Read it out of the binary that is
+    # actually in the bundle rather than asking Homebrew, which may have since
+    # moved on or have several versions installed.
+    FREETDS_VERSION="$(strings "$APP/Contents/Frameworks/libsybdb.5.dylib" 2>/dev/null \
+        | grep -oE 'freetds v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/freetds v//' | sort -u | head -1)"
+    [ -n "$FREETDS_VERSION" ] || FREETDS_VERSION="unknown"
+    {
+        echo ""
+        echo "VERSION SHIPPED WITH THIS BUILD: FreeTDS $FREETDS_VERSION"
+        echo "Source: https://www.freetds.org/files/stable/freetds-$FREETDS_VERSION.tar.bz2"
+        echo "A copy is published alongside each BerryDB release."
+    } >> "$APP/Contents/Resources/NOTICE-FreeTDS.txt"
+    echo "note: embedded FreeTDS $FREETDS_VERSION" >&2
 fi
 if [ "$EMBEDDED_OPENSSL" = 1 ]; then
     OPENSSL_NOTICE="$(find /opt/homebrew/Cellar/openssl@3 -maxdepth 2 -iname "LICENSE*" 2>/dev/null | head -1)"
@@ -120,7 +147,7 @@ if [ "$EMBEDDED_OPENSSL" = 1 ]; then
 fi
 
 # SPM resource bundles (localization etc.) must ship inside the app —
-# Bundle.module falls back to the main bundle's Resources dir (UD-06).
+# Bundle.module falls back to the main bundle's Resources dir.
 for bundle in "$BIN_DIR"/*.bundle ".build/${CONFIG}"/*.bundle; do
     [ -d "$bundle" ] && cp -R "$bundle" "$APP/Contents/Resources/" 2>/dev/null || true
 done
@@ -163,30 +190,11 @@ if [ -n "$SU_PUBLIC_ED_KEY" ]; then
 fi
 
 # Load local dev env if available (.env.prod as a base, .env wins for
-# anything it also sets). Deliberately NOT deploy/.env here: that file is
-# deploy/release.sh's own secrets (signing/notarization/R2), sourced there
-# before it invokes this script — those vars are already inherited via the
-# environment by the time a release build gets here. Re-sourcing deploy/.env
-# in this script too meant every scripts/run.sh dev build got its
-# BERRYDB_BACKEND_URL/BERRYDB_LICENSE_PUBLIC_KEY silently overwritten back to
-# production, no matter what a developer's own .env said — confirmed live:
-# .env correctly set 127.0.0.1:8787, but the packaged app ended up with
-# https://berrydb-api.notex.work anyway, because deploy/.env was sourced
-# LAST and clobbered it. A local dev build must only ever consult .env(.prod).
-#
-# But this script runs unconditionally for BOTH callers (scripts/run.sh AND
-# deploy/release.sh), and a developer's own .env sits in the repo root either
-# way — so sourcing it here can *also* clobber deploy/release.sh's already-
-# correct, already-exported values right back, just in the opposite
-# direction from the bug above. Confirmed live: deploy/.env correctly
-# exports the production BERRYDB_BACKEND_URL before calling this script, but
-# .env's own http://127.0.0.1:8787 overwrote it moments later — the
-# resulting release build had a production BERRYDB_LICENSE_PUBLIC_KEY paired
-# with a local-dev BERRYDB_BACKEND_URL, which is exactly a
-# LicenseVerifyError.badSignature the moment it tries to activate (the dev
-# backend signs with its own dev key, not the one the app was told to trust).
-# Snapshot whatever deploy/release.sh already exported and restore it after
-# sourcing local dev env, so a release build's real values always win.
+# anything it sets). Deploy secrets in deploy/.env are sourced by release.sh
+# before invoking this script.
+# Preserve any environment variables already exported by release.sh
+# (e.g. production BERRYDB_BACKEND_URL or BERRYDB_LICENSE_PUBLIC_KEY) so that
+# a developer's local .env does not overwrite production release settings.
 _release_backend_url="${BERRYDB_BACKEND_URL:-}"
 _release_license_key="${BERRYDB_LICENSE_PUBLIC_KEY:-}"
 [ -f .env.prod ] && set -a && . ./.env.prod && set +a
@@ -230,6 +238,47 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>SQL Script</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.sql</string>
+            </array>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>sql</string>
+            </array>
+        </dict>
+    </array>
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>public.sql</string>
+            <key>UTTypeDescription</key>
+            <string>SQL Script</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.plain-text</string>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>sql</string>
+                    <string>SQL</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
 ${ICON_KEY}
 ${SPARKLE_KEYS}
 ${BACKEND_URL_KEY}
@@ -244,4 +293,8 @@ quiet_install_name_tool -add_rpath "@loader_path/../Frameworks" "$APP/Contents/M
 # Re-sign the app bundle ad-hoc so code signature remains valid for local dev
 codesign --force --deep -s - "$APP" 2>/dev/null || true
 
+# Register with LaunchServices so Finder recognizes the file association immediately
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" 2>/dev/null || true
+
 echo "OK: $APP (v${VERSION} build ${BUILD})"
+

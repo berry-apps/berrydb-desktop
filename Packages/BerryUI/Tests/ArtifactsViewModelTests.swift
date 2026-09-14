@@ -6,7 +6,7 @@ import Testing
 
 @testable import BerryUI
 
-/// Artifacts (AI-29, docs/draft/09.md) at the `WorkspaceViewModel` level:
+/// Artifacts at the `WorkspaceViewModel` level:
 /// opening an artifact creates and links a tab of the right kind, and
 /// re-opening the same artifact focuses that tab instead of duplicating it —
 /// mirrors the equivalent `openSavedQuery` coverage in
@@ -124,7 +124,7 @@ struct ArtifactsViewModelTests {
         #expect(vm.tabs.isEmpty)
     }
 
-    /// AI-31's chat bubble chip only carries the artifact's `id` (`AIPanelController
+ /// The chat bubble chip only carries the artifact's `id` (`AIPanelController
     /// .openArtifact: ((UUID) -> Void)?` wired to `openArtifact(id:)` in
     /// `WorkspaceView`) — every other test in this suite calls `openArtifact(_:)`
     /// directly with an already-resolved `Artifact`, which never exercises the
@@ -170,7 +170,7 @@ struct ArtifactsViewModelTests {
         #expect(vm.tabs.isEmpty)
     }
 
-    /// The other branch of AI-31's chip click: a `.table`/`.view`/`.trigger`/
+ /// The other branch of's chip click: a `.table`/`.view`/`.trigger`/
     /// `.function` artifact is a live pointer (`objectRef` = `SchemaObject.id`,
     /// the plan's decision #2) — it resolves against `vm.objects` and opens
     /// via `select(_:)` instead of creating/linking a tab. Needs a real

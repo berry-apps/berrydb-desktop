@@ -4,13 +4,13 @@ import Foundation
 
 /// The NoSQL/vector sibling of `Session` (BerryCore) — one active
 /// `DataSourceDriver` connection per workspace, mutually exclusive with the
-/// SQL `session` on `WorkspaceViewModel` (docs/architecture/12 §7):
+/// SQL `session` on `WorkspaceViewModel`:
 /// connecting to one tears down the other.
 public struct DataSourceSession: Sendable, Identifiable {
     public let id: UUID
     /// Saved profile this session was opened from — mirrors `Session.profileID`.
     public let profileID: UUID?
-    /// Production label (KN-07) — read from the profile at connect time.
+ /// Production label — read from the profile at connect time.
     public let isProduction: Bool
     public let connection: any DataSourceConnection
     public let kind: DataSourceKind
@@ -20,7 +20,7 @@ public struct DataSourceSession: Sendable, Identifiable {
     /// reads `config.name` from a stored `ConnectionConfig`; there is no
     /// equivalent config kept here, so this carries the same value directly.
     public let displayName: String
-    /// Non-nil when the connection runs through an SSH tunnel (KN-03) —
+ /// Non-nil when the connection runs through an SSH tunnel
     /// closed together with the session, mirroring `Session.tunnel`.
     public let tunnel: SSHTunnel?
 

@@ -7,12 +7,12 @@ private func makeStore() -> BerryStore {
     try! BerryStore(path: ":memory:")
 }
 
-/// AI-35: this file's tests seed a thread's messages directly via
+/// this file's tests seed a thread's messages directly via
 /// `appendAIMessage`, bypassing the real send/persistTurn flow that
 /// maintains the message tree — this chains each message's `parentID` and
 /// advances the thread's `activeLeafMessageID` the same way `persistTurn`
 /// does, so `buildContext`/`openThread`/`recentReportContext` (which now
-/// read the ACTIVE path only, AI-35) see them.
+/// read the ACTIVE path only) see them.
 @discardableResult
 private func seedActiveMessages(
     _ store: BerryStore, threadID: UUID, _ messages: [AIMessageRecord]
@@ -194,7 +194,7 @@ private func normalizedMockInteractionEvent(
 
 // MARK: - Event decoding
 
-// MARK: - Restoring a saved conversation (AI-21)
+// MARK: - Restoring a saved conversation
 
 @Test func conversationTurnsKeepsUserAndAnsweredAssistantMessages() {
     let messages: [[String: Any]] = [
@@ -287,7 +287,7 @@ private func normalizedMockInteractionEvent(
         == "7f469e29b85f66a7b2d0f266a9060a52f1226f3a427ba994019db83b8b97af9a")
 }
 
-/// The report draft digest rule (Task 11, backend Task 3 §4): SHA-256 of
+/// The report draft digest rule (Task 11): SHA-256 of
 /// the exact UTF-8 bytes, no normalization — verified against a fixture
 /// computed independently (`shasum -a 256`), including a multibyte/
 /// multilingual draft, since a byte-exact rule is exactly where a naive
@@ -738,7 +738,7 @@ private final class MockTransport: AITransport, @unchecked Sendable {
     /// echo it back, same as the real gateway echoing whatever `thread_id`
     /// came in on the request.
     private var activeThreadID = "thr-mock"
-    // AI-35: `AITransport` conformance methods are plain (non-actor-isolated)
+ // `AITransport` conformance methods are plain (non-actor-isolated)
     // async funcs — calling one from `@MainActor`-isolated `AISession` code
     // doesn't pin its body to the MainActor, and a background fold Task
     // (`AISession.applySummaryFold`, fire-and-forget alongside the main turn)
@@ -1183,8 +1183,8 @@ private final class PausableExecutor: AIToolExecutor {
     #expect(session.lastError == nil)
 }
 
-/// AI-31 (docs/draft/09.md): a tool result carrying artifact_id/artifact_version
-/// (AI-30's create_debug_tab/run_sql/etc.) attaches an ArtifactRef to the live
+/// a tool result carrying artifact_id/artifact_version
+/// ('s create_debug_tab/run_sql/etc.) attaches an ArtifactRef to the live
 /// turn, and that ref survives persistTurn + a fresh openThread reload from the
 /// same BerryStore — the bubble's link must still resolve after a history
 /// reload/app restart, not just within the live session.
@@ -1228,7 +1228,7 @@ private final class PausableExecutor: AIToolExecutor {
     #expect(session.transcript.last?.artifactRefs == [liveRef])
 }
 
-/// docs/feature/09: the working block's sub-block shows the action that ran, and
+/// the working block's sub-block shows the action that ran, and
 /// the user expects to click it to see what that action produced. The action
 /// badge was pure `Label` text with nothing behind it, because `AIWorkStep`
 /// carried only narration + tool names — no artifact identity, so there was
@@ -1278,7 +1278,7 @@ private final class PausableExecutor: AIToolExecutor {
     #expect(ref.kind == .editorTab)
 }
 
-/// docs/feature/09's example expands each action to the inputs it ran with, the
+/// Each action expands to the inputs it ran with, the
 /// result it produced, and a Completed/Running status. Tools that create no
 /// artifact ("Reading schema", "Analyzing queries") therefore need their own
 /// detail captured from the call's args and the outcome — otherwise their badge
@@ -1407,7 +1407,7 @@ private final class PausableExecutor: AIToolExecutor {
     #expect(session.transcript.last?.text == "There are 1,240 rows.")
 }
 
-/// docs/feature/09's flow is: state the action, THEN perform it. The user should
+/// The flow is: state the action, THEN perform it. The user should
 /// read "Reading the schema." while the schema is being read — not after.
 ///
 /// Steps were only appended once their round had ended, so narration appeared
@@ -1579,7 +1579,7 @@ private final class PausableExecutor: AIToolExecutor {
     )
 }
 
-/// docs/feature/09: the row's detail is truncated, so it cannot answer "what SQL
+/// the row's detail is truncated, so it cannot answer "what SQL
 /// actually ran". The action keeps the untruncated primary argument for the
 /// popover — extracted per tool, since the interesting argument differs: SQL for
 /// a run, the written contents for a tab, the object list for a schema read.
@@ -1797,10 +1797,9 @@ private final class PausableExecutor: AIToolExecutor {
     #expect(session.transcript.last?.workSteps.first?.artifactRefs.isEmpty == true)
 }
 
-/// AI-31: the same tab/artifact is commonly touched by more than one tool
+/// the same tab/artifact is commonly touched by more than one tool
 /// call within a single turn (e.g. a run, then a self-correcting re-run) —
-/// reported as duplicate chips on the bubble ("các artifact giống nhau đang
-/// gắn duplicate trên bubble"). Two tool calls returning the SAME artifact_id
+/// prevents duplicate chips from appearing on the bubble. Two tool calls returning the SAME artifact_id
 /// must still leave exactly one chip, not one per call.
 @MainActor
 @Test func repeatedToolCallsOnTheSameArtifactLeaveExactlyOneChip() async throws {
@@ -2119,7 +2118,7 @@ private final class PausableExecutor: AIToolExecutor {
 
     #expect(session.transcript.last?.text == "Round one final answer.")
     // Compared field-by-field rather than whole-struct: `actions` carries this
-    // round's per-tool detail (docs/feature/09) and is asserted by its own tests.
+ // round's per-tool detail and is asserted by its own tests.
     #expect(session.transcript.last?.workSteps.count == 1)
     #expect(session.transcript.last?.workSteps.first?.narration == "Round zero narration. ")
     #expect(session.transcript.last?.workSteps.first?.toolNames == ["get_schema"])
@@ -2134,7 +2133,7 @@ private final class PausableExecutor: AIToolExecutor {
 /// sub-blocks, but the text was still being appended to `AITurn.reasoning` on
 /// every token — and `transcript` is `@Observable`, so each of those writes
 /// invalidated the whole view tree for a string nothing displays. A live log
-/// showed 5684 reasoning events in one round (docs/tests/crash.md), so that is
+/// showed 5684 reasoning events in one round, so that is
 /// 5684 pointless invalidations plus the O(n) string growth behind them.
 ///
 /// The trace is not sent back to the backend (`AITransport` never reads it) and
@@ -2204,7 +2203,7 @@ private final class PausableExecutor: AIToolExecutor {
 /// cursor shared by both cases lets whichever arrives first consume the
 /// boundary — leaving `.delta` to concatenate every round's narration into
 /// one runaway `text` and never flush a `workSteps` sub-block. Each event
-/// stream needs its own cursor over the same round metadata (docs/feature/09).
+/// stream needs its own cursor over the same round metadata.
 @MainActor
 @Test func reasoningBeforeNarrationInTheSameRoundStillFlushesWorkStepsAndResetsText() async {
     let transport = MockTransport(
@@ -2270,7 +2269,7 @@ private final class PausableExecutor: AIToolExecutor {
 
 /// A round with zero narration before its tool call must not leave a
 /// stray leading/trailing artifact once the next round's text replaces
-/// it. It DOES still get a `workSteps` entry now (docs/feature/09): empty
+/// it. It DOES still get a `workSteps` entry now: empty
 /// narration paired with the tool(s) that ran, so a silent tool-only round
 /// (e.g. a lone `run_sql`) still shows up as an action badge in the working
 /// block instead of vanishing — the old plain-`String` `steps` had no way
@@ -2412,7 +2411,7 @@ private final class PausableExecutor: AIToolExecutor {
 ///
 /// This is also why the hang hides the answer outright now that
 /// `TurnView.showsResponseText` gates the bubble on `workDuration`
-/// (docs/feature/09 §block response): an unsettled working block means the
+/// (response): an unsettled working block means the
 /// partial text never renders. The settle must therefore be driven by "the
 /// turn ended", not by "message.complete arrived".
 @MainActor
@@ -2917,7 +2916,7 @@ private final class VersionedSkillRanker: SkillRanking {
     #expect(session.subThreads(for: turnID).count == 1)
 }
 
-/// AI-08: the composer stays usable while a turn streams — sending another
+/// the composer stays usable while a turn streams — sending another
 /// message queues it instead of dropping it, and it runs automatically once
 /// the in-flight turn finishes.
 @MainActor
@@ -2957,7 +2956,7 @@ private final class VersionedSkillRanker: SkillRanking {
 }
 
 /// Reported live: the AI panel scrolled to a fresh `send()`'s new bubble
-/// directly and immediately, but a message dequeued from AI-08's queue
+/// directly and immediately, but a message dequeued from's queue
 /// (once the previous turn finishes) only ever caught up later via the
 /// slower reactive path. `onTurnAdmitted` is what the panel hooks to
 /// trigger the same direct scroll for both — this pins that it actually
@@ -2992,7 +2991,7 @@ private final class VersionedSkillRanker: SkillRanking {
     #expect(admittedCount == 2, "the queued message getting its own bubble once drained must also fire onTurnAdmitted")
 }
 
-/// AI-20 follow-up, reported live: a device with Apple-Intelligence-only
+/// follow-up, reported live: a device with Apple-Intelligence-only
 /// access (no real license) whose on-device toggle was off had `prepareSend`
 /// return nil for every send — the message vanished with no bubble and no
 /// error, no matter how many times it was retried. `admitBlocked` is the
@@ -3026,7 +3025,7 @@ private final class VersionedSkillRanker: SkillRanking {
     #expect(session.transcript.isEmpty)
 }
 
-/// AI-20: lets `AIPanelController` check, before committing to a
+/// lets `AIPanelController` check, before committing to a
 /// send, whether `admitSend` would run immediately or queue — needed
 /// because an auto-trial attempt (starting a real trial before actually
 /// running the turn) must not be interleaved with a message that's about
@@ -3126,11 +3125,9 @@ private final class PausableLocalProvider: LocalCompletionProvider, @unchecked S
     }
 }
 
-/// Reported live: "cái tính năng queue mất đi đâu rồi" — sending a second
-/// message while an on-device reply was still streaming silently did
-/// nothing at all (no bubble, no queue indicator), unlike the backend path
-/// (AI-08), which has queued a mid-stream send since it shipped. On-device
-/// was simply never wired into the same queue.
+/// Sending a second message while an on-device reply is still streaming
+/// must queue rather than being dropped (no bubble, no queue indicator),
+/// matching the backend queue path.
 @MainActor
 @Test func aSecondLocalSendWhileStreamingQueuesInsteadOfVanishing() async {
     let provider = PausableLocalProvider(finalText: "first reply")
@@ -3153,10 +3150,8 @@ private final class PausableLocalProvider: LocalCompletionProvider, @unchecked S
     #expect(session.transcript[3].text == "first reply", "drained locally too, not routed through the backend")
 }
 
-/// Reported live: "queue message đang cộng dồn thời gian" — each queued
-/// message paid for its own full round trip, so the wait for the Nth queued
-/// message was the sum of every turn ahead of it. Queued messages that share
-/// the same destination (local vs backend) now merge into one turn instead.
+/// Queued messages sharing the same destination (local vs backend) merge into
+/// one turn instead of paying separate round-trip waits for each queued message.
 @MainActor
 @Test func drainMergesQueuedBackendMessagesIntoOneNumberedTurn() async {
     let transport = MockTransport(before: [.delta("reply"), .complete(totalTokens: 1)], after: [])
@@ -3369,7 +3364,7 @@ private final class PausableLocalProvider: LocalCompletionProvider, @unchecked S
     #expect(weakSession == nil)
 }
 
-// MARK: - Q17: client-authoritative chat history (docs/agents/architecture/11 §7)
+// MARK: - Q17: client-authoritative chat history
 
 @MainActor
 @Test func availableThreadsReturnsLocallySavedThreadsNewestUpdatedFirst() async throws {
@@ -3398,10 +3393,10 @@ private final class PausableLocalProvider: LocalCompletionProvider, @unchecked S
     #expect(transport.listThreadsCalls == 0)
 }
 
-/// Reported: "chat ở connection A ... khi chuyển sang connection B thì chat
-/// của A bị lẫn sang của B" — threads were scoped by `dialect` alone, so two
-/// connections sharing one (e.g. two Postgres servers) saw each other's
-/// saved conversations (docs/agents/architecture/11 §7.3, v28).
+/// Scopes threads by connection profile id: threads previously scoped by
+/// `dialect` alone would cause two distinct connections of the SAME dialect
+/// (e.g. two Postgres profiles) to share one thread list and active conversation
+/// (v28).
 @MainActor
 @Test func availableThreadsExcludesThreadsFromADifferentConnectionSharingTheSameDialect() async throws {
     let store = makeStore()
@@ -3438,7 +3433,7 @@ private final class PausableLocalProvider: LocalCompletionProvider, @unchecked S
     let threadID = UUID()
     let now = Date()
     try store.saveAIThread(AIThreadRecord(id: threadID, dialect: "postgres", title: "Test", createdAt: now, updatedAt: now))
-    // AI-35: openThread reads the ACTIVE path — chain parentID + advance the
+ // openThread reads the ACTIVE path — chain parentID + advance the
     // thread's leaf the same way persistTurn does, not just flat inserts.
     var previous: UUID?
     for message in [
@@ -3534,7 +3529,7 @@ private final class PausableLocalProvider: LocalCompletionProvider, @unchecked S
     #expect(Set(transport.embedInputs()) == ["hello", "Hi there!"])
 }
 
-// MARK: - AI-35: edit & version messages
+// MARK: -: edit & version messages
 
 @MainActor
 @Test func editingAMessageForksTheTranscriptAndSiblingSwitchRestoresTheOriginal() async throws {
@@ -3955,7 +3950,7 @@ private final class PausableLocalProvider: LocalCompletionProvider, @unchecked S
     #expect(try store.aiThread(id: threadID)?.summaryThroughSeq == 191)
 }
 
-/// docs/feature/08 perf plan (item A1): `buildContext`'s SQLite read must
+/// perf plan (item A1): `buildContext`'s SQLite read must
 /// overlap with a slow `resolveTools`/skill-rank round trip instead of
 /// waiting for it — otherwise every send pays both latencies back to back
 /// instead of just the slower of the two.
@@ -4784,7 +4779,7 @@ private func reportReadyWire(
 /// envelope never carries a distinct child thread id for this event type
 /// (unlike `message.delta`/`tool.call`, which do tag with the emitting
 /// agent's own id). Confirmed against
-/// `berrydb-api-claude-backend/src/ai/gateway.rs`: `run_agent`'s depth-0
+/// `berrydb-api/src/ai/gateway.rs`: `run_agent`'s depth-0
 /// call seeds `interaction_thread_id = id_prefix` (the root's own id), and
 /// both the `spawn_subagent` recursion and `resume_child_agent` forward
 /// that same `interaction_thread_id` unchanged into the child's own
@@ -5007,7 +5002,7 @@ private func makeSessionWithReviewedReportDraft(
     let threadID = UUID()
     let seedNow = Date()
     try? store.saveAIThread(AIThreadRecord(id: threadID, dialect: "postgres", createdAt: seedNow, updatedAt: seedNow))
-    try? seedActiveMessages(store, threadID: threadID, [
+    _ = try? seedActiveMessages(store, threadID: threadID, [
         AIMessageRecord(threadID: threadID, seq: 0, role: "user", content: "The history panel looks empty after restart.", createdAt: seedNow),
         AIMessageRecord(threadID: threadID, seq: 1, role: "assistant", content: "Let me check the local store for that thread.", createdAt: seedNow),
     ])

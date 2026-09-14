@@ -1,6 +1,6 @@
 import Foundation
 
-/// AI-20: a Mac with Apple Intelligence available can use on-device AI
+/// a Mac with Apple Intelligence available can use on-device AI
 /// without a paid trial/license — it costs BerryDB nothing to serve. Purely
 /// local: no network call, no server-issued trial consumed. The email is
 /// captured only as the same commitment step the real trial flow asks for;

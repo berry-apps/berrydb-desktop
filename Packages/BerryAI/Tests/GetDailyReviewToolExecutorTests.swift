@@ -2,7 +2,7 @@ import BerryGraph
 import Testing
 @testable import BerryAI
 
-@Suite("get_daily_review client tool (DI-23, docs/architecture/13 §6)")
+@Suite("get_daily_review client tool")
 struct GetDailyReviewToolExecutorTests {
     @MainActor
     @Test func generatesBeforeReadingAndReturnsFormattedSummary() async {

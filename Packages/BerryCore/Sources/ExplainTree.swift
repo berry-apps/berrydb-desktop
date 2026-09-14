@@ -1,7 +1,7 @@
 import BerryDriverKit
 import Foundation
 
-/// One node of a query plan tree (ED-09).
+/// One node of a query plan tree.
 public struct PlanNode: Identifiable, Equatable, Sendable {
     public let id: Int
     public let text: String
@@ -18,7 +18,7 @@ extension PlanNode {
     /// Hand-rolled JSON since `PlanNode` deliberately isn't `Codable` (it's a
     /// display type, not a wire contract) — same shape the AI's
     /// `explain_query` tool already builds (BerryAI/QueryToolExecutor.swift),
-    /// reused here for Query Replay's stored plan snapshots (DI-17).
+ /// reused here for Query Replay's stored plan snapshots.
     public static func jsonObject(of nodes: [PlanNode]) -> [[String: Any]] {
         nodes.map { ["id": $0.id, "text": $0.text, "children": jsonObject(of: $0.children)] }
     }
@@ -33,7 +33,7 @@ extension PlanNode {
     }
 }
 
-/// Turns EXPLAIN output rows into a plan tree (ED-09). Two shapes are
+/// Turns EXPLAIN output rows into a plan tree. Two shapes are
 /// recognized; anything else falls back to the flat grid:
 /// - SQLite `EXPLAIN QUERY PLAN`: id/parent/…/detail columns.
 /// - Postgres `EXPLAIN` / MySQL `EXPLAIN ANALYZE` (TREE): one text column whose

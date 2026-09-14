@@ -1,8 +1,7 @@
 import Foundation
 
 /// A parsed skill: SKILL.md frontmatter (name, description) + the markdown body
-/// the model reads verbatim (docs/agents/architecture/07 §2). Format is 100%
-/// compatible with Claude Code skills.
+/// the model reads verbatim. Standardized markdown frontmatter format.
 public struct Skill: Equatable, Sendable {
     public let name: String
     public let description: String
@@ -21,9 +20,7 @@ public enum SkillParseError: Error, Equatable {
 }
 
 /// Minimal SKILL.md parser — flat `key: value` frontmatter only, deliberately
-/// NOT a general YAML parser (docs/agents/architecture/07 §4). If a skill ever
-/// needs richer YAML, that's a signal to reconsider the "no YAML lib" decision,
-/// not to grow this into a partial YAML engine.
+/// lightweight. If a skill ever needs richer YAML, use a dedicated parser library.
 public func parseSkillFile(_ contents: String) throws -> Skill {
     let lines = contents.components(separatedBy: "\n")
     guard lines.first == "---",
@@ -49,7 +46,7 @@ public func parseSkillFile(_ contents: String) throws -> Skill {
     return Skill(name: name, description: description, body: body)
 }
 
-/// One skill offered to the backend `/rank` endpoint (docs/agents/architecture/07 §7).
+/// One skill offered to the backend `/rank` endpoint.
 public struct SkillRankInput: Sendable, Equatable {
     public let name: String
     public let description: String
@@ -62,17 +59,17 @@ public struct SkillRankInput: Sendable, Equatable {
     }
 }
 
-/// Supplies skills for top-K ranking and builds `skill:<name>` specs (07 §7).
+/// Supplies skills for top-K ranking and builds `skill:<name>` specs.
 @MainActor
 public protocol SkillRanking {
     func skillsForRanking() -> [SkillRankInput]
     func skillToolSpec(named name: String) -> AIToolSpec?
 }
 
-/// Client-executed skill tools (docs/agents/architecture/07 §6). Discovers
+/// Client-executed skill tools. Discovers
 /// skills under a directory (one subfolder per skill, each with a SKILL.md) and
 /// serves `list_skills` / `load_skill`, plus the pre-ranked `skill:<name>`
-/// shortcuts (§7). No DB, no approval — reads local files only.
+/// shortcuts. No DB, no approval — reads local files only.
 @MainActor
 public final class SkillToolExecutor: AIToolExecutor, SkillRanking {
     private let directory: URL
@@ -113,7 +110,7 @@ public final class SkillToolExecutor: AIToolExecutor, SkillRanking {
         return outcome
     }
 
-    // MARK: - SkillRanking (§7)
+ // MARK: - SkillRanking
 
     public func skillsForRanking() -> [SkillRankInput] {
         discoverWithHashes().map { SkillRankInput(name: $0.skill.name, description: $0.skill.description, contentHash: $0.hash) }
@@ -149,7 +146,7 @@ public final class SkillToolExecutor: AIToolExecutor, SkillRanking {
     }
 
     /// FNV-1a — a stable non-cryptographic hash to detect skill content changes
-    /// (§5). No CryptoKit, so BerryAI stays Linux-clean.
+ /// No CryptoKit, so BerryAI stays Linux-clean.
     static func contentHash(_ string: String) -> String {
         var hash: UInt64 = 14695981039346656037
         for byte in string.utf8 {

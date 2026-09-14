@@ -2,9 +2,9 @@ import BerryDriverKit
 import Foundation
 
 /// Sibling contract to `DatabaseDriver` (BerryDriverKit) for data with no SQL
-/// shape — document stores and vector stores (docs/architecture/12 §2).
+/// shape — document stores and vector stores.
 /// DynamoDB does NOT implement this: it has PartiQL, so it implements
-/// `DatabaseDriver` instead via a `PartiQLDialect` (docs/architecture/12 §4).
+/// `DatabaseDriver` instead via a `PartiQLDialect`.
 public protocol DataSourceDriver: Sendable {
     static var id: DriverID { get }
     static var displayName: String { get }
@@ -22,7 +22,7 @@ public protocol DataSourceConnection: Actor {
 
     func listCollections() async throws -> [CollectionRef]
 
-    /// Explicit collection/point-set creation (docs/architecture/12 §3/§5) —
+ /// Explicit collection/point-set creation
     /// NOT gated behind write-confirm like `write`: creating a collection is
     /// schema-ish, not a destructive data change. `options` lets each driver
     /// interpret its own config shape rather than forcing one generic schema
@@ -43,7 +43,7 @@ public protocol DataSourceConnection: Actor {
     /// - `ElasticsearchConnection`: `PUT /{ref.name}` with an empty body —
     ///   `options` is ignored for v1 (same as Mongo); ES's dynamic mapping
     ///   infers field types from the first document indexed, so no upfront
-    ///   mapping is required to get a usable index (docs/architecture/17 §2).
+ /// mapping is required to get a usable index.
     func createCollection(_ ref: CollectionRef, options: BerryDocument) async throws
 
     /// ALWAYS returns a stream, batched 500–1000 items (N3) — the
@@ -53,7 +53,7 @@ public protocol DataSourceConnection: Actor {
     nonisolated func query(_ request: DataSourceQuery) -> AsyncThrowingStream<DataSourceEvent, Error>
 
     /// Insert/update/delete — caller has already shown the native-command
-    /// preview and gotten confirmation (DL-03/04, docs/architecture/12 §6).
+ /// preview and gotten confirmation.
     func write(_ change: DataSourceChangeSet) async throws -> DataSourceWriteResult
 
     /// `nonisolated` because it must be callable WHILE the actor is busy
@@ -64,10 +64,10 @@ public protocol DataSourceConnection: Actor {
     func ping() async -> Bool
     func close() async
 
-    // MARK: User management (TI-03 Phase C, docs/architecture/14)
+ // MARK: User management (Phase C)
     //
     // Default-unsupported via the extension below, same "nil/throw when
-    // unsupported" spirit as SQLDialect's TI-03 primitives — only
+ // unsupported" spirit as SQLDialect's primitives — only
     // MongoConnection overrides these. A driver whose
     // DataSourceCapabilities.userManagement is false (Qdrant) never has them
     // called (the UI gates on that flag), so the throwing default is
@@ -101,12 +101,12 @@ extension DataSourceConnection {
 
 /// Introspection for schema-less stores — deliberately narrower than
 /// `Introspector` (BerryDriverKit): there is no DDL to read, only sample-based
-/// inference (docs/architecture/12 §3).
+/// inference.
 public protocol DataSourceIntrospector: Sendable {
     func collections() async throws -> [CollectionRef]
 
     /// Best-effort field/type map inferred from up to `sampleSize` recent
     /// documents. NOT a real schema — callers must present it as inferred,
-    /// never as authoritative DDL (docs/architecture/12 §3, TR-03).
+ /// never as authoritative DDL.
     func inferredSchema(of collection: CollectionRef, sampleSize: Int) async throws -> [String: String]
 }

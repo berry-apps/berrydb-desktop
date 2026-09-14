@@ -2,7 +2,7 @@ import AppKit
 import BerryCore
 
 /// NSAlert-based implementation of the DangerGuard confirmation gate
-/// (docs/architecture/07 §6). Wired into QueryService at startup — every SQL
+/// Wired into QueryService at startup — every SQL
 /// path in the app funnels through it (principle N1).
 struct AlertDangerConfirmer: DangerConfirmer {
     func confirm(_ level: DangerLevel, sql: String) async -> Bool {
@@ -29,7 +29,7 @@ struct AlertDangerConfirmer: DangerConfirmer {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    /// CT-04: destructive DDL on production requires typing the object name.
+ /// destructive DDL on production requires typing the object name.
     @MainActor
     private static func typedConfirm(objectName: String, reason: DangerReason, sql: String) -> Bool {
         let alert = NSAlert()

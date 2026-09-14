@@ -2,8 +2,7 @@ import BerryDriverKit
 import Charts
 import SwiftUI
 
-/// Visualize Result (docs/feature/07 §8, AI SQL Copilot): a bar/line chart
-/// over the current result set. A transient, single-result view — a sheet
+/// Visualize Result: a bar/line chart over the current result set.
 /// like `DDLSheet`/`TableStatsSheet`, not a tab (unlike Insights/Graph
 /// Explorer/Time Machine, this isn't an ongoing, navigable analysis surface,
 /// just a one-off look at whatever the grid currently shows). Presentation

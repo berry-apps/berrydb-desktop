@@ -3,9 +3,9 @@ import Testing
 
 @testable import BerryAI
 
-@Suite("MCP client (docs/agents/architecture/08)")
+@Suite("MCP client")
 struct MCPTests {
-    // MARK: - Allowlist manifest (§2)
+ // MARK: - Allowlist manifest
 
     @Test func parsesAllowlistManifest() throws {
         let json = Data(#"""
@@ -39,7 +39,7 @@ struct MCPTests {
         #expect(tools.first?.inputSchemaJSON.contains("object") == true)
     }
 
-    // MARK: - JSON-RPC codec (§4)
+ // MARK: - JSON-RPC codec
 
     @Test func encodesAndDecodesJSONRPC() throws {
         let line = JSONRPC.encodeRequest(id: 7, method: "tools/list", params: [:])
@@ -68,7 +68,7 @@ struct MCPTests {
         #expect(first.feed(":2}\n") == ["{\"b\":2}"])
     }
 
-    // MARK: - Namespacing + routing (§5)
+ // MARK: - Namespacing + routing
 
     @Test func parsesNamespacedToolName() {
         #expect(MCPToolExecutor.parseToolName("mcp:codebase-memory:search_graph")?.server == "codebase-memory")

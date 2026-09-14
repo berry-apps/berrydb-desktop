@@ -5,12 +5,12 @@ import Testing
 
 @testable import BerryAI
 
-/// `graph_query` (docs/architecture/11 §7) over a persisted DSG — metadata only,
+/// `graph_query` over a persisted DSG — metadata only,
 /// entirely local (no DBMS). Uses an in-memory GraphStore seeded with a small
 /// FK graph: order_items → orders → customers, order_items → products, and a
 /// view order_summary derived from orders.
 @MainActor
-@Suite("GraphToolExecutor (docs/architecture/11 §7)")
+@Suite("GraphToolExecutor")
 struct GraphToolExecutorTests {
     private let profile = UUID()
 
@@ -137,7 +137,7 @@ struct GraphToolExecutorTests {
         #expect(outcome.resultJSON?.contains("harvested") == true)
     }
 
-    // MARK: - get_stats (§7)
+ // MARK: - get_stats
 
     private func statsStore() throws -> GraphStore {
         let store = GraphStore(store: try BerryStore(path: ":memory:"))
@@ -181,7 +181,7 @@ struct GraphToolExecutorTests {
 
 /// The `ToolRouter` dispatches by tool name across executors.
 @MainActor
-@Suite("ToolRouter (docs/architecture/09 §4)")
+@Suite("ToolRouter")
 struct ToolRouterTests {
     private final class StubExecutor: AIToolExecutor {
         let tag: String

@@ -1,7 +1,7 @@
 import BerryDriverKit
 import Foundation
 
-/// CSV → table import (XN-05) — docs/architecture/06 · L5. Maps source columns
+/// CSV → table import. Maps source columns
 /// to table columns, generates batched multi-row INSERTs through the single
 /// SQL path (N1), and runs the whole import in one transaction: any error rolls
 /// everything back and is reported against the offending source line.

@@ -9,7 +9,7 @@ import Testing
 
 @testable import BerryGraph
 
-@Suite("RuntimeHealthHarvester on Postgres (DI-24)", .enabled(if: TestServer.postgres != nil))
+@Suite("RuntimeHealthHarvester on Postgres", .enabled(if: TestServer.postgres != nil))
 struct RuntimeHealthHarvesterPostgresTests {
     private func openSession() async throws -> Session {
         DriverRegistry.register(PostgresDriver.self)
@@ -34,7 +34,7 @@ struct RuntimeHealthHarvesterPostgresTests {
     }
 }
 
-@Suite("RuntimeHealthHarvester on MySQL (DI-24)", .enabled(if: TestServer.mysql != nil))
+@Suite("RuntimeHealthHarvester on MySQL", .enabled(if: TestServer.mysql != nil))
 struct RuntimeHealthHarvesterMySQLTests {
     private func openSession() async throws -> Session {
         DriverRegistry.register(MySQLDriver.self)
@@ -56,7 +56,7 @@ struct RuntimeHealthHarvesterMySQLTests {
     }
 }
 
-@Suite("RuntimeHealthHarvester on SQLite (DI-24)")
+@Suite("RuntimeHealthHarvester on SQLite")
 struct RuntimeHealthHarvesterSQLiteTests {
     @Test func returnsEmptyForSQLite() async throws {
         DriverRegistry.register(SQLiteDriver.self)

@@ -20,17 +20,17 @@ struct BerryDBApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
-        // The ONLY place where concrete drivers are wired (docs/architecture/05 §2).
+ // The ONLY place where concrete drivers are wired.
         DriverRegistry.register(SQLiteDriver.self)
         DriverRegistry.register(PostgresDriver.self)
         DriverRegistry.register(MySQLDriver.self)
-        DriverRegistry.register(DynamoDBDriver.self)     // PartiQL (docs/architecture/12 §4)
-        DriverRegistry.register(SQLServerDriver.self)    // FreeTDS C interop (docs/architecture/05 §4, V2⚠️)
-        // DataSourceDriver family (docs/architecture/12 §8) — independent registry.
+ DriverRegistry.register(DynamoDBDriver.self) // PartiQL
+ DriverRegistry.register(SQLServerDriver.self) // FreeTDS C interop (V2⚠️)
+ // DataSourceDriver family — independent registry.
         DataSourceRegistry.register(QdrantDriver.self)
         DataSourceRegistry.register(MongoDriver.self)
         DataSourceRegistry.register(ElasticsearchDriver.self)
-        // KeyValueDriver family (docs/architecture/15 §2) — independent registry.
+ // KeyValueDriver family — independent registry.
         // RedisDriver requires macOS 15+ (valkey-swift's own minimum); the app
         // itself stays at .macOS(.v14), so this is the one place that gates on
         // it — on macOS 14 this branch never runs, KeyValueRegistry.registered
@@ -44,13 +44,20 @@ struct BerryDBApp: App {
         WindowGroup {
             WorkspaceView(checkForUpdates: { appDelegate.updater.checkForUpdates() })
                 .frame(minWidth: 900, minHeight: 560)
+                .onOpenURL { url in
+                    if url.pathExtension.lowercased() == "sql" {
+                        WorkspaceViewModel.pendingOpenURLs.append(url)
+                        NotificationCenter.default.post(name: .berryDBOpenSQLFile, object: url)
+                    }
+                }
         }
-        .windowToolbarStyle(.unifiedCompact) // shorter title bar (ui.md §3)
-        // UD-07: open with a generous default so content shows without
+        .handlesExternalEvents(matching: ["*"])
+ .windowToolbarStyle(.unifiedCompact) // shorter title bar
+ // open with a generous default so content shows without
         // scrolling wherever the screen allows.
         .defaultSize(width: 1240, height: 800)
         .commands {
-            // Sparkle auto-update entry (docs/architecture/10 §3). No-op in
+ // Sparkle auto-update entry. No-op in
             // dev / unsigned builds; the real updater lights up in a signed
             // release (see AppUpdater + deploy/README.md).
             CommandGroup(replacing: .appInfo) {
@@ -69,17 +76,17 @@ struct BerryDBApp: App {
                     NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
                 }
             }
-            // The full BerryDB menu bar (ui.md §3) — File/Query/Database/
+ // The full BerryDB menu bar — File/Query/Database/
             // Intelligence/View, all keyboard-navigable.
             WorkspaceCommands()
         }
 
-        // Settings (⌘,): customizable keyboard shortcuts (docs/ui).
+ // Settings (⌘): customizable keyboard shortcuts.
         Settings {
             ShortcutSettingsView()
         }
 
-        // A tab moved into its own window (docs/ui/01 D1) — same document and
+ // A tab moved into its own window (D1) — same document and
         // session as the main workspace.
         WindowGroup(id: "detached-tab", for: String.self) { $tabID in
             DetachedTabWindow(tabID: tabID ?? "")
@@ -137,6 +144,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        for filename in filenames {
+            let url = URL(fileURLWithPath: filename)
+            if url.pathExtension.lowercased() == "sql" {
+                WorkspaceViewModel.pendingOpenURLs.append(url)
+                NotificationCenter.default.post(name: .berryDBOpenSQLFile, object: url)
+            }
+        }
+        sender.reply(toOpenOrPrint: .success)
+    }
+
     /// `ConnectionManager.closeAll()` existed but nothing ever called it —
     /// every SQL-family session (Postgres/MySQL/SQLite/DynamoDB/SQL Server)
     /// relied entirely on the OS tearing down its socket/file descriptors on
@@ -146,11 +164,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `applicationShouldTerminate` to return, so this actually runs before
     /// the process exits rather than racing it.
     ///
-    /// Bounded at 3s: quitting the app must never hang because one driver's
-    /// `close()` misbehaves — this session already hit that exact "missing
-    /// timeout" bug class more than once elsewhere (SQL Server login, AI
-    /// query execution). Whichever finishes first wins; the loser is simply
-    /// abandoned as the process exits anyway.
+    /// Bounded at 3s: quitting the app must never hang if an external driver
+    /// connection close takes longer than expected. Whichever finishes first wins;
+    /// any uncompleted cleanup is abandoned as the process terminates.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         Task {
             await withTaskGroup(of: Void.self) { group in

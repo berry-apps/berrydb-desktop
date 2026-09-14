@@ -10,9 +10,8 @@ import Testing
 /// (`WorkspaceViewModel.runDestructiveStatements`) that runs a fixed
 /// statement directly through `QueryService` (native DangerGuard confirm)
 /// instead of opening an editor tab to review first, since there's nothing
-/// to review (the statement is exactly what the menu item said). Reported:
-/// "tao thấy click truncate vẫn mở tab???" — the user expected a
-/// confirm-then-run flow, not a tab.
+/// to review (the statement is exactly what the menu item said).
+/// The user expects a confirm-then-run flow, not an editor tab.
 ///
 /// Deliberately tests the free function against a bare `Session` (built via
 /// `ConnectionManager`, exactly like `DangerGuardTests.deniedStatementDoesNotExecute`)

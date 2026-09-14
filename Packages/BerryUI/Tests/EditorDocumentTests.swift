@@ -4,7 +4,7 @@ import Testing
 
 @testable import BerryUI
 
-/// `EditorDocument.loadSnapshotResults` (AI-31, docs/draft/09.md): reopening
+/// `EditorDocument.loadSnapshotResults`: reopening
 /// an artifact with a captured result snapshot shows "what did the agent
 /// actually get back" through the same result grid a live run would.
 @MainActor

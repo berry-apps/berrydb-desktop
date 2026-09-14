@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-/// The single point of Keychain access in the app (docs/architecture/07 §2).
+/// The single point of Keychain access in the app.
 /// Secrets are keyed by profile UUID, live only in RAM after reading, and are
 /// never logged or persisted anywhere else.
 public enum KeychainService {
@@ -9,7 +9,7 @@ public enum KeychainService {
         case database = "db"
         case ssh = "ssh"
         case sshPassphrase = "sshpp"
-        /// Elasticsearch API-key auth mode (docs/architecture/17 §3) — a real
+ /// Elasticsearch API-key auth mode — a real
         /// second secret shape, not another `password`-reuse hack like
         /// Qdrant's API key.
         case elasticsearchAPIKey = "esapikey"
@@ -64,7 +64,7 @@ public enum KeychainService {
     }
 
     /// Deleting a profile must also delete its secrets — no orphaned entries
-    /// (docs/architecture/07 §2).
+ ///
     public static func deleteSecrets(profileID: UUID) {
         for kind in SecretKind.allCases {
             let query: [String: Any] = [
@@ -77,7 +77,7 @@ public enum KeychainService {
 }
 
 /// Secrets captured by the connection sheet, handed to the single Keychain
-/// write point (docs/architecture/07 §2). Empty fields mean "keep stored".
+/// write point. Empty fields mean "keep stored".
 public struct ConnectionSecrets: Sendable {
     public var dbPassword: String?
     public var sshPassword: String?

@@ -3,7 +3,7 @@ import BerryDriverKit
 import Foundation
 
 /// Best-effort collection metadata from `GET /collections/{name}` — vector
-/// size/distance feed `inferredSchema` (docs/architecture/12 §3).
+/// size/distance feed `inferredSchema`.
 struct QdrantCollectionInfo: Sendable {
     let pointsCount: Int?
     let vectorSize: Int?
@@ -11,14 +11,14 @@ struct QdrantCollectionInfo: Sendable {
 }
 
 /// Thin REST/JSON client over `URLSession` — zero vendored dependency, same
-/// pattern as the AI client (docs/architecture/03 §2, 12 §5). Every method
+/// pattern as the AI client. Every method
 /// maps failures to `DataSourceError` so the actor above never touches
 /// HTTP/JSON details directly.
 struct QdrantHTTPClient: Sendable {
     let baseURL: URL
     /// Pragmatic reuse of `ConnectionConfig.password` as the Qdrant API key:
     /// Qdrant auth is a single header value, not a user/password pair, but
-    /// `ConnectionConfig` (docs/architecture/07 §2) has no dedicated "API key"
+ /// `ConnectionConfig` has no dedicated "API key"
     /// secret shape yet. Growing it for one driver isn't worth it for v1 —
     /// revisit if a second header-only-auth driver shows up.
     let apiKey: String?
@@ -116,7 +116,7 @@ struct QdrantHTTPClient: Sendable {
     }
 
     /// `PUT /collections/{name}` — explicit collection creation
-    /// (docs/architecture/12 §5); Qdrant has no implicit-creation-on-insert
+ /// Qdrant has no implicit-creation-on-insert
     /// equivalent to Mongo's, so this is the only path into an existing
     /// collection. Caller (`QdrantConnection.createCollection`) has already
     /// validated `vectorSize`/`distance`.
@@ -141,7 +141,7 @@ struct QdrantHTTPClient: Sendable {
                 distance = vectors["distance"] as? String
             } else {
                 // Named-vector collection — best-effort: report the first one
-                // (docs/architecture/12 §5 scopes to a single default vector).
+ // (scopes to a single default vector).
                 for (_, value) in vectors {
                     guard let dict = value as? [String: Any] else { continue }
                     size = (dict["size"] as? NSNumber)?.intValue
@@ -153,11 +153,28 @@ struct QdrantHTTPClient: Sendable {
         return QdrantCollectionInfo(pointsCount: pointsCount, vectorSize: size, distance: distance)
     }
 
-    // MARK: Query (NS-06/07)
+ // MARK: Query
+
+    /// Search hits from Qdrant. Marked `@unchecked Sendable` because the
+    /// underlying JSON dictionary contains `Any` values that cross the actor boundary.
+    struct QdrantSearchResults: @unchecked Sendable, RandomAccessCollection {
+        typealias Element = [String: Any]
+        typealias Index = Int
+
+        let points: [[String: Any]]
+
+        init(points: [[String: Any]]) {
+            self.points = points
+        }
+
+        var startIndex: Int { points.startIndex }
+        var endIndex: Int { points.endIndex }
+        subscript(position: Int) -> [String: Any] { points[position] }
+    }
 
     func search(
         collection: String, vector: [Float], filter: BerryDocument?, topK: Int, scoreThreshold: Double?
-    ) async throws -> [[String: Any]] {
+    ) async throws -> QdrantSearchResults {
         var body: [String: Any] = [
             "vector": vector.map(Double.init),
             "limit": topK,
@@ -168,15 +185,28 @@ struct QdrantHTTPClient: Sendable {
         if let scoreThreshold { body["score_threshold"] = scoreThreshold }
         let req = try request(method: "POST", path: "collections/\(collection)/points/search", jsonBody: body)
         let json = try await send(req)
-        return (json["result"] as? [[String: Any]]) ?? []
+        return QdrantSearchResults(points: (json["result"] as? [[String: Any]]) ?? [])
+    }
+
+    /// Result of a scroll query in Qdrant. Marked `@unchecked Sendable` because
+    /// the underlying JSON points dictionary contains `Any` values that cross
+    /// the actor boundary.
+    struct QdrantScrollPage: @unchecked Sendable {
+        let points: [[String: Any]]
+        let nextPageToken: String?
+
+        init(points: [[String: Any]], nextPageToken: String?) {
+            self.points = points
+            self.nextPageToken = nextPageToken
+        }
     }
 
     /// One page per call — `nextPageToken` drives the next `scroll` the same
     /// way DynamoDB's `LastEvaluatedKey` drives sequential paging
-    /// (docs/architecture/12 §4/§5): no seek, caller passes the token back in.
+ /// no seek, caller passes the token back in.
     func scroll(
         collection: String, filter: BerryDocument?, pageToken: String?, limit: Int, withVector: Bool
-    ) async throws -> (points: [[String: Any]], nextPageToken: String?) {
+    ) async throws -> QdrantScrollPage {
         var body: [String: Any] = [
             "limit": limit,
             "with_payload": true,
@@ -191,17 +221,16 @@ struct QdrantHTTPClient: Sendable {
         let nextOffset = result?["next_page_offset"]
         let nextToken: String? =
             if nextOffset == nil || nextOffset is NSNull { nil } else { Self.encodeOffset(nextOffset!) }
-        return (points, nextToken)
+        return QdrantScrollPage(points: points, nextPageToken: nextToken)
     }
 
-    // MARK: Write (docs/architecture/12 §6)
+ // MARK: Write
 
     /// `wait=true` on every write below: Qdrant applies writes asynchronously
     /// by default, so a query issued right after an unwaited write can miss
-    /// it. BerryDB always previews-then-applies (DL-03/04) and the UI expects
+    /// it. BerryDB always previews-then-applies and the UI expects
     /// the change visible immediately afterward, so this trades a little
-    /// latency for read-after-write consistency — not in the doc's endpoint
-    /// list verbatim, called out in docs/architecture/12 §5 "Trạng thái hiện thực".
+    /// latency for read-after-write consistency.
     private static let waitForResult = [URLQueryItem(name: "wait", value: "true")]
 
     func upsertPoint(collection: String, id: Any, vector: [Double], payload: [String: Any]?) async throws {
@@ -215,9 +244,7 @@ struct QdrantHTTPClient: Sendable {
     }
 
     /// Merges into the existing payload without touching the vector — used
-    /// for a payload-only `.update` so a partial patch never wipes the vector
-    /// (deliberate deviation from the doc's plain "upsert" description; see
-    /// docs/architecture/12 §5 "Trạng thái hiện thực").
+    /// for a payload-only `.update` so a partial patch never wipes the vector.
     func setPayload(collection: String, id: Any, payload: [String: Any]) async throws {
         let body: [String: Any] = ["payload": payload, "points": [id]]
         let req = try request(
@@ -236,7 +263,7 @@ struct QdrantHTTPClient: Sendable {
     }
 
     /// Empty filter `{}` matches every point — the "no id" delete case
-    /// (`DataSourceDangerGuard.deleteWithoutFilter`, docs/architecture/12 §6).
+ /// (`DataSourceDangerGuard.deleteWithoutFilter`).
     func deleteByFilter(collection: String, filter: [String: Any]) async throws {
         let req = try request(
             method: "POST", path: "collections/\(collection)/points/delete",

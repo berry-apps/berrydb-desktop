@@ -4,7 +4,7 @@ import Testing
 
 @testable import BerryGraph
 
-@Suite("Graph persistence + Digital Twin (DI-08, docs/architecture/11 §6)")
+@Suite("Graph persistence + Digital Twin")
 struct GraphPersistenceTests {
     private func makeStore() throws -> GraphStore {
         GraphStore(store: try BerryStore(path: ":memory:"))
@@ -94,7 +94,7 @@ struct GraphPersistenceTests {
     }
 }
 
-@Suite("GraphDiff (docs/architecture/11 §6)")
+@Suite("GraphDiff")
 struct GraphDiffTests {
     @Test func reportsAddedAndRemoved() {
         var before = SchemaGraph()

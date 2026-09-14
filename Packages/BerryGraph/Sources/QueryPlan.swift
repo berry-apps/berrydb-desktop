@@ -1,7 +1,7 @@
 import BerryDriverKit
 import Foundation
 
-/// A normalized execution plan (docs/architecture/11 §4, DI-06). Dialect EXPLAIN
+/// A normalized execution plan. Dialect EXPLAIN
 /// output differs wildly, so `QueryPlanParser` boils each down to the one signal
 /// the Query Analyzer needs: which tables the plan scans, and whether each scan
 /// rides an index or reads the whole table.
@@ -23,7 +23,7 @@ public struct QueryPlan: Sendable, Equatable {
 
     public init(scans: [Scan]) { self.scans = scans }
 
-    /// Scans that read the whole table with no index — the DI-06 signal.
+ /// Scans that read the whole table with no index — the signal.
     public var fullScans: [Scan] { scans.filter { !$0.usesIndex } }
 }
 

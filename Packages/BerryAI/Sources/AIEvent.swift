@@ -2,7 +2,7 @@ import CoreFoundation
 import Foundation
 
 /// A negotiated local-capability call delivered to the desktop
-/// (docs/architecture/09 §4). Backend-owned tools and interactions are handled
+/// Backend-owned tools and interactions are handled
 /// by AgentHarness on the server; only authorization-stamped local calls reach
 /// the desktop executor, where DangerGuard and approval still apply.
 public struct AIToolCall: Equatable, Sendable, Identifiable {
@@ -46,7 +46,7 @@ public struct AIToolCall: Equatable, Sendable, Identifiable {
 }
 
 /// A decoded gateway event tagged with the thread it belongs to
-/// (docs/agents/architecture/06 §5). The root thread is the conversation; any
+/// The root thread is the conversation; any
 /// other id is a sub-agent spawned by the backend.
 public struct AIStreamEvent: Sendable, Equatable {
     public let threadID: String?
@@ -162,7 +162,7 @@ public struct AIInteractionReceipt: Equatable, Sendable {
     }
 }
 
-/// The `report.draft` SSE event (Task 11, backend Task 3 §4): a digest-only
+/// The `report.draft` SSE event (Task 11): a digest-only
 /// preview emitted immediately after the `interaction.required` envelope for
 /// a `report_draft_ready` interaction, so the client can verify its own
 /// digest rule (SHA-256 over exact UTF-8 bytes) hashes the draft the same
@@ -196,7 +196,7 @@ public struct AIReportDraftPreview: Equatable, Sendable {
     }
 }
 
-/// The `report.ready` SSE event (Task 11, backend Task 3 §4): emitted on the
+/// The `report.ready` SSE event (Task 11): emitted on the
 /// turn that resumes a `report_draft_ready` interaction with `action:
 /// "accepted"` — the only place a `report_ready_token` is minted. Absent
 /// from a turn entirely means nothing was issued (declined, cancelled, or
@@ -245,7 +245,7 @@ public struct AIReportReadyGrant: Equatable, Sendable {
 }
 
 /// The payload of a `message.delta` SSE event (Task 13,
-/// docs/agents/architecture/06 §5). `text` is always present; the
+/// `text` is always present; the
 /// round/segmentID/provisional metadata is additive and only sent by
 /// backends that support round-boundary detection — old/local providers
 /// leave them nil. `ExpressibleByStringLiteral` lets the ~35 pre-existing
@@ -281,23 +281,23 @@ public struct AIEventDelta: Equatable, Sendable, ExpressibleByStringLiteral {
     }
 }
 
-/// One parsed SSE event from the AI gateway (docs/architecture/09 §3).
+/// One parsed SSE event from the AI gateway.
 public enum AIEvent: Equatable, Sendable {
     /// Per-response transport signal derived from the authenticated HTTP
     /// response, never from model-controlled SSE payload.
     case capabilityMode(AICapabilityTransportMode)
     case delta(AIEventDelta)
     /// A reasoning-mode provider's internal chain-of-thought for the current
-    /// round (docs/architecture/09 §3, 2026-08-03) — real progress the model
+ /// round (2026-08-03) — real progress the model
     /// is generating regardless, forwarded so the UI has something to show
     /// during a round that narrates nothing else. Same round/segmentID
     /// shape as `delta`, no `provisional` field (reasoning is never the
     /// committed answer).
     case reasoning(AIEventDelta)
-    /// A streamed piece of the optional planner pass (docs/agents/architecture/02 §A).
+ /// A streamed piece of the optional planner pass.
     case plan(String)
     /// One sentence of narration from the backend's `note_progress` tool
-    /// (docs/feature/09) — what the model is about to do, on its own channel.
+ /// what the model is about to do, on its own channel.
     ///
     /// The channel is the point. Narration used to arrive as `message.delta`
     /// alongside the answer, so the client could not tell them apart: it showed

@@ -3,15 +3,15 @@ import Testing
 
 @testable import BerryDriverMongo
 
-/// Verified against RFC 7677 §3's own worked example, fetched and grepped
+/// Verified against RFC 7677's own worked example, fetched and grepped
 /// directly from https://www.rfc-editor.org/rfc/rfc7677.txt (not transcribed
 /// from memory) — username 'user', password 'pencil'. Same "verify against a
 /// real, independently-fetched vector" discipline `SigV4SignerTests` used for
-/// AWS SigV4 (docs/architecture/12 §4).
-@Suite("SCRAM-SHA-256 — RFC 7677 §3 worked example")
+/// AWS SigV4.
+@Suite("SCRAM-SHA-256 — RFC 7677 section 3 worked example")
 struct SCRAMTests {
     // The server appends its own random suffix to the client nonce to form
-    // the combined nonce — RFC 7677 §3's example combined nonce is:
+ // the combined nonce — RFC 7677's example combined nonce is:
     //   rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0
     private let clientNonce = "rOprNGfwEbeRWgbNEkqO"
     private let combinedNonce = "rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0"

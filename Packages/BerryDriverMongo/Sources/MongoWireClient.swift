@@ -8,15 +8,15 @@ import Foundation
 /// listCollections) that turn driver-level requests into wire commands.
 /// Everything above this (query routing, write model, introspection) talks
 /// to this actor, not the transport directly — same layering as
-/// `QdrantHTTPClient` sitting under `QdrantConnection` (docs/architecture/12
-/// §5), just over a socket instead of REST. An actor (not a plain struct
+/// `QdrantHTTPClient` sitting under `QdrantConnection`
+/// just over a socket instead of REST. An actor (not a plain struct
 /// like `QdrantHTTPClient`) because a raw TCP connection can only run one
 /// request/response round trip at a time — concurrent `runCommand` calls
 /// would interleave bytes and corrupt framing.
 actor MongoWireClient {
     private var transport: MongoTransport
     /// Seed members to try, in order — `config.host`/`.port` first, then
-    /// `config.additionalHosts` (replica-set v1, docs/architecture/12 §3).
+ /// `config.additionalHosts` (replica-set v1).
     private let seeds: [(host: String, port: Int)]
     private let useTLS: Bool
     /// `replicaSet=<name>`, verified against each candidate's `hello`
@@ -72,7 +72,7 @@ actor MongoWireClient {
         }
     }
 
-    // MARK: - Seeds -> primary (replica-set v1, docs/architecture/12 §3)
+ // MARK: - Seeds -> primary (replica-set v1)
 
     /// Tries each seed in order for a TCP-reachable host, reads its `hello`
     /// response, and — if that node reports it isn't the primary — reconnects
@@ -80,7 +80,7 @@ actor MongoWireClient {
     /// confirms the server speaks OP_MSG correctly; beyond `isWritablePrimary`
     /// /`primary`/`setName` this driver still does not gate on
     /// `maxWireVersion` or any other capability field (documented scope
-    /// narrowing, docs/architecture/12 §3).
+ /// narrowing).
     ///
     /// v1 boundary, deliberate: no background topology monitoring/heartbeats,
     /// no automatic reconnect if the primary steps down mid-session (a
@@ -206,7 +206,7 @@ actor MongoWireClient {
         return (try? await runCommand(.object([("ping", .int(1))]), database: "admin")) != nil
     }
 
-    // MARK: - SCRAM-SHA-256 auth (docs/architecture/12 §3)
+ // MARK: - SCRAM-SHA-256 auth
 
     private func authenticateSCRAM(username: String, password: String) async throws {
         let nonce = SCRAM.generateNonce()
@@ -311,7 +311,7 @@ actor MongoWireClient {
         }
     }
 
-    // MARK: - Explicit collection creation (docs/architecture/12 §3)
+ // MARK: - Explicit collection creation
 
     /// The `create` admin command — explicit collection creation, matching
     /// what a real Mongo admin UI would do rather than relying on Mongo's
@@ -391,7 +391,7 @@ actor MongoWireClient {
         return CursorPage(documents: batchDocs, cursorID: cursorID)
     }
 
-    // MARK: - Write (docs/architecture/12 §6)
+ // MARK: - Write
 
     /// `document` is the Mongo document itself (unlike Qdrant's
     /// id/vector/payload wrapper — Mongo has no such split). A missing `_id`
@@ -482,12 +482,12 @@ actor MongoWireClient {
         ]), database: "admin")
     }
 
-    // MARK: - User management (TI-03 Phase C, docs/architecture/14)
+ // MARK: - User management (Phase C)
 
     /// `usersInfo: 1` lists every user scoped to `database` — real MongoDB
     /// admin command, roles come back as `{role, db}` pairs; role names only
     /// are kept (v1: every role is scoped to the connection's own working
-    /// database, docs/architecture/14 §"Deferred").
+ /// database).
     func usersInfo(database: String) async throws -> [DataSourceUserInfo] {
         let reply = try await runCommand(.object([("usersInfo", .int(1))]), database: database)
         guard case .array(let users)? = reply["users"] else { return [] }
@@ -540,7 +540,7 @@ actor MongoWireClient {
     /// random bytes + 3-byte rolling counter) — not the exact MongoDB
     /// driver-spec algorithm (which also mixes in a process identifier), but
     /// globally-unique enough for a client-generated `_id`; same pragmatic
-    /// bar as Qdrant's UUID-when-missing (docs/architecture/12 §5/§3).
+ /// bar as Qdrant's UUID-when-missing.
     /// `objectIDCounter` is actor-isolated state, so no separate lock is
     /// needed for the rolling counter.
     private func generateObjectIDHex() -> String {

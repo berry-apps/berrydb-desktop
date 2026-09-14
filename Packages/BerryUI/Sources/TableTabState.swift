@@ -3,43 +3,43 @@ import BerryDriverKit
 import Foundation
 import Observation
 
-/// State of one table tab: streamed rows + staged edits (DL-03/04/05,
-/// docs/architecture/06 · L3). Edits stay local (ChangeSet + display overlay)
+/// State of one table tab: streamed rows + staged edits
+/// Edits stay local (ChangeSet + display overlay)
 /// until the user reviews the SQL preview and applies.
 @MainActor
 @Observable
-public final class TableTabState: @MainActor Identifiable {
+public final class TableTabState: @preconcurrency Identifiable {
     public let object: SchemaObject
     public let buffer = ResultBuffer()
 
     public private(set) var pkColumns: [String] = []
-    /// Foreign keys of this table (DL-08) — drives the grid's "jump to
+ /// Foreign keys of this table — drives the grid's "jump to
     /// referenced row" action.
     public private(set) var foreignKeys: [ForeignKeyInfo] = []
-    /// Full introspected detail, kept for the SQL-export DDL header (XN-03).
+ /// Full introspected detail, kept for the SQL-export DDL header.
     public private(set) var detail: TableDetail?
     public private(set) var detailLoaded = false
     public private(set) var changeSet: ChangeSet
     /// Display overlay for staged edits: row → column index → new value.
     public private(set) var pendingDisplay: [Int: [Int: BerryValue]] = [:]
     public private(set) var deletedRowIndexes: Set<Int> = []
-    /// Locally staged NEW rows (DL-04), appended below the buffer rows in the
+ /// Locally staged NEW rows, appended below the buffer rows in the
     /// grid; values are keyed by column index, NULL until edited.
     public private(set) var insertedRows: [[BerryValue]] = []
     public private(set) var isApplying = false
     public var applyError: String?
 
-    /// Server-side sort & filter (DL-02).
+ /// Server-side sort & filter.
     public private(set) var sortColumn: String?
     public private(set) var sortAscending = true
     public var filterClause: String = ""
 
     public var id: String { object.id }
-    /// Editing EXISTING rows requires a discovered primary key (06 · L3 safety).
+ /// Editing EXISTING rows requires a discovered primary key (06 safety).
     public var canEdit: Bool { detailLoaded && changeSet.canEdit }
     /// Inserting needs no primary key — an INSERT has no row identity to match —
     /// so an empty table is always insertable, enabling quick data entry on
-    /// fresh tables (docs/ui/01 D4b).
+ /// fresh tables (D4b).
     public var canInsert: Bool {
         detailLoaded && !buffer.columns.isEmpty && (canEdit || buffer.rowCount == 0)
     }
@@ -80,8 +80,8 @@ public final class TableTabState: @MainActor Identifiable {
             } else {
                 self.detailLoaded = true   // stays read-only (pkColumns empty)
             }
-            // DL-04 / docs/ui/01: an empty editable table opens with one blank
-            // row so you can start typing data immediately (Navicat-style).
+ // an empty editable table opens with one blank
+            // row so you can start typing data immediately.
             // Network drivers ship no columns for a 0-row result — seed them from
             // the introspected detail so an empty table still shows its headers
             // and the blank row has cells to type into.
@@ -106,7 +106,7 @@ public final class TableTabState: @MainActor Identifiable {
         ))
     }
 
-    /// Column-header sort (DL-02). Ignored while edits are pending — a reload
+ /// Column-header sort. Ignored while edits are pending — a reload
     /// would silently drop them.
     public func sort(by column: String, ascending: Bool, session: Session) {
         guard pendingCount == 0 else { return }
@@ -115,13 +115,13 @@ public final class TableTabState: @MainActor Identifiable {
         reload(session: session)
     }
 
-    /// Applies the user's WHERE fragment (DL-02); same guard as sorting.
+ /// Applies the user's WHERE fragment; same guard as sorting.
     public func applyFilter(session: Session) {
         guard pendingCount == 0 else { return }
         reload(session: session)
     }
 
-    /// Retargets the WHERE filter and reloads (DL-08 FK jump). Skips when edits
+ /// Retargets the WHERE filter and reloads (FK jump). Skips when edits
     /// are pending so they are never silently dropped.
     public func setFilterAndReload(_ clause: String, session: Session) {
         guard pendingCount == 0 else { return }
@@ -130,7 +130,7 @@ public final class TableTabState: @MainActor Identifiable {
         reload(session: session)
     }
 
-    /// The foreign key defined on the column at `index`, if any (DL-08).
+ /// The foreign key defined on the column at `index`, if any.
     public func foreignKey(forColumnIndex index: Int) -> ForeignKeyInfo? {
         guard index < buffer.columns.count else { return nil }
         let columnName = buffer.columns[index].name
@@ -139,7 +139,7 @@ public final class TableTabState: @MainActor Identifiable {
         }
     }
 
-    // MARK: - Staging (DL-03/04/05)
+ // MARK: - Staging
 
     /// Primary-key values of a row, read from the ORIGINAL buffer content —
     /// never from the overlay, so a staged edit cannot corrupt its own WHERE.
@@ -155,7 +155,7 @@ public final class TableTabState: @MainActor Identifiable {
         return key
     }
 
-    /// Rows shown by the grid = streamed rows + locally inserted rows (DL-04).
+ /// Rows shown by the grid = streamed rows + locally inserted rows.
     public var totalRowCount: Int { buffer.rowCount + insertedRows.count }
 
     private func isInsertedRow(_ row: Int) -> Bool {
@@ -177,8 +177,8 @@ public final class TableTabState: @MainActor Identifiable {
         deletedRowIndexes.contains(row)
     }
 
-    /// Appends a staged new row (DL-04) — all NULL until edited, so column
-    /// DEFAULTs apply for anything the user leaves untouched (DL-05).
+ /// Appends a staged new row — all NULL until edited, so column
+ /// DEFAULTs apply for anything the user leaves untouched.
     public func addInsertRow() {
         guard canInsert, !buffer.columns.isEmpty else { return }
         insertedRows.append(Array(repeating: .null, count: buffer.columns.count))
@@ -187,7 +187,7 @@ public final class TableTabState: @MainActor Identifiable {
     /// Paste-into-grid: parse clipboard text as TSV (Excel/Numbers/Sheets copy
     /// a cell range as tab-separated) or CSV (matches BerryDB's own "Copy as
     /// CSV", ClipboardFormatter.csv) and stage each line as an inserted row,
-    /// same mechanism as `addInsertRow`. Reuses CSVParser (already the XN-05
+ /// same mechanism as `addInsertRow`. Reuses CSVParser (already the
     /// import parser) rather than a new one. Only guards on having columns to
     /// pad/truncate against — the "is this table insertable right now" check
     /// (canInsert) is the view layer's job (DataGridView only wires the Paste
@@ -210,7 +210,7 @@ public final class TableTabState: @MainActor Identifiable {
     }
 
     /// Stages a cell edit typed as text; the new value is parsed against the
-    /// ORIGINAL value's type so numbers stay numbers (DL-05).
+ /// ORIGINAL value's type so numbers stay numbers.
     public func stageEdit(row: Int, column: Int, text: String) {
         guard canInsert, column < buffer.columns.count else { return }
         if isInsertedRow(row) {
@@ -227,7 +227,7 @@ public final class TableTabState: @MainActor Identifiable {
         pendingDisplay[row, default: [:]][column] = newValue
     }
 
-    /// Explicit NULL — distinct from an empty string (DL-05).
+ /// Explicit NULL — distinct from an empty string.
     public func stageNull(row: Int, column: Int) {
         guard canInsert, column < buffer.columns.count else { return }
         if isInsertedRow(row) {
@@ -268,7 +268,7 @@ public final class TableTabState: @MainActor Identifiable {
     }
 
     /// ChangeSet + staged inserts combined — the exact statements previewed
-    /// and applied (06 · L3). NULL cells are omitted from INSERTs so column
+ /// and applied (06). NULL cells are omitted from INSERTs so column
     /// DEFAULTs take effect.
     private func combinedChangeSet() -> ChangeSet {
         var combined = changeSet
@@ -285,12 +285,12 @@ public final class TableTabState: @MainActor Identifiable {
         return combined
     }
 
-    /// SQL preview content (06 · L3 — always shown before writing).
+ /// SQL preview content (06 — always shown before writing).
     public func previewStatements(session: Session) -> [String] {
         combinedChangeSet().statements(dialect: session.dialect)
     }
 
-    // MARK: - Apply (06 · L3)
+ // MARK: - Apply (06)
 
     /// Must be called directly from the tap handler, before any `Task` is
     /// created — this is what makes `isApplying` (and the spinner/disabled

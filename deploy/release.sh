@@ -2,7 +2,7 @@
 # BerryDB release: build → package → codesign (hardened runtime) → notarize →
 # staple → zip → Sparkle-sign. Produces dist/BerryDB-<version>.zip and
 # deploy/last-release.json (consumed by upload-release.py).
-# docs/architecture/08 §6 (hardening) + 10 §3 (distribution).
+# (hardening) + (distribution).
 #
 # Secrets come from deploy/.env (gitignored) — never hardcode. Nothing here
 # uploads; run deploy/upload-release.py after this to publish.
@@ -16,8 +16,8 @@ cd "$ROOT"
 
 VERSION="${1:-${BERRYDB_VERSION:-0.1.0}}"
 BUILD="${BERRYDB_BUILD:-$(date +%Y%m%d%H%M)}"
-SIGNING_IDENTITY="${SIGNING_IDENTITY:-Developer ID Application: Vu Dong (WZ2Z528AM6)}"
-APPLE_TEAM_ID="${APPLE_TEAM_ID:-WZ2Z528AM6}"
+SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
+APPLE_TEAM_ID="${APPLE_TEAM_ID:-}"
 ENTITLEMENTS="deploy/BerryDB.entitlements"
 APP="dist/BerryDB.app"
 ZIP="dist/BerryDB-${VERSION}.zip"
@@ -27,8 +27,9 @@ SPARKLE_BIN="${SPARKLE_BIN:-}"
 need() { [ -n "${!1:-}" ] || { echo "✗ Missing required env: $1 (set it in .env)" >&2; exit 1; }; }
 need APPLE_ID
 need APP_SPEC_PASSWORD
-# BerryDB must ship with ITS OWN feed + Sparkle key — no silent fallback to
-# another product's domain (the old default pointed at BerryShot's appcast).
+need SIGNING_IDENTITY
+need APPLE_TEAM_ID
+# BerryDB must ship with its own feed and public EdDSA key for Sparkle updates.
 need SU_FEED_URL
 need SU_PUBLIC_ED_KEY
 
@@ -105,16 +106,8 @@ xcrun stapler validate "$DMG"
 # ---- Sparkle EdDSA signature (Sparkle 2 installs from a .dmg) ---------------
 ED_SIG=""
 LENGTH="$(stat -f%z "$DMG")"
-if [ -z "$SPARKLE_BIN" ]; then
-  SPARKLE_BIN="$(find .build -name sign_update -type f 2>/dev/null | head -1 || true)"
-fi
-if [ -n "$SPARKLE_BIN" ] && [ -x "$SPARKLE_BIN" ]; then
-  echo "▸ Signing update with Sparkle EdDSA key…"
-  SIG_LINE="$("$SPARKLE_BIN" "$DMG")"
-  ED_SIG="$(printf '%s' "$SIG_LINE" | sed -n 's/.*edSignature="\([^"]*\)".*/\1/p')"
-else
-  echo "⚠ sign_update not found — appcast will be UNSIGNED. Set SPARKLE_BIN to Sparkle's sign_update." >&2
-fi
+echo "▸ Signing update with Sparkle EdDSA key…"
+ED_SIG="$(scripts/sign-update.sh "$DMG")"
 
 # ---- Release manifest for the upload step -----------------------------------
 cat > deploy/last-release.json <<JSON

@@ -8,7 +8,7 @@ import Testing
 
 @testable import BerryUI
 
-/// AI-20 follow-up: a Mac with Apple Intelligence available can use AI
+/// follow-up: a Mac with Apple Intelligence available can use AI
 /// without a paid trial/license (on-device inference costs BerryDB nothing).
 /// The risk this guards against: that bypass must only ever unlock the local
 /// path — it must never let a device with no real license reach the metered
@@ -22,7 +22,7 @@ import Testing
 /// shared `UserDefaults.standard` state — concurrent tests in this suite
 /// stomp on each other's grant/revoke otherwise.
 @MainActor
-@Suite("Apple Intelligence access bypass (AI-20 follow-up)", .serialized)
+@Suite("Apple Intelligence access bypass", .serialized)
 struct AppleIntelligenceAccessTests {
     private func withCleanGrant(_ body: () throws -> Void) rethrows {
         AppleIntelligenceAccess.revoke()
@@ -84,7 +84,7 @@ struct AppleIntelligenceAccessTests {
             AppleIntelligenceAccess.grant(email: "dev@example.com")
             // This machine's real on-device availability, not a mock — the
             // same ground truth `AppleFoundationProvider.isAvailable()`
-            // itself reports elsewhere in this suite (AI-20 smoke test).
+ // itself reports elsewhere in this suite (smoke test).
             #expect(controller.appleIntelligenceGranted == AppleFoundationProvider.isAvailable())
         }
     }

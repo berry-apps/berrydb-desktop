@@ -4,11 +4,11 @@ import Testing
 
 @testable import BerryAI
 
-/// `get_ui_state`/`query_ui_graph` (docs/feature/08, AI-27/28) — an in-memory
+/// `get_ui_state`/`query_ui_graph` — an in-memory
 /// graph built fresh from a live snapshot + the bounded recent-actions log,
 /// never persisted (unlike the DSG's `graph_query`/`get_stats`).
 @MainActor
-@Suite("UIGraphToolExecutor (docs/feature/08, AI-27/28)")
+@Suite("UIGraphToolExecutor")
 struct UIGraphToolExecutorTests {
     private func decode(_ outcome: ToolOutcome) -> [String: Any] {
         guard let json = outcome.resultJSON,

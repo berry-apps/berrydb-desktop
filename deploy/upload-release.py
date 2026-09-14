@@ -3,11 +3,12 @@
 the Sparkle appcast from the release history, upload it, and purge the CDN cache.
 
 Reads deploy/last-release.json (written by deploy/release.sh) and appends it to
-deploy/releases.json (the source of truth for the appcast). Secrets come from
-deploy/.env (gitignored) — see deploy/.env.example. Requires boto3
-(see requirements.txt).
+releases.json IN R2, which is the source of truth for the appcast. The tracked
+deploy/releases.json only seeds the very first run and is frozen after that —
+editing it changes nothing. Secrets come from deploy/.env (gitignored) — see
+deploy/.env.example. Requires boto3 (see requirements.txt).
 
-docs/architecture/10 §3 (distribution). Nothing here signs the build; the
+Nothing here signs the build; the
 EdDSA signature is produced by release.sh and carried in last-release.json.
 """
 from __future__ import annotations
@@ -56,14 +57,42 @@ def r2_client():
     )
 
 
-def record_release() -> dict:
-    """Merge last-release.json into releases.json (newest first, deduped)."""
+HISTORY_KEY = "releases.json"
+
+
+def _load_history(s3, bucket: str) -> list[dict]:
+    """The release history, from R2 if it is there and the tracked file if not.
+
+    R2 holds it because a CI runner's checkout is whatever main holds: merging into
+    the tracked file and letting the VM be destroyed would drop every intermediate
+    version from the appcast, silently. The tracked deploy/releases.json seeds the
+    very first run and is frozen after that.
+    """
+    try:
+        body = s3.get_object(Bucket=bucket, Key=HISTORY_KEY)["Body"].read()
+        return json.loads(body)
+    except s3.exceptions.NoSuchKey:
+        local = DEPLOY / HISTORY_KEY
+        if local.exists():
+            print(f"• No {HISTORY_KEY} in R2 yet — seeding from the tracked copy")
+            return json.loads(local.read_text())
+        print(f"• No {HISTORY_KEY} in R2 and none tracked — starting a new history")
+        return []
+
+
+def record_release(s3, bucket: str) -> dict:
+    """Merge last-release.json into the R2 history (newest first, deduped)."""
     last = json.loads((DEPLOY / "last-release.json").read_text())
-    history_path = DEPLOY / "releases.json"
-    history = json.loads(history_path.read_text()) if history_path.exists() else []
+    history = _load_history(s3, bucket)
     history = [r for r in history if r.get("version") != last["version"]]
     history.insert(0, last)
-    history_path.write_text(json.dumps(history, indent=2) + "\n")
+    s3.put_object(
+        Bucket=bucket,
+        Key=HISTORY_KEY,
+        Body=(json.dumps(history, indent=2) + "\n").encode(),
+        ContentType="application/json",
+        CacheControl="no-cache",
+    )
     return {"last": last, "history": history}
 
 
@@ -117,16 +146,16 @@ def purge_cache(urls: list[str]) -> None:
 def main() -> None:
     load_env()
     bucket = require("R2_BUCKET")
-    # Required — a fallback to another product's domain once lived here.
+    # Base URL for public release downloads.
     download_base = require("DOWNLOAD_BASE_URL")
 
-    merged = record_release()
+    s3 = r2_client()
+    merged = record_release(s3, bucket)
     last, history = merged["last"], merged["history"]
     zip_path = ROOT / last["path"]
     if not zip_path.exists():
         sys.exit(f"✗ Release artifact missing: {zip_path} (run deploy/release.sh first)")
 
-    s3 = r2_client()
     print(f"▸ Uploading {last['file']} → r2://{bucket}/")
     s3.upload_file(str(zip_path), bucket, last["file"],
                    ExtraArgs={"ContentType": "application/octet-stream"})
@@ -143,6 +172,23 @@ def main() -> None:
     print(f"▸ Uploading {latest_key} → r2://{bucket}/")
     s3.upload_file(str(zip_path), bucket, latest_key,
                    ExtraArgs={"ContentType": "application/octet-stream"})
+
+    # LGPL 6(a)/6(d): the source of the exact FreeTDS version we ship has to be
+    # offered from the same place as the download, so it goes to R2 beside the DMG.
+    version_file = DEPLOY / "freetds-version.txt"
+    if version_file.exists():
+        freetds_version = version_file.read_text().strip()
+        tarball = ROOT / "dist" / f"freetds-{freetds_version}.tar.bz2"
+        if tarball.exists():
+            print(f"▸ Uploading {tarball.name} → r2://{bucket}/")
+            s3.upload_file(str(tarball), bucket, tarball.name,
+                           ExtraArgs={"ContentType": "application/x-bzip2"})
+        elif os.environ.get("CI"):
+            # Fatal under automation: a release whose licence obligation quietly
+            # went unmet is not something to discover from a log nobody read.
+            sys.exit(f"✗ Missing {tarball} — LGPL source offer would not be published")
+        else:
+            print(f"• Skipping FreeTDS source upload ({tarball.name} not built)")
 
     appcast = build_appcast(history, download_base)
     (DEPLOY / "appcast.xml").write_text(appcast)

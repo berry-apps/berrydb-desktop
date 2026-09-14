@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryAI
 
-@Suite("SkillToolExecutor (docs/agents/architecture/07)")
+@Suite("SkillToolExecutor")
 struct SkillToolExecutorTests {
     private func makeSkillsDir(_ skills: [(name: String, contents: String)]) throws -> URL {
         let fm = FileManager.default
@@ -25,7 +25,7 @@ struct SkillToolExecutorTests {
         return object
     }
 
-    // MARK: - Parser (§4)
+ // MARK: - Parser
 
     @Test func parsesValidSkillFile() throws {
         let skill = try parseSkillFile("---\nname: pg-explain\ndescription: Analyze EXPLAIN output.\n---\n\n# Body\nDo the thing.")
@@ -46,7 +46,7 @@ struct SkillToolExecutorTests {
         }
     }
 
-    // MARK: - Discovery + tools (§3/§6)
+ // MARK: - Discovery + tools
 
     @MainActor
     @Test func listSkillsReturnsAllDiscoveredSorted() async throws {

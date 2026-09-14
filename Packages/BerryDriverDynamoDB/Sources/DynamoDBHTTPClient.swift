@@ -2,8 +2,8 @@ import BerryDriverKit
 import Foundation
 
 /// Signed REST/JSON client for the DynamoDB HTTP API — zero vendored
-/// dependency, same shape as `QdrantHTTPClient` (docs/architecture/12 §5)
-/// but with AWS SigV4 signing (§4) instead of a bearer header. Every method
+/// dependency, same shape as `QdrantHTTPClient`
+/// but with AWS SigV4 signing instead of a bearer header. Every method
 /// maps failures to `DriverError` so `DynamoDBConnection` never touches
 /// HTTP/JSON details directly.
 struct DynamoDBHTTPClient: Sendable {
@@ -13,7 +13,7 @@ struct DynamoDBHTTPClient: Sendable {
     let session: URLSession
 
     /// `config.host` set (non-empty) → explicit endpoint, the shape used for
-    /// dynamodb-local (docs/architecture/12 §10) and for self-hosted-behind-
+ /// dynamodb-local and for self-hosted-behind-
     /// SSH-tunnel setups. Otherwise the endpoint is derived from
     /// `awsRegion` — the normal shape for real AWS, where DynamoDB is always
     /// reached at `dynamodb.{region}.amazonaws.com`, not a user-chosen host.
@@ -92,27 +92,38 @@ struct DynamoDBHTTPClient: Sendable {
         return .queryFailed(message: "\(label): \(message)", code: Int32(status))
     }
 
-    // MARK: - ExecuteStatement (docs/architecture/12 §4)
+ // MARK: - ExecuteStatement
+
+    /// Parsed ExecuteStatement page result. Marked `@unchecked Sendable` because
+    /// the underlying JSON dictionary contains immutable `Any` values that cross
+    /// the actor boundary.
+    public struct DynamoDBPage: @unchecked Sendable {
+        public let items: [[String: Any]]
+        public let nextToken: String?
+
+        public init(items: [[String: Any]], nextToken: String?) {
+            self.items = items
+            self.nextToken = nextToken
+        }
+    }
 
     /// One page. `limit` is the API's page-size cap ("max items to
     /// evaluate", distinct from a SQL LIMIT — see `PartiQLDialect.limitClause`);
-    /// `nextToken` continues a previous page. Tuple return (not a named
-    /// `Sendable` struct) — same reasoning as `QdrantHTTPClient.scroll`:
-    /// `[String: Any]` can't provably conform to `Sendable`, and Swift 6
-    /// strict concurrency only flags that when it's a stored property of an
-    /// explicitly `Sendable`-declared type, not a bare tuple crossing the
-    /// actor boundary.
+    /// `nextToken` continues a previous page.
     func executeStatement(
         _ statement: String, nextToken: String?, limit: Int?
-    ) async throws -> (items: [[String: Any]], nextToken: String?) {
+    ) async throws -> DynamoDBPage {
         var body: [String: Any] = ["Statement": statement]
         if let nextToken { body["NextToken"] = nextToken }
         if let limit { body["Limit"] = limit }
         let json = try await send(target: "DynamoDB_20120810.ExecuteStatement", body: body)
-        return ((json["Items"] as? [[String: Any]]) ?? [], json["NextToken"] as? String)
+        return DynamoDBPage(
+            items: (json["Items"] as? [[String: Any]]) ?? [],
+            nextToken: json["NextToken"] as? String
+        )
     }
 
-    // MARK: - Introspection (05 §5)
+ // MARK: - Introspection
 
     func listTables() async throws -> [String] {
         var names: [String] = []
@@ -135,7 +146,7 @@ struct DynamoDBHTTPClient: Sendable {
         return table
     }
 
-    /// Fail-fast check for `connect()` (KN-06 "Test connection" expectation,
+ /// Fail-fast check for `connect()` ("Test connection" expectation,
     /// same reasoning as `QdrantDriver.connect()`) — an HTTP client has no
     /// TCP-handshake-time failure the way Postgres/MySQL do, so a cheap real
     /// call is the only way to catch a bad host/region/credential early.

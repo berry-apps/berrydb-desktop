@@ -7,7 +7,7 @@ public struct ConformanceFailure: Error, CustomStringConvertible {
     public init(_ description: String) { self.description = description }
 }
 
-/// Shared contract checks for EVERY driver (docs/architecture/05 §7).
+/// Shared contract checks for EVERY driver.
 /// Each driver supplies SQL in its own dialect; the behavioral assertions
 /// (streaming, cancel, error classification, round-trip) are shared and mandatory.
 public struct DriverConformance: Sendable {
@@ -118,7 +118,7 @@ public struct DriverConformance: Sendable {
             // nanoseconds, not Task.sleep(for:) — the latter is a confirmed
             // Swift runtime crash risk in release builds when multiple
             // modules generate different Clock-generic specializations
-            // (swiftlang/swift#86204, #84793; docs/tests/crash.md).
+ // (swiftlang/swift#86204, #84793).
             try? await Task.sleep(nanoseconds: 150_000_000)
             conn.cancelCurrentQuery()
         }

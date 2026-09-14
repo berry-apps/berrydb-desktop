@@ -1,12 +1,12 @@
 import BerryAI
 import SwiftUI
 
-/// Past-conversations panel (AI-21) that slides in from the right (the AI panel
+/// Past-conversations panel that slides in from the right (the AI panel
 /// is a right-hand inspector) over the whole panel body, under the header.
 /// Replaces the old dropdown menu so old threads are actually
 /// reachable: relative timestamps, per-row delete, and infinite scroll (keyset
 /// paging in the controller). Opening a different thread is blocked while the
-/// assistant is streaming (§6) — reopening the active one is fine.
+/// assistant is streaming — reopening the active one is fine.
 struct AIHistorySidebarView: View {
     @Bindable var controller: AIPanelController
     @Binding var isPresented: Bool
@@ -62,7 +62,7 @@ struct AIHistorySidebarView: View {
                 ForEach(controller.threads) { thread in
                     row(thread)
                 }
-                // Infinite scroll (AI-21): the next keyset page (20 records) loads
+ // Infinite scroll: the next keyset page (20 records) loads
                 // automatically as this footer scrolls into view — no button.
                 if controller.hasMoreThreads {
                     ProgressView()
@@ -126,7 +126,7 @@ struct AIHistorySidebarView: View {
     }
 
     /// Open the tapped thread and dismiss. Blocked mid-stream unless it's the
-    /// already-active thread (§6) — otherwise flash the banner instead.
+ /// already-active thread — otherwise flash the banner instead.
     /// `openingThreadID` is set here, directly on the tap's call stack,
     /// before the `Task` — see its declaration for why.
     private func open(_ thread: AIThreadSummary) {
@@ -137,7 +137,7 @@ struct AIHistorySidebarView: View {
             Task {
                 // nanoseconds, not Task.sleep(for:) — confirmed Swift
                 // runtime crash risk in release builds (swiftlang/swift#86204,
-                // #84793; docs/tests/crash.md), not a style choice.
+ // #84793), not a style choice.
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 streamingBlocked = false
             }

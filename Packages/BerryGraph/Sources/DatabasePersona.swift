@@ -1,8 +1,8 @@
 import BerryDriverKit
 import Foundation
 
-/// A rule set that judges a DSG for one workload persona (DI-27,
-/// docs/architecture/13 §5.7). Relational rules (missing PK, unused index…)
+/// A rule set that judges a DSG for one workload persona
+/// Relational rules (missing PK, unused index…)
 /// are correct for Postgres/MySQL/SQLite/SQL Server but meaningless or wrong
 /// for document/key-value/vector engines — this protocol lets `InsightEngine`
 /// dispatch to the right rule set instead of running one rule set on every
@@ -23,7 +23,7 @@ struct RelationalIndexAnalyzer: PersonaAnalyzer {
     }
 }
 
-/// Which workload a `DriverID` represents, for analyzer dispatch (DI-27).
+/// Which workload a `DriverID` represents, for analyzer dispatch.
 public enum DatabasePersona: Sendable, Equatable {
     case relational
     case document
@@ -40,7 +40,7 @@ public enum DatabasePersona: Sendable, Equatable {
     }
 
     /// Rule set for this persona. Non-relational personas are empty until
-    /// their own rules land alongside NS-01…08 (docs/architecture/12-nosql-vector.md)
+ /// their own rules land alongside…08
     /// — better to say nothing than to flag a document/key-value/vector store
     /// for not having a primary key or a foreign key.
     var analyzers: [PersonaAnalyzer] {

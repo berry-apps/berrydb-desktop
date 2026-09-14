@@ -2,8 +2,8 @@ import Foundation
 import GRDB
 
 /// One recent tab/pane action — bounded recall for the AI `get_ui_state` tool
-/// (docs/feature/08, AI-28), separate from the in-memory-only UI graph itself
-/// (docs/architecture/13 §8b). `description` is human-readable and never a
+/// separate from the in-memory-only UI graph itself
+/// `description` is human-readable and never a
 /// raw tab id: most `WorkspaceTab.id` values don't survive an app relaunch.
 public struct WorkspaceActionRecord: Identifiable, Codable, Sendable {
     public var id: UUID

@@ -4,8 +4,8 @@ import Foundation
 import NIOCore
 import NIOSSH
 
-/// Trust-on-first-use store of SSH host-key fingerprints (docs/architecture/07
-/// §4). Host public keys are not secret, so this is a plain file like OpenSSH's
+/// Trust-on-first-use store of SSH host-key fingerprints
+/// Host public keys are not secret, so this is a plain file like OpenSSH's
 /// `known_hosts` — never the Keychain. Keyed by `host:port`.
 public struct KnownHostsStore: Sendable {
     public enum Decision: Equatable, Sendable {
@@ -115,7 +115,7 @@ public struct KnownHostsStore: Sendable {
 }
 
 /// Citadel host-key delegate implementing TOFU against a `KnownHostsStore`
-/// (docs/architecture/07 §4). Captures a mismatch so the caller can raise a
+/// Captures a mismatch so the caller can raise a
 /// precise `DriverError.sshHostKeyChanged`.
 final class TOFUHostKeyValidator: NIOSSHClientServerAuthenticationDelegate, @unchecked Sendable {
     private let store: KnownHostsStore

@@ -3,7 +3,7 @@ import Testing
 @testable import BerryUI
 
 /// `licenseErrorMessage(_:)` maps stable backend error codes to a localized,
-/// user-facing string (docs/architecture/09 §8 — client renders by code,
+/// user-facing string (client renders by code,
 /// never the raw backend message). An unmapped code falls back to showing
 /// itself verbatim, which is how a user restoring a purchase by email ended
 /// up seeing the raw "key_sent"/"no_subscription" codes instead of a
@@ -27,7 +27,7 @@ struct LicenseSupportTests {
         #expect(licenseErrorMessage("badResponse").localizedCaseInsensitiveContains("could not reach"))
     }
 
-    /// TM-07: the backend rejects a second email's trial on an
+ /// the backend rejects a second email's trial on an
     /// already-claimed device with `trial_already_used` — without a mapping
     /// here the user would see that raw code instead of an explanation.
     @Test func mapsTrialAlreadyUsedToAReadableMessage() {

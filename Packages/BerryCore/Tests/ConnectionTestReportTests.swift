@@ -5,8 +5,8 @@ import Testing
 
 @testable import BerryCore
 
-/// Connection-test step breakdown (KN-06).
-@Suite("ConnectionManager.testReport (KN-06)")
+/// Connection-test step breakdown.
+@Suite("ConnectionManager.testReport")
 struct ConnectionTestReportTests {
     @Test func reportsConnectAndPingForSQLite() async throws {
         DriverRegistry.register(SQLiteDriver.self)

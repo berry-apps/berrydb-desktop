@@ -1,14 +1,14 @@
 import Foundation
 
-/// One action offered in the Command Palette (DI-22, docs/architecture/13
-/// §5.3, ⌘K).
+/// One action offered in the Command Palette
+/// ⌘K).
 public struct CommandPaletteEntry: Identifiable {
     public var id: String { title }
     public let title: String
     public let subtitle: String
     public let isEnabled: Bool
     public let perform: () -> Void
-    /// Stable, locale-independent identifier for AI routing (DI-22 §5.3's
+ /// Stable, locale-independent identifier for AI routing ('s
     /// `perform_ui_action` tool) — `title` can't serve this role since it's
     /// localized. Defaulted so existing direct-construction call sites (tests)
     /// that predate AI routing keep compiling unchanged.
@@ -32,7 +32,7 @@ public enum CommandPaletteEntries {
     /// menu bar), so nothing added to the menu goes missing from the palette.
     /// v1 is a fixed, curated subset (the ones worth reaching without the
     /// mouse) rather than every menu item — natural-language routing to a
-    /// wider action set is a documented v2 (docs/architecture/13 §5.3).
+ /// wider action set is a documented v2.
     public static func build(from actions: WorkspaceMenuActions) -> [CommandPaletteEntry] {
         [
             CommandPaletteEntry(
@@ -60,15 +60,15 @@ public enum CommandPaletteEntries {
                 isEnabled: actions.hasAnySession, action: "saved_queries", perform: actions.showSavedQueries
             ),
             CommandPaletteEntry(
-                title: L("Insights"), subtitle: L("Schema and index findings (DI-09)"),
+                title: L("Insights"), subtitle: L("Schema and index findings"),
                 isEnabled: actions.hasIntelligence, action: "insights", perform: actions.showInsights
             ),
             CommandPaletteEntry(
-                title: L("Graph Explorer"), subtitle: L("Table dependencies and blast radius (DI-02/04)"),
+                title: L("Graph Explorer"), subtitle: L("Table dependencies and blast radius"),
                 isEnabled: actions.hasIntelligence, action: "graph_explorer", perform: actions.showGraphExplorer
             ),
             CommandPaletteEntry(
-                title: L("Time Machine"), subtitle: L("Schema change history (DI-08)"),
+                title: L("Time Machine"), subtitle: L("Schema change history"),
                 isEnabled: actions.hasIntelligence, action: "timeline", perform: actions.showTimeline
             ),
             CommandPaletteEntry(

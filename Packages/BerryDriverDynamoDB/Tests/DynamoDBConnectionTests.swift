@@ -6,7 +6,7 @@ import Testing
 
 @Suite("DynamoDBConnection — statement routing, pagination, transaction no-ops")
 struct DynamoDBConnectionTests {
-    /// `init` calls `client.ping()` (fail-fast, KN-06) which hits ListTables —
+ /// `init` calls `client.ping()` (fail-fast) which hits ListTables
     /// every stub handler below must answer that target too.
     private func makeConnection(
         host: String, handler: @escaping DynamoDBStubURLProtocol.Handler
@@ -39,7 +39,7 @@ struct DynamoDBConnectionTests {
         request.value(forHTTPHeaderField: "X-Amz-Target") ?? ""
     }
 
-    // MARK: Transaction control — client-side no-op (docs/architecture/12 §4)
+ // MARK: Transaction control — client-side no-op
 
     @Test func beginCommitRollbackCompleteWithoutAnyNetworkCall() async throws {
         let host = "dynamo-\(UUID().uuidString)".lowercased()
@@ -181,40 +181,41 @@ struct DynamoDBConnectionTests {
             _ = try await DynamoDBConnection(config: config, session: session)
         }
     }
-
-    /// Deterministic proof of the client-side cancel mechanism
-    /// (capabilities.cancelQuery == false — "❌ chỉ hủy phía client",
-    /// docs/architecture/05 §4): a stub handler sleeps briefly before
-    /// answering, so if `cancelCurrentQuery()` did NOT abort the in-flight
-    /// request the stream would complete successfully after the full sleep
-    /// instead of throwing quickly. Deterministic (not timing-sensitive
-    /// against a real server) — that's why this lives here rather than as a
-    /// conformance test racing dynamodb-local, which has no PartiQL
-    /// equivalent of `pg_sleep` to build a genuinely slow real query.
+    /// Cancellation must abort the in-flight request rather than wait it out.
     ///
-    /// Sleep/deadline widened from 300ms/250ms (2026-08-07): that margin was
-    /// too tight for CI — observed failing in real GitHub Actions runs at
-    /// 480ms and 304ms elapsed, both times against the same PASSING local
-    /// runs, meaning CI's shared/lower-core runners plus Swift Testing's
-    /// default cross-suite parallelism occasionally eat into the margin
-    /// between "cancelled quickly" and "waited out the stub" enough to trip
-    /// a deadline that close to the sleep duration itself. 1s/700ms keeps
-    /// `Thread.sleep`'s stall of other concurrently-running stub-based tests
-    /// short (the original concern this file's history already flagged)
-    /// while giving the deadline real headroom over realistic scheduling
-    /// jitter — a genuinely broken cancel would still fail clearly (~1s+,
-    /// not the passing runs' typical tens of ms).
+    /// This used to assert a wall-clock deadline, and that deadline kept
+    /// failing on CI: a shared runner measured 843 ms against a 700 ms bound
+    /// while the stub slept 1 s, so cancellation had worked and only its
+    /// propagation was slow. The bound could not simply be raised, because it
+    /// has to stay under the stub's sleep to mean anything, and the sleep
+    /// cannot be lengthened either — `Thread.sleep` blocks a stub thread and
+    /// stalls every other test running in parallel, which is the compromise
+    /// the previous 1 s/700 ms pairing was already navigating.
+    ///
+    /// So the timing assertion is gone. The stub records when it finishes
+    /// sleeping, and the test asserts the stream threw *before* that happened.
+    /// That is the property the deadline was standing in for, stated directly
+    /// and without a clock: a cancel that silently waited out the request
+    /// fails, however loaded the machine is.
     @Test func cancelCurrentQueryAbortsAnInFlightSelect() async throws {
+        final class Flag: @unchecked Sendable {
+            private let lock = NSLock()
+            private var raised = false
+            func raise() { lock.lock(); raised = true; lock.unlock() }
+            var isRaised: Bool { lock.lock(); defer { lock.unlock() }; return raised }
+        }
+        let stubFinished = Flag()
+
         let host = "dynamo-\(UUID().uuidString)".lowercased()
         let connection = try await makeConnection(host: host) { request, _ in
             if Self.target(request) == "DynamoDB_20120810.ListTables" {
                 return (dynamoStubResponse(request.url!, status: 200), dynamoStubJSON(["TableNames": []]))
             }
             Thread.sleep(forTimeInterval: 1.0)
+            stubFinished.raise()
             return (dynamoStubResponse(request.url!, status: 200), dynamoStubJSON(["Items": []]))
         }
         let stream = connection.execute(#"SELECT * FROM "Music""#)
-        let started = ContinuousClock.now
         Task {
             try? await Task.sleep(for: .milliseconds(30))
             connection.cancelCurrentQuery()
@@ -225,8 +226,7 @@ struct DynamoDBConnectionTests {
         } catch {
             threw = true
         }
-        let elapsed = ContinuousClock.now - started
-        #expect(threw)
-        #expect(elapsed < .milliseconds(700))
+        #expect(threw, "cancelling an in-flight query must surface as an error")
+        #expect(!stubFinished.isRaised, "cancel waited out the request instead of aborting it")
     }
 }

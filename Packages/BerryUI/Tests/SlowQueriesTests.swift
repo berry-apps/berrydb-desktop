@@ -6,7 +6,7 @@ import Testing
 
 @testable import BerryUI
 
-/// `slowestQueries` (`get_slow_queries` tool bridge, docs/feature/07 §14) —
+/// `slowestQueries` (`get_slow_queries` tool bridge)
 /// re-ranks `query_history` by duration instead of recency.
 /// Serialized: registers `SQLiteDriver` (shared global `DriverRegistry`
 /// state), same caveat `WorkspaceGraphTests` documents.

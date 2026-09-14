@@ -1,7 +1,7 @@
 import BerryDataSourceKit
 import SwiftUI
 
-/// One Elasticsearch query tab (docs/architecture/17 §5): a JSON editor on
+/// One Elasticsearch query tab: a JSON editor on
 /// top, the result grid below — the search-engine sibling of
 /// `QdrantQueryTabView`, minus the Form half (no vector-shaped field awkward
 /// in JSON, so a form surface adds no value here). Reads stream into the

@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-/// Keychain storage for the AI bearer token (docs/architecture/07 §2 — secrets
+/// Keychain storage for the AI bearer token (secrets
 /// live in the Keychain). Separate from the DB-secret path because it is a
 /// different kind of secret with its own lifecycle.
 enum LicenseKeychain {
@@ -17,6 +17,10 @@ enum LicenseKeychain {
         SecItemDelete(base as CFDictionary)
         var attributes = base
         attributes[kSecValueData as String] = Data(token.utf8)
+        // Match KeychainService, which stores the database and SSH secrets. Two
+        // secret stores in one app with different accessibility attributes is a
+        // difference nobody chose; this one was simply left unset.
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         SecItemAdd(attributes as CFDictionary, nil)
     }
 

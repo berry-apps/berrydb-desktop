@@ -2,9 +2,8 @@ import BerryDriverKit
 import Foundation
 
 /// Parses a pasted `mongodb://` connection string into the Connection sheet's
-/// Host/Port/Username/Password/Database/TLS fields (Navicat-inspired "paste a
-/// URI" convenience, `docs/draft/mongodb.md`). Deliberately **unidirectional**
-/// (paste → fields populate once) — not a live bidirectional URI↔fields sync.
+/// Host/Port/Username/Password/Database/TLS fields ("paste a URI" convenience).
+/// Deliberately **unidirectional** (paste → fields populate once) — not a live bidirectional URI↔fields sync.
 /// Pure/free of SwiftUI so it's unit-testable on its own.
 public enum MongoConnectionURI {
     public struct ParsedFields: Equatable {
@@ -18,7 +17,7 @@ public enum MongoConnectionURI {
         public var tlsMode: TLSMode?
         /// Replica-set seed members beyond `host`/`port`, from a
         /// comma-separated host list — `"host:port"` entries, empty when the
-        /// URI named only one host (docs/architecture/12 §3, replica-set v1).
+ /// URI named only one host (replica-set v1).
         public var additionalHosts: [String]
         /// `replicaSet=<name>` query param, if present.
         public var replicaSet: String?
@@ -43,7 +42,7 @@ public enum MongoConnectionURI {
         /// Doesn't start with "mongodb://" (and isn't the +srv case below).
         case notMongoDBScheme
         /// "mongodb+srv://" — needs DNS SRV lookup, not implemented
-        /// (docs/architecture/12-nosql-vector.md §3/§9: tracked as a known gap).
+ /// (tracked as a known gap).
         case srvNotSupported
         case missingHost
         case malformed
@@ -69,7 +68,7 @@ public enum MongoConnectionURI {
     /// with URL-decoded credentials, default port 27017, and the `authSource`/
     /// `tls`/`ssl`/`replicaSet` query params (see field-level comments below).
     /// A comma-separated host list becomes `host`/`additionalHosts` — replica
-    /// set seeds (docs/architecture/12 §3, v1: seeds tried in order to find
+ /// set seeds (v1: seeds tried in order to find
     /// the primary at connect time, no topology monitoring). Rejects
     /// `mongodb+srv://` outright instead of guessing — see `ParseError`.
     public static func parse(_ uriString: String) -> Result<ParsedFields, ParseError> {
@@ -121,7 +120,7 @@ public enum MongoConnectionURI {
         }
 
         guard !hostList.isEmpty else { return .failure(.missingHost) }
-        // Replica set support (docs/architecture/12 §3, v1): a comma-separated
+ // Replica set support (v1): a comma-separated
         // host list becomes the first host/port pair plus `additionalHosts` —
         // normalized to "host:port" (default port filled in) so
         // `ConnectionConfig.additionalHosts` entries are unambiguous.
@@ -157,7 +156,7 @@ public enum MongoConnectionURI {
 
         // `ConnectionConfig`/`ConnectionProfile` only have one `database`
         // field, used as BOTH the SCRAM authSource and the working database
-        // (docs/architecture/12-nosql-vector.md §3, point 2 — a documented
+ // (point 2 — a documented
         // gap, not something this parser can fix). When the URI's authSource
         // differs from its path database, prefer authSource: it's what
         // `MongoWireClient` actually authenticates against, so it's the value

@@ -1,8 +1,8 @@
 import BerryDriverKit
 import Foundation
 
-/// A finding produced by an analyzer over the DSG (docs/architecture/11 §7,
-/// DI-05/07/09). Deterministic and offline — no LLM, no DBMS access; it reads
+/// A finding produced by an analyzer over the DSG
+/// Deterministic and offline — no LLM, no DBMS access; it reads
 /// only the harvested graph + stats. Applying a `suggestedSQL` still goes
 /// through SQL preview + DangerGuard like any statement (N1).
 public struct Insight: Sendable, Equatable, Identifiable, Codable {
@@ -20,9 +20,9 @@ public struct Insight: Sendable, Equatable, Identifiable, Codable {
 
     /// Which analyzer produced the finding.
     public enum Category: String, Sendable, Codable {
-        case schema // Schema Analyzer (DI-07)
-        case index // Index Advisor (DI-05)
-        case query // Query Analyzer (DI-06)
+ case schema // Schema Analyzer
+ case index // Index Advisor
+ case query // Query Analyzer
     }
 
     /// Stable across runs (category.rule.target) so the UI can dedupe/track.
@@ -37,7 +37,7 @@ public struct Insight: Sendable, Equatable, Identifiable, Codable {
     /// target) — the owning table for index findings.
     public let targetName: String?
     /// A starting-point fix, or nil when the fix needs human judgement / more
-    /// data (e.g. which column to index — that needs the workload, DI-06).
+ /// data (e.g. which column to index — that needs the workload).
     public let suggestedSQL: String?
 
     public init(
@@ -57,9 +57,9 @@ public struct Insight: Sendable, Equatable, Identifiable, Codable {
 }
 
 /// Runs every analyzer over a DSG and returns the findings, most severe first
-/// (docs/architecture/11 §7 — feeds the Insight Panel, DI-09). Which analyzers
-/// run is chosen by the dialect's `DatabasePersona` (DI-27, docs/architecture
-/// /13 §5.7) — relational rules never run against a document/key-value/vector
+/// (feeds the Insight Panel). Which analyzers
+/// run is chosen by the dialect's `DatabasePersona`
+/// — relational rules never run against a document/key-value/vector
 /// dialect, so a Qdrant or Redis connection doesn't get warned for missing a
 /// primary key it was never meant to have.
 public enum InsightEngine {

@@ -1,9 +1,9 @@
 import BerryDataSourceKit
 import Foundation
 
-/// Best-effort introspection for MongoDB (docs/architecture/12 §3): no DDL to
+/// Best-effort introspection for MongoDB: no DDL to
 /// read, only a union of field names/types inferred from up to `sampleSize`
-/// recent documents — same "suy luận, không phải schema thật" stance as
+/// recent documents — same inferred schema stance (not strict DDL) as
 /// `QdrantIntrospector`'s payload-field inference.
 struct MongoIntrospector: DataSourceIntrospector {
     let client: MongoWireClient

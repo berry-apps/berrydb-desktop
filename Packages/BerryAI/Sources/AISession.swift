@@ -7,7 +7,7 @@ import Network
 /// multiple modules in the same binary generate different specializations of
 /// it — confirmed upstream Swift runtime bug (swiftlang/swift#86204, #84793,
 /// `swift_task_dealloc`/"freed pointer was not the last allocation"), not
-/// application logic; see docs/tests/crash.md for this app's own hit.
+/// application logic;.md for this app's own hit.
 /// `Task.sleep(nanoseconds:)` isn't generic over `Clock`, so it can't collide
 /// — this converts a `Duration` to feed that call instead.
 extension Duration {
@@ -17,7 +17,7 @@ extension Duration {
     }
 }
 
-/// A reference to an artifact (AI-29/30/31, docs/draft/09.md) a tool call
+/// A reference to an artifact a tool call
 /// produced during a turn — rendered as a clickable chip below the bubble so
 /// the user (or a later turn re-reading the transcript) can open exactly
 /// what the agent wrote/ran.
@@ -36,7 +36,7 @@ public struct ArtifactRef: Sendable, Equatable, Codable {
 }
 
 /// One tool invocation inside a working sub-block, with the detail
-/// docs/feature/09's example expands under each action: the inputs it ran with,
+/// Each action expands to show the inputs it ran with,
 /// a short summary of what came back, and its status.
 ///
 /// Needed because most tools produce no artifact — "Reading schema", "Analyzing
@@ -52,7 +52,7 @@ public struct AIToolAction: Sendable, Equatable {
 
     public var name: String
     public var status: Status
-    /// Argument summaries, one per line — `docs/feature/09`'s `• export`.
+ /// Argument summaries, one per line — ``'s `• export`.
     public var inputs: [String]
     /// Result summaries — the example's `Found • …`.
     public var outputs: [String]
@@ -102,12 +102,12 @@ public struct AIToolAction: Sendable, Equatable {
     }
 }
 
-/// One conversational turn shown in the AI panel (docs/architecture/09 §5).
+/// One conversational turn shown in the AI panel.
 public struct AITurn: Identifiable, Sendable, Equatable {
     public enum Role: Sendable { case user, assistant }
     public let id: UUID
     public let role: Role
-    /// The persisted `ai_message` row this turn corresponds to (AI-35) — nil
+ /// The persisted `ai_message` row this turn corresponds to — nil
     /// until `persistTurn` writes it back, or for a turn that never made it
     /// to disk (e.g. still streaming). Distinct from `id` above, which stays
     /// a fresh random UUID minted for SwiftUI identity / `subThreads(for:)`
@@ -116,23 +116,23 @@ public struct AITurn: Identifiable, Sendable, Equatable {
     public var messageID: UUID?
     public var text: String
     /// Optional planner output shown as a collapsible "Plan" block above the
-    /// answer (docs/agents/architecture/02 §A). Empty when no planner ran.
+ /// answer. Empty when no planner ran.
     public var plan: String
-    /// This turn's "working" state machine (docs/feature/09) — narration
+ /// This turn's "working" state machine — narration
     /// steps, tool-call actions/artifacts, and the live/settled timer. See
     /// `AIWorkBlock`. The properties below forward into it so existing call
     /// sites keep reading e.g. `turn.workSteps` rather than `turn.work.steps`;
     /// nothing outside `AIWorkBlock`'s own mutators writes to it directly.
     public var work: AIWorkBlock
-    /// Artifacts a tool call produced during this turn (AI-31) — empty for
+ /// Artifacts a tool call produced during this turn — empty for
     /// user turns and for any assistant turn that didn't touch one.
     public var artifactRefs: [ArtifactRef]
 
     /// Completed prior rounds of this turn's own narration plus which
-    /// tool(s) ran during that round (Task 13 round boundaries, docs/feature
+ /// tool(s) ran during that round (Task 13 round boundaries,
     /// /09) — each earlier round's work, preserved as collapsible history
     /// instead of being overwritten by the next round the way `text` used
-    /// to (docs/agents/architecture/06 §5): a multi-round tool-calling turn
+ /// to: a multi-round tool-calling turn
     /// narrates "step 1", "step 2", … before its final answer, and all but
     /// the last round used to vanish the moment the next one started. The
     /// still-streaming/most-recent round stays in `text` above; only
@@ -156,25 +156,25 @@ public struct AITurn: Identifiable, Sendable, Equatable {
     public var toolCallCount: Int { work.toolCallCount }
     /// Wall-clock time this turn's multi-round tool-calling phase took,
     /// start to finish. `nil` until the turn's `message.complete` lands —
-    /// the UI reads that as "still working," matching a collapsed "Worked
-    /// for Xs" summary line (Codex-style) instead of a per-step disclosure
-    /// list once it's known.
+    /// the UI reads that as "still working," and once it is known the panel
+    /// collapses to a single "Worked for Xs" summary line rather than keeping
+    /// a per-step disclosure list open.
     public var workDuration: TimeInterval? { work.duration }
     /// The instant this turn's first `tool.call` arrived — same `Date`
     /// `workDuration` is later computed from, so the view's live-ticking
-    /// counter (docs/feature/09) and the eventual settled "Worked for Xs"
+ /// counter and the eventual settled "Worked for Xs"
     /// never disagree at the collapse moment. `nil` until the first tool
     /// call (mirrors `hadToolCall`).
     public var workStartedAt: Date? { work.startedAt }
     /// Whether this turn's provider emitted any reasoning-mode trace
-    /// (`reasoning.delta`, docs/architecture/09 §3) — a flag, NOT the text.
+ /// (`reasoning.delta`) — a flag, NOT the text.
     ///
     /// The trace used to be accumulated into two properties here. It stopped
     /// being rendered when the working block moved to narration-based
     /// sub-blocks, but the append kept running on every token, and `transcript`
     /// is `@Observable` — so each write invalidated the whole view tree for a
     /// string nothing displays. One live round carried 5684 reasoning events
-    /// (docs/tests/crash.md): 5684 invalidations plus O(n) string growth, for
+ /// 5684 invalidations plus O(n) string growth, for
     /// nothing. Nothing else needed the text either — it is never sent back to
     /// the backend and never persisted.
     ///
@@ -200,7 +200,7 @@ public struct AITurn: Identifiable, Sendable, Equatable {
     }
 }
 
-/// A sub-agent's activity, rendered as a nested card (docs/agents/architecture/06 §6).
+/// A sub-agent's activity, rendered as a nested card.
 /// Keyed by the child thread id; text is the sub-agent's streamed answer.
 public struct SubAgentTranscript: Identifiable, Sendable, Equatable {
     public let id: String
@@ -217,7 +217,7 @@ public struct SubAgentTranscript: Identifiable, Sendable, Equatable {
     }
 }
 
-/// Rebuild the display transcript from a thread's stored messages (AI-21). Keeps
+/// Rebuild the display transcript from a thread's stored messages. Keeps
 /// user turns and assistant turns that actually said something; drops tool
 /// results and the empty assistant messages that only carried a tool call.
 public func conversationTurns(from messages: [[String: Any]]) -> [AITurn] {
@@ -246,7 +246,7 @@ public enum AISkillRankPolicy {
     public static let rankTimeout: Duration = .seconds(1.5)
 }
 
-/// Drives one AI conversation against the gateway (docs/architecture/09 §3/§6).
+/// Drives one AI conversation against the gateway.
 ///
 /// The gateway pauses its SSE stream on a `tool.call` until we post the tool
 /// result, so a tool call is handled inline in the receive loop: run the tool
@@ -268,20 +268,20 @@ public final class AISession {
     public private(set) var controlDeliveryErrorLocalizationKey: String?
     /// Name of the tool currently running, for a "Running get_schema…" hint.
     public private(set) var runningTool: String?
-    /// Cumulative tokens reported by the gateway this session (AI-08 quota UI).
+ /// Cumulative tokens reported by the gateway this session (quota UI).
     public private(set) var totalTokens = 0
-    /// Sub-agent transcripts by child thread id (docs/agents/architecture/06 §6).
+ /// Sub-agent transcripts by child thread id.
     public private(set) var subThreads: [String: SubAgentTranscript] = [:]
     /// Child thread ids grouped by `parentTurnID`, maintained alongside
     /// `subThreads` — see `subThreads(for:)`.
     private var subThreadIDsByParentTurn: [UUID: [String]] = [:]
     /// Messages sent while a turn was already streaming, waiting to run next
-    /// (AI-08): the composer stays usable during a response instead of
+ /// the composer stays usable during a response instead of
     /// dropping what you typed. Runs in order, one at a time.
     public private(set) var queuedMessages: [String] = []
     private var queuedMessageWasDisplayed: [Bool] = []
     /// Which path each queued message drains through — the backend queue
-    /// (AI-08) only ever knew how to redrive via `runTurn`, so on-device had
+ /// only ever knew how to redrive via `runTurn`, so on-device had
     /// no queue of its own. Kept parallel to `queuedMessages`/
     /// `queuedMessageWasDisplayed` rather than folding all three into one
     /// array, matching how those two already track state.
@@ -296,7 +296,7 @@ public final class AISession {
     /// a queued message being drained once the previous turn finishes.
     /// `AIPanelView` uses this to scroll to the new bubble directly and
     /// synchronously, the same way it already does for `send()` — reported
-    /// live that a message dequeued from AI-08's queue didn't get the same
+ /// live that a message dequeued from's queue didn't get the same
     /// treatment, only ever catching up later via the slower reactive
     /// `onChange` path.
     public var onTurnAdmitted: (() -> Void)?
@@ -479,7 +479,7 @@ public final class AISession {
 
     /// Whether `admitSend` would run a message immediately (true) or queue
     /// it (false) — the same condition its own guards check, exposed so a
-    /// caller can decide whether a precondition (AI-20: starting a real
+ /// caller can decide whether a precondition (starting a real
     /// trial before running the turn) is safe to attempt without leaving a
     /// queued message orphaned if that precondition then fails.
     public var canRunImmediately: Bool {
@@ -640,7 +640,7 @@ public final class AISession {
     private let skills: (any SkillRanking)?
     private let dialect: String
     /// Scopes saved threads to the connection this session was bound to
-    /// (§7.3 v28) — the saved profile's `UUID.uuidString`, or nil for a
+ /// (v28) — the saved profile's `UUID.uuidString`, or nil for a
     /// profileless quick-open connection. Never used for anything but
     /// thread scoping; tool execution reads the live connection directly.
     private let connectionKey: String?
@@ -774,7 +774,7 @@ public final class AISession {
             return .queued
         }
         // A turn already streaming just queues this one instead of dropping
-        // it (AI-08) — same "not a transcript bubble yet" treatment as the
+ // it — same "not a transcript bubble yet" treatment as the
         // activeInteraction branch above, so a queued send only shows up in
         // the composer's queued-messages strip until it actually dequeues
         // and runs (drainQueuedMessageIfReady appends the bubble then).
@@ -805,7 +805,7 @@ public final class AISession {
 
     /// Fails a turn `admitSend` already began (assistant bubble already on
     /// the transcript, `isStreaming` already true) before any network call
-    /// happened — for a precondition that turned out not to hold (AI-20:
+ /// happened — for a precondition that turned out not to hold
     /// an auto-trial-start attempt that failed before `runTurn` ever ran).
     /// `assistantTurnID` guards against a stale call landing on a
     /// different turn that has since taken the same index.
@@ -834,7 +834,7 @@ public final class AISession {
         await run(admitSend(text))
     }
 
-    /// Sync half of editing an already-sent message (AI-35) — mirrors
+ /// Sync half of editing an already-sent message — mirrors
     /// `admitSend`'s split and must run on the same MainActor call stack as
     /// the Edit/Send action, for the same reason documented there. Truncates
     /// `transcript` back to before the edited turn, retargets the thread's
@@ -870,7 +870,7 @@ public final class AISession {
         return admitSend(newText)
     }
 
-    /// Switches to a different version at a fork point (AI-35's `‹ i/N ›`
+ /// Switches to a different version at a fork point ('s `‹ i/N ›`
     /// nav) — `messageID` names ONE sibling; this resolves that sibling's
     /// own current tip (it may itself have been edited further since) and
     /// reloads the transcript for that path.
@@ -1175,7 +1175,7 @@ public final class AISession {
         let newCursor: Int?
     }
 
-    /// Client-built turn context (Q17 §7.4): the last `recentWindow` local
+ /// Client-built turn context (Q17): the last `recentWindow` local
     /// messages, plus the last *successfully persisted* rolling summary and
     /// whatever hasn't been folded into it yet, sent as raw messages instead
     /// of waiting on a fresh fold (Task 7.1) — no network call happens here.
@@ -1200,10 +1200,10 @@ public final class AISession {
         }
         // Bounded probe: fetch one more than the threshold, so its row count
         // alone says whether this thread needs compression — never fetching a
-        // long-lived thread's full history just to learn it's long (docs/feature/08
+ // long-lived thread's full history just to learn it's long
         // perf follow-up: the DB read below used to be `aiMessagesAsync(threadID:)`
         // unbounded, re-fetching the entire thread on every single turn).
-        // AI-35: active path only, throughout — an edited-away message must
+ // active path only, throughout — an edited-away message must
         // not leak into the model's own context.
         let probeLimit = AIConversationPolicy.summaryThreshold + 1
         let probe = (try? await store.activeAIRecentMessagesAsync(threadID: id, limit: probeLimit)) ?? []
@@ -1334,8 +1334,8 @@ public final class AISession {
         try? store.saveAIThread(thread)
     }
 
-    /// Persists the turn locally (Q17 §7.3) — the backend no longer does this
-    /// (stateless `post_message`, §7.4). Only the display-level user/assistant
+ /// Persists the turn locally (Q17) — the backend no longer does this
+ /// (stateless `post_message`). Only the display-level user/assistant
     /// text is kept, not intermediate tool-call/tool-result messages (unlike
     /// the old backend's full raw history) — the next turn's context is
     /// slightly less detailed there, but display/summary continuity holds.
@@ -1349,7 +1349,7 @@ public final class AISession {
         var seq = (try? await store.aiMessagesAsync(threadID: id).count) ?? 0
         let now = Date()
         var persisted: [AIMessageRecord] = []
-        // AI-35: every write chains onto the thread's current active tip and
+ // every write chains onto the thread's current active tip and
         // advances it, so the message tree never has a gap — this applies
         // uniformly to normal sends, interaction resolution, and report
         // turns (every `persistTurn` call site), even though only normal
@@ -1388,7 +1388,7 @@ public final class AISession {
     }
 
     /// Writes `persistTurn`'s returned records' ids back onto the transcript
-    /// entries they came from (AI-35) — every call site appends the user
+ /// entries they came from — every call site appends the user
     /// turn immediately before `assistant`'s empty placeholder (`admitSend`/
     /// `beginTurn` and this file's other turn-starting call sites all follow
     /// that same shape), so matching by role against those two fixed
@@ -1493,7 +1493,7 @@ public final class AISession {
         // from `message.complete` left every one of those cases ticking
         // "Working…" forever on a turn that had already stopped — the reported
         // hang. Now that `TurnView.showsResponseText` gates the response
-        // bubble on this same value (docs/feature/09 §block response), an
+ // bubble on this same value (response), an
         // unsettled block would also hide whatever partial answer did arrive.
         //
         // Guarded on the turn still being the one we started (same index and
@@ -1609,7 +1609,7 @@ public final class AISession {
                     appendSub(tid, text: payload.text, parentTurnID: assistantTurnID, replace: isNewRound)
                 }
                 // TEMPORARY diagnostic (investigating reported release-build
-                // stutter, docs/tests/crash.md): the existing top-of-loop
+ // stutter): the existing top-of-loop
                 // "consumer: message.delta" tick spans event RECEIPT +
                 // PROCESSING together. This one covers processing alone, so
                 // comparing the two spans for the same event count tells
@@ -1621,7 +1621,7 @@ public final class AISession {
                 //
                 // The trace text is deliberately DISCARDED — see
                 // `AITurn.hadReasoning`. This case is the single hottest event
-                // on the stream (5684 in one round, docs/tests/crash.md), and
+ // on the stream (5684 in one round), and
                 // every write here lands on an `@Observable` array, so
                 // accumulating text nothing renders cost a full view-tree
                 // invalidation per token. All that is needed is "reasoning
@@ -1631,7 +1631,7 @@ public final class AISession {
                 guard isRoot else { break }
                 if !transcript[assistantIndex].hadReasoning {
                     // Reasoning is part of the same unified "working" activity
-                    // as tool calls (docs/feature/09) — `noteReasoning` starts
+ // as tool calls — `noteReasoning` starts
                     // the same live-timer clock the header reads, whichever of
                     // the two happens first (a reasoning-mode model typically
                     // thinks before its very first tool call, if it ever makes
@@ -2025,8 +2025,8 @@ public final class AISession {
         subThreads[threadID] = sub
     }
 
-    /// AI-31 (docs/draft/09.md): if this tool call's result carries an
-    /// `artifact_id` (AI-30's create_debug_tab/propose_sql/propose_query/
+ /// if this tool call's result carries an
+ /// `artifact_id` ('s create_debug_tab/propose_sql/propose_query/
     /// run_sql/run_tab_statements), attach a reference to it on the root
     /// turn so the bubble can link to it — mutates `transcript[index]`
     /// in place (not a copy-then-reassign) for the same reason `.delta`
@@ -2067,7 +2067,7 @@ public final class AISession {
         transcript[assistantIndex].text += transcript[assistantIndex].work.promoteProvisionalText()
     }
 
-    // MARK: - Working-block action detail (docs/feature/09)
+ // MARK: - Working-block action detail
 
     /// Caps below exist because these strings live in the transcript for the
     /// whole session. A `run_sql` result can be megabytes; copying it here to
@@ -2209,11 +2209,11 @@ public final class AISession {
         return refs
     }
 
-    /// Run one turn entirely on-device via LocalAgentLoop (AI-20). Conversation
+ /// Run one turn entirely on-device via LocalAgentLoop. Conversation
     /// ownership remains local and clarification uses the same pending UI.
     ///
     /// Queues under the same conditions `admitSend` already does for the
-    /// backend path (AI-08), instead of silently no-oping while streaming.
+ /// backend path, instead of silently no-oping while streaming.
     /// Outcome of admitting a newly submitted on-device prompt
     /// (`admitSendLocal`) — mirrors `SendAdmission` for the local path.
     public enum SendLocalAdmission: Sendable {
@@ -2370,7 +2370,7 @@ public final class AISession {
         reportContextSummaryUnavailable = false
     }
 
-    /// Open a saved conversation for display + continuation (AI-21).
+ /// Open a saved conversation for display + continuation.
     public func loadThread(id: String, turns: [AITurn]) {
         guard canChangeThread else { return }
         threadID = id
@@ -2400,7 +2400,7 @@ public final class AISession {
     public var currentConnectionKey: String? { connectionKey }
 
     /// The device's saved conversations for this dialect + connection, most-recent
-    /// first (Q17, docs/agents/architecture/11 §7.3, connectionKey per v28). No real
+ /// first (Q17,, connectionKey per v28). No real
     /// pagination needed locally; prefix to limit while preserving public signature.
     public func availableThreads(limit: Int = 50, beforeUpdatedAt: Int? = nil, beforeID: String? = nil) async -> [AIThreadSummary] {
         let records = (try? store.aiThreads(dialect: dialect, connectionKey: connectionKey)) ?? []
@@ -2435,7 +2435,7 @@ public final class AISession {
         }
     }
 
-    /// Reconstructs `AITurn`s for a thread's ACTIVE path (AI-35) — the
+ /// Reconstructs `AITurn`s for a thread's ACTIVE path — the
     /// branch-aware replacement for a flat `store.aiMessages` read, shared by
     /// `openThread` and `selectSibling` so both rebuild the transcript the
     /// same way.
@@ -2446,7 +2446,7 @@ public final class AISession {
             switch record.role {
             case "user": return AITurn(role: .user, text: text, messageID: record.id)
             case "assistant":
-                // AI-31: without this, an artifact's bubble link only ever
+ // without this, an artifact's bubble link only ever
                 // lived in the in-memory session — reopening this thread
                 // from history/after a restart would silently drop it even
                 // though the artifact itself is still there.
@@ -2809,7 +2809,7 @@ public final class AISession {
     }
 
     private func recentReportContext(attach: Bool) -> [AIContextMessage] {
-        // AI-35: active path only — a report must never attach an
+ // active path only — a report must never attach an
         // edited-away version of the conversation.
         guard attach, let threadID, let id = UUID(uuidString: threadID),
               let all = try? store.activeAIMessages(threadID: id) else { return [] }
@@ -3337,7 +3337,7 @@ public final class AISession {
         )
     }
 
-    /// The thread id is now purely local (Q17 §7.4) — a fresh UUID, saved to
+ /// The thread id is now purely local (Q17) — a fresh UUID, saved to
     /// `BerryStore` right away so the first `appendAIMessage` in
     /// `persistTurn` has a parent row to attach to. No backend round trip:
     /// `schemaDigest` (still accepted for API-source compatibility) is
@@ -3351,8 +3351,8 @@ public final class AISession {
         return id.uuidString
     }
 
-    /// The client is the source of truth for the tool list (05 §4): the
-    /// static tools plus this turn's top-K skill:<name> shortcuts (07 §7),
+ /// The client is the source of truth for the tool list: the
+ /// static tools plus this turn's top-K skill:<name> shortcuts,
     /// ranked against this turn's message.
     ///
     /// The rank call is bounded (Task 7.2): a slow or hung `rankSkills`

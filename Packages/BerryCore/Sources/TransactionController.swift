@@ -2,7 +2,7 @@ import BerryDriverKit
 import Foundation
 import Observation
 
-/// Manual transaction control for the SQL editor (ED-11) — docs/architecture/06 · L2.
+/// Manual transaction control for the SQL editor.
 ///
 /// State is connection-scoped: the workspace shares one physical connection,
 /// so a transaction opened here spans every editor tab on that session. When

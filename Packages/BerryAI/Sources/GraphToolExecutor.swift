@@ -1,14 +1,14 @@
 import BerryGraph
 import Foundation
 
-/// Answers the `graph_query` tool (docs/architecture/11 §7) against the
+/// Answers the `graph_query` tool against the
 /// persisted DSG. **Metadata only, runs entirely local** — never touches the
 /// DBMS: it loads the latest harvested snapshot for the active profile via
 /// `GraphStore.loadGraph` and runs the pure-Swift graph algorithms. Callers
 /// name tables/views by their plain name; the executor resolves them to node
 /// ids and answers with names so the model never sees internal keys.
 ///
-/// Ops (§7): `neighbors`, `path`, `blast_radius`, `scc`, `top_centrality`.
+/// Ops: `neighbors`, `path`, `blast_radius`, `scc`, `top_centrality`.
 @MainActor
 public final class GraphToolExecutor: AIToolExecutor {
     /// Dependency edges that matter for impact analysis — FK and view
@@ -126,7 +126,7 @@ public final class GraphToolExecutor: AIToolExecutor {
         return .ok(Self.json(["top_by_dependents": top]))
     }
 
-    // MARK: - get_stats (docs/architecture/11 §7)
+ // MARK: - get_stats
 
     /// Reads harvested statistics off the persisted DSG node attrs — table size /
     /// rows / scan counts and unused indexes. Metadata only; no DBMS access.

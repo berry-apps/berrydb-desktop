@@ -1,11 +1,11 @@
 import Foundation
 
-/// Builds a Daily Review digest from the Insight Panel's findings (DI-23,
-/// docs/architecture/13 §5.3) — pure, no DBMS/network access. `isDue` decides
+/// Builds a Daily Review digest from the Insight Panel's findings
+/// — pure, no DBMS/network access. `isDue` decides
 /// whether enough time has passed to generate a new one: BerryDB defines this
 /// cadence itself (fixed, not user-configurable), which is what keeps this
-/// out of "automation/scheduler" territory (docs/architecture/01 §5 non-goal)
-/// — see docs/architecture/13 §1's "not a 24/7 agent" principle.
+/// out of "automation/scheduler" territory (non-goal)
+/// see's "not a 24/7 agent" principle.
 public struct DailyReviewSummary: Codable, Sendable, Equatable {
     public let criticalCount: Int
     public let warningCount: Int

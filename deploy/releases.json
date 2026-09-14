@@ -1,13 +1,33 @@
 [
   {
+    "version": "1.0.2",
+    "build": "202608130225",
+    "file": "BerryDB-1.0.2.dmg",
+    "path": "dist/BerryDB-1.0.2.dmg",
+    "length": 28460920,
+    "edSignature": "4GRamD1ac6wW8N9fm955ztZ9K57glejtGZ7/uChovZvKAmvG+wT026NSVzmbvfxCR1RytQEmoUckUXOzFbrGDw==",
+    "minimumSystemVersion": "14.0",
+    "pubDate": "Wed, 12 Aug 2026 19:29:16 +0000"
+  },
+  {
+    "version": "1.0.1",
+    "build": "202608112322",
+    "file": "BerryDB-1.0.1.dmg",
+    "path": "dist/BerryDB-1.0.1.dmg",
+    "length": 28344310,
+    "edSignature": "U5T2P9GzqCLZ17TdgYHJWncJ3NAmUrUpl0PNes7RZd9gumse/2B2DWysxivzxORrOOQTWamt9oU10myrgMbNDg==",
+    "minimumSystemVersion": "14.0",
+    "pubDate": "Tue, 11 Aug 2026 16:24:37 +0000"
+  },
+  {
     "version": "1.0.0",
-    "build": "202608111324",
+    "build": "202608111721",
     "file": "BerryDB-1.0.0.dmg",
     "path": "dist/BerryDB-1.0.0.dmg",
-    "length": 28342164,
-    "edSignature": "jyqYschCmxZMJ8zV5Nx5jAcLkQBoP61Ev+XJe25z3p4K1VWCkptEOAsGcdYIhU/qpS6RJJ0UIU8A8YepQT+2Ag==",
+    "length": 28273526,
+    "edSignature": "+0BPjIBtFGf3Uhikg+Z1Sb0S2CUhvgf6QQP93ZH1mSq8lL8aI16MAeiP3jKOpzSIFh8BxKahLc5LqUSRIqFJAA==",
     "minimumSystemVersion": "14.0",
-    "pubDate": "Tue, 11 Aug 2026 06:32:19 +0000"
+    "pubDate": "Tue, 11 Aug 2026 10:27:35 +0000"
   },
   {
     "version": "0.1.0",

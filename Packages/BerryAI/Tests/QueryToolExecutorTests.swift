@@ -56,7 +56,7 @@ private final class LeaseInvalidator {
 /// concurrently is a pre-existing race that grew more likely to manifest as
 /// this suite (now 40+ tests) grew across the Artifacts phases.
 @MainActor
-@Suite("QueryToolExecutor (docs/architecture/09 §4/§6)", .serialized)
+@Suite("QueryToolExecutor", .serialized)
 struct QueryToolExecutorTests {
     private func makeSession() async throws -> Session {
         DriverRegistry.register(SQLiteDriver.self)
@@ -351,7 +351,7 @@ struct QueryToolExecutorTests {
         _ = await executor.execute(AIToolCall(id: "c1", name: "get_schema", args: [:]))
         #expect(executor.overviewBuildCount == 1)
 
-        // Explicit schema refresh (docs/architecture — WorkspaceViewModel.refreshSchema()
+ // Explicit schema refresh (WorkspaceViewModel.refreshSchema()
         // calls catalog.invalidate() on this same actor before re-reading objects).
         try await drain("CREATE TABLE fresh (id INTEGER)", on: session)
         await catalog.invalidate()
@@ -424,7 +424,7 @@ struct QueryToolExecutorTests {
         let executor = makeExecutor(session: session, gate: gate)
 
         // A plain INSERT is DangerLevel.safe on a non-production connection, yet
-        // AI writes must always be approved (§6).
+ // AI writes must always be approved.
         let outcome = await executor.execute(
             AIToolCall(id: "c", name: "run_sql", args: ["sql": "INSERT INTO t (id, name) VALUES (3, 'cal')"])
         )
@@ -548,7 +548,7 @@ struct QueryToolExecutorTests {
         #expect(outcome.status == "error")
     }
 
-    // MARK: - SQL-tab tools (AI-17/18/19)
+ // MARK: - SQL-tab tools
 
     @Test func readCurrentTabReturnsSnapshot() async throws {
         let session = try await makeSession()
@@ -829,7 +829,7 @@ struct QueryToolExecutorTests {
         #expect(captured?.title == "Dead tuple bloat")
     }
 
-    /// docs/feature/08 (AI-27/28): if the created tab's kind isn't covered by
+ /// if the created tab's kind isn't covered by
     /// `readActiveTab()` (e.g. Qdrant today), the result still reports
     /// `created: true` — the tab_id/tab_title/pane fields are just omitted
     /// rather than failing the tool call.
@@ -852,7 +852,7 @@ struct QueryToolExecutorTests {
         #expect(obj["tab_title"] == nil)
     }
 
-    // MARK: - Artifacts (AI-30, docs/draft/09.md)
+ // MARK: - Artifacts
 
     /// Minimal in-test stand-in for the tab/artifact-linking closures
     /// `WorkspaceViewModel`/`AIPanelController` normally provide in

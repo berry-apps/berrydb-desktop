@@ -9,9 +9,9 @@ import CryptoKit
 import Foundation
 import Observation
 
-/// Drives the AI panel (docs/architecture/09 §1/§5/§6): owns the per-connection
+/// Drives the AI panel: owns the per-connection
 /// `AISession`, the local tool executor, the inline approval flow, and the
-/// AI-06/AI-07 switches. Rebuilt whenever the workspace's active session
+/// switches. Rebuilt whenever the workspace's active session
 /// changes. The heavy lifting (SSE, tools) lives in BerryAI; this is the glue
 /// to the workspace + license + editor.
 @MainActor
@@ -21,14 +21,14 @@ public final class AIPanelController {
     public enum Availability: Equatable {
         case noConnection
         case unlicensed
-        /// AI-07: switched off for this connection (default on production).
+ /// switched off for this connection (default on production).
         case disabledForConnection
-        /// First use of this connection must accept the metadata policy (§6).
+ /// First use of this connection must accept the metadata policy.
         case needsConsent
         case ready
     }
 
-    /// A statement the agent wants to run, awaiting the user's decision (§6).
+ /// A statement the agent wants to run, awaiting the user's decision.
     public struct PendingApproval: Identifiable, Equatable {
         public let id = UUID()
         public let sql: String
@@ -36,7 +36,7 @@ public final class AIPanelController {
         public var isDangerous: Bool { danger != .safe }
     }
 
-    /// An MCP tool call awaiting the user's decision (docs/agents/architecture/08 §6).
+ /// An MCP tool call awaiting the user's decision.
     public struct PendingMCPApproval: Identifiable, Equatable {
         public let id = UUID()
         public let serverID: String
@@ -44,20 +44,20 @@ public final class AIPanelController {
         public let argumentsJSON: String
     }
 
-    /// AI usage/access state from `GET /v1/ai/balance` (TM-12/13). Unconditional
+ /// AI usage/access state from `GET /v1/ai/balance`. Unconditional
     /// now: every account gets both its trial-era `tokenQuota` snapshot (frozen
     /// once a trial converts to a balance — see the server's doc comment on
     /// `BalanceResponse`) *and* its pay-as-you-go `balanceMicros`/`models`, so
     /// the UI can show all three usage bars (trial, and each selectable
     /// model) together rather than branching on current plan.
-    public struct Balance: Equatable {
-        public struct TokenQuota: Equatable {
+    public struct Balance: Equatable, Sendable {
+        public struct TokenQuota: Equatable, Sendable {
             public let used: Int
             public let limit: Int
-            /// `limit == 0` means unlimited (docs/feature/05 §3) — never report that as exhausted.
+ /// `limit == 0` means unlimited — never report that as exhausted.
             public var isExhausted: Bool { limit > 0 && used >= limit }
         }
-        public struct Model: Equatable, Identifiable {
+        public struct Model: Equatable, Identifiable, Sendable {
             public let id: String
             public let name: String
             public let tokensRemaining: Int
@@ -105,7 +105,7 @@ public final class AIPanelController {
         /// Mirrors `check_ai_allowance`'s actual gate: when a quota fallback
         /// (trial grant or admin override) is active, the account only reads
         /// as exhausted once *both* that quota and the balance are gone, not
-        /// just one (docs/tests/02.md #3) — otherwise it's balance-only.
+ /// just one (#3) — otherwise it's balance-only.
         public var isExhausted: Bool {
             quotaFallbackActive ? (tokenQuota.isExhausted && balanceMicros <= 0) : balanceMicros <= 0
         }
@@ -155,10 +155,10 @@ public final class AIPanelController {
     /// propose_sql bridge — the workspace inserts the SQL into an editor tab.
     /// Second value is an optional tab title, used only when no query tab is open
     /// and one has to be created — that tab was always landing as "Untitled"
-    /// (docs/feature/09).
+ ///
     public var onPropose: ((String, String?) -> Void)?
 
-    /// SQL-tab tool bridges (docs/agents/architecture/09 §5 — AI-17/18/19). The
+ /// SQL-tab tool bridges. The
     /// workspace supplies these reading the active `EditorDocument`; when nil the
     /// tools report no active tab. `activeTabStatements` takes the tool's raw
     /// "all"/"selection"/"cursor" so this controller never names `EditorDocument`.
@@ -167,29 +167,29 @@ public final class AIPanelController {
     public var readOpenTabs: (() -> OpenTabsSnapshot?)?
     public var activeTabStatements: ((String) -> [String])?
     /// Live tab/pane/action-log snapshot for `get_ui_state`/`query_ui_graph`
-    /// (docs/feature/08, AI-27) — unlike `readOpenTabs`, carries every tab in
+ /// unlike `readOpenTabs`, carries every tab in
     /// each pane, not just the active one.
     public var uiGraphSnapshot: (() -> UIGraphSnapshot?)?
     /// The command palette / menu bar's action registry, re-described for AI
-    /// routing (DI-22, docs/architecture/13 §5.3) — see `UIActionEntry`.
+ /// routing — see `UIActionEntry`.
     public var uiActionEntries: (() -> [UIActionEntry])?
     /// AI Schema Review for a proposed new column (`preview_migration`,
-    /// docs/architecture/13 §6) — `WorkspaceViewModel.previewNewColumn`.
+ /// — `WorkspaceViewModel.previewNewColumn`.
     public var previewNewColumn: ((String, ColumnDesign) async -> [Insight]?)?
-    /// Impact Simulator (`simulate_impact`, docs/architecture/13 §6) —
+ /// Impact Simulator (`simulate_impact`)
     /// `WorkspaceViewModel.simulateImpact`, same as Graph Explorer uses.
     public var simulateImpact: ((String) -> ImpactSimulator.Report?)?
-    /// Daily Review digest (`get_daily_review`, docs/architecture/13 §6) —
+ /// Daily Review digest (`get_daily_review`)
     /// `WorkspaceViewModel.maybeGenerateDailyReview`/`latestDailyReview`, same
     /// as the Insight Panel's "Today's Summary" uses.
     public var maybeGenerateDailyReview: (() async -> Void)?
     public var latestDailyReview: (() -> DailyReviewSummary?)?
-    /// Slow-query ranking (`get_slow_queries`, docs/feature/07 §14) —
+ /// Slow-query ranking (`get_slow_queries`)
     /// `WorkspaceViewModel.slowestQueries`, base "ai" tier like History
     /// itself (not Intelligence-gated).
     public var slowestQueries: ((Int) -> [QueryHistoryEntry])?
     public var createDebugTab: ((String, String?) -> Void)?
-    /// `open_mermaid_tab` (AI-34 follow-up) — same action as `MermaidBlock`'s
+ /// `open_mermaid_tab` (follow-up) — same action as `MermaidBlock`'s
     /// "Open in Tab" button (`openMermaidInTab` below), but reachable from a
     /// tool call instead of only a chat-bubble click.
     public var openMermaidTab: ((String, String?) -> Void)?
@@ -198,24 +198,24 @@ public final class AIPanelController {
     /// per `aiSession` construction in `bind()`, since `aiSession` itself is
     /// rebuilt on a genuine connection switch.
     public var onTurnAdmitted: (() -> Void)?
-    /// AI-30 (docs/draft/09.md): read/write the artifact linked to a tab, so
+ /// read/write the artifact linked to a tab, so
     /// `QueryToolExecutor` can accumulate versions onto the same artifact
     /// across repeated tool calls instead of creating a new one each time —
     /// `WorkspaceViewModel.artifactID(forTab:)`/`setArtifactID(_:forTab:)`.
     public var resolveArtifactID: ((String) -> UUID?)?
     public var linkArtifact: ((String, UUID) -> Void)?
-    /// AI-31: opens the artifact a chip in the transcript links to —
+ /// opens the artifact a chip in the transcript links to
     /// `WorkspaceViewModel.openArtifact(id:)`.
     public var openArtifact: ((UUID) -> Void)?
-    /// AI-32: opens the table/view a linkified `@{Name}` mention in a user's
+ /// opens the table/view a linkified `@{Name}` mention in a user's
     /// own bubble resolves to — `WorkspaceViewModel.selectObject(id:)`.
     public var openObject: ((String) -> Void)?
-    /// docs/feature/09: Cmd-clicking a working-block action's payload opens it as
+ /// Cmd-clicking a working-block action's payload opens it as
     /// a new editor tab — `WorkspaceViewModel.newEditorTab(text:)`. Unlike
     /// `openArtifact`, this text may never have been an artifact at all (a
     /// `get_schema` object list, a statement the model proposed but never ran).
     public var openTextInTab: ((String) -> Void)?
-    /// AI-34: opens a chat-rendered Mermaid diagram as its own tab, zoomable —
+ /// opens a chat-rendered Mermaid diagram as its own tab, zoomable
     /// `WorkspaceViewModel.openMermaidDiagram(source:)`.
     public var openMermaidInTab: ((String) -> Void)?
 
@@ -232,7 +232,7 @@ public final class AIPanelController {
     public func noteWorkingBlockLayoutChange() {
         workingBlockLayoutGeneration += 1
     }
-    /// AI-32: candidates for the `@` mention autocomplete —
+ /// candidates for the `@` mention autocomplete
     /// `WorkspaceViewModel.matchingArtifactMentions(query:)`.
     public var mentionCandidates: ((String) -> [ArtifactMentionItem])?
 
@@ -241,15 +241,15 @@ public final class AIPanelController {
     public private(set) var aiSession: AISession?
     private var executor: QueryToolExecutor?
 
-    /// Local chat history + sqlite-vec RAG (Q17, docs/agents/architecture/11
-    /// §7). Independent connection from `WorkspaceViewModel`'s own `BerryStore`
+ /// Local chat history + sqlite-vec RAG (Q17,
+ /// Independent connection from `WorkspaceViewModel`'s own `BerryStore`
     /// (same pattern that already uses — GRDB/SQLite is fine with multiple
     /// connections to the same store.sqlite). Falls back to an in-memory store
     /// if `store.sqlite` can't be opened, so a rare disk error degrades to
     /// "chat doesn't persist" instead of the whole AI panel breaking.
     private let store: BerryStore = (try? BerryStore.open()) ?? (try! BerryStore(path: ":memory:"))
 
-    /// Saved conversations for the panel's history menu (AI-21).
+ /// Saved conversations for the panel's history menu.
     public private(set) var threads: [AIThreadSummary] = []
 
     public private(set) var hasMoreThreads = true
@@ -272,7 +272,7 @@ public final class AIPanelController {
 
     /// Load the next page of past conversations for the current database/dialect.
     /// Keyset cursor from the last row we hold — stable even if a thread is
-    /// touched between page loads (AI-21).
+ /// touched between page loads.
     public func loadMoreThreads() async {
         guard hasMoreThreads, !isLoadingMore, let cursor = threads.last else { return }
         isLoadingMore = true
@@ -310,7 +310,7 @@ public final class AIPanelController {
         await refreshThreads()
     }
 
-    /// Persisted per-connection AI preferences (AI-06/AI-07 + consent).
+ /// Persisted per-connection AI preferences (+ consent).
     public struct AIConnectionSettings: Equatable, Sendable {
         public var enabled: Bool
         public var allowSampleRows: Bool
@@ -340,12 +340,12 @@ public final class AIPanelController {
     /// quick-open connections stay in memory only.
     public var loadSettings: ((UUID) -> AIConnectionSettings?)?
     public var saveSettings: ((UUID, AIConnectionSettings) -> Void)?
-    /// Builds the local `graph_query` executor for a profile (docs/architecture
-    /// 11 §7); nil disables the tool (quick-open / no store). Wired by the
+ /// Builds the local `graph_query` executor for a profile
+ /// nil disables the tool (quick-open / no store). Wired by the
     /// workspace so this controller stays free of the graph module.
     public var makeGraphExecutor: ((UUID) -> (any AIToolExecutor)?)?
 
-    // Per-connection settings (AI-06/AI-07). Changes persist unless restoring.
+ // Per-connection settings. Changes persist unless restoring.
     public var enabledForConnection = false {
         didSet { persistSettings() }
     }
@@ -372,7 +372,7 @@ public final class AIPanelController {
 
     public private(set) var pendingApproval: PendingApproval?
     private var approvalContinuation: CheckedContinuation<Bool, Never>?
-    /// Set by an approval card's "Run All Safe" button (§6) — subsequent
+ /// Set by an approval card's "Run All Safe" button — subsequent
     /// safe statements this turn skip the prompt entirely instead of
     /// re-asking one by one (e.g. running many SELECTs from a tab). Reset
     /// at the start of every new user message so the trust never silently
@@ -382,19 +382,19 @@ public final class AIPanelController {
     /// already classified safe.
     private var autoApproveSafeThisTurn = false
 
-    // MCP (AI-16): servers the user has enabled/trusted this session (in-memory —
-    // persistence is a follow-up) and the pending per-call approval (§6).
+ // MCP: servers the user has enabled/trusted this session (in-memory
+ // persistence is a follow-up) and the pending per-call approval.
     public var enabledMCPServers: Set<String> = []
     private var trustedMCPServers: Set<String> = []
     public private(set) var pendingMCPApproval: PendingMCPApproval?
     private var mcpApprovalContinuation: CheckedContinuation<Bool, Never>?
     private var mcpExecutor: MCPToolExecutor?
     private var capabilityHost: LocalCapabilityHost?
-    /// The curated MCP allowlist (§2), for the settings UI.
+ /// The curated MCP allowlist, for the settings UI.
     public let mcpAllowlist: [MCPServerManifest] = MCPAllowlist.bundled()
 
     public var draft = ""
-    /// Set while the composer is editing a previously-sent message (AI-35)
+ /// Set while the composer is editing a previously-sent message
     /// instead of drafting a new one — `prepareSend()` routes to
     /// `AISession.prepareEdit` and clears this the moment it's consumed.
     public var editingMessageID: UUID?
@@ -418,7 +418,7 @@ public final class AIPanelController {
     public var matchingCommands: [ChatCommand] { ChatCommands.matching(commandQuery ?? "") }
 
     /// The text after the last word-starting "@" in the draft, or nil if
-    /// there isn't an open one (AI-32, docs/draft/09.md) — e.g. "show me
+ /// there isn't an open one — e.g. "show me
     /// @use" → "use". Triggers on a bare "@" (matching the common
     /// Slack/Notion convention the user expected, not the original "@{"
     /// design) but only when it starts a "word" — preceded by whitespace or
@@ -625,7 +625,7 @@ public final class AIPanelController {
     /// an already-running conversation.
     public var isBuilt: Bool { aiSession != nil }
 
-    /// TM-12/14: the real gate is the credit balance now, not the license
+ /// the real gate is the credit balance now, not the license
     /// status — a `.trialExpired` device (trial fully lapsed, never topped
     /// up) still reaches `.ready` so it can see the "insufficient_credit"
     /// error bar and its "Add Credit" CTA, instead of being blocked outright
@@ -639,7 +639,7 @@ public final class AIPanelController {
         return .ready
     }
 
-    /// True when Apple Intelligence access (AI-20) — not a real
+ /// True when Apple Intelligence access — not a real
     /// license/trial — has been granted and is currently usable. Re-evaluated
     /// live, not cached, off `license.status` and
     /// `AppleFoundationProvider.isAvailable()`.
@@ -655,8 +655,8 @@ public final class AIPanelController {
     // MARK: - Bind to the active session
 
     /// Rebuilds the AI session for a (possibly nil) workspace connection.
-    /// Restores this connection's saved AI settings (AI-06/AI-07 + consent), or
-    /// applies defaults — AI off by default on production (§6, KN-07).
+ /// Restores this connection's saved AI settings (+ consent), or
+ /// applies defaults — AI off by default on production.
     public func bind(
         session: Session?,
         dataSourceSession: DataSourceSession? = nil,
@@ -702,7 +702,7 @@ public final class AIPanelController {
         autoApproveSelects = saved?.autoApproveSelects ?? true
         enabledMCPServers = saved?.enabledMCPServers ?? []
         trustedMCPServers = saved?.trustedMCPServers ?? []
-        // AI-07: default OFF on production (KN-07) when there's no saved choice.
+ // default OFF on production when there's no saved choice.
         enabledForConnection = saved?.enabled ?? (session.map { !$0.isProduction } ?? (dataSourceSession != nil))
         isRestoring = false
 
@@ -736,9 +736,9 @@ public final class AIPanelController {
         var routes: [String: any AIToolExecutor] = [
             "list_skills": skillExecutor,
             "load_skill": skillExecutor,
-            // Tab/pane awareness (docs/feature/08, AI-27/28) — deliberately
+ // Tab/pane awareness — deliberately
             // registered unconditionally, unlike graph_query/get_stats below:
-            // this is base "ai" capability, not Intelligence-tier (05 §7).
+ // this is base "ai" capability, not Intelligence-tier.
             "get_ui_state": uiGraphExecutor,
             "query_ui_graph": uiGraphExecutor,
         ]
@@ -780,7 +780,7 @@ public final class AIPanelController {
                         case .search:
                             // Same reasoning as Qdrant above — Elasticsearch's
                             // Query DSL script isn't Mongo shell syntax either
-                            // (docs/architecture/17 §5).
+ //
                             let query = try ElasticsearchQueryScript.parse(sql)
                             return try await Self.runDataSourceStatement(
                                 readQuery: query.readQuery, changeSets: query.changeSets, collection: query.index,
@@ -838,26 +838,26 @@ public final class AIPanelController {
             self.executor = nil
         }
 
-        // Register graph_query alongside the SQL tools in one AISession (09 §4)
-        // when a DSG is available for this profile (11 §7); otherwise the SQL
+ // Register graph_query alongside the SQL tools in one AISession
+ // when a DSG is available for this profile; otherwise the SQL
         // executor stands alone. DSG is SQL-only (!isNoSQL).
-        // Skills (AI-14) are always available; graph_query (11 §7) only with a DSG.
+ // Skills are always available; graph_query only with a DSG.
         if !isNoSQL, let profileID = currentProfileID, let graphExecutor = makeGraphExecutor?(profileID) {
             routes["graph_query"] = graphExecutor
             routes["get_stats"] = graphExecutor
-            // preview_migration (DI-15, docs/architecture/13 §6) — same
+ // preview_migration — same
             // Intelligence-tier availability as graph_query/get_stats, since
             // it compares against the same harvested DSG.
             routes["preview_migration"] = PreviewMigrationToolExecutor(previewNewColumn: { [weak self] table, column in
                 await self?.previewNewColumn?(table, column) ?? nil
             })
-            // simulate_impact (DI-16, docs/architecture/13 §6) — same
+ // simulate_impact — same
             // Intelligence-tier availability, since it also reads the
             // harvested DSG (plus query history).
             routes["simulate_impact"] = SimulateImpactToolExecutor(simulateImpact: { [weak self] table in
                 self?.simulateImpact?(table) ?? nil
             })
-            // get_daily_review (DI-23, docs/architecture/13 §6) — same
+ // get_daily_review — same
             // Intelligence-tier availability as the other bridges here.
             routes["get_daily_review"] = GetDailyReviewToolExecutor(
                 maybeGenerateDailyReview: { [weak self] in await self?.maybeGenerateDailyReview?() },
@@ -873,12 +873,12 @@ public final class AIPanelController {
             baseURL: backendURL,
             token: { LicenseManager.apiToken() ?? "dev-token" },
             reauthenticate: { [license] in await license.syncFromBackend() },
-            // AI Database Coach (docs/feature/07 §16) — a global preference,
+ // AI Database Coach — a global preference,
             // not per-connection (how the user likes things explained
             // doesn't change with which database they're looking at), same
             // @AppStorage key AIPanelView's picker writes.
             detailLevel: { UserDefaults.standard.string(forKey: "berry.ai.detailLevel") },
-            // TM-13/14: the user's chosen AI model, same @AppStorage key
+ // the user's chosen AI model, same @AppStorage key
             // AIPanelView's model picker writes. Empty string (the default)
             // is read back here too, so guard against sending a blank field.
             model: {
@@ -886,12 +886,12 @@ public final class AIPanelController {
                 return value?.isEmpty == false ? value : nil
             }
         )
-        // search_conversation (Q17 §7.5) runs entirely local now — no gateway
+ // search_conversation (Q17) runs entirely local now — no gateway
         // interception needed, just another client-executed tool like graph_query.
         routes["search_conversation"] = SearchConversationToolExecutor(
             store: store, transport: transport, currentThreadID: { [weak self] in self?.aiSession?.currentThreadID }
         )
-        // search_schema (DI-12, docs/feature/07 §13) — deliberately reads the
+ // search_schema — deliberately reads the
         // ungated `objects`/`collections` snapshot (base sidebar data, always
         // populated), NOT the Intelligence-gated harvested DSG, so this stays
         // base "ai" capability like search_conversation rather than inheriting
@@ -903,12 +903,12 @@ public final class AIPanelController {
                 isNoSQL ? collectionNames : objects.filter(\.kind.isRelational).map(\.name)
             }
         )
-        // get_slow_queries (docs/feature/07 §14) — reads query_history, base
+ // get_slow_queries — reads query_history, base
         // "ai" tier like History itself, available for SQL and NoSQL alike.
         routes["get_slow_queries"] = GetSlowQueriesToolExecutor(slowestQueries: { [weak self] limit in
             self?.slowestQueries?(limit) ?? []
         })
-        // skill:<name> (07 §7) and mcp:<server>:<tool> (08 §5) route by prefix.
+ // skill:<name> and mcp:<server>:<tool> route by prefix.
         capabilityHost?.invalidate()
         if let old = mcpExecutor { Task { await old.disconnectAll() } }
         let mcpExecutor = MCPToolExecutor(gate: MCPApprovalAdapter(controller: self))
@@ -952,20 +952,20 @@ public final class AIPanelController {
         }
         aiSession?.onTurnAdmitted = { [weak self] in self?.onTurnAdmitted?() }
 
-        // Spawn enabled MCP servers in the background (08 §5); their tools appear
+ // Spawn enabled MCP servers in the background; their tools appear
         // on the next turn once tools/list returns.
         let enabled = enabledMCPServers
         Task { await mcpExecutor.connect(mcpAllowlist, enabled: enabled) }
         // Populate history immediately after session is built so the
-        // history menu is non-empty even before the user opens it (AI-21).
+ // history menu is non-empty even before the user opens it.
         Task { await refreshThreads(autoLoadLatest: true) }
-        // Same for the balance footer (AI-08): otherwise it showed nothing
+ // Same for the balance footer: otherwise it showed nothing
         // at all until the user's first send completed — it must be visible
         // as soon as the panel is usable, not just after a message round trip.
         Task { await refreshBalance(force: true) }
     }
 
-    /// AI Command Palette NL routing (DI-22, docs/architecture/13 §5.3): a
+ /// AI Command Palette NL routing: a
     /// dedicated AI turn whose executor is deliberately narrow — UI
     /// navigation (`perform_ui_action`) plus the read-only analysis bridges
     /// already built for chat (`get_slow_queries`/`graph_query`/`get_stats`/
@@ -974,7 +974,7 @@ public final class AIPanelController {
     /// mutating capability to misuse, so this needs no separate
     /// narrow-system-prompt backend mode ("cheapest implementation" per the
     /// doc). This is what lets "impact of dropping X"/"optimize this
-    /// table"/"show slow queries" (docs/feature/07 §14) actually investigate
+ /// table"/"show slow queries" actually investigate
     /// instead of only opening a blank panel.
     /// Runs as its own `AISession`/thread rather than the panel's main one,
     /// so it costs the same as one ordinary chat turn (per the doc) without
@@ -993,7 +993,7 @@ public final class AIPanelController {
                 self?.slowestQueries?(limit) ?? []
             }),
         ]
-        // Read-only analysis bridges (11 §7, 13 §6) — SQL-only, same as the
+ // Read-only analysis bridges — SQL-only, same as the
         // main chat session's own gating for these tools.
         if dataSourceSession == nil, let profileID = currentProfileID, let graphExecutor = makeGraphExecutor?(profileID) {
             routes["graph_query"] = graphExecutor
@@ -1028,7 +1028,7 @@ public final class AIPanelController {
         return (entryExecutor.didPerform, reply)
     }
 
-    /// Enable/disable an allowlisted MCP server (08 §3) and reconnect so its tools
+ /// Enable/disable an allowlisted MCP server and reconnect so its tools
     /// (dis)appear. In-memory this session.
     public func setMCPServer(_ id: String, enabled: Bool) {
         if enabled { enabledMCPServers.insert(id) } else { enabledMCPServers.remove(id) }
@@ -1043,7 +1043,7 @@ public final class AIPanelController {
 
     // MARK: - Consent + send
 
-    /// Accept the metadata policy and turn AI on for this connection (§6).
+ /// Accept the metadata policy and turn AI on for this connection.
     public func giveConsentAndEnable() {
         enabledForConnection = true
         consentGiven = true
@@ -1102,7 +1102,7 @@ public final class AIPanelController {
         draft = ""
         // A fresh message starts a fresh trust window — "Run All Safe" from
         // an earlier turn must not silently cover statements a later,
-        // unrelated request proposes (§6).
+ // unrelated request proposes.
         autoApproveSafeThisTurn = false
         // A device with no real license/trial must never reach the metered
         // backend through any branch below — editing included.
@@ -1110,7 +1110,7 @@ public final class AIPanelController {
             if case .none = license.status { return false }
             return true
         }()
-        // Editing a past message (AI-35) always goes through the backend —
+ // Editing a past message always goes through the backend
         // versioning/tree state lives in AISession.prepareEdit, which
         // sendLocal's on-device loop doesn't participate in.
         if let messageID = editingMessageID {
@@ -1124,14 +1124,14 @@ public final class AIPanelController {
             guard let admission = aiSession.prepareEdit(messageID: messageID, newText: text) else { return nil }
             return .backend(admission)
         }
-        // On-device (AI-20): checked here, at the point of sending, not in
+ // On-device: checked here, at the point of sending, not in
         // `availability` — that's what keeps the toggle from also gating
         // whether the panel itself is reachable.
         if UserDefaults.standard.bool(forKey: "berry.ai.onDevice"), AppleFoundationProvider.isAvailable() {
             return .local(aiSession.admitSendLocal(text, provider: AppleFoundationProvider()))
         }
         guard hasRealLicense else {
-            // AI-20: no real license, but this device already has an email
+ // no real license, but this device already has an email
             // (captured when Apple Intelligence access was granted) — try
             // a real trial for it before giving up, instead of just
             // telling the user to go do it themselves. Requires
@@ -1169,7 +1169,7 @@ public final class AIPanelController {
                 // than leaving a permanent spinner or attempting the
                 // backend call anyway with no valid token. Reuse the same
                 // code→message mapping LicenseView uses (e.g. this device
-                // already used its trial under a different email, TM-07)
+ // already used its trial under a different email)
                 // instead of a generic message that would bury the actual,
                 // actionable reason.
                 if case let .run(_, assistantIndex, assistantTurnID) = admission {
@@ -1196,11 +1196,11 @@ public final class AIPanelController {
         // reading is stale, so force the refresh in exactly that case.
         let staleExhausted = balance?.isExhausted == true && aiSession.lastError == nil
         await refreshBalance(force: staleExhausted)
-        // A fresh chat now exists / got its title on the backend — reflect it (AI-21).
+ // A fresh chat now exists / got its title on the backend — reflect it.
         await refreshThreads()
     }
 
-    // MARK: - Approval gate backing (§6)
+ // MARK: - Approval gate backing
 
     func requestApproval(sql: String, danger: DangerLevel) async -> Bool {
         if danger == .safe, autoApproveSafeThisTurn { return true }
@@ -1220,7 +1220,7 @@ public final class AIPanelController {
         approvalContinuation = nil
     }
 
-    /// MCP tool approval (docs/agents/architecture/08 §6). A trusted server
+ /// MCP tool approval. A trusted server
     /// auto-approves; otherwise the panel prompts with server/tool/args.
     func requestMCPApproval(serverID: String, toolName: String, argumentsJSON: String, forcePrompt: Bool = false) async -> Bool {
         if trustedMCPServers.contains(serverID), !forcePrompt { return true }
@@ -1240,7 +1240,7 @@ public final class AIPanelController {
         mcpApprovalContinuation = nil
     }
 
-    // MARK: - Balance (AI-08, TM-12/13)
+ // MARK: - Balance
 
     /// `force` bypasses the throttle for an explicit user-facing refresh (none
     /// today, but kept for a future "refresh" action) — the implicit call
@@ -1263,14 +1263,14 @@ public final class AIPanelController {
         lastQuotaRefreshAttempt = Date()
     }
 
-    /// Global skills directory (docs/agents/architecture/07 §3).
+ /// Global skills directory.
     private static var skillsDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
         return base.appendingPathComponent("BerryDB/skills", isDirectory: true)
     }
 
-    /// Stable per-connection schema hash for the gateway's DDL cache (09 §3).
+ /// Stable per-connection schema hash for the gateway's DDL cache.
     private static func digest(_ objects: [SchemaObject]) -> String {
         let joined = objects
             .map { "\($0.kind.rawValue).\($0.name)" }
@@ -1287,7 +1287,7 @@ public final class AIPanelController {
     }
 
     /// Shared read/write execution for `run_tab_statements`/`explain_query`
-    /// against a Qdrant/Elasticsearch query (docs/architecture/17 §5) —
+ /// against a Qdrant/Elasticsearch query
     /// mirrors the Mongo branch's inline shape (stream + sample up to 10 for
     /// a read, apply each change for a write) so both connection families get
     /// the same tool contract. `changeSets.count == 1` reports `"write"`,
@@ -1329,7 +1329,7 @@ public final class AIPanelController {
     }
 
     /// The `dialect` string sent to `AISession`/the backend system prompt
-    /// (docs/architecture/17 §5) — `.document` reports "mongodb" (the
+ /// `.document` reports "mongodb" (the
     /// backend's `system_prompt()` match arm) rather than the generic kind
     /// name; every other kind's `rawValue` already IS its own dialect token
     /// (`"vector"`, `"search"`), so no other special-casing is needed here.
@@ -1353,7 +1353,7 @@ private final class ApprovalGateAdapter: AIApprovalGate {
     }
 }
 
-/// Bridges the MCP executor's approval requests to the panel controller (08 §6).
+/// Bridges the MCP executor's approval requests to the panel controller.
 @MainActor
 private final class MCPApprovalAdapter: MCPApprovalGate {
     weak var controller: AIPanelController?

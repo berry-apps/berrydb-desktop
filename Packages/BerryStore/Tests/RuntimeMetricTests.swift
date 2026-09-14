@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import BerryStore
 
-@Suite("Runtime Metrics (DI-24)")
+@Suite("Runtime Metrics")
 struct RuntimeMetricTests {
     private func makeStore() throws -> BerryStore {
         try BerryStore(path: ":memory:")

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Successful activation/trial response (docs/architecture/10 §3).
+/// Successful activation/trial response.
 public struct ActivationResponse: Decodable, Sendable {
     public let license: String
     public let apiToken: String
@@ -13,7 +13,7 @@ public struct ActivationResponse: Decodable, Sendable {
     }
 }
 
-/// Response to a topup request (docs/architecture/10 §2, TM-11).
+/// Response to a topup request.
 public struct TopupResponse: Decodable, Sendable {
     public let checkoutURL: String
 
@@ -23,7 +23,7 @@ public struct TopupResponse: Decodable, Sendable {
 }
 
 /// Stable API error — the client shows behavior by `code`, never parses the
-/// message (docs/architecture/09 §8 point 4).
+/// message (point 4).
 public struct APIError: Error, Equatable, Sendable, Decodable {
     public let code: String
     public let message: String
@@ -43,7 +43,7 @@ public enum LicenseClientError: Error, Equatable {
 /// human sentence, on purpose — `LicenseManager` treats every error's
 /// `localizedDescription` uniformly as a code to look up (mirroring
 /// `APIError.code`), and `licenseErrorMessage` is the one place that maps a
-/// code to user-facing text (docs/architecture/09 §8: client renders by
+/// code to user-facing text (client renders by
 /// code).
 extension LicenseClientError: LocalizedError {
     public var errorDescription: String? {
@@ -81,25 +81,25 @@ public struct LicenseClient: Sendable {
     }
 
     /// After a Paddle checkout, fetch the license the webhook granted this
-    /// device (docs/architecture/10 §2). Throws `no_subscription` (404) until
+ /// device. Throws `no_subscription` (404) until
     /// the payment webhook has landed.
     public func licenseByDevice(deviceHash: String) async throws -> ActivationResponse {
         try await post("/v1/licenses/by-device", body: ["device_hash": deviceHash])
     }
 
-    /// Restore a purchase by the email used at checkout (docs/architecture/10 §2)
+ /// Restore a purchase by the email used at checkout
     /// — the fallback when the checkout didn't carry a device hash.
     public func licenseByEmail(email: String, deviceHash: String) async throws -> ActivationResponse {
         try await post("/v1/licenses/by-email", body: ["email": email, "device_hash": deviceHash])
     }
 
-    /// Re-issues a fresh signed blob for a live token (docs/architecture/09 §7).
+ /// Re-issues a fresh signed blob for a live token.
     /// Bearer-authenticated; an unknown token throws `APIError(plan_required)`.
     public func refresh(token: String) async throws -> ActivationResponse {
         try await post("/v1/licenses/refresh", body: [:], bearer: token)
     }
 
-    /// Starts an AI-credit deposit (docs/architecture/10 §2, TM-11): opens a
+ /// Starts an AI-credit deposit: opens a
     /// Paddle checkout for a custom amount. The returned URL already carries
     /// this device's binding as Paddle `custom_data` (set server-side at
     /// transaction creation) — unlike the old Subscribe flow, the caller

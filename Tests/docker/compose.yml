@@ -1,4 +1,4 @@
-# Conformance test matrix (docs/architecture/08 §5).
+# Conformance test matrix.
 # Usage:
 #   docker compose -f Tests/docker/compose.yml up -d --wait
 #   BERRYDB_TEST_POSTGRES=127.0.0.1:54329:berry:berrypass:berrydb_test \
@@ -28,7 +28,7 @@ services:
 
   # mysql84:
   #   # MySQL 8.4 defaults to caching_sha2_password — this is the M1 auth spike
-  #   # (docs/architecture/08 §1).
+ # #.
   #   image: mysql:8.4
   #   ports: ["33069:3306"]
   #   environment:
@@ -45,7 +45,7 @@ services:
   mssql:
     # amd64-only image, runs under Rosetta emulation on Apple Silicon
     # (confirmed via `docker image inspect` — no arm64 build exists,
-    # docs/architecture/16 §1). sqlcmd lives at /opt/mssql-tools18/bin
+ # sqlcmd lives at /opt/mssql-tools18/bin
     # (newer "tools18" package, not the older /opt/mssql-tools) and defaults
     # to encrypted connections — the healthcheck needs `-C` to trust the
     # container's self-signed cert, otherwise it fails on a TLS trust error
@@ -65,7 +65,7 @@ services:
 
   qdrant:
     # No auth configured — good enough for a local conformance container;
-    # BERRYDB_TEST_QDRANT carries no API key (docs/architecture/12 §5, §10).
+ # BERRYDB_TEST_QDRANT carries no API key.
     image: qdrant/qdrant:v1.10.1
     ports: ["63339:6333"]
     healthcheck:
@@ -79,7 +79,7 @@ services:
   elasticsearch:
     # Security disabled (no auth) — good enough for a local conformance
     # container, same call as `qdrant` above; BERRYDB_TEST_ELASTICSEARCH
-    # carries no credentials (docs/architecture/17 §2/§6).
+ # carries no credentials.
     image: docker.elastic.co/elasticsearch/elasticsearch:9.5.0
     ports: ["19200:9200"]
     environment:
@@ -99,10 +99,8 @@ services:
   #   # MONGO_INITDB_ROOT_USERNAME/PASSWORD creates a root user in the `admin`
   #   # database (fixed by the image's entrypoint script, not configurable) —
   #   # BERRYDB_TEST_MONGO's database field is "admin" for exactly that reason:
-  #   # `ConnectionConfig.database` doubles as BOTH the SCRAM authSource and the
-  #   # working database for find/collections (docs/architecture/12 §3
-  #   # "Trạng thái hiện thực" — no separate authSource field, a real gap found
-  #   # empirically, not from the design doc).
+  #   # `ConnectionConfig.database` doubles as both the SCRAM authSource and the
+  #   # working database for find/collections when no separate authSource is specified.
   #   image: mongo:7
   #   ports: ["27117:27017"]
   #   environment:
@@ -131,7 +129,7 @@ services:
 
   # mongo-rs:
   #   # Single-node replica set ("replica set of one") — conformance target for
-  #   # the v1 multi-seed/primary-discovery code path (docs/architecture/12 §3).
+ # # the v1 multi-seed/primary-discovery code path.
   #   # A real 3-node topology was tried and dropped: `rs.initiate()`'s
   #   # `primary`/`me` fields report the container's *internal* Docker hostname
   #   # (verified directly against a throwaway container, e.g.
@@ -170,7 +168,7 @@ services:
 
   # dynamodb-local:
   #   # Test double straight from AWS — accepts any non-empty SigV4 credentials,
-  #   # no real AWS account needed (docs/architecture/12 §4/§10).
+ # # no real AWS account needed.
   #   image: amazon/dynamodb-local:3.3.0
   #   command: ["-jar", "DynamoDBLocal.jar", "-inMemory", "-sharedDb"]
   #   ports: ["48000:8000"]
@@ -183,7 +181,7 @@ services:
   #     - berry-test-net
 
   # sshd:
-  #   # Bastion for SSH-tunnel conformance tests (KN-03). The mod enables
+ # # Bastion for SSH-tunnel conformance tests. The mod enables
   #   # AllowTcpForwarding; the tunnel targets service DNS names (postgres16).
   #   image: lscr.io/linuxserver/openssh-server:latest
   #   ports: ["22229:2222"]

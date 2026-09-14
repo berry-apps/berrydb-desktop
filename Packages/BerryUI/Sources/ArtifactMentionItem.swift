@@ -2,8 +2,8 @@ import BerryDriverKit
 import BerryStore
 import Foundation
 
-/// One row in the composer's `@{...}` mention autocomplete (AI-32,
-/// docs/draft/09.md): an artifact (AI-29) or a relational schema object
+/// One row in the composer's `@{...}` mention autocomplete
+/// an artifact or a relational schema object
 /// (table/view/…) this connection has. Mirrors `QuickOpenItem`'s shape and
 /// matching rule — case-insensitive substring, no extra ranking — deliberately
 /// not deduped across the two: an artifact and a table can share a name, and

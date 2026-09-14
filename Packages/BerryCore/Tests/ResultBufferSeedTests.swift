@@ -4,7 +4,7 @@ import Testing
 
 @testable import BerryCore
 
-/// Seeding columns for empty (0-row) results (docs/ui, network-driver fix:
+/// Seeding columns for empty (0-row) results (network-driver fix:
 /// Postgres/MySQL ship no columns when there are no rows).
 @Suite("ResultBuffer seed columns")
 @MainActor

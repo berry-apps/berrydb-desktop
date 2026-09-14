@@ -2,7 +2,7 @@ import BerryDriverKit
 import Foundation
 
 /// Introspection via information_schema + SHOW CREATE TABLE
-/// (docs/architecture/05 §5). In MySQL, database and schema are the same thing.
+/// In MySQL, database and schema are the same thing.
 public struct MySQLIntrospector: Introspector {
     let connection: MySQLDriverConnection
     private let dialect = MySQLDialect()
@@ -36,7 +36,7 @@ public struct MySQLIntrospector: Introspector {
             return SchemaObject(kind: kind, name: name, database: schema)
         }
 
-        // Functions & procedures (TR-01). MySQL forbids overloading, so the
+ // Functions & procedures. MySQL forbids overloading, so the
         // name is a unique key within its schema.
         let routineRows = try await connection.queryAll(
             """
@@ -53,7 +53,7 @@ public struct MySQLIntrospector: Introspector {
             return SchemaObject(kind: type == "PROCEDURE" ? .procedure : .function, name: name, database: schema)
         }
 
-        // Triggers (TR-01).
+ // Triggers.
         let triggerRows = try await connection.queryAll(
             """
             SELECT TRIGGER_SCHEMA, TRIGGER_NAME
@@ -128,7 +128,7 @@ public struct MySQLIntrospector: Introspector {
         return TableDetail(ref: ref, columns: columns, indexes: indexes, foreignKeys: foreignKeys)
     }
 
-    /// TR-04: `information_schema.TABLES` carries all four fields at once —
+ /// `information_schema.TABLES` carries all four fields at once
     /// `TABLE_ROWS` is InnoDB's estimate (not exact; MySQL's own docs say so),
     /// `DATA_LENGTH + INDEX_LENGTH` is on-disk size, `ENGINE` and
     /// `TABLE_COMMENT` are exact.

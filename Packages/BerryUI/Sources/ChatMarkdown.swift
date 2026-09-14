@@ -4,7 +4,7 @@ import Foundation
 /// turns each into a native view: paragraphs/lists via AttributedString markdown
 /// (inline **bold**/`code`/links), code as a monospace box, mermaid via an
 /// offline WebView. A small hand-rolled parser instead of a dependency — the
-/// chat only needs these few blocks (CLAUDE.md: simplicity first).
+/// chat only needs these few blocks (simplicity first).
 public enum ChatBlock: Equatable, Sendable {
     case heading(level: Int, text: String)
     case paragraph(String)

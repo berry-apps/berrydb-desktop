@@ -2,7 +2,7 @@ import BerryDriverKit
 import Foundation
 
 /// Diff between an introspected table and its edited design, generating ALTER
-/// statements (CT-01/02/03). v1 supports add/drop column, add/drop index, and
+/// statements. v1 supports add/drop column, add/drop index, and
 /// add foreign key (Postgres/MySQL); everything else (type change, rename,
 /// dropping an FK) is reported in `warnings` instead of guessed at.
 public struct TableAlteration {
@@ -155,7 +155,7 @@ public struct TableAlteration {
             for try await _ in QueryService.execute(
                 sql, on: session, autoLimit: nil,
                 // The SQL preview the user just approved IS the confirmation
-                // (06 · L3) — don't stack a second delete dialog, and never
+ // (06) — don't stack a second delete dialog, and never
                 // block a headless run on an alert.
                 dangerPreconfirmed: true
             ) {}

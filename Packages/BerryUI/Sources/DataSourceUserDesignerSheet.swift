@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Create-user form for the DataSource family (TI-03 Phase C,
-/// docs/architecture/14) — the Mongo-shaped sibling of `UserDesignerSheet`.
+/// Create-user form for the DataSource family (Phase C,
+/// — the Mongo-shaped sibling of `UserDesignerSheet`.
 /// Simpler than the SQL version: no host field (Mongo users aren't
 /// host-scoped), and roles are a curated built-in-role picker instead of
 /// privilege+database grant rows, since Mongo's `createUser` command takes
@@ -12,7 +12,7 @@ struct DataSourceUserDesignerSheet: View {
     let onApply: (_ username: String, _ password: String, _ roles: [String]) async -> String?
     let onClose: () -> Void
 
-    /// Curated built-in database roles (docs/architecture/14 §Deferred: no
+ /// Curated built-in database roles (no
     /// custom-role definitions, no cluster-scoped roles like `clusterAdmin` —
     /// every role here is scoped to the connection's own working database).
     private static let roles = ["read", "readWrite", "dbAdmin", "userAdmin", "dbOwner"]

@@ -9,7 +9,7 @@ import Testing
 
 @testable import BerryUI
 
-/// Harvest-on-refresh + live `graph_query` wiring (docs/architecture/11 §4/§7),
+/// Harvest-on-refresh + live `graph_query` wiring,
 /// end-to-end through the workspace against an in-process SQLite schema.
 /// Serialized: every test calls `DriverRegistry.register(SQLiteDriver.self)`
 /// (shared global state) — running them concurrently is a pre-existing race
@@ -97,7 +97,7 @@ struct WorkspaceGraphTests {
         #expect(empty.isEmpty)
     }
 
-    /// `preview_migration` tool bridge (docs/architecture/13 §6, DI-15): a
+ /// `preview_migration` tool bridge: a
     /// real end-to-end pass through live introspection + the harvested graph
     /// + `MigrationPreviewAnalyzer` — proven via the analyzer's own
     /// "hidden FK" rule (MigrationPreviewAnalyzerTests.swift), which only
@@ -185,7 +185,7 @@ struct WorkspaceGraphTests {
         vm.disconnect()
     }
 
-    /// docs/feature/07 §4, DI-16: quantified impact complements
+ /// quantified impact complements
     /// `graphOverview`'s pure topology with real, recently-executed queries
     /// that touch the affected tables.
     @Test func simulateImpactFindsBlastRadiusAndMatchingRecentQueries() async throws {
@@ -222,7 +222,7 @@ struct WorkspaceGraphTests {
         #expect(vm.simulateImpact("customers") == nil)
     }
 
-    /// docs/feature/07 §5, DI-17: "Save for Replay" reuses the duration
+ /// "Save for Replay" reuses the duration
     /// already measured by the run that just finished — the first save has
     /// nothing to compare against; the second reports the delta.
     @Test func saveQueryReplayComparesAgainstThePreviousSnapshot() async throws {
@@ -250,7 +250,7 @@ struct WorkspaceGraphTests {
     }
 
     /// Query Replay's saved snapshot now also captures a fresh EXPLAIN QUERY
-    /// PLAN (DI-17, docs/architecture/13 §5.2) — this exercises real capture
+ /// PLAN — this exercises real capture
     /// end-to-end against SQLite (the only dialect available without an
     /// external server in this test environment).
     @Test func saveQueryReplayCapturesAPlanForAnExistingTable() async throws {
@@ -272,7 +272,7 @@ struct WorkspaceGraphTests {
 
     @Test func productionProfileIsNotHarvested() async throws {
         let vm = try WorkspaceViewModel(storePath: tempPath("store"))
-        // envColor "production" → KN-07: harvester off.
+ // envColor "production" →: harvester off.
         let profile = ConnectionProfile(
             driverID: "sqlite", name: "prod", envColor: "production", filePath: makeSQLiteDB()
         )

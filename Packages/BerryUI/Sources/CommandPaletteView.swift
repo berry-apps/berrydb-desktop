@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// Global command palette (DI-22, docs/architecture/13 §5.3, ⌘K): fuzzy-search
+/// Global command palette (⌘K): fuzzy-search
 /// the workspace's actions and run one without leaving the keyboard. Row/
 /// keyboard pattern mirrors `QuickOpenView.swift` — plain Buttons, not
 /// `List(selection:)` (same click-to-select bug class avoided there).
 struct CommandPaletteView: View {
     let entries: [CommandPaletteEntry]
     let onCancel: () -> Void
-    /// NL routing fallback (DI-22 §5.3) for when no local keyword matches —
+ /// NL routing fallback for when no local keyword matches
     /// `AIPanelController.routeCommandPaletteQuery`. `performed` lets this
     /// view dismiss deterministically instead of parsing `reply`'s text.
     let onAskAI: (String) async -> (performed: Bool, reply: String?)
@@ -79,7 +79,7 @@ struct CommandPaletteView: View {
     }
 
     /// No local keyword match: offer to route the query through
-    /// `perform_ui_action` instead (DI-22 §5.3) rather than a dead end.
+ /// `perform_ui_action` instead rather than a dead end.
     @ViewBuilder private var emptyState: some View {
         VStack(spacing: 8) {
             if isAsking {

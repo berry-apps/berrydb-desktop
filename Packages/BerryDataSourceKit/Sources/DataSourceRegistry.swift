@@ -4,7 +4,7 @@ import Foundation
 /// Static registry for the `DataSourceDriver` family — independent from
 /// `DriverRegistry` (BerryDriverKit) on purpose: the two protocol families
 /// serve different query shapes and must not blur into one union type
-/// (docs/architecture/12 §8). `BerryApp` registers at startup, same as
+/// `BerryApp` registers at startup, same as
 /// `DriverRegistry` — no dynamic loading.
 public enum DataSourceRegistry {
     private static let lock = NSLock()

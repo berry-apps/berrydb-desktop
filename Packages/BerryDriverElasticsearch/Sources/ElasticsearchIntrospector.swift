@@ -1,7 +1,7 @@
 import BerryDataSourceKit
 import Foundation
 
-/// Introspection for Elasticsearch (docs/architecture/17 §4) — unlike Qdrant's
+/// Introspection for Elasticsearch — unlike Qdrant's
 /// sample-based inference, `_mapping` is a real, declared schema, so this
 /// reads it directly instead of sampling documents.
 struct ElasticsearchIntrospector: DataSourceIntrospector {

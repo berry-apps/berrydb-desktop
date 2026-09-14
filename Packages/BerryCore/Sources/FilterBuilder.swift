@@ -1,7 +1,7 @@
 import BerryDriverKit
 import Foundation
 
-/// Visual filter builder (DL-02): turns a list of column/operator/value
+/// Visual filter builder: turns a list of column/operator/value
 /// conditions into a WHERE fragment for the grid. Values are emitted as quoted
 /// string literals — engines coerce them for numeric comparisons — and every
 /// value goes through '' doubling. Anything more expressive (OR, functions,

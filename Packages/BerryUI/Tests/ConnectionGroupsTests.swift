@@ -4,9 +4,9 @@ import Testing
 
 @testable import BerryUI
 
-/// Connection grouping + drag-reorder (KN-02).
+/// Connection grouping + drag-reorder.
 @MainActor
-@Suite("Connection groups (KN-02)")
+@Suite("Connection groups")
 struct ConnectionGroupsTests {
     private func tempPath(_ tag: String) -> String {
         NSTemporaryDirectory() + "berry-\(tag)-\(UUID().uuidString).sqlite"

@@ -3,8 +3,8 @@ import Testing
 
 @testable import BerryDriverDynamoDB
 
-/// Byte-correctness of the hand-rolled SigV4 signer (docs/architecture/12
-/// §4) against AWS's own published test vectors — the `get-vanilla` /
+/// Byte-correctness of the hand-rolled SigV4 signer
+/// against AWS's own published test vectors — the `get-vanilla` /
 /// `post-vanilla` cases from the canonical `aws4_testsuite`
 /// (`AKIDEXAMPLE`/`wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY`, region
 /// `us-east-1`, service `service`, fixed date `2015-08-30T12:36:00Z`).

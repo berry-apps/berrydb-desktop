@@ -50,7 +50,7 @@ private actor RecordingConnection: DataSourceConnection {
 }
 
 /// Pure text→query-param parsing, `run()`'s query-construction branching, and
-/// edit-in-place id/patch stripping (docs/architecture/12 §7) — no Docker,
+/// edit-in-place id/patch stripping — no Docker,
 /// always runs.
 @MainActor
 @Suite("CollectionTabState parsing")

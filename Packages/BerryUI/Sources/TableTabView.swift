@@ -4,12 +4,12 @@ import BerryDriverKit
 import SwiftUI
 
 /// One table tab: editable grid + pending-changes bar + SQL preview sheet
-/// (DL-03/04/05 — docs/architecture/06 · L3).
+///.
 struct TableTabView: View {
     @Bindable var state: TableTabState
     let session: Session?
     let isProduction: Bool
-    /// FK jump (DL-08): open the referenced row in another table tab.
+ /// FK jump: open the referenced row in another table tab.
     var onOpenReference: ((ForeignKeyInfo, BerryValue) -> Void)?
 
     @AppStorage("ui.showButtonLabels") private var showButtonLabels = true
@@ -127,7 +127,7 @@ struct TableTabView: View {
 
             Spacer()
 
-            // Raw WHERE filter (DL-02) — user-authored, same trust as the editor.
+ // Raw WHERE filter — user-authored, same trust as the editor.
             HStack(spacing: 4) {
                 Text(verbatim: "WHERE")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -223,8 +223,8 @@ struct TableTabView: View {
         )
     }
 
-    /// Staged-changes bar: review before anything is written (06 · L3).
-    // Navicat-style (docs/ui): Apply runs immediately, errors show inline —
-    // no preview modal. Buttons use the app's compact styles.
+ /// Staged-changes bar: review before anything is written (06).
+    // Apply runs immediately, errors show inline without preview modal.
+    // Buttons use the app's compact styles.
 
 }

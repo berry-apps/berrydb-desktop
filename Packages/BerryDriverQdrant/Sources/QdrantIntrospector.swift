@@ -1,7 +1,7 @@
 import BerryDataSourceKit
 import Foundation
 
-/// Best-effort introspection for Qdrant (docs/architecture/12 §3/§5): there is
+/// Best-effort introspection for Qdrant: there is
 /// no DDL, only the collection's vector config plus a sample-based union of
 /// payload field names/types — always inferred, never authoritative.
 struct QdrantIntrospector: DataSourceIntrospector {
@@ -14,7 +14,7 @@ struct QdrantIntrospector: DataSourceIntrospector {
     /// Keys `"_vector.size"`/`"_vector.distance"` report the collection's
     /// vector config; every other key is a payload field name, with its value
     /// the `|`-joined union of `BerryDocument` type labels seen across the
-    /// sample (docs/architecture/12 §3 "suy luận, không phải schema thật").
+    /// sample (inferred schema from sampled points).
     func inferredSchema(of collection: CollectionRef, sampleSize: Int) async throws -> [String: String] {
         var schema: [String: String] = [:]
 
@@ -23,12 +23,12 @@ struct QdrantIntrospector: DataSourceIntrospector {
         if let distance = info.distance { schema["_vector.distance"] = distance }
 
         let limit = max(1, min(sampleSize, 1000))
-        let (points, _) = try await client.scroll(
+        let page = try await client.scroll(
             collection: collection.name, filter: nil, pageToken: nil, limit: limit, withVector: false
         )
 
         var fieldTypes: [String: Set<String>] = [:]
-        for point in points {
+        for point in page.points {
             guard let payload = point["payload"] as? [String: Any],
                   case .object(let fields) = BerryDocument(jsonObject: payload) else { continue }
             for (name, value) in fields {

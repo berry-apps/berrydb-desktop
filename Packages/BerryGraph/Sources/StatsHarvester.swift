@@ -3,7 +3,7 @@ import BerryDriverKit
 import Foundation
 
 /// Enriches the structural DSG with harvested table/index statistics
-/// (docs/architecture/11 §4 — the data foundation for the Index Advisor, DI-05).
+/// (the data foundation for the Index Advisor).
 /// **Metadata only**: reads the engine's catalog/stats views through
 /// `QueryService` (single SQL path, N1) and never touches user data (Q6).
 /// Best-effort — a missing stats view or a permissions error leaves the graph
@@ -72,7 +72,7 @@ public enum StatsHarvester {
             var columns: [String] = []
             var result: [[String: String]] = []
             // Metadata probe: no auto-LIMIT (would truncate a large catalog) and
-            // no history recording (11 §4 — harvesters aren't user queries).
+ // no history recording (harvesters aren't user queries).
             for try await event in QueryService.execute(
                 sql, on: session, autoLimit: nil, recordHistory: false
             ) {

@@ -2,7 +2,7 @@ import BerryDataSourceKit
 import Foundation
 import SwiftUI
 
-/// Whole-document viewer/editor (DL-06 sibling, docs/architecture/12 §7) —
+/// Whole-document viewer/editor (sibling)
 /// pretty-printed JSON. Editing is document-granularity, not per-field:
 /// Mongo's update wraps the WHOLE patch in `$set`, Qdrant's needs
 /// vector+payload together, so there is no meaningful "edit one field

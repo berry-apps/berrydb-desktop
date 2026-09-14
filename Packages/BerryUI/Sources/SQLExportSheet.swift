@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// SQL export options (XN-03): batch size for multi-row INSERTs and whether to
+/// SQL export options: batch size for multi-row INSERTs and whether to
 /// prepend the CREATE TABLE DDL. Confirming runs the save panel + export.
 struct SQLExportSheet: View {
     let canIncludeDDL: Bool

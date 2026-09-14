@@ -3,7 +3,7 @@ import BerryDataSourceKit
 import Foundation
 import Observation
 
-/// One Qdrant query tab (docs/feature/03) — the vector-store sibling of
+/// One Qdrant query tab — the vector-store sibling of
 /// `MongoShellTabState`/`EditorDocument`. Hybrid surface: a structured **Form**
 /// and a **JSON** editor, kept in sync, with the JSON (`rawJSON`) as the
 /// canonical, runnable form used for run/history/save. Reads stream into the
@@ -35,7 +35,7 @@ public final class QdrantQueryTabState: Identifiable {
     public var pendingFocus = false
     /// Linked saved query (mirrors `EditorDocument.savedQueryID`).
     public var savedQueryID: UUID?
-    /// Linked artifact (AI-29, docs/draft/09.md), mirrors `EditorDocument.artifactID`.
+ /// Linked artifact, mirrors `EditorDocument.artifactID`.
     public var artifactID: UUID?
 
     private var lastSession: DataSourceSession?

@@ -1,7 +1,7 @@
 import BerryDriverKit
 import Foundation
 
-/// Staged grid edits (DL-03/04/05) — docs/architecture/06 · L3.
+/// Staged grid edits.
 ///
 /// Every mutation is keyed by the row's primary key; tables without a
 /// PK/unique key stay read-only (`canEdit == false`), matching the safety
@@ -27,7 +27,7 @@ public struct ChangeSet: Sendable {
     }
 
     /// Editing requires a primary key — otherwise a WHERE clause could match
-    /// more rows than the one the user touched (docs/architecture/06 · L3).
+ /// more rows than the one the user touched.
     public var canEdit: Bool { !pkColumns.isEmpty }
     public var isEmpty: Bool { changes.isEmpty }
     public var count: Int { changes.count }
@@ -101,7 +101,7 @@ public struct ChangeSet: Sendable {
         .joined(separator: " AND ")
     }
 
-    // MARK: - Apply (docs/architecture/06 · L3)
+ // MARK: - Apply
 
     /// BEGIN → each statement → COMMIT; any failure rolls back and rethrows.
     /// Returns the number of executed statements.
@@ -114,7 +114,7 @@ public struct ChangeSet: Sendable {
             for try await _ in QueryService.execute(
                 sql, on: session, autoLimit: nil,
                 // The SQL preview the user just approved IS the confirmation
-                // (06 · L3) — don't stack a second delete dialog, and never
+ // (06) — don't stack a second delete dialog, and never
                 // block a headless run on an alert.
                 dangerPreconfirmed: true
             ) {}

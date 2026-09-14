@@ -1,9 +1,8 @@
 /// MongoDB shell method/operator names for the shell-script editor's
 /// highlighter and completion popup (mirrors `SQLBuiltins`/`SQLStatements`,
-/// ED-13's per-dialect autocomplete pattern). Each method carries its real
+/// the per-dialect autocomplete pattern). Each method carries its real
 /// parameter signature (not just a bare name) so the completion popup can
-/// show Navicat-style detail text like `insertOne(document)`
-/// (docs/feedback/02.md).
+/// show detail text like `insertOne(document)`.
 public struct MongoShellMethod: Sendable {
     public let name: String
     public let signature: String

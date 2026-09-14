@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryCore
 
-@Suite("SnippetPlaceholder (ED-07 saved-query placeholders)")
+@Suite("SnippetPlaceholder (saved-query placeholders)")
 struct SnippetPlaceholderTests {
     @Test func resolvesFirstPlaceholderAndSelectsIt() {
         let result = SnippetPlaceholder.resolve("SELECT * FROM ${1:table_name} LIMIT 10")

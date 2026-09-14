@@ -1,14 +1,14 @@
 import BerryDriverKit
 import Foundation
 
-/// Third driver-contract family (docs/architecture/15 §2), alongside
+/// Third driver-contract family, alongside
 /// `DatabaseDriver` (BerryDriverKit, SQL-shaped) and `DataSourceDriver`
 /// (BerryDataSourceKit, document/vector-shaped). Neither existing contract
 /// fits a schemaless key-value store: `DatabaseDriver.execute` takes raw SQL
 /// text and `Introspector` is table/column-shaped; `DataSourceQuery`/
 /// `DataSourceChangeSet` are closed enums with Mongo/Qdrant-named cases with
 /// no natural "collection" mapping for numbered Redis databases. Splitting by
-/// actual query shape mirrors the exact reasoning docs/architecture/12 §2
+/// actual query shape mirrors the exact reasoning
 /// already used to keep Mongo/Qdrant out of `DatabaseDriver`.
 ///
 /// Deliberately has NO dependency on any concrete Redis/Valkey client
@@ -31,7 +31,7 @@ public protocol KeyValueConnection: Actor {
     /// drivers where `capabilities.numberedDatabases == false`.
     func selectDatabase(_ index: Int) async throws
     /// Cursor-paginated key listing via `SCAN` — never `KEYS`, which blocks
-    /// the server (N3, docs/architecture/05 §5). `cursor: nil` starts a new
+ /// the server (N3). `cursor: nil` starts a new
     /// scan; a `nil` `nextCursor` in the result means the scan is complete.
     func scan(pattern: String, cursor: String?) async throws -> KeyValueScanPage
     func get(_ key: String) async throws -> KeyValueValue

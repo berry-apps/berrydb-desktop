@@ -1,8 +1,8 @@
 import Foundation
 import GRDB
 
-/// A single instance-level health measurement at harvest time (DI-24,
-/// docs/architecture/13 §5.5).
+/// A single instance-level health measurement at harvest time
+///
 public struct RuntimeMetricRecord: Codable, Sendable, Equatable, FetchableRecord, PersistableRecord, Identifiable {
     public var id: UUID
     public var profileID: UUID

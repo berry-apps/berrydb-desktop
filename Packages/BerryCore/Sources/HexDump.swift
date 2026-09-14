@@ -1,6 +1,6 @@
 import Foundation
 
-/// Classic hex dump for the cell viewer's binary tab (DL-06):
+/// Classic hex dump for the cell viewer's binary tab:
 /// `00000000  48 65 6c 6c 6f ..  |Hello.|`
 public enum HexDump {
     public static func format(_ data: Data, bytesPerLine: Int = 16, maxBytes: Int = 64 * 1024) -> String {

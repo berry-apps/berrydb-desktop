@@ -3,7 +3,7 @@ import BerryDriverKit
 import Foundation
 
 /// Cancellation state reachable from outside the actor (same reasoning as
-/// `PostgresCancelBox` in BerryDriverPostgres, docs/architecture/05 §4):
+/// `PostgresCancelBox` in BerryDriverPostgres):
 /// `cancelCurrentQuery()` must work while the actor is busy awaiting the
 /// in-flight HTTP request.
 private final class QdrantCancelBox: @unchecked Sendable {
@@ -19,12 +19,12 @@ private final class QdrantCancelBox: @unchecked Sendable {
 public actor QdrantConnection: DataSourceConnection {
     public nonisolated let id = UUID()
 
-    private nonisolated let client: QdrantHTTPClient
+    private let client: QdrantHTTPClient
     private nonisolated let cancelBox = QdrantCancelBox()
     private var isClosed = false
 
     /// Batch/page size for scroll and for chunking search results — N3
-    /// (docs/architecture/12 §5): "Qdrant search top-K is usually small, but
+ /// "Qdrant search top-K is usually small, but
     /// scroll must batch/paginate."
     static let batchSize = 1000
 
@@ -50,7 +50,7 @@ public actor QdrantConnection: DataSourceConnection {
         try await client.createCollection(name: ref.name, vectorSize: Int(size), distance: distance)
     }
 
-    // MARK: - Query (NS-06/07, docs/architecture/12 §5)
+ // MARK: - Query
 
     public nonisolated func query(_ request: DataSourceQuery) -> AsyncThrowingStream<DataSourceEvent, Error> {
         AsyncThrowingStream { continuation in
@@ -119,14 +119,14 @@ public actor QdrantConnection: DataSourceConnection {
         let clock = ContinuousClock()
         let started = clock.now
         do {
-            let (points, nextToken) = try await client.scroll(
+            let page = try await client.scroll(
                 collection: collection, filter: filter, pageToken: pageToken,
                 limit: Self.batchSize, withVector: true
             )
-            let docs = points.map(QdrantWire.document(fromPointJSON:))
+            let docs = page.points.map(QdrantWire.document(fromPointJSON:))
             if !docs.isEmpty { continuation.yield(.items(docs)) }
             continuation.yield(.complete(
-                DataSourceStats(itemsReturned: docs.count, duration: clock.now - started, nextPageToken: nextToken)
+                DataSourceStats(itemsReturned: docs.count, duration: clock.now - started, nextPageToken: page.nextPageToken)
             ))
             continuation.finish()
         } catch {
@@ -140,7 +140,7 @@ public actor QdrantConnection: DataSourceConnection {
         return .connectionFailed(error.localizedDescription)
     }
 
-    // MARK: - Write (docs/architecture/12 §6)
+ // MARK: - Write
 
     public func write(_ change: DataSourceChangeSet) async throws -> DataSourceWriteResult {
         guard !isClosed else { throw DataSourceError.notConnected }
@@ -168,7 +168,7 @@ public actor QdrantConnection: DataSourceConnection {
 
     /// Expects `document` shaped as `.object` with an optional `"id"` field,
     /// a required `"vector"` field, and an optional `"payload"` field — the
-    /// point shape a caller builds for `.insert` (docs/architecture/12 §6).
+ /// point shape a caller builds for `.insert`.
     private func insert(collection: String, document: BerryDocument) async throws -> DataSourceWriteResult {
         guard let vectorDoc = document["vector"], let vector = QdrantWire.vectorArray(from: vectorDoc) else {
             throw DataSourceError.queryFailed("Insert requires a \"vector\" field")
@@ -198,9 +198,9 @@ public actor QdrantConnection: DataSourceConnection {
         return DataSourceWriteResult(affectedCount: 1)
     }
 
-    /// An empty/missing id is the "no filter" delete case (NS-08,
+ /// An empty/missing id is the "no filter" delete case
     /// `DataSourceDangerGuard`) — the caller already confirmed via the danger
-    /// gate (DL-03/04) before this runs; here it just decides HOW to delete.
+ /// gate before this runs; here it just decides HOW to delete.
     private func delete(collection: String, id: BerryDocument) async throws -> DataSourceWriteResult {
         let classification = DataSourceDangerGuard.classify(.delete(collection: collection, id: id))
         if classification == .confirm(.deleteWithoutFilter) {

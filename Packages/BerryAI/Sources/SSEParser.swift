@@ -6,7 +6,7 @@ public struct SSERawEvent: Equatable, Sendable {
     public let data: String
 }
 
-/// Incremental SSE parser (docs/architecture/09 §3). Feed it text chunks as
+/// Incremental SSE parser. Feed it text chunks as
 /// they arrive; it buffers partial lines and emits a raw event on each blank
 /// line. Heartbeat comment lines (starting with `:`) are ignored.
 public final class SSEParser {

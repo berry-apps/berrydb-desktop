@@ -3,8 +3,8 @@ import GRDB
 import SQLite3
 
 /// Registers the vendored `sqlite-vec` extension (v0.1.9, statically linked —
-/// see `CSQLiteVec`) so GRDB's `vec0` virtual tables work (docs/agents/
-/// architecture/11 §7.3, local RAG for chat messages).
+/// see `CSQLiteVec`) so GRDB's `vec0` virtual tables work
+/// architecture/, local RAG for chat messages).
 ///
 /// `sqlite3_auto_extension` (the usual process-global registration API) is
 /// explicitly unsupported on Apple platforms — the system libsqlite3 no-ops

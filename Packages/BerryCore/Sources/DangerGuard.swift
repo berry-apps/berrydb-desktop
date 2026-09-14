@@ -1,11 +1,11 @@
 import Foundation
 
-/// Danger classification for a statement about to run (docs/architecture/07 §6).
+/// Danger classification for a statement about to run.
 public enum DangerLevel: Equatable, Sendable {
     case safe
     /// Simple confirmation dialog.
     case confirm(DangerReason)
-    /// Type-the-object-name confirmation (CT-04 — DROP/TRUNCATE on production).
+ /// Type-the-object-name confirmation (DROP/TRUNCATE on production).
     case typedConfirm(objectName: String, reason: DangerReason)
 }
 
@@ -15,12 +15,12 @@ public enum DangerReason: Equatable, Sendable {
     case writeOnProduction
     case dropOnProduction
     case truncateOnProduction
-    /// Data-destroying statements warn on ANY connection (docs/ui): a targeted
+ /// Data-destroying statements warn on ANY connection: a targeted
     /// DELETE, a DROP, or a TRUNCATE outside production.
     case deleteData
     case dropObject
     case truncateTable
-    /// One summary confirmation for a whole run (docs/ui): N data-destroying
+ /// One summary confirmation for a whole run: N data-destroying
     /// statements ask ONCE, not N times.
     case deleteBatch(count: Int)
 }
@@ -28,7 +28,7 @@ public enum DangerReason: Equatable, Sendable {
 extension DangerReason {
     /// The soft data-deletion confirms (non-production). These are batched into
     /// one dialog per run and can be switched off by the user; the production
-    /// rules (07 §6) are neither.
+ /// rules are neither.
     public var isSoftDataDeletion: Bool {
         switch self {
         case .deleteData, .dropObject, .truncateTable, .deleteBatch: return true
@@ -88,7 +88,7 @@ public enum DangerGuard {
         case "DELETE" where !hasWhere:
             return .confirm(.deleteWithoutWhere)
         // Data-destroying statements always confirm, even off production
-        // (docs/ui): a targeted DELETE removes rows; DROP/TRUNCATE remove
+ // a targeted DELETE removes rows; DROP/TRUNCATE remove
         // objects/all rows.
         case "DELETE":
             return .confirm(.deleteData)

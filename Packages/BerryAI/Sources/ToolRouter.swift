@@ -1,14 +1,14 @@
 import Foundation
 
 /// Routes each gateway tool call to the executor that owns it
-/// (docs/architecture/09 §4 tool registry). Lets `QueryToolExecutor` (SQL /
+/// (tool registry). Lets `QueryToolExecutor` (SQL /
 /// schema tools) and `GraphToolExecutor` (`graph_query`) share one `AISession`
 /// without either knowing about the other. Calls whose name has no route go to
 /// `fallback` — typically the SQL executor, which reports unknown tools.
 @MainActor
 public final class ToolRouter: AIToolExecutor {
     private let routes: [String: any AIToolExecutor]
-    /// Prefix routes for dynamic namespaces like `skill:` / `mcp:` (docs/agents/architecture/05 §6).
+ /// Prefix routes for dynamic namespaces like `skill:` / `mcp:`.
     private let prefixRoutes: [(prefix: String, executor: any AIToolExecutor)]
     private let fallback: (any AIToolExecutor)?
 

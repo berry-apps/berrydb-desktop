@@ -18,12 +18,12 @@ private final class ElasticsearchCancelBox: @unchecked Sendable {
 public actor ElasticsearchConnection: DataSourceConnection {
     public nonisolated let id = UUID()
 
-    private nonisolated let client: ElasticsearchHTTPClient
+    private let client: ElasticsearchHTTPClient
     private nonisolated let cancelBox = ElasticsearchCancelBox()
     private var isClosed = false
 
     /// Batch/page size for `.esScroll` and for chunking `.esSearch` results —
-    /// N3's 500-1000 floor (docs/architecture/17 §2).
+ /// N3's 500-1000 floor.
     static let batchSize = 500
 
     init(config: ConnectionConfig, session: URLSession = URLSession(configuration: .ephemeral)) throws {
@@ -40,7 +40,7 @@ public actor ElasticsearchConnection: DataSourceConnection {
         try await client.createIndex(name: ref.name)
     }
 
-    // MARK: - Query (docs/architecture/17 §2)
+ // MARK: - Query
 
     public nonisolated func query(_ request: DataSourceQuery) -> AsyncThrowingStream<DataSourceEvent, Error> {
         AsyncThrowingStream { continuation in
@@ -122,7 +122,7 @@ public actor ElasticsearchConnection: DataSourceConnection {
         return .connectionFailed(error.localizedDescription)
     }
 
-    // MARK: - Write (docs/architecture/17 §2)
+ // MARK: - Write
 
     public func write(_ change: DataSourceChangeSet) async throws -> DataSourceWriteResult {
         guard !isClosed else { throw DataSourceError.notConnected }
@@ -184,9 +184,9 @@ public actor ElasticsearchConnection: DataSourceConnection {
         return DataSourceWriteResult(affectedCount: 1)
     }
 
-    /// An empty/missing id is the "no filter" delete case (NS-08-equivalent,
+ /// An empty/missing id is the "no filter" delete case (-equivalent,
     /// `DataSourceDangerGuard`) — the caller already confirmed via the danger
-    /// gate (DL-03/04) before this runs; here it just decides HOW to delete.
+ /// gate before this runs; here it just decides HOW to delete.
     private func delete(index: String, id: BerryDocument) async throws -> DataSourceWriteResult {
         let classification = DataSourceDangerGuard.classify(.delete(collection: index, id: id))
         if classification == .confirm(.deleteWithoutFilter) {

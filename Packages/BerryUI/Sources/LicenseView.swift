@@ -66,7 +66,7 @@ struct LicenseView: View {
             }
             // The three usage bars added real height — a fixed 560pt sheet
             // now needs a scroll to see all of them, which reads as
-            // "hidden" rather than just below the fold. Per docs/ui/01,
+ // "hidden" rather than just below the fold. Per,
             // sheets should fit their content rather than lean on
             // scrolling to hide overflow.
             .scrollDisabled(true)
@@ -91,13 +91,13 @@ struct LicenseView: View {
         }
     }
 
-    /// Trial usage and per-model tokens-remaining (TM-13) — same
+ /// Trial usage and per-model tokens-remaining — same
     /// `GET /v1/ai/balance` the AI panel footer polls, fetched here too so
     /// this sheet shows the up-to-date breakdown without needing the panel
     /// open, and right after a topup completes.
     ///
     /// Only assigns `balance` on a *successful* fetch (mirrors
-    /// `AIPanelController.refreshBalance`, PR #86) — this sheet polls every
+    /// `AIPanelController.refreshBalance`) — this sheet polls every
     /// 15s while open, so a single transient failure (a slow network, or the
     /// backend briefly overloaded) used to null out `balance` and blank the
     /// whole three-bar usage section until the next poll succeeded.
@@ -122,9 +122,9 @@ struct LicenseView: View {
     }
 
     /// An admin-granted comp entitlement (Pro/Intelligence are no longer
-    /// sold, TM-10, but remain valid as manually-granted plans) — distinct
+ /// sold,, but remain valid as manually-granted plans) — distinct
     /// from "topup", the plan a device's own token is upgraded to in place
-    /// once it buys AI credit (TM-11 gap-fix), which isn't a subscription at
+ /// once it buys AI credit (gap-fix), which isn't a subscription at
     /// all and gets its own balance display below instead of this banner.
     private var isSubscribedPaid: Bool {
         if case .active(let plan, _) = license.status, plan != "topup" { return true }
@@ -186,7 +186,7 @@ struct LicenseView: View {
         return switch license.status {
         case .none: L("Start a free trial or enter a license key to unlock everything.")
         case .trial(let days): L("\(days) days left in your trial.")
-        // "topup" (TM-11 gap-fix) has a ~10-year expiry so it keeps
+ // "topup" (gap-fix) has a ~10-year expiry so it keeps
         // authorizing indefinitely — "Active — 3650 days remaining" would
         // read as an obvious bug, not a feature.
         case .active(let plan, let days):
@@ -214,7 +214,7 @@ struct LicenseView: View {
                 .disabled(key.trimmingCharacters(in: .whitespaces).isEmpty || working != nil)
             }
             // Restore a Paddle purchase by the email used at checkout — the
-            // fallback when the checkout didn't bind this device (10 §2).
+ // fallback when the checkout didn't bind this device.
             HStack {
                 TextField(L("Purchase email"), text: $restoreEmail)
                     .textFieldStyle(.roundedBorder)
@@ -280,7 +280,7 @@ struct LicenseView: View {
 
     /// Both billing periods used to collapse to the "pro" tier in the
     /// license, so this couldn't tell monthly from yearly — that's moot now
-    /// (TM-10 removed both), this only fires for an admin-granted comp plan.
+ /// (removed both), this only fires for an admin-granted comp plan.
     @ViewBuilder
     private var subscribedPlanBanner: some View {
         if isSubscribedPaid {
@@ -291,7 +291,7 @@ struct LicenseView: View {
 
     private static let topupPresetsCents = [200, 500, 1000, 2000]
 
-    /// TM-11/14: pay-as-you-go AI credit — presets plus a free-form amount
+ /// pay-as-you-go AI credit — presets plus a free-form amount
     /// (min $2, enforced server-side against the admin-configured minimum).
     /// Tapping a preset opens its checkout immediately, mirroring the old
     /// single-tap "Subscribe" button; the custom field needs its own
@@ -448,7 +448,7 @@ struct LicenseView: View {
         }
     }
 
-    /// TM-09: a plain external link, no in-app payment flow — purely a
+ /// a plain external link, no in-app payment flow — purely a
     /// goodwill/support option, independent of AI credit/usage entirely.
     private var donateSection: some View {
         HStack {
@@ -494,7 +494,7 @@ struct LicenseView: View {
     /// function that's only reached via `Task { await ... }` (the previous
     /// shape here) delays it by however long that Task waits for its turn —
     /// under MainActor congestion the click looks like it did nothing, which
-    /// reads as "needs multiple clicks" (docs/architecture — see the AI
+ /// reads as "needs multiple clicks" (see the AI
     /// composer's admitSend/beginTurn split for the same fix applied there).
     private func beginWork(_ which: WorkingAction) {
         working = which

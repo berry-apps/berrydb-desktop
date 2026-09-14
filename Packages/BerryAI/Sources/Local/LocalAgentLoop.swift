@@ -1,14 +1,14 @@
 import Foundation
 
 /// A local (on-device) text-completion source — the Apple Foundation Models path
-/// (docs/agents/architecture/10, AI-20). No API key, no backend, no network.
+/// No API key, no backend, no network.
 public protocol LocalCompletionProvider: Sendable {
     /// Whether this device can run the local model (Apple Intelligence available).
     static func isAvailable() -> Bool
     /// One completion for the given prompt; returns the model's full text.
     func complete(prompt: String) async throws -> String
     /// Streamed completion — yields text DELTAS as they generate, so the panel
-    /// can show the reply progressively (AI-20). Default: one delta = full text.
+ /// can show the reply progressively. Default: one delta = full text.
     func stream(prompt: String) -> AsyncThrowingStream<String, Error>
 }
 
@@ -39,16 +39,16 @@ public enum LocalAgentOutcome: Sendable, Equatable {
     case clarification(LocalClarification)
 }
 
-/// Runs the agent loop entirely on-device (docs/agents/architecture/10 §2).
+/// Runs the agent loop entirely on-device.
 ///
 /// Foundation Models' native tool API needs compile-time `@Generable` argument
-/// types, not the dynamic JSON Schema our `AIToolSpec` carries (§4). So this uses
+/// types, not the dynamic JSON Schema our `AIToolSpec` carries. So this uses
 /// **prompt-based tool-calling**: the tools are described in the prompt and the
 /// model replies with a bare `{"tool","args"}` object we dispatch — the same
 /// shape the backend's `parse_tool_call` fallback understands. Reuses the
 /// existing `AIToolExecutor`s, so tools still run locally under approval (N1).
 ///
-/// This is a first pass (AI-20, P3): single tool per round, no planner/sub-agent.
+/// This is a first pass (P3): single tool per round, no planner/sub-agent.
 @MainActor
 public final class LocalAgentLoop {
     public static let maxRounds = 6
@@ -64,7 +64,7 @@ public final class LocalAgentLoop {
     /// Runs one user turn; streams the assistant text via `onDelta` and returns
     /// everything shown. Tool rounds run silently. A tool call emitted as text —
     /// even after some prose — is dispatched, never shown, via `StreamGate`
-    /// (mirrors the backend fix, AI-09).
+ /// (mirrors the backend fix).
     public func run(userText: String, tools: [AIToolSpec], onDelta: @escaping (String) -> Void) async -> String {
         let outcome = await runUntilInteraction(
             userText: userText, tools: tools, priorTranscript: "",
@@ -214,7 +214,7 @@ public final class LocalAgentLoop {
     }
 
     /// Extracts a `{"tool":..,"args":..}` object from the reply, even behind a
-    /// ``` fence of any language or with surrounding prose (AI-09).
+ /// ``` fence of any language or with surrounding prose.
     nonisolated static func parseToolCall(_ text: String) -> (name: String, args: [String: Any])? {
         guard let object = firstJSONObject(text),
               let data = object.data(using: .utf8),
@@ -249,7 +249,7 @@ public final class LocalAgentLoop {
     }
 
     /// Apple's on-device model has a much smaller context window than the
-    /// backend's cloud models (docs/agents/architecture/10, AI-20) — a tool
+ /// backend's cloud models — a tool
     /// result joined into the transcript raw (a schema dump, a query result)
     /// can already exceed it in round 2, throwing from `provider.stream`
     /// with nothing shown yet. That reaches the user as an unexplained "the
@@ -283,7 +283,7 @@ public final class LocalAgentLoop {
 /// Streams assistant prose to the UI but withholds any line that opens a `{...}`
 /// object or a ``` fence, so a prompt-based tool call — pure or trailing a
 /// preamble — is dispatched instead of shown (mirrors the backend `ToolCallGate`,
-/// docs/agents/architecture/06). A genuine prose line never starts with `{`/`` ` ``.
+/// A genuine prose line never starts with `{`/`` ` ``.
 struct StreamGate {
     private var full = ""
     private var shown = 0 // count of Characters already emitted

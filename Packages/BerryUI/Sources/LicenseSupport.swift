@@ -6,7 +6,7 @@ extension LicenseManager {
     nonisolated static let defaultBackend = "http://127.0.0.1:8787"
 
     /// Backend root for license + AI gateway (`BERRYDB_BACKEND_URL`, default
-    /// local staging on :8787). Both services share one host (09 §2, 10 §4).
+ /// local staging on:8787). Both services share one host.
     nonisolated static func backendURL() -> URL {
         if let envURL = ProcessInfo.processInfo.environment["BERRYDB_BACKEND_URL"], !envURL.isEmpty {
             return secureBackendURL(envURL)
@@ -18,7 +18,7 @@ extension LicenseManager {
     }
 
     /// The bearer token (license + AI) rides `Authorization` on every backend
-    /// call, so a plaintext remote host would leak it (07 §2). Guard: allow
+ /// call, so a plaintext remote host would leak it. Guard: allow
     /// https anywhere, or http only on loopback (dev); a misconfigured
     /// non-loopback `http://` URL fails safe to the local default rather than
     /// sending the token in cleartext.
@@ -72,7 +72,7 @@ extension LicenseStatus {
         switch self {
         case .none: String(localized: "Unlicensed", bundle: berryModuleBundle)
         case .trial(let days): String(localized: "Trial · \(days)d", bundle: berryModuleBundle)
-        // "topup" (TM-11 gap-fix): a device's token in place of the trial
+ // "topup" (gap-fix): a device's token in place of the trial
         // plan once it buys AI credit — not a subscription tier, so
         // "Topup".capitalized would read oddly here.
         case .active(let plan, _): plan == "topup" ? String(localized: "Credit", bundle: berryModuleBundle) : plan.capitalized
@@ -105,7 +105,7 @@ extension LicenseStatus {
 }
 
 /// Maps a stable backend error code (or a raw message) to a localized string
-/// (docs/architecture/09 §8 — client renders by code).
+/// (client renders by code).
 func licenseErrorMessage(_ code: String) -> String {
     switch code {
     case "unknown_key": String(localized: "License key not found", bundle: berryModuleBundle)

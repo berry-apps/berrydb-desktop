@@ -2,7 +2,7 @@ import BerryGraph
 import Testing
 @testable import BerryAI
 
-@Suite("simulate_impact client tool (DI-16, docs/architecture/13 §6)")
+@Suite("simulate_impact client tool")
 struct SimulateImpactToolExecutorTests {
     /// `ImpactSimulator.Report` has no public initializer (it's only ever
     /// meant to be produced by `simulate`, not hand-built) — construct a real

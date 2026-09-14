@@ -1,7 +1,7 @@
 import BerryStore
 import Foundation
 
-/// Client-executed `get_slow_queries` (docs/feature/07 §14): the slowest
+/// Client-executed `get_slow_queries`: the slowest
 /// recent successful queries — reuses `WorkspaceViewModel.slowestQueries(limit:)`
 /// (same `query_history` the History tab already shows), no new analysis.
 /// Base "ai" tier like `search_conversation`/`search_schema`, not

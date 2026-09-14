@@ -2,8 +2,8 @@ import BerryGraph
 import BerryStore
 import SwiftUI
 
-/// Time Machine Timeline (docs/architecture/11 §5/§6, DI-08; docs/feature/07
-/// §1): pick a recorded Digital-Twin snapshot and see what changed since the
+/// Time Machine Timeline
+/// pick a recorded Digital-Twin snapshot and see what changed since the
 /// one before it. Existence-only (added/removed tables, columns, indexes) —
 /// see `TimelineChange`'s doc comment for why attribute-level changes (e.g. a
 /// column's type) aren't tracked. Reads through the viewModel — presentation

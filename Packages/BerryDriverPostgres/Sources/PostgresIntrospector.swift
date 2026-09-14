@@ -2,7 +2,7 @@ import BerryDriverKit
 import Foundation
 
 /// Introspection via pg_catalog — faster and more accurate than
-/// information_schema (docs/architecture/05 §5). For Postgres, SchemaObject's
+/// information_schema. For Postgres, SchemaObject's
 /// `database` field means SCHEMA (namespace).
 public struct PostgresIntrospector: Introspector {
     let connection: PostgresDriverConnection
@@ -39,7 +39,7 @@ public struct PostgresIntrospector: Introspector {
             return SchemaObject(kind: objectKind, name: name, database: schema)
         }
 
-        // Functions & procedures (TR-01). Per-overload signature in object.name
+ // Functions & procedures. Per-overload signature in object.name
         // so each overloaded function is listed separately on the sidebar and
         // opens its own exact DDL tab.
         let routineRows = try await connection.queryAll(
@@ -65,7 +65,7 @@ public struct PostgresIntrospector: Introspector {
             return SchemaObject(kind: kind == "p" ? .procedure : .function, name: fullName, database: schema)
         }
 
-        // Triggers (TR-01) — DISTINCT so a name shared across tables shows once.
+ // Triggers — DISTINCT so a name shared across tables shows once.
         let triggerRows = try await connection.queryAll(
             """
             SELECT DISTINCT n.nspname, t.tgname
@@ -167,7 +167,7 @@ public struct PostgresIntrospector: Introspector {
         return TableDetail(ref: ref, columns: columns, indexes: indexes, foreignKeys: foreignKeys)
     }
 
-    /// TR-04: `pg_stat_user_tables.n_live_tup` (autovacuum's estimate, cheap —
+ /// `pg_stat_user_tables.n_live_tup` (autovacuum's estimate, cheap
     /// no table scan), `pg_total_relation_size` (table + indexes + TOAST),
     /// `obj_description` for any `COMMENT ON TABLE`. Postgres has no storage
     /// engine concept, so `engine` is always nil. `n_live_tup` is 0 (not null)
@@ -252,7 +252,7 @@ public struct PostgresIntrospector: Introspector {
             return defs.joined(separator: ";\n\n") + ";"
         default:
             // Postgres has no SHOW CREATE TABLE — rebuild basic DDL from the catalog.
-            // Enough for TR-03 (view/copy); the full version (constraints, storage) is CT-01's job.
+ // Enough for (view/copy); the full version (constraints, storage) is's job.
             let detail = try await tableDetail(TableRef(database: schema, name: object.name))
             var lines: [String] = []
             for column in detail.columns {

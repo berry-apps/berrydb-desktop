@@ -3,7 +3,7 @@ import BerryDriverKit
 import Foundation
 import Observation
 
-/// Result of one statement inside an editor run (ED-05: one result tab per
+/// Result of one statement inside an editor run (one result tab per
 /// statement).
 @MainActor
 public struct EditorResult: Identifiable {
@@ -11,7 +11,7 @@ public struct EditorResult: Identifiable {
     public let sql: String
     public let buffer: ResultBuffer
     /// In-place editing over this result when it maps to a single table
-    /// (docs/ui/01 D4a); stays read-only otherwise.
+ /// (D4a); stays read-only otherwise.
     let editing = ResultEditState()
 
     /// Short label for the result tab.
@@ -21,7 +21,7 @@ public struct EditorResult: Identifiable {
     }
 }
 
-/// One SQL editor tab (ED-01): document text + its result sets.
+/// One SQL editor tab: document text + its result sets.
 @MainActor
 @Observable
 public final class EditorDocument: Identifiable {
@@ -33,44 +33,55 @@ public final class EditorDocument: Identifiable {
     public private(set) var isRunning = false
     /// UTF-16 cursor location, kept in sync by the editor view (⌘↩ target).
     public var cursorLocation: Int = 0
-    /// Current selection, kept in sync by the editor view. Drives the Navicat
-    /// exec rule: a non-empty selection runs only the highlighted SQL, an empty
-    /// one runs the whole editor (docs/ui).
+    /// Current selection, kept in sync by the editor view. Drives the execution
+    /// rule: a non-empty selection runs only the highlighted SQL, an empty
+    /// one runs the whole editor.
     public var selectedRange = NSRange(location: 0, length: 0)
-    /// One-shot format trigger (ED-08). Bumping it asks the editor view to
+ /// One-shot format trigger. Bumping it asks the editor view to
     /// pretty-print in place — the view owns the caret/selection, so formatting
     /// there keeps the cursor where it was instead of resetting it.
     public var formatRequestID: Int = 0
-    /// One-shot ⌘/ trigger (docs/ui): the editor view toggles line comments on
+ /// One-shot ⌘/ trigger: the editor view toggles line comments on
     /// the current selection when this changes.
     public var commentToggleRequestID: Int = 0
-    /// One-shot request for this editor to take keyboard focus (docs/ui/03) —
+ /// One-shot request for this editor to take keyboard focus
     /// set when a new tab/split opens so the caret lands in the right pane.
     public var pendingFocus = false
-    /// One-shot (ED-07): when set alongside `pendingFocus`, the editor selects
+ /// One-shot: when set alongside `pendingFocus`, the editor selects
     /// this range instead of just placing the caret — used to pre-select a
     /// saved-query snippet's placeholder so typing replaces it immediately.
     public var pendingSelection: NSRange?
-    /// The saved query this editor is a view of (docs/ui): opening a saved
+ /// The saved query this editor is a view of: opening a saved
     /// query links the tab, ⌘S then updates that same record, and re-opening
     /// focuses this tab instead of spawning a copy.
     public var savedQueryID: UUID?
-    /// The artifact this editor is a view of (AI-29, docs/draft/09.md) —
+ /// The artifact this editor is a view of
     /// mirrors `savedQueryID`: opening an artifact links the tab and
     /// re-opening focuses it instead of spawning a copy.
     public var artifactID: UUID?
-    /// Automatic row cap for SELECTs (ED-12). `nil` = no cap; the user can
+    /// The local file on disk this editor is a view of, if opened from Finder or File -> Open.
+    public var fileURL: URL?
+    /// Whether this editor is detached (not associated with an active database connection session).
+    public var isDetached: Bool = false
+ /// Automatic row cap for SELECTs. `nil` = no cap; the user can
     /// change or disable it per editor from the run bar.
     public var autoLimit: Int? = QueryService.defaultAutoLimit
-    /// Column cache for completion (ED-03), warmed from SchemaCatalog for the
+ /// Column cache for completion, warmed from SchemaCatalog for the
     /// tables referenced in the document.
     public var columnsByTable: [String: [String]] = [:]
 
     public var initialText: String
     public var isDirty: Bool { text != initialText }
 
+    /// Saves modifications atomically directly back to `fileURL` on disk.
+    public func saveToFile() throws {
+        guard let url = fileURL else { return }
+        try Data(text.utf8).write(to: url, options: .atomic)
+        initialText = text
+    }
+
     /// `id` is stable across restarts — it doubles as the persistence key
-    /// for editor session restore (UD-05).
+ /// for editor session restore.
     public init(id: UUID = UUID(), title: String, text: String = "") {
         self.id = id
         self.title = title
@@ -91,9 +102,9 @@ public final class EditorDocument: Identifiable {
         runStatements(statements(for: mode), on: session, autoLimit: autoLimit, onCompleted: onCompleted)
     }
 
-    /// EXPLAIN for the statement at the cursor (ED-09) — plan rows land in a
+ /// EXPLAIN for the statement at the cursor — plan rows land in a
     /// normal result tab; the tree renderer arrives with the V1.5 Query
-    /// Analyzer (docs/architecture/11 §7).
+ /// Analyzer.
     public func explain(on session: Session, analyze: Bool = false) {
         guard let statement = statements(for: .current(selection: nil)).first else { return }
         let prefix = session.dialect.explainPrefix(analyze: analyze)
@@ -110,9 +121,9 @@ public final class EditorDocument: Identifiable {
         Task { [weak self] in
             guard let self else { return }
 
-            // One summary confirmation for the whole run (docs/ui): count the
+ // One summary confirmation for the whole run: count the
             // data-destroying statements up front; 100 DELETEs ask once, not 100
-            // times. Production rules (07 §6) still confirm per statement.
+ // times. Production rules still confirm per statement.
             var preconfirmed = false
             if QueryService.confirmsDataDeletion, !session.isProduction {
                 let destructive = statements.filter {
@@ -160,10 +171,10 @@ public final class EditorDocument: Identifiable {
         results.last?.buffer.cancel()
     }
 
-    /// Populates this tab with previously-captured result snapshots (AI-31,
-    /// docs/draft/09.md) — reopening an artifact whose latest version has a
+ /// Populates this tab with previously-captured result snapshots
+ /// — reopening an artifact whose latest version has a
     /// `resultSnapshotJSON` shows "what did the agent actually get back"
-    /// through the same result grid a live run would (ED-05: one tab per
+ /// through the same result grid a live run would (one tab per
     /// statement), instead of nothing. Values are display strings only (the
     /// original typed `BerryValue`s aren't preserved past the AI tool's own
     /// bounded sample), so every value renders as `.text`/`.null`.
@@ -186,7 +197,7 @@ public final class EditorDocument: Identifiable {
     }
 
     /// Internal (not private) so WorkspaceViewModel can reuse this exact
-    /// selection/cursor logic for the AI run_tab_statements tool (docs/agents/architecture/09 §3.2).
+ /// selection/cursor logic for the AI run_tab_statements tool.
     func statements(for mode: RunMode) -> [String] {
         switch mode {
         case .all:

@@ -2,10 +2,8 @@ import BerryDataSourceKit
 import Foundation
 
 /// OP_MSG wire framing (MongoDB Wire Protocol, opcode 2013) — the only opcode
-/// this driver speaks. Legacy OP_QUERY/OP_REPLY are not implemented: every
-/// server new enough to matter (4.0+, well below any realistic BerryDB
-/// target) accepts OP_MSG for commands, so there is no fallback path to
-/// build (docs/architecture/12 §3 "Trạng thái hiện thực").
+/// this driver speaks. Legacy OP_QUERY/OP_REPLY are not implemented: modern
+/// servers (4.0+) accept OP_MSG for commands.
 ///
 /// Only "kind 0" (single body document) sections are built when encoding a
 /// request — "kind 1" document-sequence sections are a wire-size

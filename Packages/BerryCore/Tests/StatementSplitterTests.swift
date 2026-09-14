@@ -3,7 +3,7 @@ import Testing
 
 @testable import BerryCore
 
-@Suite("StatementSplitter (ED-04)")
+@Suite("StatementSplitter")
 struct StatementSplitterTests {
     @Test func splitsSimpleStatements() {
         let statements = StatementSplitter.split("SELECT 1; SELECT 2;\nSELECT 3")

@@ -3,35 +3,35 @@ import BerryDriverKit
 import BerryGraph
 import SwiftUI
 
-/// Table designer (CT-01/02/03) — a form that edits a `TableDesign`, shows the
-/// generated DDL live (CT-01 always-preview rule), and applies it through the
+/// Table designer — a form that edits a `TableDesign`, shows the
+/// generated DDL live (always-preview rule), and applies it through the
 /// single SQL path. Creates a NEW table; ALTER of existing tables is a
-/// separate follow-up (docs/architecture/06 · L3).
+/// separate follow-up.
 struct TableDesignerSheet: View {
     let preview: (TableDesign) -> [String]
     let onApply: (TableDesign) async -> String?
 
-    /// Close this tool tab (docs/ui/02 §4).
+ /// Close this tool tab.
     let onClose: () -> Void
-    /// Non-nil when EDITING an existing table (CT-01/02/03 ALTER mode): the
+ /// Non-nil when EDITING an existing table (ALTER mode): the
     /// name is fixed and the caller's preview/apply closures diff against it.
     let editingExisting: TableDesign?
     /// Unsupported-edit warnings from the alteration diff (ALTER mode).
     let alterWarnings: (TableDesign) -> [String]
-    /// AI Schema Review findings for the edit-in-progress (DI-15, ALTER mode).
+ /// AI Schema Review findings for the edit-in-progress (ALTER mode).
     let migrationPreview: (TableDesign) -> [Insight]
-    /// Existing table names for FK "referenced table" suggestions (CT-03).
+ /// Existing table names for FK "referenced table" suggestions.
     let tableNames: [String]
     /// Columns of a referenced table, for FK "referenced column" suggestions.
     let columnsProvider: (String) async -> [String]
-    /// Connected engine — picks the dialect-aware type list (CT-05); the field
+ /// Connected engine — picks the dialect-aware type list; the field
     /// stays free-text so any DBMS-specific type still works.
     let driver: DriverID
 
     @State private var design: TableDesign
     @State private var isApplying = false
     @State private var applyError: String?
-    /// Fetched columns per referenced table, for FK column suggestions (CT-03).
+ /// Fetched columns per referenced table, for FK column suggestions.
     @State private var refColumnCache: [String: [String]] = [:]
     /// Debounced AI Schema Review results (see `schedulePreviewRefresh`) — the
     /// analyzer runs over the whole harvested schema graph, so it must not
@@ -83,7 +83,7 @@ struct TableDesignerSheet: View {
         .onDisappear { previewTask?.cancel() }
     }
 
-    /// Debounces the AI Schema Review re-run (DI-15) to once per typing pause
+ /// Debounces the AI Schema Review re-run to once per typing pause
     /// instead of once per keystroke — `migrationPreview` runs `InsightEngine`
     /// over the whole harvested schema graph, the same cost class this
     /// codebase already debounces elsewhere for streaming markdown (100ms)
@@ -95,7 +95,7 @@ struct TableDesignerSheet: View {
         previewTask = Task {
             // nanoseconds, not Task.sleep(for:) — confirmed Swift runtime
             // crash risk in release builds (swiftlang/swift#86204, #84793;
-            // docs/tests/crash.md), not a style choice.
+ // not a style choice.
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard !Task.isCancelled else { return }
             previewInsights = migrationPreview(current)
@@ -133,7 +133,7 @@ struct TableDesignerSheet: View {
         }
     }
 
-    // MARK: - Columns (CT-01)
+ // MARK: - Columns
 
     private var columnsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -183,7 +183,7 @@ struct TableDesignerSheet: View {
                 .font(.system(.caption, design: .monospaced))
                 .frame(width: 110)
             // Fixed-size, indicator-less menu — the default borderless menu adds
-            // its own arrow and stretches, breaking the row (docs/ui/03).
+ // its own arrow and stretches, breaking the row.
             Menu {
                 ForEach(SQLTypes.types(for: driver), id: \.self) { candidate in
                     Button(candidate) { type.wrappedValue = candidate }
@@ -198,7 +198,7 @@ struct TableDesignerSheet: View {
         }
     }
 
-    // MARK: - Indexes (CT-02)
+ // MARK: - Indexes
 
     private var indexesSection: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -233,7 +233,7 @@ struct TableDesignerSheet: View {
         }
     }
 
-    // MARK: - Foreign keys (CT-03)
+ // MARK: - Foreign keys
 
     private var foreignKeysSection: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -250,7 +250,7 @@ struct TableDesignerSheet: View {
                         suggestField(L("column"), text: $fk.column, width: 100,
                                      options: design.columns.map(\.name).filter { !$0.isEmpty })
                         Image(systemName: "arrow.right").foregroundStyle(.secondary)
-                        // Referenced table from the known tables (CT-03).
+ // Referenced table from the known tables.
                         suggestField(L("ref table"), text: $fk.referencedTable, width: 120,
                                      options: tableNames)
                         // Referenced column from that table's columns (fetched).
@@ -284,7 +284,7 @@ struct TableDesignerSheet: View {
     }
 
     /// A text field with a chevron menu of suggestions — type freely (for
-    /// cross-schema or not-yet-created names) or pick a known one (CT-03).
+ /// cross-schema or not-yet-created names) or pick a known one.
     private func suggestField(_ placeholder: String, text: Binding<String>, width: CGFloat, options: [String]) -> some View {
         HStack(spacing: 2) {
             TextField(placeholder, text: text)
@@ -334,7 +334,7 @@ struct TableDesignerSheet: View {
                     .padding(.horizontal, 10)
                     .padding(.top, 6)
             }
-            // AI Schema Review (DI-15) — findings this edit would introduce,
+ // AI Schema Review — findings this edit would introduce,
             // compared against the currently harvested schema. Debounced via
             // `schedulePreviewRefresh`, not called live here.
             ForEach(previewInsights) { insight in

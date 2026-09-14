@@ -2,37 +2,37 @@ import BerryAI
 import BerryCore
 import SwiftUI
 
-/// The per-connection AI panel (docs/architecture/09 §1/§5). A right-hand
+/// The per-connection AI panel. A right-hand
 /// inspector column: chat transcript, streaming reply, inline SQL approval
-/// (§6), the AI-06/AI-07 switches, and token usage (AI-08). All safety lives in
+/// the switches, and token usage. All safety lives in
 /// the controller + BerryAI — this is presentation only.
 struct AIPanelView: View {
     @Bindable var controller: AIPanelController
     /// Opens the license sheet from the unlicensed / quota-exceeded state.
     var onUpgrade: () -> Void
     var onClose: (() -> Void)? = nil
-    /// On-device model opt-in (AI-20). Read by AIPanelController.send() too.
+ /// On-device model opt-in. Read by AIPanelController.send() too.
     @AppStorage("berry.ai.onDevice") private var useOnDeviceModel = false
-    /// AI Database Coach (docs/feature/07 §16) — how the assistant explains
+ /// AI Database Coach — how the assistant explains
     /// things; empty means "let the server pick its own default register".
     /// Read directly by `AIClient` (via `AIPanelController.bind()`) using the
     /// same key, not routed through the controller.
     @AppStorage("berry.ai.detailLevel") private var detailLevel = ""
-    /// TM-13/14: the user's chosen AI model ("{provider_id}/{model_id}"), or
+ /// the user's chosen AI model ("{provider_id}/{model_id}"), or
     /// empty to let the server pick its own default role — same pattern as
     /// `detailLevel` above, read directly by `AIClient` via `bind()`.
     @AppStorage("berry.ai.model") private var selectedModel = ""
-    /// Past-conversations sidebar (AI-21) overlaid on the body, under the header.
+ /// Past-conversations sidebar overlaid on the body, under the header.
     @State private var showHistory = false
-    /// Restored when a stream finishes (AI-08) — otherwise the composer loses
+ /// Restored when a stream finishes — otherwise the composer loses
     /// keyboard focus and the next message needs an extra click to type.
     @FocusState private var promptFieldFocused: Bool
     /// Selection state for the "/" command dropdown — view-local like
     /// `promptFieldFocused` above, not session state (see the design spec).
     @State private var selectedCommandIndex = 0
     @State private var commandPaletteDismissed = false
-    /// Selection state for the `@{...}` mention dropdown (AI-32,
-    /// docs/draft/09.md) — same shape as the "/" state above, kept separate
+ /// Selection state for the `@{...}` mention dropdown
+ /// — same shape as the "/" state above, kept separate
     /// since the two triggers/palettes are otherwise unrelated.
     @State private var selectedMentionIndex = 0
     @State private var mentionPaletteDismissed = false
@@ -88,12 +88,12 @@ struct AIPanelView: View {
                 .accessibilityLabel(L("Close"))
             }
         }
-        .frame(height: 30)          // compact, aligned inspector header (docs/ui)
+ .frame(height: 30) // compact, aligned inspector header
         .padding(.horizontal, 12)
         .background(.bar)
     }
 
-    /// Toggles the past-conversations sidebar (AI-21). Refreshes the list each
+ /// Toggles the past-conversations sidebar. Refreshes the list each
     /// time it opens so recent chats show up.
     private var historyToggle: some View {
         Button {
@@ -111,7 +111,7 @@ struct AIPanelView: View {
 
     private var settingsMenu: some View {
         Menu {
-            // On-device model (AI-20) — only offered when Apple Intelligence is
+ // On-device model — only offered when Apple Intelligence is
             // ready on this Mac; runs the chat locally, no backend/network.
             if AppleFoundationProvider.isAvailable() {
                 Toggle(L("Use on-device model (Apple Intelligence)"), isOn: $useOnDeviceModel)
@@ -120,7 +120,7 @@ struct AIPanelView: View {
             Toggle(L("Auto-run safe SELECTs"), isOn: $controller.autoApproveSelects)
             Toggle(L("Allow sending sample rows"), isOn: $controller.allowSampleRows)
             Divider()
-            // AI Database Coach (docs/feature/07 §16) — explain-level register,
+ // AI Database Coach — explain-level register,
             // a global preference (not per-connection).
             Picker(L("Explain like I'm…"), selection: $detailLevel) {
                 Text(L("Default")).tag("")
@@ -318,7 +318,7 @@ struct AIPanelView: View {
     /// Deliberately excludes the reasoning trace. This is recomputed on every
     /// single token, and summing `reasoningSteps` made that O(total trace
     /// length) per token — the same quadratic cost that made the panel lag
-    /// behind the stream (docs/tests/crash.md). The trace is no longer
+ /// behind the stream. The trace is no longer
     /// rendered either (see `TurnWorkSummary`), so it cannot move the content
     /// height and has nothing to scroll to. `workSteps` is summed by count,
     /// not by narration length, for the same reason: a step's arrival is what
@@ -348,7 +348,7 @@ struct AIPanelView: View {
     /// `subAgentTextLength` is accepted and deliberately IGNORED. Summing it was
     /// O(total sub-agent text) on every token — the same shape as the
     /// reasoning-trace sum removed earlier, which is what made the client fall
-    /// 14s behind the backend (docs/tests/crash.md). `subAgentCount` covers what
+ /// 14s behind the backend. `subAgentCount` covers what
     /// this signal actually needs: a sub-agent appearing changes the content
     /// height enough to re-anchor, and its own text growing does not need to move
     /// the scroll on every character.
@@ -383,7 +383,7 @@ struct AIPanelView: View {
     /// "Running <tool>…" row covered that, but it does not cover a turn whose
     /// first action is a tool call: no answer text and no settled working block
     /// yet, so the panel showed nothing at all while the turn was plainly
-    /// working. Reported as "đang working nhưng không thấy loading".
+    /// working, causing the panel to appear completely unresponsive.
     ///
     /// A running tool is now irrelevant here. `TurnView` picks the right signal
     /// for the phase — typing indicator before anything arrives, the working
@@ -406,7 +406,7 @@ struct AIPanelView: View {
                     }
                     ForEach(currentTranscript) { turn in
                         turnView(for: turn, in: currentTranscript)
-                        // Nest each turn's sub-agents right under it (06 §6).
+ // Nest each turn's sub-agents right under it.
                         ForEach(controller.aiSession?.subThreads(for: turn.id) ?? []) { sub in
                             subAgentCard(sub)
                         }
@@ -427,7 +427,7 @@ struct AIPanelView: View {
             }
             .onAppear {
                 scrollProxy = proxy
-                // A queued message (AI-08) getting its own bubble once the
+ // A queued message getting its own bubble once the
                 // previous turn finishes is the same "new turn just
                 // appeared" moment as an explicit send — see
                 // `scrollToBottomImmediately`'s doc comment.
@@ -497,7 +497,7 @@ struct AIPanelView: View {
         .frame(maxHeight: .infinity)
     }
 
-    // MARK: - Sub-agent (docs/agents/architecture/06 §6)
+ // MARK: - Sub-agent
 
     private func subAgentCard(_ sub: SubAgentTranscript) -> some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -519,7 +519,7 @@ struct AIPanelView: View {
         .padding(.leading, 16)
     }
 
-    // MARK: - Inline approval (§6)
+ // MARK: - Inline approval
 
     private func approvalCard(_ approval: AIPanelController.PendingApproval) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -974,7 +974,7 @@ struct AIPanelView: View {
         controller.commandQuery != nil && !commandPaletteDismissed && !controller.matchingCommands.isEmpty
     }
 
-    /// AI-32: mirrors `isCommandPaletteShowing`. In practice mutually
+ /// mirrors `isCommandPaletteShowing`. In practice mutually
     /// exclusive with it — `commandQuery` requires the draft to *start* with
     /// "/" with no space anywhere yet, while typing "@{" past that point
     /// already means a space came first — but each check stands on its own
@@ -1098,7 +1098,7 @@ struct AIPanelView: View {
         .onKeyPress(.return) { acceptHighlightedMention() }
     }
 
-    /// Shown above the composer while editing a past message (AI-35) instead
+ /// Shown above the composer while editing a past message instead
     /// of drafting a new one, so it's clear Send will replace that message
     /// rather than append a new turn.
     @ViewBuilder
@@ -1256,7 +1256,7 @@ struct AIPanelView: View {
         HStack {
             if let balance = controller.balance {
                 if balance.plan == "trial" {
-                    // Trial — same flat token-count display as the pre-TM-10
+ // Trial — same flat token-count display as the pre-
                     // model. (Balance/models are always present now too, but
                     // this compact footer only has room for the one bar
                     // that's actually gating this account right now; the
@@ -1312,7 +1312,7 @@ struct AIPanelView: View {
         .padding(.horizontal, 10).padding(.vertical, 6)
     }
 
-    // AI-35: plain methods (an explicitly-`TurnView`-typed builder, plus its
+ // plain methods (an explicitly-`TurnView`-typed builder, plus its
     // helpers) rather than constructing TurnView(...) with all its trailing
     // closures directly inside the transcript ForEach — inline there, it
     // pushed the call past what the type checker would resolve in reasonable
@@ -1332,7 +1332,7 @@ struct AIPanelView: View {
             onOpenTextInTab: { text in controller.openTextInTab?(text) },
             onOpenMermaidInTab: { source in controller.openMermaidInTab?(source) },
             onLayoutChange: { controller.noteWorkingBlockLayoutChange() },
-            // AI-35: edit reuses the exact composer pre-fill pattern
+ // edit reuses the exact composer pre-fill pattern
             // `/command`/`@mention` autocomplete already use elsewhere in
             // this file.
             canEditMessages: controller.aiSession?.isStreaming != true,
@@ -1391,7 +1391,7 @@ struct AIPanelView: View {
 
     /// Scrolls to the newest turn(s) directly and synchronously — called
     /// from `send()`, and from `controller.onTurnAdmitted` (wired below) for
-    /// a queued message (AI-08) getting its own bubble once the previous
+ /// a queued message getting its own bubble once the previous
     /// turn finishes streaming. Both are "a new turn just appeared, watch
     /// what happens next" moments; neither should wait on the reactive
     /// `onChange(of: transcript.count)` + `DispatchQueue
@@ -1458,20 +1458,20 @@ struct TurnView: View {
     /// This turn is the live one and no token has landed yet → show the
     /// "thinking" indicator instead of an empty bubble (which read as a dark box).
     var isStreaming = false
-    /// AI-31 (docs/draft/09.md): opens the artifact a chip below the bubble
+ /// opens the artifact a chip below the bubble
     /// links to — `WorkspaceViewModel.openArtifact(id:)` via `AIPanelController`.
     var onOpenArtifact: (UUID) -> Void = { _ in }
-    /// AI-32: opens the table/view a linkified `@{Name}` mention in the
+ /// opens the table/view a linkified `@{Name}` mention in the
     /// user's own bubble resolved to — `WorkspaceViewModel.selectObject(id:)`.
     var onOpenObject: (String) -> Void = { _ in }
-    /// docs/feature/09: Cmd-click on a working-block action's payload.
+ /// Cmd-click on a working-block action's payload.
     var onOpenTextInTab: (String) -> Void = { _ in }
-    /// AI-34: opens a mermaid diagram in the answer bubble (or a step's
+ /// opens a mermaid diagram in the answer bubble (or a step's
     /// narration) as its own zoomable tab.
     var onOpenMermaidInTab: (String) -> Void = { _ in }
     /// Forwarded from the working block when it expands/collapses.
     var onLayoutChange: () -> Void = {}
-    /// AI-35: false while anything in the session is streaming — editing
+ /// false while anything in the session is streaming — editing
     /// truncates the transcript, which has no defined meaning mid-stream
     /// (there's no cancellation path for the stream that's still writing to
     /// the very turns being truncated).
@@ -1488,14 +1488,14 @@ struct TurnView: View {
     /// The answer renders as soon as there is any of it — it types out again.
     ///
     /// This used to be withheld until `workDuration` landed, to satisfy
-    /// docs/feature/09 §block response ("chỉ xuất hiện khi working done"). The
+ /// response (only shown when working is complete). The
     /// real reason that gate was needed is that narration and the answer both
     /// arrived as `message.delta`: showing text early meant showing narration
     /// that then jumped into a sub-block. Narration now has its own
     /// `progress.note` channel (berrydb-api's `note_progress`), so `turn.text`
     /// is only ever the answer and there is nothing to hide.
     ///
-    /// §block response is still honoured in the part that matters — the working
+ /// response is still honoured in the part that matters — the working
     /// block collapses to "Worked for Xs" when the turn settles — but its
     /// literal reading cost streaming, which reads worse than the flicker it
     /// avoided.
@@ -1507,7 +1507,7 @@ struct TurnView: View {
     var hasWorkingBlock: Bool {
         turn.hadToolCall || turn.hadReasoning || !turn.workSteps.isEmpty
     }
-    /// AI-32: resolves an `@{Name}` mention's exact name against the same
+ /// resolves an `@{Name}` mention's exact name against the same
     /// candidate list the composer's autocomplete used, so an already-sent
     /// bubble can re-derive which artifact/object (if any) it points to.
     var mentionCandidates: (String) -> [ArtifactMentionItem] = { _ in [] }
@@ -1539,10 +1539,10 @@ struct TurnView: View {
                 }
                 .padding(.horizontal, 4)
 
-                // AI-35: markdown, same as the assistant bubble — pre-process
+ // markdown, same as the assistant bubble — pre-process
                 // `@{mention}` spans into markdown link syntax first so
                 // `MarkdownMessageView`'s AttributedString(markdown:) parse
-                // turns them into real links (AI-32 stays working); the
+ // turns them into real links (stays working); the
                 // openURL handler below is unchanged, just re-scoped to wrap
                 // this instead of a plain Text.
                 MarkdownMessageView(text: styledMessageMarkdown(turn.text), onOpenMermaidInTab: onOpenMermaidInTab)
@@ -1679,7 +1679,7 @@ struct TurnView: View {
         }
     }
 
-    /// One chip per artifact this turn's tool calls touched (AI-31) — a
+ /// One chip per artifact this turn's tool calls touched — a
     /// sibling of the bubble, not a `ChatBlock` case: unlike mermaid/table,
     /// which are parsed out of the model's own markdown text, an artifact ref
     /// is structured data already known at tool-call time (`AISession`'s
@@ -1742,7 +1742,7 @@ struct TurnView: View {
 
     /// Renders a user's own message, turning any `@{Name}` span that still
     /// resolves to a live artifact/object into a clickable, brace-stripped
-    /// link (docs/draft/09.md) — an unresolved mention (renamed/deleted since
+ /// link — an unresolved mention (renamed/deleted since
     /// it was sent) is left exactly as typed, braces and all.
     func styledMessageText(_ text: String) -> AttributedString {
         let nsText = text as NSString
@@ -1786,7 +1786,7 @@ struct TurnView: View {
     /// into a real `.link` run via `AttributedString(markdown:)`. Feeding it
     /// raw `@{Name}` (rather than pre-resolving it here) would either leak
     /// the braces as literal text or need its own mention-aware parser — this
-    /// keeps mention resolution in exactly one place (AI-32).
+ /// keeps mention resolution in exactly one place.
     func styledMessageMarkdown(_ text: String) -> String {
         let nsText = text as NSString
         let matches = Self.mentionRegex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
@@ -1815,7 +1815,7 @@ struct TurnView: View {
     }
 
     /// `‹ i/N ›` version nav for a user turn with more than one edited
-    /// variant at its fork point (AI-35).
+ /// variant at its fork point.
     @ViewBuilder
     private func siblingNav(currentIndex: Int, ids: [UUID]) -> some View {
         HStack(spacing: 2) {
@@ -1839,17 +1839,17 @@ struct TurnView: View {
     }
 }
 
-/// One turn's whole "working" activity (docs/feature/09) — one sub-block per
+/// One turn's whole "working" activity — one sub-block per
 /// completed round, under a single collapse. Live-ticking "Working… Ns"
 /// header while active, "Worked for Xs" once `duration` lands.
 ///
 /// The body is `steps` only. A reasoning-mode model's raw chain-of-thought
 /// used to be rendered here too, on the theory that it was free progress
-/// text — but §body asks for a bounded description of each action, which the
+/// text — but asks for a bounded description of each action, which the
 /// trace is not, and rendering it was the dominant cost in the panel:
 /// re-joining every prior step per render, then re-parsing the whole
 /// accumulated string through `ChatMarkdown.parse` per token. Quadratic, and
-/// with 191 reasoning events in one turn (docs/tests/crash.md) it saturated
+/// with 191 reasoning events in one turn it saturated
 /// the MainActor until the client ran ~14s behind a finished backend. The
 /// description now comes from `AIWorkStep.narration`, which the model is
 /// asked for explicitly and which every provider produces.
@@ -1865,7 +1865,7 @@ struct TurnView: View {
 /// also collapse as soon as narration text existed, on the assumption that
 /// visible text was what replaced the working block on screen — but
 /// `TurnView.showsResponseText` now withholds the bubble until that same
-/// `duration` arrives (docs/feature/09 §block response), so text can exist
+/// `duration` arrives (response), so text can exist
 /// while still hidden and collapsing on it would leave the turn blank. Using
 /// one signal for both also retires the narration/answer flicker the old
 /// two-signal form could not avoid.
@@ -1927,14 +1927,13 @@ struct TurnWorkSummary: View {
                         // preview-only step dropped once its text promotes
                         // into the answer, see `AIWorkBlock.promoteProvisionalText`)
                         // does not reshuffle every later step's positional
-                        // identity — the same `swift_task_dealloc` crash
-                        // shape as PR #108(b), just triggered by array
-                        // mutation instead of a per-step `isStreaming` flip.
+                        // identity — prevents swift_task_dealloc crash
+                        // triggered by array mutation.
                         ForEach(steps, id: \.id) { step in
                             WorkStepRow(
                                 step: step,
                                 // A property of the TURN, never of a step or
-                                // its position (PR #108(b): keying this on
+                                // its position (keying this on
                                 // index/count let opening a new step flip an
                                 // EARLIER step's flag true→false→true,
                                 // crashing `MarkdownMessageView`'s per-row
@@ -1955,18 +1954,13 @@ struct TurnWorkSummary: View {
                 header
             }
         }
-        // Reported live, again, after the TurnView-level fix for the block
-        // appearing/disappearing (PR #118): with the block already visible,
-        // a SECOND tool-call round appends a new step to `steps` with no
-        // animation of its own here — an instant height change that snapped
-        // whatever sits below this block (the typing indicator, in
-        // TurnView) straight to its new position, reading as the dots
-        // "jumping out of their row" even though the dots themselves never
-        // moved. Keyed on `steps.count`, not `steps` itself: a step's
+        // Smooth height transition when a second tool-call round appends a new step:
+        // avoids an instant height snap that causes elements below this block
+        // (such as the typing indicator in TurnView) to appear to jump.
+        // Keyed on `steps.count`, not `steps` itself: a step's
         // `provisionalText` grows on every streamed token, and animating
-        // that per character would reintroduce the per-token cost this
-        // project has repeatedly had to rip back out (CLAUDE.md "Performance
-        // is not covered by tests"). Count only changes once per round.
+        // that per character would reintroduce per-token layout overhead.
+        // Count only changes once per round.
         .animation(.easeInOut(duration: 0.15), value: steps.count)
         .padding(.leading, 8)
         .padding(.vertical, 2)
@@ -2012,7 +2006,7 @@ struct TurnWorkSummary: View {
         "\(L("Worked")) \(Self.elapsedLabel(duration))"
     }
 
-    /// `mm:ss` below an hour, `h:mm:ss` past it (docs/feature/09.md's mock:
+ /// `mm:ss` below an hour, `h:mm:ss` past it ('s mock:
     /// `00:18`, `1:01:01`) — digits need no localization, unlike the old
     /// "Working… 5s"/"5m 3s" word-based phrasing this replaces. The same
     /// formatter backs both the live "Working" header and the settled
@@ -2030,12 +2024,12 @@ struct TurnWorkSummary: View {
     }
 }
 
-/// One step's sub-block (docs/feature/09): un-narrated preview prose (if
+/// One step's sub-block: un-narrated preview prose (if
 /// this step is still buffering `message.delta` text, see
 /// `AIWorkBlock.appendProvisionalText`) above its natural-language
 /// description, followed by the action badge(s) for the tool(s) that ran —
-/// description first, action after, matching the Codex working-block layout
-/// in docs/feature/09.md ("Mô tả... hành động thực hiện"). A step with a
+/// description first, action after, so the reader learns what is about to
+/// happen before seeing it happen. A step with a
 /// tool call but no narration (e.g. a lone `run_sql` with nothing to say
 /// about it — the accepted gap when the model skips `note_progress`; see
 /// the plan's decision not to synthesize one) still shows its action row
@@ -2060,8 +2054,7 @@ struct WorkStepRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             // Un-narrated `message.delta` prose this step is still
-            // buffering (docs/feature/09: "đang working thì description
-            // phải ở trong block working chứ") — rendered above the real
+            // buffering (keeps description inside the active working block) — rendered above the real
             // narration since prose always precedes a round's own note
             // within the stream, not after it.
             if !step.provisionalText.isEmpty {
@@ -2073,7 +2066,7 @@ struct WorkStepRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             // One row per action, expandable into its inputs/outputs
-            // (docs/feature/09's `Search … Completed` block with its
+ // ('s `Search … Completed` block with its
             // bullets). Every tool call publishes an action the instant it
             // starts (`AIWorkBlock.toolCallStarted`), so a step with no
             // narration and no actions can't happen from a real tool call —
@@ -2085,7 +2078,7 @@ struct WorkStepRow: View {
             // What this step actually produced, openable. Previously the row
             // ended at the action badge above — inert `Label` text — so a user
             // clicking the action that created a tab got no response at all
-            // (docs/feature/09). A step with no artifact renders nothing here
+ // A step with no artifact renders nothing here
             // rather than a dead affordance.
             ForEach(Array(step.artifactRefs.enumerated()), id: \.offset) { _, ref in
                 Button {
@@ -2104,12 +2097,10 @@ struct WorkStepRow: View {
 
 /// One action inside a sub-block: friendly label + status on the right, and — if
 /// the tool reported any — an expandable list of the inputs it ran with and what
-/// came back (docs/feature/09's `Search … Completed` with its bullets).
+/// came back ('s `Search … Completed` with its bullets).
 ///
-/// An action with no detail is rendered as a plain row, NOT a disclosure. A
-/// disclosure that opens onto nothing is what the user reported as "Reading
-/// schema / Analyzing queries không click được": it looked interactive and
-/// wasn't.
+/// An action with no detail is rendered as a plain row, NOT a disclosure,
+/// avoiding an empty interactive disclosure when there is nothing to expand.
 struct ActionRow: View {
     let action: AIToolAction
     /// Cmd-click target: hands the action's full argument to the workspace to
@@ -2251,9 +2242,9 @@ struct ActionRow: View {
 }
 
 /// Raw tool name → a short, friendly action label + icon for the working
-/// block's sub-blocks (docs/feature/09) — display-only, never touches
+/// block's sub-blocks — display-only, never touches
 /// dispatch/policy (the registry stays server-authoritative,
-/// docs/architecture/07 §2). Names mirror `berrydb-api/src/ai/
+/// Names mirror `berrydb-api/src/ai/
 /// tool_registry.rs`'s `builtin_descriptors`; an unmapped/newer tool name
 /// (a client that hasn't shipped a matching entry yet) falls back to the
 /// raw name and a generic gear icon rather than hiding the sub-block.

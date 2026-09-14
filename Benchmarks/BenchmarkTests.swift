@@ -7,7 +7,7 @@ import Darwin
 import Foundation
 import Testing
 
-// Performance harness for the measurable targets in docs/architecture/01 §2
+// Performance harness for the measurable targets
 // (streaming throughput, connect latency, memory under a large result). Opt-in:
 // runs only with BERRYDB_BENCH=1 AND the Docker matrix env vars set, so a plain
 // `swift test` never pays for it. Numbers are REPORTED (see `make bench`); the
@@ -69,7 +69,7 @@ private func drainRowCount(_ sql: String, on session: Session) async throws -> I
     return rows
 }
 
-@Suite("Benchmarks (M7, docs/architecture/01 §2)", .enabled(if: benchEnabled))
+@Suite("Benchmarks", .enabled(if: benchEnabled))
 struct Benchmarks {
     // MARK: - Streaming throughput (N3)
 

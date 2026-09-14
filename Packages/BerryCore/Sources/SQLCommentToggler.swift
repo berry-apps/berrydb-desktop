@@ -1,6 +1,6 @@
 import Foundation
 
-/// Line-comment toggling for the SQL editor (⌘/, docs/ui): comments every line
+/// Line-comment toggling for the SQL editor (⌘/): comments every line
 /// touched by the selection with `-- `, or uncomments when ALL non-blank
 /// touched lines are already commented. Pure — the editor applies the result.
 public enum SQLCommentToggler {

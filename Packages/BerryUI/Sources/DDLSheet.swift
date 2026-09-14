@@ -2,7 +2,7 @@ import AppKit
 import BerryDriverKit
 import SwiftUI
 
-/// Read-only DDL viewer (TR-03): the CREATE statement for a table/view, from
+/// Read-only DDL viewer: the CREATE statement for a table/view, from
 /// the driver introspector. Selectable + copyable.
 struct DDLSheet: View {
     let object: SchemaObject

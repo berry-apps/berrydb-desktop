@@ -8,8 +8,8 @@ import Testing
 
 /// Runs against a real single-node replica set from `BERRYDB_TEST_MONGO_RS`
 /// (`host:port[,host:port...]`, see `Tests/docker/compose.yml`'s `mongo-rs`
-/// service); skipped when the env var is unset (docs/architecture/12 §3/§10,
-/// CLAUDE.md · Build & test). Ground truth for the v1 seeds->primary
+/// service); skipped when the env var is unset
+/// see Tests/docker/compose.yml). Ground truth for the v1 seeds->primary
 /// discovery code path — confirms the driver actually lands on a node the
 /// SERVER ITSELF reports as primary (re-queried independently after
 /// connect), not just "it connected to something".

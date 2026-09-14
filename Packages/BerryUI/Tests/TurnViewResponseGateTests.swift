@@ -5,7 +5,7 @@ import Testing
 @testable import BerryUI
 
 // The gate this file was named for is gone. It withheld the response bubble
-// until `workDuration` landed, to satisfy docs/feature/09 §block response —
+// until `workDuration` landed, to satisfy response
 // necessary only because narration and the answer shared `message.delta`, so
 // showing text early meant showing narration that then moved into a sub-block.
 // With narration on its own `progress.note` channel there is nothing to hide,
@@ -16,12 +16,12 @@ import Testing
 /// `TurnWorkSummary.autoExpanded` used to collapse the moment narration text
 /// existed, on the assumption that visible text was the thing replacing the
 /// working block on screen. Once the response is gated on `workDuration`
-/// (§block response) that assumption breaks: text can exist while still
+/// (response) that assumption breaks: text can exist while still
 /// hidden, so collapsing on it leaves the turn showing nothing at all.
 /// Expansion must follow "has the work settled", which is the same signal the
 /// response gate uses.
 @MainActor
-@Suite("TurnWorkSummary expansion vs. the response gate (docs/feature/09)")
+@Suite("TurnWorkSummary expansion vs. the response gate")
 struct TurnWorkSummaryExpansionTests {
     private func summary(duration: TimeInterval?) -> TurnWorkSummary {
         TurnWorkSummary(
@@ -53,12 +53,12 @@ struct TurnWorkSummaryExpansionTests {
     }
 }
 
-/// docs/feature/09 §body wants each sub-block to state, in natural language,
-/// what the agent is about to do — the way Codex describes a step and then
-/// shows the action. A reasoning-mode model's raw chain-of-thought is not
+/// wants each sub-block to state, in natural language,
+/// what the agent is about to do, and only then show the action it took.
+/// A reasoning-mode model's raw chain-of-thought is not
 /// that: it is unbounded, unstructured, and arrives token-by-token in far
 /// greater volume than the narration (191 reasoning events in one turn in
-/// docs/tests/crash.md).
+///
 ///
 /// Rendering it was also the single largest cost in the working block:
 /// `combinedReasoningText` re-joined every prior step on each render, and the
@@ -71,7 +71,7 @@ struct TurnWorkSummaryExpansionTests {
 /// RESPONSE_BEHAVIOR) — is the description, on every provider rather than
 /// only the ones exposing a thinking stream.
 @MainActor
-@Suite("Working block renders narration, not raw reasoning (docs/feature/09)")
+@Suite("Working block renders narration, not raw reasoning")
 struct TurnWorkSummaryReasoningTests {
     /// The compile-time half of this guarantee is that `TurnWorkSummary` has
     /// no reasoning inputs left to pass; this pins the behaviour that a turn
@@ -98,7 +98,7 @@ struct TurnWorkSummaryReasoningTests {
 /// Narration now arrives as its own `progress.note` event (berrydb-api), so
 /// `turn.text` is only ever the answer and can render as it streams.
 @MainActor
-@Suite("Response streams once narration has its own channel (docs/feature/09)")
+@Suite("Response streams once narration has its own channel")
 struct ResponseStreamingTests {
     private func turn(text: String, hadToolCall: Bool, workDuration: TimeInterval?) -> AITurn {
         AITurn(
@@ -132,7 +132,7 @@ struct ResponseStreamingTests {
 /// open. The step now carries refs and the row renders a real button per ref —
 /// this pins that the callback reaches the workspace with the right id.
 @MainActor
-@Suite("Working block artifact opening (docs/feature/09)")
+@Suite("Working block artifact opening")
 struct WorkStepArtifactTests {
     private let ref = ArtifactRef(
         artifactID: UUID(), versionNumber: 1, title: "Ad-hoc run", kind: .editorTab
@@ -165,12 +165,12 @@ struct WorkStepArtifactTests {
     }
 }
 
-/// docs/feature/09's example shows each action expanding to its own detail —
+/// Each action expands to its own detail
 /// the inputs it ran with, the result it found, and a `Completed`/`Running`
 /// status. Tools with no artifact ("Reading schema", "Analyzing queries") had
 /// nothing to expand at all, so their badge looked clickable but did nothing.
 @MainActor
-@Suite("Working block action detail (docs/feature/09)")
+@Suite("Working block action detail")
 struct WorkStepActionDetailTests {
     private func action(
         _ name: String, status: AIToolAction.Status = .completed,
@@ -215,7 +215,7 @@ struct WorkStepActionDetailTests {
 /// SQL for a run, the tab contents for a write, the object list for a read — for
 /// the popover a click opens, while `inputs`/`outputs` stay short for the row.
 @MainActor
-@Suite("Working block action payload (docs/feature/09)")
+@Suite("Working block action payload")
 struct WorkStepActionPayloadTests {
     private let longSQL = "SELECT " + String(repeating: "col_name, ", count: 60) + "1"
 
@@ -278,7 +278,7 @@ struct PulsingDotsTests {
 /// `scrollSignal` summed the full length of every sub-agent transcript, so a turn
 /// with sub-agent output paid O(total sub text) on every token — the same shape as
 /// the reasoning-trace sum removed earlier, which is what made the client lag 14s
-/// behind the backend (docs/tests/crash.md).
+/// behind the backend.
 ///
 /// These assert the SHAPE of the signal rather than timing, which is what a unit
 /// test can hold: the value must not grow with accumulated text.
@@ -369,7 +369,7 @@ struct WorkingHeaderIdentityTests {
     }
 }
 
-/// docs/feature/09.md's mock uses a digital-clock elapsed time (`00:18`,
+/// The mock uses a digital-clock elapsed time (`00:18`,
 /// `1:01:01`), not the old word-based "Working… 5s"/"5m 3s" phrasing —
 /// digits need no localization, unlike that phrasing did.
 @MainActor
@@ -458,7 +458,7 @@ struct WorkingProgressVisibilityTests {
 /// gestures share one hit target, so a wiring mistake silently collapses them
 /// into whichever branch was written last.
 @MainActor
-@Suite("Working block action gestures (docs/feature/09)")
+@Suite("Working block action gestures")
 struct ActionRowGestureTests {
     private func row(payload: String? = "SELECT 1") -> ActionRow {
         ActionRow(action: AIToolAction(name: "run_sql", status: .completed, payload: payload))

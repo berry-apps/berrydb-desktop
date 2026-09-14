@@ -1,7 +1,7 @@
 import Foundation
 
 /// A built-in chat command shown in the composer's "/" dropdown
-/// (docs/superpowers/specs/2026-07-27-chat-command-dropdown-design.md).
+///
 /// This is discovery metadata only — dispatch (what actually happens when
 /// the command runs) stays hand-written per command in `AISession.send(_:)`.
 public struct ChatCommand: Identifiable, Equatable, Sendable {
