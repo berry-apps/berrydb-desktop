@@ -14,34 +14,46 @@ All secrets reside in `deploy/.env` (gitignored) — see `deploy/.env.example`. 
 - Private key resides in Keychain, used by `sign_update` during release packaging.
 - Set `SPARKLE_BIN` to `sign_update` if it is not in your `PATH` or `.build`.
 
-## 2. One-Time Setup: Enable In-App Updater (Sparkle Framework)
+## 2. In-App Updater (Sparkle Framework)
 
-By default, builds do **not** embed Sparkle: the *Check for Updates…* menu item is a no-op (`NoopUpdater`). This preserves zero runtime external dependencies and enforces binary size limits (`scripts/check-size.sh`) during development and testing.
+Sparkle is an unconditional dependency: both the `.package(...)` entry and the
+`BerryApp` target's `Sparkle` product in `Package.swift` are always active, so
+`#if canImport(Sparkle)` in `App/Sources/AppUpdater.swift` compiles the real
+`SparkleUpdater` for every build — `swift build`/`swift test`/`swift run`
+included, not only a packaged release. `scripts/check-size.sh`'s
+runtime-dependency guard already allowlists `Sparkle.framework` as a
+permanent embedded exception (see the comment next to its `FOREIGN` check),
+so there is nothing to opt into or add here.
 
-The updater code (`App/Sources/AppUpdater.swift`) is gated by `#if canImport(Sparkle)`, activating automatically once the framework is linked.
+`scripts/make_app.sh` copies any `.framework` produced by the build into
+`Contents/Frameworks/` when it assembles the `.app`. For a release build,
+`deploy/release.sh` then re-signs `Sparkle.framework` from the inside out,
+after `swift build -c release` and before the outer `codesign`:
 
-To enable Sparkle for a production release:
+```sh
+FW="$(swift build -c release --show-bin-path)/Sparkle.framework"
+mkdir -p dist/BerryDB.app/Contents/Frameworks
+ditto "$FW" dist/BerryDB.app/Contents/Frameworks/Sparkle.framework
 
-1. Uncomment the two Sparkle lines in `Package.swift`:
-   - `.package(url: "https://github.com/sparkle-project/Sparkle.git", ...)`
-   - `.product(name: "Sparkle", package: "Sparkle")` in the `BerryApp` target.
-   `canImport(Sparkle)` evaluates to `true`, compiling `SparkleUpdater`.
+# Sign from inside out: XPCServices + Autoupdate, then framework
+codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
+  dist/BerryDB.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/*.xpc
+codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
+  dist/BerryDB.app/Contents/Frameworks/Sparkle.framework
+```
 
-2. Embed and re-sign the framework into the bundle **after** `swift build -c release` and **before** the outer `codesign`:
+(`deploy/release.sh` already runs this; it's shown here only for anyone
+reproducing the release process by hand — see "Fallback — releasing by hand"
+below.)
 
-   ```sh
-   FW="$(swift build -c release --show-bin-path)/Sparkle.framework"
-   mkdir -p dist/BerryDB.app/Contents/Frameworks
-   ditto "$FW" dist/BerryDB.app/Contents/Frameworks/Sparkle.framework
-
-   # Sign from inside out: XPCServices + Autoupdate, then framework
-   codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
-     dist/BerryDB.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/*.xpc
-   codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
-     dist/BerryDB.app/Contents/Frameworks/Sparkle.framework
-   ```
-
-3. Add `Sparkle.framework` to the allowlist in `scripts/check-size.sh` for release builds.
+Whether `SparkleUpdater` is actually used at runtime is a separate check in
+`makeUpdater()` (`App/Sources/AppUpdater.swift`): it only returns
+`SparkleUpdater` for a real `.app` bundle whose `Info.plist` carries a
+non-empty `SUFeedURL` — `scripts/make_app.sh` only writes that key when
+`SU_PUBLIC_ED_KEY` is set (a real release build). Everything else, including
+a plain `swift run` or a dev build packaged by `scripts/run.sh`, gets
+`NoopUpdater` and the *Check for Updates…* menu item is a no-op, even though
+the real Sparkle class is compiled in either way.
 
 ## 3. Release Process
 
