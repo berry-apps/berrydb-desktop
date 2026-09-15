@@ -1,12 +1,13 @@
 import AppKit
 import Foundation
 
-/// Auto-update entry point. Sparkle is a binary
-/// framework that only works from a signed `.app` bundle, so the default
-/// SwiftPM build (tests, `swift run`, the size guard) ships WITHOUT it and the
-/// menu is a no-op. A release build adds the Sparkle SPM product (see
-/// deploy/README.md) — `canImport(Sparkle)` then compiles the real updater and
-/// the `.app`-bundle guard activates it.
+/// Auto-update entry point. The Sparkle SPM product is an unconditional
+/// dependency of the `BerryApp` target (see `Package.swift`), so
+/// `canImport(Sparkle)` compiles the real `SparkleUpdater` for every build —
+/// `swift build`/`swift test`/`swift run` included, not only a packaged
+/// release. Whether it's actually *used* at runtime is a separate, deliberate
+/// check in `makeUpdater()` below (a real `.app` bundle with `SUFeedURL` set);
+/// see its own doc comment. See deploy/README.md.
 @MainActor
 protocol UpdaterControlling {
     var canCheckForUpdates: Bool { get }

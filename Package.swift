@@ -33,12 +33,14 @@ let package = Package(
  // `ssh-rsa` by default. Re-point at upstream once that PR
         // merges and a release including it ships.
         .package(url: "https://github.com/quangtaned/Citadel.git", revision: "aef7eebf90860a6abca4580c31e85b88ab9ce832"),
- // Sparkle auto-update is OPT-IN for release
-        // builds only: it adds an embedded binary framework, which the
- // dependency-free default build + size guard must not carry.
-        // To enable, uncomment this line and the matching product below, then
-        // build with `-Xswiftc -DSPARKLE` off — `canImport(Sparkle)` in
-        // AppUpdater.swift keys off the module being linked. See deploy/README.md.
+        // Sparkle auto-update — unconditional, like every other dependency
+        // here. `canImport(Sparkle)` in AppUpdater.swift is therefore true
+        // for every ordinary build (`swift build`/`swift test`/`swift run`),
+        // not only a packaged release. scripts/check-size.sh's runtime-
+        // dependency guard already sanctions Sparkle.framework as a permanent
+        // embedded exception (see its own comment) and deploy/release.sh
+        // embeds and signs it unconditionally too, so there is no
+        // dependency-free build variant to preserve here. See deploy/README.md.
         .package(url: "https://github.com/sparkle-project/Sparkle.git", from: "2.6.0"),
     ],
     targets: [
@@ -297,8 +299,8 @@ let package = Package(
                 // its own registration call for why this app target can still
                 // depend on it unconditionally while staying .macOS(.v14).
                 "BerryKeyValueKit", "BerryDriverRedis",
-                // Release-only Sparkle product — uncomment together with the
-                // package dependency above to compile the real updater.
+                // Sparkle product — unconditional, see the dependency
+                // comment above.
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "App/Sources"
