@@ -325,6 +325,11 @@ let package = Package(
             path: "Packages/BerryDriverTestKit/Sources"
         ),
         .testTarget(
+            name: "BerryDriverKitTests",
+            dependencies: ["BerryDriverKit"],
+            path: "Packages/BerryDriverKit/Tests"
+        ),
+        .testTarget(
             name: "BerryDataSourceKitTests",
             dependencies: ["BerryDataSourceKit", "BerryDriverKit"],
             path: "Packages/BerryDataSourceKit/Tests/BerryDataSourceKitTests"

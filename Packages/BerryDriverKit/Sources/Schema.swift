@@ -79,10 +79,18 @@ public struct IndexInfo: Sendable, Hashable {
 
 public struct ForeignKeyInfo: Sendable, Hashable {
     public let column: String
+    public let referencedSchema: String?
     public let referencedTable: String
     public let referencedColumn: String
-    public init(column: String, referencedTable: String, referencedColumn: String) {
+
+    public init(
+        column: String,
+        referencedSchema: String? = nil,
+        referencedTable: String,
+        referencedColumn: String
+    ) {
         self.column = column
+        self.referencedSchema = referencedSchema
         self.referencedTable = referencedTable
         self.referencedColumn = referencedColumn
     }
