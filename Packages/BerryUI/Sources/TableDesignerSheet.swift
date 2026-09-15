@@ -27,6 +27,7 @@ struct TableDesignerSheet: View {
  /// Connected engine — picks the dialect-aware type list; the field
     /// stays free-text so any DBMS-specific type still works.
     let driver: DriverID
+    let availableSchemas: [String]
 
     @State private var design: TableDesign
     @State private var isApplying = false
@@ -48,7 +49,8 @@ struct TableDesignerSheet: View {
         migrationPreview: @escaping (TableDesign) -> [Insight] = { _ in [] },
         tableNames: [String] = [],
         columnsProvider: @escaping (String) async -> [String] = { _ in [] },
-        driver: DriverID = .sqlite
+        driver: DriverID = .sqlite,
+        availableSchemas: [String] = []
     ) {
         self.preview = preview
         self.onApply = onApply
@@ -59,7 +61,10 @@ struct TableDesignerSheet: View {
         self.tableNames = tableNames
         self.columnsProvider = columnsProvider
         self.driver = driver
+        self.availableSchemas = availableSchemas
+        let defaultSchema = editingExisting?.database ?? availableSchemas.first
         _design = State(initialValue: editingExisting ?? TableDesign(
+            database: defaultSchema,
             columns: [ColumnDesign(name: "id", type: "INTEGER", isNullable: false, isPrimaryKey: true)]
         ))
     }
@@ -107,6 +112,17 @@ struct TableDesignerSheet: View {
             Image(systemName: "tablecells.badge.ellipsis")
             Text(editingExisting == nil ? L("New Table") : L("Edit Table")).font(.headline)
             Spacer()
+            if availableSchemas.count > 1 {
+                Picker(L("Schema"), selection: Binding(
+                    get: { design.database ?? availableSchemas.first ?? "public" },
+                    set: { design.database = $0 }
+                )) {
+                    ForEach(availableSchemas, id: \.self) { schema in
+                        Text(schema).tag(schema)
+                    }
+                }
+                .frame(width: 140)
+            }
             HStack(spacing: 4) {
                 Text(verbatim: editingExisting == nil ? "CREATE TABLE" : "ALTER TABLE")
                     .font(.caption).foregroundStyle(.secondary)

@@ -2249,7 +2249,8 @@ public struct WorkspaceView: View {
                 },
                 tableNames: viewModel.relationalTableNames,
                 columnsProvider: { await viewModel.columns(ofTableNamed: $0) },
-                driver: viewModel.session?.config.driver ?? .sqlite
+                driver: viewModel.session?.config.driver ?? .sqlite,
+                availableSchemas: viewModel.availableSchemas
             )
         case .collection(let state):
             CollectionTabView(
@@ -2343,7 +2344,8 @@ public struct WorkspaceView: View {
                 onClose: close,
                 tableNames: viewModel.relationalTableNames,
                 columnsProvider: { await viewModel.columns(ofTableNamed: $0) },
-                driver: viewModel.session?.config.driver ?? .sqlite
+                driver: viewModel.session?.config.driver ?? .sqlite,
+                availableSchemas: viewModel.availableSchemas
             )
         case .importCSV:
             ImportCSVSheet(

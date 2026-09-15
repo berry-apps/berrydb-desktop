@@ -124,10 +124,20 @@ public enum WorkspaceTab: @preconcurrency Identifiable {
 
     public var title: String {
         switch self {
-        case .table(let state): state.object.name
+        case .table(let state):
+            if let db = state.object.database, !db.isEmpty, db != "public" && db != "dbo" {
+                "\(db).\(state.object.name)"
+            } else {
+                state.object.name
+            }
         case .editor(let document): document.title
         case .tool(let kind): kind.title
-        case .alterTable(let design): L("Edit Table") + ": \(design.name)"
+        case .alterTable(let design):
+            if let db = design.database, !db.isEmpty, db != "public" && db != "dbo" {
+                L("Edit Table") + ": \(db).\(design.name)"
+            } else {
+                L("Edit Table") + ": \(design.name)"
+            }
         case .collection(let state): state.ref.name
         case .mongoShell(let state): state.title
         case .qdrantQuery(let state): state.title
@@ -1324,6 +1334,12 @@ public final class WorkspaceViewModel {
     /// Relational object names for the designer's referenced-table suggestions.
     public var relationalTableNames: [String] {
         objects.filter { $0.kind.isRelational }.map(\.name).sorted()
+    }
+
+    /// Distinct schemas available in the active session when driver supports schemas.
+    public var availableSchemas: [String] {
+        guard session?.capabilities.schemas == true else { return [] }
+        return Array(Set(objects.compactMap(\.database))).sorted()
     }
 
     /// Runs a CSV import through the importer and formats a user-facing result
