@@ -65,6 +65,15 @@ if otool -L "$BIN" | grep -q 'libsybdb'; then
     fi
 fi
 
+# --- Embedded dylib minimum-OS drift (see scripts/check-minos.sh) ---
+# A dependency's bottle (freetds/libsybdb today, potentially others later) gets
+# rebuilt by Homebrew against whatever macOS the build machine runs, which only
+# ever moves forward, and can end up declaring a higher minimum OS than the app
+# itself without anyone noticing (issue #8: `ld` warned about exactly this at
+# build time and nothing failed the build on it).
+MINOS_FAIL=0
+sh "$(dirname "$0")/check-minos.sh" "$APP" || MINOS_FAIL=1
+
 FAIL=0
 if [ "$SIZE_KB" -gt $(( LIMIT_MB * 1024 )) ]; then
     echo "FAIL: app is ${SIZE_MB} MB, over the ${LIMIT_MB} MB target" >&2
@@ -86,6 +95,10 @@ if [ -n "$FREETDS_MISMATCH" ]; then
     echo "FAIL: shipped FreeTDS is not the pinned version ($FREETDS_MISMATCH)." >&2
     echo "  Either 'brew upgrade freetds' to match, or bump deploy/freetds-version.txt" >&2
     echo "  and publish the matching source tarball with the next release." >&2
+    FAIL=1
+fi
+
+if [ "$MINOS_FAIL" -ne 0 ]; then
     FAIL=1
 fi
 
