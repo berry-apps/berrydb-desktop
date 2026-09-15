@@ -1064,59 +1064,82 @@ public struct WorkspaceView: View {
                             if !viewModel.objects.isEmpty {
                                 objectFilterField
                             }
-                            if objectTypeFilter == .all || objectTypeFilter == .table {
-                                let tables = filteredObjects(.table)
-                                Section(isExpanded: expanded(.table)) {
-                                    ForEach(tables) { object in
-                                        objectRow(object, icon: "tablecells")
-                                    }
-                                } header: {
-                                    sectionHeader(L("Tables (\(tables.count))"), binding: expanded(.table))
-                                }
-                            }
-                            if objectTypeFilter == .all || objectTypeFilter == .view {
-                                let views = filteredObjects(.view)
-                                if !views.isEmpty || objectTypeFilter == .view {
-                                    Section(isExpanded: expanded(.view)) {
-                                        ForEach(views) { object in
-                                            objectRow(object, icon: "rectangle.on.rectangle")
+                            let hasSchemas = viewModel.session?.capabilities.schemas ?? false
+                            let schemaGroups = SchemaTree.group(objects: viewModel.objects, hasSchemaCapability: hasSchemas)
+                            if schemaGroups.count == 1 && schemaGroups[0].name == nil {
+                                let flat = schemaGroups[0]
+                                if objectTypeFilter == .all || objectTypeFilter == .table {
+                                    let tables = filteredObjects(in: flat.tables, kind: .table)
+                                    Section(isExpanded: expanded(.table)) {
+                                        ForEach(tables) { object in
+                                            objectRow(object, icon: "tablecells")
                                         }
                                     } header: {
-                                        sectionHeader(L("Views (\(views.count))"), binding: expanded(.view), onAdd: { createViewTemplate() })
+                                        sectionHeader(L("Tables (\(tables.count))"), binding: expanded(.table))
                                     }
                                 }
-                            }
-                            if objectTypeFilter == .all || objectTypeFilter == .function {
-                                let functions = filteredObjects(.function)
-                                if !functions.isEmpty || objectTypeFilter == .function {
-                                    Section(isExpanded: expanded(.function)) {
-                                        ForEach(functions) { object in
-                                            objectRow(object, icon: "function")
+                                if objectTypeFilter == .all || objectTypeFilter == .view {
+                                    let views = filteredObjects(in: flat.views, kind: .view)
+                                    if !views.isEmpty || objectTypeFilter == .view {
+                                        Section(isExpanded: expanded(.view)) {
+                                            ForEach(views) { object in
+                                                objectRow(object, icon: "rectangle.on.rectangle")
+                                            }
+                                        } header: {
+                                            sectionHeader(L("Views (\(views.count))"), binding: expanded(.view), onAdd: { createViewTemplate() })
                                         }
-                                    } header: {
-                                        sectionHeader(L("Functions (\(functions.count))"), binding: expanded(.function), onAdd: { createFunctionTemplate() })
                                     }
                                 }
-                                let procedures = filteredObjects(.procedure)
-                                if !procedures.isEmpty || objectTypeFilter == .function {
-                                    Section(isExpanded: expanded(.procedure)) {
-                                        ForEach(procedures) { object in
-                                            objectRow(object, icon: "gearshape.2")
+                                if objectTypeFilter == .all || objectTypeFilter == .function {
+                                    let functions = filteredObjects(in: flat.functions, kind: .function)
+                                    if !functions.isEmpty || objectTypeFilter == .function {
+                                        Section(isExpanded: expanded(.function)) {
+                                            ForEach(functions) { object in
+                                                objectRow(object, icon: "function")
+                                            }
+                                        } header: {
+                                            sectionHeader(L("Functions (\(functions.count))"), binding: expanded(.function), onAdd: { createFunctionTemplate() })
                                         }
-                                    } header: {
-                                        sectionHeader(L("Procedures (\(procedures.count))"), binding: expanded(.procedure), onAdd: { createProcedureTemplate() })
+                                    }
+                                    let procedures = filteredObjects(in: flat.procedures, kind: .procedure)
+                                    if !procedures.isEmpty || objectTypeFilter == .function {
+                                        Section(isExpanded: expanded(.procedure)) {
+                                            ForEach(procedures) { object in
+                                                objectRow(object, icon: "gearshape.2")
+                                            }
+                                        } header: {
+                                            sectionHeader(L("Procedures (\(procedures.count))"), binding: expanded(.procedure), onAdd: { createProcedureTemplate() })
+                                        }
                                     }
                                 }
-                            }
-                            if objectTypeFilter == .all || objectTypeFilter == .trigger {
-                                let triggers = filteredObjects(.trigger)
-                                if !triggers.isEmpty || objectTypeFilter == .trigger {
-                                    Section(isExpanded: expanded(.trigger)) {
-                                        ForEach(triggers) { object in
-                                            objectRow(object, icon: "bolt")
+                                if objectTypeFilter == .all || objectTypeFilter == .trigger {
+                                    let triggers = filteredObjects(in: flat.triggers, kind: .trigger)
+                                    if !triggers.isEmpty || objectTypeFilter == .trigger {
+                                        Section(isExpanded: expanded(.trigger)) {
+                                            ForEach(triggers) { object in
+                                                objectRow(object, icon: "bolt")
+                                            }
+                                        } header: {
+                                            sectionHeader(L("Triggers (\(triggers.count))"), binding: expanded(.trigger), onAdd: { createTriggerTemplate() })
                                         }
+                                    }
+                                }
+                            } else {
+                                ForEach(schemaGroups) { group in
+                                    Section(isExpanded: schemaExpanded(group.id)) {
+                                        schemaGroupContent(group)
                                     } header: {
-                                        sectionHeader(L("Triggers (\(triggers.count))"), binding: expanded(.trigger), onAdd: { createTriggerTemplate() })
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "folder")
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(.secondary)
+                                            Text(group.name ?? "")
+                                                .font(BerryTheme.Typeface.sidebarSection)
+                                            Spacer()
+                                            Text("(\(group.totalCount))")
+                                                .font(BerryTheme.Typeface.sidebarSection)
+                                                .foregroundStyle(.secondary)
+                                        }
                                     }
                                 }
                             }
@@ -1255,11 +1278,102 @@ public struct WorkspaceView: View {
         )
     }
 
+    private func schemaExpanded(_ id: String) -> Binding<Bool> {
+        let key = "schema:\(id)"
+        return Binding(
+            get: { !objectSearch.isEmpty || !collapsedGroupKeys.contains(key) },
+            set: { isExpanded in
+                if isExpanded { collapsedGroupKeys.remove(key) } else { collapsedGroupKeys.insert(key) }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func schemaGroupContent(_ group: SchemaTreeGroup) -> some View {
+        let tables = filteredObjects(in: group.tables, kind: .table)
+        let views = filteredObjects(in: group.views, kind: .view)
+        let functions = filteredObjects(in: group.functions, kind: .function)
+        let procedures = filteredObjects(in: group.procedures, kind: .procedure)
+        let triggers = filteredObjects(in: group.triggers, kind: .trigger)
+
+        if objectTypeFilter == .all || objectTypeFilter == .table {
+            if !tables.isEmpty {
+                DisclosureGroup(isExpanded: expanded(.table)) {
+                    ForEach(tables) { object in
+                        objectRow(object, icon: "tablecells")
+                    }
+                } label: {
+                    Text(L("Tables (\(tables.count))"))
+                        .font(BerryTheme.Typeface.sidebarSection)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        if objectTypeFilter == .all || objectTypeFilter == .view {
+            if !views.isEmpty || objectTypeFilter == .view {
+                DisclosureGroup(isExpanded: expanded(.view)) {
+                    ForEach(views) { object in
+                        objectRow(object, icon: "rectangle.on.rectangle")
+                    }
+                } label: {
+                    Text(L("Views (\(views.count))"))
+                        .font(BerryTheme.Typeface.sidebarSection)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        if objectTypeFilter == .all || objectTypeFilter == .function {
+            if !functions.isEmpty || objectTypeFilter == .function {
+                DisclosureGroup(isExpanded: expanded(.function)) {
+                    ForEach(functions) { object in
+                        objectRow(object, icon: "function")
+                    }
+                } label: {
+                    Text(L("Functions (\(functions.count))"))
+                        .font(BerryTheme.Typeface.sidebarSection)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if !procedures.isEmpty || objectTypeFilter == .function {
+                DisclosureGroup(isExpanded: expanded(.procedure)) {
+                    ForEach(procedures) { object in
+                        objectRow(object, icon: "gearshape.2")
+                    }
+                } label: {
+                    Text(L("Procedures (\(procedures.count))"))
+                        .font(BerryTheme.Typeface.sidebarSection)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        if objectTypeFilter == .all || objectTypeFilter == .trigger {
+            if !triggers.isEmpty || objectTypeFilter == .trigger {
+                DisclosureGroup(isExpanded: expanded(.trigger)) {
+                    ForEach(triggers) { object in
+                        objectRow(object, icon: "bolt")
+                    }
+                } label: {
+                    Text(L("Triggers (\(triggers.count))"))
+                        .font(BerryTheme.Typeface.sidebarSection)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
     private func filteredObjects(_ kind: SchemaObjectKind) -> [SchemaObject] {
-        let base = viewModel.objects.filter { $0.kind == kind }
+        filteredObjects(in: viewModel.objects, kind: kind)
+    }
+
+    private func filteredObjects(in objects: [SchemaObject], kind: SchemaObjectKind) -> [SchemaObject] {
+        let base = objects.filter { $0.kind == kind }
         let query = objectSearch.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return base }
-        return base.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        return base.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
+                || ($0.database?.localizedCaseInsensitiveContains(query) ?? false)
+                || "\($0.database ?? "").\($0.name)".localizedCaseInsensitiveContains(query)
+        }
     }
 
     private func profileRow(_ profile: ConnectionProfile) -> some View {
