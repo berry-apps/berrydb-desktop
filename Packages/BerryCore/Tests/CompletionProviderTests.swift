@@ -238,5 +238,54 @@ struct CompletionProviderTests {
         #expect(price?.detail == "berry_s1.items")
         #expect(sku?.detail == "berry_s2.items")
     }
+
+    @Test func doesNotCrashOnIncompleteQualifiedTableNameDot() {
+        let objects = [
+            SchemaObject(kind: .table, name: "items", database: "berry_s1")
+        ]
+        let suggestions = CompletionProvider.suggestions(
+            for: "SELECT * FROM .",
+            cursor: 16,
+            objects: objects
+        )
+        #expect(!suggestions.isEmpty)
+
+        let map = CompletionProvider.aliasMap(statement: "SELECT * FROM .", tableNames: ["items"])
+        #expect(map.isEmpty)
+    }
+
+    @Test func schemaQualifiedAliasResolvesOnlyTargetSchemaColumns() {
+        let objects = [
+            SchemaObject(kind: .table, name: "items", database: "berry_s1"),
+            SchemaObject(kind: .table, name: "items", database: "berry_s2")
+        ]
+        let tableDetails = [
+            TableRef(database: "berry_s1", name: "items"): TableDetail(
+                ref: TableRef(database: "berry_s1", name: "items"),
+                columns: [ColumnInfo(name: "price", declaredType: "NUMERIC", isNullable: false, defaultValue: nil, isPrimaryKey: false)],
+                indexes: [], foreignKeys: []
+            ),
+            TableRef(database: "berry_s2", name: "items"): TableDetail(
+                ref: TableRef(database: "berry_s2", name: "items"),
+                columns: [ColumnInfo(name: "sku", declaredType: "TEXT", isNullable: false, defaultValue: nil, isPrimaryKey: false)],
+                indexes: [], foreignKeys: []
+            )
+        ]
+        let script = "SELECT i. FROM berry_s1.items i"
+        let cursor = (script as NSString).range(of: "i.").upperBound
+        let suggestions = CompletionProvider.suggestions(
+            for: script,
+            cursor: cursor,
+            objects: objects,
+            tableDetails: tableDetails
+        )
+        let columnNames = suggestions.filter {
+            if case .column = $0 { true } else { false }
+        }.map(\.text)
+        #expect(columnNames.contains("price"))
+        #expect(!columnNames.contains("sku"))
+        let priceSuggestion = suggestions.first { $0.text == "price" }
+        #expect(priceSuggestion?.detail == "berry_s1.items")
+    }
 }
 
