@@ -1509,6 +1509,7 @@ public final class WorkspaceViewModel {
         guard let session else { return }
         guard let object = objects.first(where: {
             $0.kind == .table
+                && (fk.referencedSchema == nil || $0.database?.caseInsensitiveCompare(fk.referencedSchema!) == .orderedSame)
                 && $0.name.caseInsensitiveCompare(fk.referencedTable) == .orderedSame
         }) else { return }
         let clause = "\(session.dialect.quoteIdentifier(fk.referencedColumn)) = \(session.dialect.literal(value))"
