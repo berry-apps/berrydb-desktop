@@ -125,6 +125,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+
+        warnIfRunningFromAVolumeThatCanVanish()
         
         #if DEBUG
         // Load the icon for local development (run.sh)
@@ -138,6 +140,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         #endif
+    }
+
+
+    // MARK: - Running from a volume that can vanish
+
+    /// Launched from the mounted .dmg, the app dies with SIGBUS the moment the
+    /// image is ejected — see `InstallLocation` for why nothing can catch it.
+    /// The only useful moment to say so is now, before there is unsaved work.
+    private func warnIfRunningFromAVolumeThatCanVanish() {
+        let bundleURL = Bundle.main.bundleURL
+        let values = try? bundleURL.resourceValues(forKeys: [
+            .volumeIsReadOnlyKey, .volumeIsRemovableKey,
+        ])
+        let location = InstallLocation.of(
+            bundlePath: bundleURL.path,
+            isRemovable: values?.volumeIsRemovable ?? false,
+            isReadOnly: values?.volumeIsReadOnly ?? false)
+        guard location.needsMoving else { return }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(localized: "Move BerryDB to Applications")
+        alert.informativeText = switch location {
+        case .diskImage:
+            String(localized: """
+                BerryDB is running from the disk image it was downloaded in. \
+                Ejecting that image quits the app immediately, without saving.
+
+                Drag BerryDB into Applications and open it from there.
+                """)
+        case .translocated:
+            String(localized: """
+                macOS is running BerryDB from a temporary read-only copy, which \
+                happens the first time a downloaded app is opened outside \
+                Applications. That copy can disappear at any time.
+
+                Move BerryDB into Applications and open it from there.
+                """)
+        default:
+            String(localized: """
+                BerryDB is running from a volume that can be detached while it \
+                is open. If that happens the app quits immediately, without saving.
+
+                Move BerryDB into Applications and open it from there.
+                """)
+        }
+        alert.addButton(withTitle: String(localized: "Move to Applications"))
+        alert.addButton(withTitle: String(localized: "Continue Anyway"))
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        moveToApplicationsAndRelaunch(from: bundleURL)
+    }
+
+    private func moveToApplicationsAndRelaunch(from source: URL) {
+        let destination = URL(fileURLWithPath: "/Applications")
+            .appendingPathComponent(source.lastPathComponent)
+        let fm = FileManager.default
+
+        // An installed copy already being there is the ordinary case: the user
+        // installed it earlier and opened the disk image again by accident.
+        // Launch what they already have rather than overwrite it.
+        if !fm.fileExists(atPath: destination.path) {
+            do {
+                try fm.copyItem(at: source, to: destination)
+            } catch {
+                // Copying can fail for reasons the app cannot fix from here
+                // (no permission, disk full). Do not pretend otherwise: put the
+                // Finder in front of them with both folders and let them drag.
+                NSWorkspace.shared.activateFileViewerSelecting([source])
+                return
+            }
+        }
+
+        NSWorkspace.shared.openApplication(
+            at: destination, configuration: NSWorkspace.OpenConfiguration()
+        ) { _, _ in
+            Task { @MainActor in NSApp.terminate(nil) }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
