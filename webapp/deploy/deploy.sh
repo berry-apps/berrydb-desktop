@@ -19,18 +19,46 @@ SUDO_CMD="${SUDO_CMD:-sudo}"
 
 echo "🫐 [BerryDB] Starting WebApp Deployment..."
 
-# ── 1. Extract Version ────────────────────────────────────────────────────────
-VERSION="1.0.2"
-if [ -f "$RELEASES_JSON" ]; then
-    EXTRACTED=$(grep -oE '"version": "[0-9]+\.[0-9]+\.[0-9]+"' "$RELEASES_JSON" | head -n 1 | awk -F'"' '{print $4}' || true)
-    if [ -n "$EXTRACTED" ]; then
-        VERSION="$EXTRACTED"
-    fi
+# ── 1. Resolve Version ────────────────────────────────────────────────────────
+# In order of authority, stopping at the first that answers:
+#   1. BERRYDB_VERSION  - the release pipeline just published this version and
+#                         says so explicitly. Always right when present.
+#   2. deploy/last-release.json - a local release left this behind. Untracked,
+#                         so it is absent on a fresh CI checkout.
+#   3. the live version.json - nobody told us a version (a push that only
+#                         touched webapp/), so keep publishing the one already
+#                         deployed rather than inventing one.
+# There used to be a `VERSION="1.0.2"` here as step 0. It was not a default: it
+# was a wrong answer, given confidently, that outlived three releases and
+# silently overwrote every version the pipeline passed in.
+VERSION="${BERRYDB_VERSION:-}"
+[ -n "$VERSION" ] && echo "📦 Version from the release pipeline: v$VERSION"
+
+if [ -z "$VERSION" ] && [ -f "$RELEASES_JSON" ]; then
+    VERSION=$(grep -oE '"version": "[^"]+"' "$RELEASES_JSON" | head -n 1 | awk -F'"' '{print $4}' || true)
+    [ -n "$VERSION" ] && echo "📦 Version from $RELEASES_JSON: v$VERSION"
 fi
-echo "📦 Detected BerryDB Version: v$VERSION"
+
+LIVE_VERSION_JSON="$DEPLOY_PATH/current/version.json"
+if [ -z "$VERSION" ] && [ -f "$LIVE_VERSION_JSON" ]; then
+    VERSION=$(grep -oE '"version": "[^"]+"' "$LIVE_VERSION_JSON" | head -n 1 | awk -F'"' '{print $4}' || true)
+    [ -n "$VERSION" ] && echo "ℹ️  No version supplied; keeping the deployed v$VERSION"
+fi
+
+if [ -z "$VERSION" ]; then
+    echo "✗ No version to publish: BERRYDB_VERSION is unset, $RELEASES_JSON is" >&2
+    echo "  absent, and nothing is deployed at $LIVE_VERSION_JSON yet." >&2
+    echo "  Re-run with BERRYDB_VERSION=x.y.z, or dispatch the workflow with" >&2
+    echo "  force_version set." >&2
+    exit 1
+fi
+echo "📦 Deploying BerryDB Version: v$VERSION"
 
 # ── 2. Update Version in HTML & Generate version.json ─────────────────────────
 RELEASE_DATE="$(date -u +"%Y-%m-%d")"
+# The commit of the WEBSITE deploy, not of the app build. A webapp-only deploy
+# runs long after the release that produced the DMG, so naming this "commit"
+# next to "version" read as "1.0.3 was built from this SHA", which was false.
 COMMIT_SHA="${GITHUB_SHA:-$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo "latest")}"
 
 # Create/Update version.json
@@ -40,7 +68,7 @@ cat <<EOF > "$WEBAPP_DIR/public/version.json"
   "name": "BerryDB",
   "version": "$VERSION",
   "releaseDate": "$RELEASE_DATE",
-  "commit": "$COMMIT_SHA",
+  "webCommit": "$COMMIT_SHA",
   "downloadUrl": "https://download-db.berryhub.app/BerryDB-latest.dmg",
   "downloadDmgUrl": "https://download-db.berryhub.app/BerryDB-latest.dmg",
   "minMacOS": "14.0",
@@ -50,16 +78,27 @@ EOF
 cp "$WEBAPP_DIR/public/version.json" "$WEBAPP_DIR/version.json"
 echo "✅ Generated version.json (v$VERSION)"
 
-# Replace version announcement badge in index.html & docs.html if placeholder exists
-if [ -f "$WEBAPP_DIR/index.html" ]; then
-    sed -i.bak -E "s/BerryDB v[0-9]+\.[0-9]+(\.[0-9]+)?/BerryDB v$VERSION/g" "$WEBAPP_DIR/index.html" && rm -f "$WEBAPP_DIR/index.html.bak"
-    echo "✅ Synchronized version in index.html"
-fi
-
-if [ -f "$WEBAPP_DIR/docs.html" ]; then
-    sed -i.bak -E "s/BerryDB v[0-9]+\.[0-9]+(\.[0-9]+)?/BerryDB v$VERSION/g" "$WEBAPP_DIR/docs.html" && rm -f "$WEBAPP_DIR/docs.html.bak"
-    echo "✅ Synchronized version in docs.html"
-fi
+# Rewrite every version badge in the pages.
+#
+# The pattern is deliberately "v" followed by all three semver components. It
+# used to be "BerryDB v<ver>", which matched the announcement ribbon and missed
+# the two download buttons -- they carry a bare "v1.0.2" -- so the site shipped
+# 1.0.3 in the ribbon and 1.0.2 on the button people actually click.
+#
+# Three components are required because these pages carry SVG path data full of
+# numbers like "1.36.08", and "v" is also an SVG path command. Requiring the "v"
+# prefix AND three components matches the badges and nothing else; test-deploy-
+# version.sh asserts that against the real pages on every deploy.
+#
+# No \b: BSD sed (macOS, where this test is usually run) does not implement word
+# boundaries and silently matches nothing, so the rewrite would quietly do nothing
+# there while working on the GNU-sed deploy host.
+for page in index.html docs.html; do
+    [ -f "$WEBAPP_DIR/$page" ] || continue
+    sed -i.bak -E "s/v[0-9]+\.[0-9]+\.[0-9]+/v$VERSION/g" "$WEBAPP_DIR/$page"
+    rm -f "$WEBAPP_DIR/$page.bak"
+    echo "✅ Synchronized version in $page"
+done
 
 # ── 3. Deploy & Validate Nginx Configuration ───────────────────────────────────
 if [ -f "$NGINX_CONF_SRC" ]; then

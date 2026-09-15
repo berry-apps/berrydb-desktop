@@ -52,49 +52,25 @@ jobs:
       - name: "Extract & Sync Version"
         id: version_step
         run: |
-          # A calling workflow's version wins over everything: the release job knows
-          # exactly what it just published, while the lookups below are guesses.
-          FORCE_VER="${{ inputs.version || github.event.inputs.force_version }}"
-          RELEASES_FILE="deploy/last-release.json"
-
-          if [ -n "$FORCE_VER" ]; then
-            VERSION="$FORCE_VER"
-            echo "Using manual version input: v$VERSION"
-          elif [ -f "$RELEASES_FILE" ]; then
-            EXTRACTED=$(grep -oE '"version": "[0-9]+\.[0-9]+\.[0-9]+"' "$RELEASES_FILE" | head -n 1 | awk -F'"' '{print $4}' || true)
-            VERSION="${EXTRACTED:-1.0.2}"
-            echo "Auto-detected version from last-release.json: v$VERSION"
+          # Only what this workflow actually knows. When nothing was passed --
+          # a push that touched webapp/ -- leave it empty and let deploy.sh
+          # decide, because it can see what is currently live and this cannot.
+          # The hardcoded "1.0.2" that used to sit here was not a default: it was
+          # a wrong answer given confidently, and deploy.sh carried the same one.
+          VERSION="${{ inputs.version || github.event.inputs.force_version }}"
+          if [ -n "$VERSION" ]; then
+            echo "Version supplied by the caller: v$VERSION"
           else
-            VERSION="1.0.2"
-            echo "Fallback version: v$VERSION"
+            echo "No version supplied; deploy.sh will keep whatever is live"
           fi
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-          # Generate version.json
-          mkdir -p webapp/public
-          cat <<EOF > webapp/public/version.json
-          {
-            "name": "BerryDB",
-            "version": "$VERSION",
-            "releaseDate": "$(date -u +"%Y-%m-%d")",
-            "commit": "${{ github.sha }}",
-            "downloadUrl": "https://download-db.berryhub.app/BerryDB-latest.dmg",
-            "downloadDmgUrl": "https://download-db.berryhub.app/BerryDB-latest.dmg",
-            "minMacOS": "14.0",
-            "architecture": "Apple Silicon (arm64)"
-          }
-          EOF
-          cp webapp/public/version.json webapp/version.json
-
-          # Replace version in HTML templates
-          if [ -f "webapp/index.html" ]; then
-            sed -i -E "s/BerryDB v[0-9]+\.[0-9]+(\.[0-9]+)?/BerryDB v$VERSION/g" webapp/index.html
-          fi
-          if [ -f "webapp/docs.html" ]; then
-            sed -i -E "s/BerryDB v[0-9]+\.[0-9]+(\.[0-9]+)?/BerryDB v$VERSION/g" webapp/docs.html
-          fi
-          echo "✅ Version synchronization complete."
+          # No files written here. webapp/deploy/deploy.sh generates version.json
+          # and syncs the HTML, and it runs after this step -- when both wrote the
+          # file, deploy.sh won and published its own stale constant while this
+          # step had the right number. One generator, one answer.
+          echo "✅ Version resolved: v$VERSION"
 
       - name: "Deploy Nginx Configuration"
         run: |
@@ -117,10 +93,13 @@ jobs:
             echo "✅ Nginx configuration syntax is valid."
           fi
 
+      - name: "Test version resolution"
+        run: bash webapp/deploy/test-deploy-version.sh
+
       - name: "Deploy WebApp to Production Slot"
         run: |
           chmod +x webapp/deploy/deploy.sh
-          bash webapp/deploy/deploy.sh
+          BERRYDB_VERSION="${{ steps.version_step.outputs.version }}" bash webapp/deploy/deploy.sh
 
       - name: "Verify Deployment & Health Check"
         run: |

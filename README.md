@@ -13,7 +13,7 @@
 [![Donate via Ko-fi](https://img.shields.io/badge/Donate-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/dautay)
 
 <p align="center">
-  <b>Sub-second startup (< 0.3s)</b> • <b>Streaming 1M+ rows at 60fps</b> • <b>~35MB RAM idle</b> • <b>AI SQL Copilot</b> • <b>Apple Keychain Security</b>
+  <b>Cold start under 1s</b> • <b>1M rows streamed for ~6MB</b> • <b>AI SQL Copilot</b> • <b>Apple Keychain Security</b>
 </p>
 
 <p align="center">
@@ -41,9 +41,11 @@ Whether you're querying production PostgreSQL databases, inspecting Redis caches
 ## ✨ Key Features
 
 ### ⚡ Pure Native Speed (Zero Electron Bloat)
-- **Instant Launch**: Starts cold in less than 300ms — no Chromium runtime, no NodeJS backend overhead.
-- **Minimal Footprint**: Uses ~35MB of RAM idle, freeing your Mac's CPU and memory for what matters.
-- **AppKit Virtualized Data Grid**: High-performance `NSTableView` engine capable of smoothly scrolling and streaming **1,000,000+ rows at 60fps**.
+- **Fast Launch**: A window is on screen about 0.85s after a cold start — no Chromium runtime, no NodeJS backend overhead.
+- **Memory That Does Not Grow With Your Data**: streaming 1,000,000 rows costs about 5.5MB of peak memory — the same as 200,000 rows.
+- **AppKit Virtualized Data Grid**: A native `NSTableView` engine that scrolls and streams **1,000,000+ rows** without holding them all in memory.
+
+> Measured on an Apple M1 (16GB, macOS 26.6.2) with a release build. Run `scripts/measure-performance.sh` to reproduce them on your own machine — it reports process spawn and first window separately, because they are not the same number.
 
 ### 🗄️ Multi-Engine Database Support
 Connect to SQL, NoSQL, Key-Value, and Vector databases all in a unified native workspace:
