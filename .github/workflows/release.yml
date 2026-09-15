@@ -54,7 +54,24 @@ jobs:
           echo "dry_run=$DRY_RUN" >> "$GITHUB_OUTPUT"
           echo "Releasing $VERSION (dry_run=$DRY_RUN)"
 
-      - name: "Select Xcode 26"
+      - name: "Install FreeTDS dependency"
+        run: brew install freetds
+
+      - name: "Run the test suite"
+        # Match ci.yml's runner-default toolchain. Xcode 26 is selected below
+        # for the release artifact only: its Swift Testing runtime crashed with
+        # signal 11 twice on the v1.0.6 release while this exact commit passed
+        # both pull-request and main CI with the default toolchain.
+        run: |
+          swift --version
+          swift test
+
+      - name: "Discard test build products"
+        # The packaging build switches toolchains below. Do not let SwiftPM
+        # reuse products compiled by the test toolchain in the signed artifact.
+        run: swift package clean
+
+      - name: "Select Xcode 26 for release packaging"
         # Not the fix for anything -- the packaging failure this was first added
         # for turned out to be make_app.sh stripping a signature, and it failed
         # under Xcode 26.3 too. It stays because the green dry run ran on 26.3,
@@ -71,12 +88,7 @@ jobs:
           sudo xcode-select -s "$SELECTED"
           echo "selected $SELECTED"
           xcodebuild -version
-
-      - name: "Install FreeTDS dependency"
-        run: brew install freetds
-
-      - name: "Run the test suite"
-        run: swift test
+          swift --version
 
       - name: "Import the signing certificate"
         env:
