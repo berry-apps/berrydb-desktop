@@ -9,6 +9,7 @@ import Testing
 final class RecordingUpdater: UpdaterControlling {
     private(set) var startIfNeededCallCount = 0
     private(set) var checkForUpdatesCallCount = 0
+    private(set) var cancelPendingRelaunchWatchdogCallCount = 0
 
     var canCheckForUpdates: Bool { false }
 
@@ -18,6 +19,10 @@ final class RecordingUpdater: UpdaterControlling {
 
     func checkForUpdates() {
         checkForUpdatesCallCount += 1
+    }
+
+    func cancelPendingRelaunchWatchdog() {
+        cancelPendingRelaunchWatchdogCallCount += 1
     }
 }
 

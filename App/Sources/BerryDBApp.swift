@@ -257,6 +257,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// connection close takes longer than expected. Whichever finishes first wins;
     /// any uncompleted cleanup is abandoned as the process terminates.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Disarm RelaunchWatchdog: this call proves the host actually
+        // received and is acting on a real termination request (Cmd-Q, or
+        // Sparkle's own install-and-relaunch signal succeeding), so any
+        // pending "the relaunch handoff looks stuck" timer is now moot. See
+        // AppUpdater.swift's RelaunchWatchdog doc comment.
+        updater.cancelPendingRelaunchWatchdog()
+
         Task {
             await withTaskGroup(of: Void.self) { group in
                 group.addTask { await ConnectionManager.shared.closeAll() }
