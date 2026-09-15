@@ -94,6 +94,8 @@ setup
 BERRYDB_VERSION=2.4.6 run_deploy >/dev/null
 check "index.html badge matches" "BerryDB v2.4.6" \
     "$(grep -oE 'BerryDB v[0-9.]+' "$SANDBOX/root/webapp/index.html" | head -1)"
+check "version metadata requires macOS 15" "15.0" \
+    "$(awk -F'"' '/"minMacOS"/ {print $4}' "$SANDBOX/root/webapp/public/version.json")"
 teardown
 
 # 6. Nothing may be left advertising an older version. This is the check that

@@ -12,11 +12,9 @@ import Foundation
 /// already used to keep Mongo/Qdrant out of `DatabaseDriver`.
 ///
 /// Deliberately has NO dependency on any concrete Redis/Valkey client
-/// library — stays buildable and usable at the app's real deployment target
-/// (macOS 14) so the connection picker can safely query
+/// library, so the connection picker can safely query
 /// `KeyValueRegistry.registered` unconditionally. Only the concrete
-/// `BerryDriverRedis` package (which actually imports a client library) is
-/// `@available(macOS 15, *)` — see that package's own doc comment.
+/// `BerryDriverRedis` package imports a client library.
 public protocol KeyValueDriver: Sendable {
     static var id: DriverID { get }
     static var displayName: String { get }

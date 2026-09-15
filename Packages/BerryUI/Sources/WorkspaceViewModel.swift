@@ -2731,11 +2731,9 @@ public final class WorkspaceViewModel {
     /// connection per workspace, SQL XOR NoSQL XOR key-value: tears down any
     /// active SQL/NoSQL session first.
     ///
-    /// `KeyValueRegistry.driverType(for:)` returns nil on macOS < 15 (nothing
-    /// ever registers there — see `BerryDBApp.swift`'s `if #available`
-    /// gate) — that surfaces here as the same "Driver … is not registered"
-    /// error `connectDataSource` already produces for an unregistered
-    /// driver, no special-casing needed.
+    /// A missing registry entry surfaces as the same "Driver … is not
+    /// registered" error `connectDataSource` already produces, with no
+    /// special-casing needed.
     public func connectKeyValue(profile: ConnectionProfile, alreadyBegun: Bool = false) async {
         guard alreadyBegun || beginConnect() else { return }
         defer { isConnecting = false }

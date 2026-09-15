@@ -31,13 +31,8 @@ struct BerryDBApp: App {
         DataSourceRegistry.register(MongoDriver.self)
         DataSourceRegistry.register(ElasticsearchDriver.self)
  // KeyValueDriver family — independent registry.
-        // RedisDriver requires macOS 15+ (valkey-swift's own minimum); the app
-        // itself stays at .macOS(.v14), so this is the one place that gates on
-        // it — on macOS 14 this branch never runs, KeyValueRegistry.registered
-        // stays empty, and .redis never appears in the connection picker.
-        if #available(macOS 15, *) {
-            KeyValueRegistry.register(RedisDriver.self)
-        }
+        // RedisDriver and BerryDB share the same macOS 15 deployment target.
+        KeyValueRegistry.register(RedisDriver.self)
     }
 
     var body: some Scene {

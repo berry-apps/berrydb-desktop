@@ -6,8 +6,8 @@
 # https://github.com/berry-apps/berrydb-desktop/issues/8: Homebrew rebuilds the
 # `freetds` bottle against whatever macOS the build machine is running, which
 # only ever moves forward, so the embedded libsybdb.5.dylib quietly picked up a
-# macOS 15.0 floor while BerryDB itself (Package.swift's .macOS(.v14)) still
-# declares macOS 14.0. `ld` already warns about this at build time
+# macOS 15.0 floor while BerryDB itself still declared macOS 14.0. `ld`
+# already warned about this at build time
 # ("building for macOS-14.0, but linking with dylib ... built for newer
 # version 15.0") but nothing failed the build on it, so the warning went
 # unnoticed until a real release shipped with the mismatch.

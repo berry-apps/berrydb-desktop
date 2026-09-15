@@ -137,7 +137,7 @@ APPCAST_HISTORY = [
     {"version": "1.0.4", "file": "BerryDB-1.0.4.dmg", "length": 100, "edSignature": "sigNEW",
      "pubDate": "Mon, 01 Jan 2026 00:00:00 +0000"},
     {"version": "1.0.3", "file": "BerryDB-1.0.3.dmg", "length": 90, "edSignature": "sigOLD",
-     "pubDate": "Sun, 31 Dec 2025 00:00:00 +0000"},
+     "pubDate": "Sun, 31 Dec 2025 00:00:00 +0000", "minimumSystemVersion": "14.0"},
 ]
 
 # 6. No deltas passed at all (the pre-existing call signature): unchanged output,
@@ -146,6 +146,12 @@ APPCAST_HISTORY = [
 appcast = upload_release.build_appcast(APPCAST_HISTORY, "https://dl.example.com")
 check("no deltas arg: no sparkle:deltas element appears",
       "sparkle:deltas" not in appcast, appcast)
+check("new releases default to the macOS 15 floor",
+      "<sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>" in appcast,
+      appcast)
+check("historical release minimums remain unchanged",
+      "<sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>" in appcast,
+      appcast)
 
 # 7. Deltas for the newest version only: its item gets a <sparkle:deltas> block
 #    with sparkle:deltaFrom/url/length/edSignature; the older item is untouched.

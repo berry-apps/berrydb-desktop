@@ -6,7 +6,7 @@ import PackageDescription
 let package = Package(
     name: "BerryDB",
     defaultLocalization: "en",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v15)],
     products: [
         .executable(name: "BerryApp", targets: ["BerryApp"]),
         .library(name: "BerryDriverKit", targets: ["BerryDriverKit"]),
@@ -25,7 +25,7 @@ let package = Package(
         // Swift 6 native, and connects to real Redis servers too (compatible up
         // to the v7.2.4 fork point). Requires macOS 15+ (its own AvailabilityMacro)
         // — BerryDriverRedis is @available(macOS 15, *) throughout; the app's own
- // minimum stays.macOS(.v14).
+ // minimum is macOS 15 as well.
         .package(url: "https://github.com/valkey-io/valkey-swift.git", from: "1.0.0"),
         // Forked from orlandos-nl/Citadel at ae8562f (the tip when forked) with
         // upstream PR #135 (RFC 8332 rsa-sha2-256/512) cherry-picked on top —
@@ -66,7 +66,7 @@ let package = Package(
         // family, sibling of BerryDriverKit/BerryDataSourceKit, for a
         // schemaless key space with no SQL and no "collection" shape (Redis).
         // No dependency on any concrete client library — stays usable at the
-        // app's real deployment target (macOS 14) so the connection picker
+        // app's deployment target so the connection picker
         // can query KeyValueRegistry.registered unconditionally.
         .target(
             name: "BerryKeyValueKit",
@@ -297,7 +297,7 @@ let package = Package(
                 // BerryKeyValueKit: KeyValueRegistry.register(...) call below.
                 // BerryDriverRedis: @available(macOS 15, *) throughout — see
                 // its own registration call for why this app target can still
-                // depend on it unconditionally while staying .macOS(.v14).
+                // depend on it unconditionally at the macOS 15 deployment target.
                 "BerryKeyValueKit", "BerryDriverRedis",
                 // Sparkle product — unconditional, see the dependency
                 // comment above.

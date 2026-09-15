@@ -239,7 +239,7 @@ def build_appcast(history: list[dict], download_base: str, deltas_by_version: di
       <pubDate>{escape(r.get('pubDate', ''))}</pubDate>
       <sparkle:version>{escape(str(r.get('build', r['version'])))}</sparkle:version>
       <sparkle:shortVersionString>{escape(r['version'])}</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>{escape(r.get('minimumSystemVersion', '14.0'))}</sparkle:minimumSystemVersion>
+      <sparkle:minimumSystemVersion>{escape(r.get('minimumSystemVersion', '15.0'))}</sparkle:minimumSystemVersion>
       <enclosure url="{escape(url)}" length="{int(r['length'])}" type="{mime}"{sig} />{deltas_block}
     </item>""")
     return f"""<?xml version="1.0" encoding="utf-8"?>

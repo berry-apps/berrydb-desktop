@@ -260,9 +260,7 @@ public struct WorkspaceView: View {
  // All three driver families
                 // offer connection types here — the unified `DriverID` enum
                 // is what makes this a plain concatenation instead of a
-                // union type. KeyValueRegistry.registered is empty on
-                // macOS < 15 (nothing ever registers there), so .redis
-                // simply doesn't appear in the picker on older systems.
+                // union type.
                 availableDrivers: (DriverRegistry.registered + DataSourceRegistry.registered + KeyValueRegistry.registered)
                     .sorted { $0.rawValue < $1.rawValue },
                 onTest: { config in await viewModel.testConnection(config) },

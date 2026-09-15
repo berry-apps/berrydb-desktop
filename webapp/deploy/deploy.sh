@@ -71,7 +71,7 @@ cat <<EOF > "$WEBAPP_DIR/public/version.json"
   "webCommit": "$COMMIT_SHA",
   "downloadUrl": "https://download-db.berryhub.app/BerryDB-latest.dmg",
   "downloadDmgUrl": "https://download-db.berryhub.app/BerryDB-latest.dmg",
-  "minMacOS": "14.0",
+  "minMacOS": "15.0",
   "architecture": "Apple Silicon (arm64)"
 }
 EOF

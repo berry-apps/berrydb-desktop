@@ -118,7 +118,7 @@ cat > deploy/last-release.json <<JSON
   "path": "${DMG}",
   "length": ${LENGTH},
   "edSignature": "${ED_SIG}",
-  "minimumSystemVersion": "14.0",
+  "minimumSystemVersion": "15.0",
   "pubDate": "$(date -u +'%a, %d %b %Y %H:%M:%S +0000')"
 }
 JSON
