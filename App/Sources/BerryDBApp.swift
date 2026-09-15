@@ -121,13 +121,22 @@ struct BerryDBApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let updater: any UpdaterControlling = makeUpdater()
+    private let updaterAutoStart = UpdaterAutoStart()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
         warnIfRunningFromAVolumeThatCanVanish()
-        
+
+        // Arms Sparkle's own background-check timer a few seconds from now
+        // (see UpdaterAutoStart.delay) so update checks happen every launch,
+        // not only when the user opens "Check for Updates…" — without
+        // starting Sparkle in this same call, which is the collision with
+        // the Gatekeeper quarantine re-scan that `startingUpdater: false`
+        // exists to avoid.
+        updaterAutoStart.run(updater: updater)
+
         #if DEBUG
         // Load the icon for local development (run.sh)
         if NSApp.applicationIconImage == nil {

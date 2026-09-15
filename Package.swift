@@ -303,6 +303,18 @@ let package = Package(
             ],
             path: "App/Sources"
         ),
+        // BerryApp has no other consumer to exercise its launch-time
+        // scheduling logic (UpdaterAutoStart) against — Sparkle itself can't
+        // be driven in a test, but the decision of *when* to call
+        // `startIfNeeded()` can via an injected scheduler + a recording
+        // UpdaterControlling double. `@testable import BerryApp` needs an
+        // executable-target test, hence this lives here rather than in a
+        // Packages/*/Tests directory.
+        .testTarget(
+            name: "BerryAppTests",
+            dependencies: ["BerryApp"],
+            path: "App/Tests"
+        ),
 
         // MARK: Tests
         .target(
