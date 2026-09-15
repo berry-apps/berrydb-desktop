@@ -32,7 +32,6 @@ venv/
 .claude/
 .superpowers/
 .mcp.json
-CLAUDE.md
 
 # Scratch and test files
 test_icon.swift
