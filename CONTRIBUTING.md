@@ -22,7 +22,7 @@ All contributors and participants are expected to uphold our [Code of Conduct](C
 
 ### 1. Prerequisites
 
-- macOS 14.0 (Sonoma) or macOS 15.0+ (Sequoia)
+- macOS 15.0 (Sequoia) or later
 - **Xcode 16.0+** (with Swift 6 toolchain)
 - **FreeTDS** C library (for TDS / SQL Server driver):
   ```sh

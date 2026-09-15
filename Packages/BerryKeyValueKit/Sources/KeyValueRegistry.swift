@@ -7,10 +7,8 @@ import Foundation
 /// different query shape and must not blur into one union type. `BerryApp`
 /// registers at startup, same as the other two — no dynamic loading.
 ///
-/// Registering `RedisDriver` is gated `if #available(macOS 15, *)` at the
-/// call site — on macOS 14 nothing ever registers,
-/// so `registered` stays empty and `.redis` never appears in the connection
-/// picker, with no separate visibility flag needed.
+/// The app registers `RedisDriver` at launch; both share the same macOS 15
+/// deployment target.
 public enum KeyValueRegistry {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var drivers: [DriverID: any KeyValueDriver.Type] = [:]

@@ -6,7 +6,7 @@
 
 ### The Ultra-Fast, Native Database Client Built Exclusively for macOS Speed
 
-[![macOS](https://img.shields.io/badge/macOS-14.0%2B-000000?style=for-the-badge&logo=apple&logoColor=white)](https://apple.com/macos)
+[![macOS](https://img.shields.io/badge/macOS-15.0%2B-000000?style=for-the-badge&logo=apple&logoColor=white)](https://apple.com/macos)
 [![Swift 6](https://img.shields.io/badge/Swift-6.0-F05138?style=for-the-badge&logo=swift&logoColor=white)](https://swift.org)
 [![Zero Electron](https://img.shields.io/badge/Electron-0%25_Pure_Native-007ACC?style=for-the-badge)](https://db.berryhub.app)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=for-the-badge)](LICENSE)
@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://download-db.berryhub.app/BerryDB-latest.dmg"><b>Download .DMG (macOS 14+)</b></a> •
+  <a href="https://download-db.berryhub.app/BerryDB-latest.dmg"><b>Download .DMG (macOS 15+)</b></a> •
   <a href="https://db.berryhub.app"><b>Official Website</b></a> •
   <a href="https://ko-fi.com/dautay"><b>☕ Donate on Ko-fi</b></a>
 </p>
@@ -109,14 +109,14 @@ Connect to SQL, NoSQL, Key-Value, and Vector databases all in a unified native w
 2. Open the `.dmg` file and drag **BerryDB.app** into your **Applications** folder.
 3. Launch BerryDB from Spotlight (⌘Space) or Launchpad.
 
-> **System Requirements**: macOS 14.0 (Sonoma) or macOS 15.0+ (Sequoia). Apple Silicon only (M1/M2/M3/M4).
+> **System Requirements**: macOS 15.0 (Sequoia) or later. Apple Silicon only (M1/M2/M3/M4).
 
 ### Option 2: Build from Source
 
 BerryDB uses the standard Swift Package Manager (SPM) and `make`.
 
 #### Prerequisites
-- macOS 14.0 or higher
+- macOS 15.0 or higher
 - **Xcode 16.0+** (with Swift 6 toolchain)
 - **FreeTDS library**: `brew install freetds` (required for FreeTDS / SQL Server C headers)
 
@@ -202,4 +202,3 @@ Contributions, issues, and feature requests are welcome!
 BerryDB is open-source software licensed under the **[Apache License 2.0](LICENSE)** — free for personal and commercial use.
 
 For detailed third-party attributions and compliance (including LGPL-2.1 dynamic linking compliance for FreeTDS), please refer to **[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)**.
-
