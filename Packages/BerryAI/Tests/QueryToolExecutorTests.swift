@@ -236,6 +236,7 @@ struct QueryToolExecutorTests {
         let objects = decode(outcome)["objects"] as? [[String: Any]] ?? []
         let table = objects.first { ($0["name"] as? String) == "t" }
         #expect(table?["kind"] as? String == "table")
+        #expect(table?["schema"] as? String == "")
         // Task 6.1: the default (no mode / mode="overview") never fetches DDL.
         #expect(table?["ddl"] == nil)
     }
@@ -534,6 +535,111 @@ struct QueryToolExecutorTests {
 
         let outcome = await executor.execute(
             AIToolCall(id: "c", name: "get_sample_rows", args: ["table": "t"])
+        )
+
+        #expect(outcome.status == "ok")
+        let rows = decode(outcome)["rows"] as? [[Any]] ?? []
+        #expect(rows.count == 2)
+    }
+
+    @Test func parseTableRefResolvesQualifiedAndUnambiguousNames() {
+        let objects = [
+            SchemaObject(kind: .table, name: "items", database: "s1"),
+            SchemaObject(kind: .table, name: "orders", database: "s1"),
+            SchemaObject(kind: .table, name: "items", database: "s2")
+        ]
+
+        // 1. Explicit schema syntax
+        let explicit = QueryToolExecutor.parseTableRef("s2.items", in: objects)
+        if case .success(let ref) = explicit {
+            #expect(ref.database == "s2")
+            #expect(ref.name == "items")
+        } else {
+            Issue.record("Expected success for s2.items")
+        }
+
+        // 2. Unambiguous bare name
+        let unambiguous = QueryToolExecutor.parseTableRef("orders", in: objects)
+        if case .success(let ref) = unambiguous {
+            #expect(ref.database == "s1")
+            #expect(ref.name == "orders")
+        } else {
+            Issue.record("Expected success for unambiguous orders")
+        }
+
+        // 3. Ambiguous bare name
+        let ambiguous = QueryToolExecutor.parseTableRef("items", in: objects)
+        if case .failure(let error) = ambiguous {
+            #expect(error.contains("ambiguous"))
+            #expect(error.contains("s1") && error.contains("s2"))
+        } else {
+            Issue.record("Expected failure for ambiguous items")
+        }
+    }
+
+    @Test func parseTableRefHandlesEdgeCases() {
+        let objects = [
+            SchemaObject(kind: .table, name: "Users", database: "auth"),
+            SchemaObject(kind: .view, name: "Users", database: "public"),
+            SchemaObject(kind: .table, name: "profiles", database: "public"),
+            SchemaObject(kind: .table, name: "bare_only")
+        ]
+
+        // Quoted explicit table ref
+        let quoted = QueryToolExecutor.parseTableRef("\"auth\".\"Users\"", in: objects)
+        if case .success(let ref) = quoted {
+            #expect(ref.database == "auth")
+            #expect(ref.name == "Users")
+        } else {
+            Issue.record("Expected success for quoted ref")
+        }
+
+        // Case insensitivity for unambiguous
+        let caseInsensitive = QueryToolExecutor.parseTableRef("PROFILES", in: objects)
+        if case .success(let ref) = caseInsensitive {
+            #expect(ref.database == "public")
+            #expect(ref.name == "profiles")
+        } else {
+            Issue.record("Expected success for case-insensitive match")
+        }
+
+        // Ambiguous table across schemas returns error with both schemas
+        let ambiguous = QueryToolExecutor.parseTableRef("users", in: objects)
+        if case .failure(let error) = ambiguous {
+            #expect(error.contains("Table 'users' is ambiguous across schemas (auth, public)"))
+        } else {
+            Issue.record("Expected failure for ambiguous users")
+        }
+
+        // Object with nil database resolves cleanly
+        let bare = QueryToolExecutor.parseTableRef("bare_only", in: objects)
+        if case .success(let ref) = bare {
+            #expect(ref.database == nil)
+            #expect(ref.name == "bare_only")
+        } else {
+            Issue.record("Expected success for bare_only")
+        }
+
+        // Unknown bare table falls back to TableRef with name
+        let unknown = QueryToolExecutor.parseTableRef("nonexistent", in: objects)
+        if case .success(let ref) = unknown {
+            #expect(ref.database == nil)
+            #expect(ref.name == "nonexistent")
+        } else {
+            Issue.record("Expected fallback for nonexistent")
+        }
+    }
+
+    @Test func getSampleRowsRunsWithQualifiedTableName() async throws {
+        let session = try await makeSession()
+        let executor = makeExecutor(
+            session: session,
+            gate: ScriptedGate(false),
+            options: .init(allowSampleRows: true)
+        )
+
+        let outcome = await executor.execute(
+            AIToolCall(id: "c", name: "get_sample_rows", args: ["table": "main.t"])
         )
 
         #expect(outcome.status == "ok")
