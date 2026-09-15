@@ -147,9 +147,10 @@ public struct PostgresIntrospector: Introspector {
 
         let fkRows = try await connection.queryAll(
             """
-            SELECT att.attname, ft.relname, fatt.attname
+            SELECT att.attname, fn.nspname, ft.relname, fatt.attname
             FROM pg_constraint c
             JOIN pg_class ft ON ft.oid = c.confrelid
+            JOIN pg_namespace fn ON fn.oid = ft.relnamespace
             JOIN unnest(c.conkey) WITH ORDINALITY AS ck(attnum, ord) ON TRUE
             JOIN unnest(c.confkey) WITH ORDINALITY AS fk(attnum, ord) ON fk.ord = ck.ord
             JOIN pg_attribute att ON att.attrelid = c.conrelid AND att.attnum = ck.attnum
@@ -159,9 +160,15 @@ public struct PostgresIntrospector: Introspector {
         )
         let foreignKeys: [ForeignKeyInfo] = fkRows.compactMap { row in
             guard case .text(let column) = row[0],
-                  case .text(let refTable) = row[1],
-                  case .text(let refColumn) = row[2] else { return nil }
-            return ForeignKeyInfo(column: column, referencedTable: refTable, referencedColumn: refColumn)
+                  case .text(let refSchema) = row[1],
+                  case .text(let refTable) = row[2],
+                  case .text(let refColumn) = row[3] else { return nil }
+            return ForeignKeyInfo(
+                column: column,
+                referencedSchema: refSchema,
+                referencedTable: refTable,
+                referencedColumn: refColumn
+            )
         }
 
         return TableDetail(ref: ref, columns: columns, indexes: indexes, foreignKeys: foreignKeys)

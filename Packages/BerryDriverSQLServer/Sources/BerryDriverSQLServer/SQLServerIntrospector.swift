@@ -133,19 +133,26 @@ public struct SQLServerIntrospector: Introspector {
 
         let fkRows = try await connection.queryAll(
             """
-            SELECT pc.name, rt.name, rc.name
+            SELECT pc.name, rs.name, rt.name, rc.name
             FROM sys.foreign_key_columns fkc
             JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
             JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
-            JOIN sys.objects rt ON rt.object_id = fkc.referenced_object_id
+            JOIN sys.tables rt ON rt.object_id = fkc.referenced_object_id
+            JOIN sys.schemas rs ON rs.schema_id = rt.schema_id
             WHERE fkc.parent_object_id = OBJECT_ID(\(qualifiedLiteral))
             """
         )
         let foreignKeys: [ForeignKeyInfo] = fkRows.compactMap { row in
             guard case .text(let column) = row[0],
-                  case .text(let refTable) = row[1],
-                  case .text(let refColumn) = row[2] else { return nil }
-            return ForeignKeyInfo(column: column, referencedTable: refTable, referencedColumn: refColumn)
+                  case .text(let refSchema) = row[1],
+                  case .text(let refTable) = row[2],
+                  case .text(let refColumn) = row[3] else { return nil }
+            return ForeignKeyInfo(
+                column: column,
+                referencedSchema: refSchema,
+                referencedTable: refTable,
+                referencedColumn: refColumn
+            )
         }
 
         return TableDetail(ref: ref, columns: columns, indexes: indexes, foreignKeys: foreignKeys)
