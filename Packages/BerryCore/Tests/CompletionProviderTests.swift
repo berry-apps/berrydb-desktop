@@ -182,4 +182,61 @@ struct CompletionProviderTests {
         )
         #expect(Set(tables) == Set(["users", "orders"]))
     }
+
+    @Test func deduplicatesSuggestionsAcrossDifferentSchemasWithoutCollision() {
+        let objects = [
+            SchemaObject(kind: .table, name: "items", database: "berry_s1"),
+            SchemaObject(kind: .table, name: "items", database: "berry_s2")
+        ]
+        let suggestions = CompletionProvider.suggestions(
+            for: "SELECT * FROM ",
+            cursor: 14,
+            objects: objects,
+            tableDetails: [
+                TableRef(database: "berry_s1", name: "items"): TableDetail(
+                    ref: TableRef(database: "berry_s1", name: "items"),
+                    columns: [ColumnInfo(name: "price", declaredType: "NUMERIC", isNullable: false, defaultValue: nil, isPrimaryKey: false)],
+                    indexes: [], foreignKeys: []
+                ),
+                TableRef(database: "berry_s2", name: "items"): TableDetail(
+                    ref: TableRef(database: "berry_s2", name: "items"),
+                    columns: [ColumnInfo(name: "sku", declaredType: "TEXT", isNullable: false, defaultValue: nil, isPrimaryKey: false)],
+                    indexes: [], foreignKeys: []
+                )
+            ]
+        )
+        let itemSuggestions = suggestions.filter { $0.text == "items" }
+        #expect(itemSuggestions.count == 2)
+        #expect(itemSuggestions.contains { $0.detail == "berry_s1" })
+        #expect(itemSuggestions.contains { $0.detail == "berry_s2" })
+    }
+
+    @Test func deduplicatesColumnSuggestionsAcrossDifferentSchemas() {
+        let objects = [
+            SchemaObject(kind: .table, name: "items", database: "berry_s1"),
+            SchemaObject(kind: .table, name: "items", database: "berry_s2")
+        ]
+        let suggestions = CompletionProvider.suggestions(
+            for: "SELECT items. FROM items",
+            cursor: 13,
+            objects: objects,
+            tableDetails: [
+                TableRef(database: "berry_s1", name: "items"): TableDetail(
+                    ref: TableRef(database: "berry_s1", name: "items"),
+                    columns: [ColumnInfo(name: "price", declaredType: "NUMERIC", isNullable: false, defaultValue: nil, isPrimaryKey: false)],
+                    indexes: [], foreignKeys: []
+                ),
+                TableRef(database: "berry_s2", name: "items"): TableDetail(
+                    ref: TableRef(database: "berry_s2", name: "items"),
+                    columns: [ColumnInfo(name: "sku", declaredType: "TEXT", isNullable: false, defaultValue: nil, isPrimaryKey: false)],
+                    indexes: [], foreignKeys: []
+                )
+            ]
+        )
+        let price = suggestions.first { $0.text == "price" }
+        let sku = suggestions.first { $0.text == "sku" }
+        #expect(price?.detail == "berry_s1.items")
+        #expect(sku?.detail == "berry_s2.items")
+    }
 }
+
