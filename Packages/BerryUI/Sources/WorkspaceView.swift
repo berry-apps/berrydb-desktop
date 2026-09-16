@@ -1112,12 +1112,20 @@ public struct WorkspaceView: View {
                         return .handled
                     }
                     .onKeyPress(.return) {
-                        if let selectedID = viewModel.selectedObjectID,
+                        // Use selectionLeadID (keyboard focus end) when valid and still selected;
+                        // fall back to selectedObjectID (Set.first) for single-selection.
+                        let leadID = viewModel.selectionLeadID.flatMap {
+                            viewModel.selectedObjectIDs.contains($0) ? $0 : nil
+                        }
+                        let targetObjectID = leadID ?? viewModel.selectedObjectID
+                        if let selectedID = targetObjectID,
                            let object = viewModel.objects.first(where: { $0.id == selectedID }) {
                             open(object)
                             return .handled
-                        } else if let selectedColID = viewModel.selectedCollectionID,
-                                  let col = viewModel.collections.first(where: { $0.id == selectedColID }) {
+                        }
+                        let targetColID = leadID ?? viewModel.selectedCollectionID
+                        if let selectedColID = targetColID,
+                           let col = viewModel.collections.first(where: { $0.id == selectedColID }) {
                             viewModel.openCollection(col)
                             return .handled
                         }
@@ -1525,7 +1533,7 @@ public struct WorkspaceView: View {
             } else {
                 for group in schemaGroups {
                     let schemaKey = "schema:\(group.id)"
-                    if !objectSearch.isEmpty || !collapsedGroupKeys.contains(schemaKey) {
+                    if !collapsedGroupKeys.contains(schemaKey) {
                         let tables = filteredObjects(in: group.tables, kind: .table)
                         let views = filteredObjects(in: group.views, kind: .view)
                         let functions = filteredObjects(in: group.functions, kind: .function)

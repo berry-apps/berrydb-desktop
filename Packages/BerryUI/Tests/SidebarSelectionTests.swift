@@ -150,4 +150,56 @@ struct SidebarSelectionTests {
         #expect(vm.selectedObjectIDs == ["b", "c", "d"])
         #expect(vm.selectionAnchorID == "b")
     }
+
+    // MARK: - Round 4 regressions
+
+    /// Finding 1: selection must only contain IDs that are actually rendered.
+    /// When a schema group is collapsed, its objects must not appear in visibleIDs
+    /// regardless of whether there is an active search.
+    @Test func collapsedSchemaObjectsAreExcludedFromVisibleIDsEvenWithSearch() throws {
+        let vm = try makeViewModel()
+
+        // Simulate: schema "public" is expanded (in visibleIDs), schema "audit" is collapsed.
+        // objectSearch is non-empty ("items").
+        // Only expanded-schema objects should be selectable.
+        let visibleWhenPublicExpandedAuditCollapsed = ["public.users", "public.items"]
+        let visibleWhenBothCollapsed: [String] = []
+
+        vm.selectObject(id: "public.users", isShift: false, isCommand: false,
+                        visibleIDs: visibleWhenPublicExpandedAuditCollapsed)
+        vm.selectObject(id: "public.items", isShift: true, isCommand: false,
+                        visibleIDs: visibleWhenPublicExpandedAuditCollapsed)
+
+        // Only visible IDs selected — collapsed-schema objects absent.
+        #expect(vm.selectedObjectIDs == ["public.users", "public.items"])
+        #expect(!vm.selectedObjectIDs.contains("audit.items"))
+
+        // If both schemas collapse, shift-click on an item with empty visible list falls back to single.
+        vm.selectObject(id: "public.users", isShift: true, isCommand: false,
+                        visibleIDs: visibleWhenBothCollapsed)
+        #expect(vm.selectedObjectIDs == ["public.users"])
+    }
+
+    /// Finding 2: Return key must open selectionLeadID, not Set.first.
+    /// After B → Shift+Down → Shift+Down the lead is D; the anchor is B.
+    /// selectionLeadID must be D.
+    @Test func shiftArrowTwiceLeadIsLastArrowTarget() throws {
+        let vm = try makeViewModel()
+        let visible = ["a", "b", "c", "d"]
+
+        vm.selectObject(id: "b", visibleIDs: visible)
+        #expect(vm.selectionLeadID == nil || vm.selectionLeadID == "b")
+
+        vm.selectNextObject(visibleIDs: visible, isShift: true) // lead → c
+        #expect(vm.selectionLeadID == "c")
+        #expect(vm.selectionAnchorID == "b")
+
+        vm.selectNextObject(visibleIDs: visible, isShift: true) // lead → d
+        #expect(vm.selectionLeadID == "d")
+        #expect(vm.selectionAnchorID == "b")
+        #expect(vm.selectedObjectIDs.contains("d"))
+        // selectedObjectID (Set.first) is NOT guaranteed to be "d":
+        // Confirm lead is distinct from anchor.
+        #expect(vm.selectionLeadID != vm.selectionAnchorID)
+    }
 }

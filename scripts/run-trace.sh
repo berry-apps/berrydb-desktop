@@ -34,6 +34,6 @@ echo "▸ Launching $APP_BIN under LLDB with auto-trace on reentrancy warning…
 
 xcrun lldb --batch \
   -o "target create $APP_BIN" \
-  -o 'breakpoint set -n NSLog -c "(int)[(id)\$arg1 containsString:@\"reentrant\"] != 0" -C "bt 40" -G1' \
-  -o 'breakpoint set -n NSLogv -c "(int)[(id)\$arg1 containsString:@\"reentrant\"] != 0" -C "bt 40" -G1' \
+  -o 'breakpoint set -n NSLog -c "(int)[(id)$arg1 containsString:@\"reentrant\"] != 0" -C "bt 40" -G1' \
+  -o 'breakpoint set -n NSLogv -c "(int)[(id)$arg1 containsString:@\"reentrant\"] != 0" -C "bt 40" -G1' \
   -o "process launch" 2>&1 | tee "$TRACE_LOG"
