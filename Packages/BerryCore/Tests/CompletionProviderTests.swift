@@ -288,4 +288,3 @@ struct CompletionProviderTests {
         #expect(priceSuggestion?.detail == "berry_s1.items")
     }
 }
-
