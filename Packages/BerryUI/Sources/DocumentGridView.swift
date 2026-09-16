@@ -88,10 +88,9 @@ public struct DocumentGridView: NSViewRepresentable {
             if columns.count != columnCount || columnsChanged(columns, in: tableView) {
                 rebuildColumns(columns, in: tableView)
                 columnCount = columns.count
-                lastRowCount = 0
+                lastRowCount = rowCount
                 tableView.reloadData()
-            }
-            if rowCount != lastRowCount {
+            } else if rowCount != lastRowCount {
                 lastRowCount = rowCount
                 tableView.reloadData()
             }

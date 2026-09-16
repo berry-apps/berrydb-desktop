@@ -134,23 +134,24 @@ public struct DataGridView: NSViewRepresentable {
             isReloading = true
             defer { isReloading = false }
 
+            let totalRows = rowCount + (parent?.appendedRowCount ?? 0)
             if columns.count != columnCount || columnsChanged(columns, in: tableView) {
                 rebuildColumns(columns, in: tableView)
                 columnCount = columns.count
-                lastRowCount = 0
+                lastRowCount = totalRows
                 tableView.reloadData()
-            }
-            let totalRows = rowCount + (parent?.appendedRowCount ?? 0)
-            if totalRows != lastRowCount {
+            } else if totalRows != lastRowCount {
                 lastRowCount = totalRows
                 tableView.reloadData()
             } else {
                 // Same row count but overlay may have changed — refresh visible rows.
-                tableView.reloadData(
-                    forRowIndexes: IndexSet(integersIn: tableView.rows(in: tableView.visibleRect).lowerBound
-                        ..< max(tableView.rows(in: tableView.visibleRect).upperBound, 0)),
-                    columnIndexes: IndexSet(0..<max(columnCount, 0))
-                )
+                let visibleRows = tableView.rows(in: tableView.visibleRect)
+                if visibleRows.location != NSNotFound && visibleRows.length > 0 {
+                    tableView.reloadData(
+                        forRowIndexes: IndexSet(integersIn: visibleRows.lowerBound ..< (visibleRows.lowerBound + visibleRows.length)),
+                        columnIndexes: IndexSet(0..<max(columnCount, 0))
+                    )
+                }
             }
         }
 
@@ -182,7 +183,9 @@ public struct DataGridView: NSViewRepresentable {
         ) {
             guard let descriptor = tableView.sortDescriptors.first,
                   let column = descriptor.key else { return }
-            parent?.onSort?(column, descriptor.ascending)
+            DispatchQueue.main.async { [weak self] in
+                self?.parent?.onSort?(column, descriptor.ascending)
+            }
         }
 
         // MARK: Context menu (Set NULL / Delete Row)
@@ -253,7 +256,12 @@ public struct DataGridView: NSViewRepresentable {
         public func controlTextDidEndEditing(_ notification: Notification) {
             guard let field = notification.object as? EditableCellField,
                   let parent, parent.isEditable else { return }
-            parent.onEdit?(field.row, field.columnIndex, field.stringValue)
+            let row = field.row
+            let col = field.columnIndex
+            let val = field.stringValue
+            DispatchQueue.main.async {
+                parent.onEdit?(row, col, val)
+            }
         }
     }
 }

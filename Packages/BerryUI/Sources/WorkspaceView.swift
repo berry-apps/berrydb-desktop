@@ -1448,10 +1448,12 @@ public struct WorkspaceView: View {
             // (via .tag below), which is unreliable when a click lands on the
             // label's glyph area specifically because of this competing
             // onTapGesture — open(object) always fired, but the highlight
- // didn't (#1). Set it explicitly instead of
-            // depending on that native path.
-            viewModel.selectedObjectIDs = [object.id]
-            open(object)
+            // didn't (#1). Set it explicitly on the next runloop turn to prevent
+            // reentrancy in NSTableView delegate.
+            DispatchQueue.main.async {
+                viewModel.selectedObjectIDs = [object.id]
+                open(object)
+            }
         }
         .tag(object.id)
         .contextMenu {
@@ -1563,8 +1565,10 @@ public struct WorkspaceView: View {
             #endif
  // Same fix as objectRow above (#1) — don't rely
             // on the native List click-to-select highlight, set it explicitly.
-            viewModel.selectedObjectIDs = [ref.id]
-            viewModel.openCollection(ref)
+            DispatchQueue.main.async {
+                viewModel.selectedObjectIDs = [ref.id]
+                viewModel.openCollection(ref)
+            }
         }
         .tag(ref.id)
         .contextMenu {
