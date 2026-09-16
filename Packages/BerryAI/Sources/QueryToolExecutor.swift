@@ -732,8 +732,8 @@ public final class QueryToolExecutor: AIToolExecutor {
     }
 
     final class ResultBox: @unchecked Sendable {
-        var payload: [String: Any]?
-        init(_ payload: [String: Any]? = nil) { self.payload = payload }
+        let payload: [String: Any]
+        init(_ payload: [String: Any] = [:]) { self.payload = payload }
     }
 
     /// Races an async operation against a timeout without blocking the caller on
@@ -748,8 +748,8 @@ public final class QueryToolExecutor: AIToolExecutor {
         static func run(
             timeoutSeconds: TimeInterval,
             timeoutError: any Error,
-            work: @escaping @MainActor () async throws -> [String: Any]
-        ) async throws -> [String: Any] {
+            work: @escaping @MainActor () async throws -> ResultBox
+        ) async throws -> ResultBox {
             try Task.checkCancellation()
 
             let raceBox = RaceHolder()
@@ -766,8 +766,7 @@ public final class QueryToolExecutor: AIToolExecutor {
             } onCancel: {
                 raceBox.cancel()
             }
-            guard let payload = box.payload else { throw CancellationError() }
-            return payload
+            return box
         }
 
         init(continuation: CheckedContinuation<ResultBox, any Error>) {
@@ -781,7 +780,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         func start(
             timeoutSeconds: TimeInterval,
             timeoutError: any Error,
-            work: @escaping @MainActor () async throws -> [String: Any]
+            work: @escaping @MainActor () async throws -> ResultBox
         ) {
             lock.lock()
             guard !isResolved else {
@@ -791,7 +790,7 @@ public final class QueryToolExecutor: AIToolExecutor {
             let workTask = Task { @MainActor in
                 do {
                     let result = try await work()
-                    self.resolve(with: .success(ResultBox(result)))
+                    self.resolve(with: .success(result))
                 } catch {
                     self.resolve(with: .failure(error))
                 }
@@ -877,7 +876,7 @@ public final class QueryToolExecutor: AIToolExecutor {
             code: nil
         )
 
-        return try await UnstoppableTimeoutRace.run(timeoutSeconds: effectiveTimeout, timeoutError: timeoutError) {
+        let box = try await UnstoppableTimeoutRace.run(timeoutSeconds: effectiveTimeout, timeoutError: timeoutError) {
             guard lease.isValid else { throw CancellationError() }
             var columnMetas: [ColumnMeta] = []
             var rawRows: [[BerryValue]] = []
@@ -897,14 +896,15 @@ public final class QueryToolExecutor: AIToolExecutor {
             try Task.checkCancellation()
             guard lease.isValid else { throw CancellationError() }
             if let plan = ExplainTreeParser.parse(columns: columnMetas, rows: rawRows) {
-                return ["plan": Self.planJSON(plan)]
+                return ResultBox(["plan": Self.planJSON(plan)])
             }
             // Unrecognized EXPLAIN shape → raw grid, same shape as run_sql.
-            return [
+            return ResultBox([
                 "columns": columnMetas.map(\.name),
                 "rows": rawRows.map { $0.map(Self.jsonValue) },
-            ]
+            ])
         }
+        return box.payload
     }
 
  /// create a fresh debug tab with the given SQL (never reuses a tab).
@@ -1249,22 +1249,24 @@ public final class QueryToolExecutor: AIToolExecutor {
             code: nil
         )
 
-        return try await UnstoppableTimeoutRace.run(timeoutSeconds: effectiveTimeout, timeoutError: timeoutError) {
+        let box = try await UnstoppableTimeoutRace.run(timeoutSeconds: effectiveTimeout, timeoutError: timeoutError) {
             guard let session = self.session else {
                 if let executeStatement = self.executeStatement {
                     guard lease.isValid else { throw CancellationError() }
                     switch await executeStatement(sql, lease) {
                     case .payload(let payload):
                         guard lease.isValid else { throw CancellationError() }
-                        return payload
+                        return ResultBox(payload)
                     case .denied:
                         throw CancellationError()
                     }
                 }
-                return ["error": "Direct query execution unavailable for this connection"]
+                return ResultBox(["error": "Direct query execution unavailable for this connection"])
             }
-            return try await self.runDatabaseQuery(sql, session: session, lease: lease)
+            let result = try await self.runDatabaseQuery(sql, session: session, lease: lease)
+            return ResultBox(result)
         }
+        return box.payload
     }
 
     /// `approve(_:)` already gated this exact statement through the chat's

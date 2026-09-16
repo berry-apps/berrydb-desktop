@@ -940,7 +940,7 @@ struct QueryToolExecutorTests {
                 timeoutError: DriverError.queryFailed(message: "timeout", code: nil)
             ) {
                 flag.executed = true
-                return [:]
+                return QueryToolExecutor.ResultBox()
             }
         }
         task.cancel()
@@ -974,7 +974,7 @@ struct QueryToolExecutorTests {
                     }
                     race.start(timeoutSeconds: 5.0, timeoutError: DriverError.queryFailed(message: "timeout", code: nil)) {
                         flag.executed = true
-                        return [:]
+                        return QueryToolExecutor.ResultBox()
                     }
                 }
             } onCancel: {
@@ -1032,7 +1032,7 @@ struct QueryToolExecutorTests {
                 await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                     holder.cont = continuation
                 }
-                return [:]
+                return QueryToolExecutor.ResultBox()
             }
         }
 
