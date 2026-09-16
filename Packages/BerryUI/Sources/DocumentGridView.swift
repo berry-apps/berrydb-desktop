@@ -72,13 +72,20 @@ public struct DocumentGridView: NSViewRepresentable {
         /// operation in its NSTableView delegate". The nested call is deferred to
         /// the next runloop tick, where it reloads with the latest buffer state.
         private var isReloading = false
+        private var pendingSync: (buffer: DataSourceResultBuffer, columns: [String], rowCount: Int)?
 
         func sync(buffer: DataSourceResultBuffer, columns: [String], rowCount: Int) {
             self.buffer = buffer
             guard let tableView else { return }
             if isReloading {
-                DispatchQueue.main.async { [weak self] in
-                    self?.sync(buffer: buffer, columns: columns, rowCount: rowCount)
+                let shouldSchedule = pendingSync == nil
+                pendingSync = (buffer, columns, rowCount)
+                if shouldSchedule {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, let latest = self.pendingSync else { return }
+                        self.pendingSync = nil
+                        self.sync(buffer: latest.buffer, columns: latest.columns, rowCount: latest.rowCount)
+                    }
                 }
                 return
             }
