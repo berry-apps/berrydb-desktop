@@ -1530,7 +1530,6 @@ public struct WorkspaceView: View {
                 }
             } else {
                 for group in schemaGroups {
-                    let schemaKey = "schema:\(group.id)"
                     if schemaGroupIsExpanded(schemaID: group.id, search: objectSearch, collapsedKeys: collapsedGroupKeys) {
                         let tables = filteredObjects(in: group.tables, kind: .table)
                         let views = filteredObjects(in: group.views, kind: .view)

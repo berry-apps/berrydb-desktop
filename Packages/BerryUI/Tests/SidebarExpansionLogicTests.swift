@@ -51,7 +51,7 @@ struct SchemaGroupExpansionTests {
 
     /// Verifies that the same call produces the same result regardless of which site (renderer,
     /// schemaExpanded getter, currentVisibleObjectIDs) calls it — there is no duplication.
-    @Test func sameCallReturnsSameResultAlways() {
+    @Test func helperReturnsDifferentResultForSearchVsNoSearch() {
         let collapsed: Set<String> = ["schema:audit"]
         let resultWithSearch = schemaGroupIsExpanded(schemaID: "audit", search: "orders", collapsedKeys: collapsed)
         let resultNoSearch = schemaGroupIsExpanded(schemaID: "audit", search: "", collapsedKeys: collapsed)

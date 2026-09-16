@@ -12,7 +12,7 @@ import Foundation
 ///
 /// - Parameters:
 ///   - schemaID: The schema group's identifier.
-///   - search: The current search query (trimmed before use by the caller).
+///   - search: The current raw search query string (non-empty triggers auto-expand).
 ///   - collapsedKeys: The set of collapsed group key strings (format: `"schema:<id>"`).
 /// - Returns: `true` if the schema's content rows should be rendered and selectable.
 public func schemaGroupIsExpanded(
