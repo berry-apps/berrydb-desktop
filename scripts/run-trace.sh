@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build once and launch BerryDB under LLDB with automatic backtrace
 # on AppKit NSTableRowHeightData reentrancy.
-# Full output is mirrored to .build/reentrancy_trace.log for analysis.
+# Full output is mirrored to reentrancy_trace.log in repository root for analysis.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -34,6 +34,6 @@ echo "▸ Launching $APP_BIN under LLDB with auto-trace on reentrancy warning…
 
 xcrun lldb --batch \
   -o "target create $APP_BIN" \
-  -o 'breakpoint set -n NSLog -C "bt 40" -G1' \
-  -o 'breakpoint set -n NSLogv -C "bt 40" -G1' \
+  -o 'breakpoint set -n NSLog -c "(int)[(id)\$arg1 containsString:@\"reentrant\"] != 0" -C "bt 40" -G1' \
+  -o 'breakpoint set -n NSLogv -c "(int)[(id)\$arg1 containsString:@\"reentrant\"] != 0" -C "bt 40" -G1' \
   -o "process launch" 2>&1 | tee "$TRACE_LOG"

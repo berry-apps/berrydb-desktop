@@ -991,8 +991,8 @@ public struct WorkspaceView: View {
                             onAdd: { connectionSheetTarget = .new }
                         )
                         if isExpanded {
-                            ForEach(group.profiles) { profile in
-                                profileRow(profile)
+                            ForEach(Array(group.profiles.enumerated()), id: \.element.id) { index, profile in
+                                profileRow(profile, group: group, index: index)
                             }
                         }
                     }
@@ -1091,6 +1091,37 @@ public struct WorkspaceView: View {
                         }
                         .padding(.horizontal, 6)
                         .padding(.vertical, 4)
+                    }
+                    .focusable()
+                    .onKeyPress(.downArrow) {
+                        #if os(macOS)
+                        let isShift = NSEvent.modifierFlags.contains(.shift)
+                        #else
+                        let isShift = false
+                        #endif
+                        viewModel.selectNextObject(visibleIDs: currentVisibleObjectIDs, isShift: isShift)
+                        return .handled
+                    }
+                    .onKeyPress(.upArrow) {
+                        #if os(macOS)
+                        let isShift = NSEvent.modifierFlags.contains(.shift)
+                        #else
+                        let isShift = false
+                        #endif
+                        viewModel.selectPreviousObject(visibleIDs: currentVisibleObjectIDs, isShift: isShift)
+                        return .handled
+                    }
+                    .onKeyPress(.return) {
+                        if let selectedID = viewModel.selectedObjectID,
+                           let object = viewModel.objects.first(where: { $0.id == selectedID }) {
+                            open(object)
+                            return .handled
+                        } else if let selectedColID = viewModel.selectedCollectionID,
+                                  let col = viewModel.collections.first(where: { $0.id == selectedColID }) {
+                            viewModel.openCollection(col)
+                            return .handled
+                        }
+                        return .ignored
                     }
                 }
             }
@@ -1465,7 +1496,84 @@ public struct WorkspaceView: View {
         }
     }
 
-    private func profileRow(_ profile: ConnectionProfile) -> some View {
+    private var currentVisibleObjectIDs: [String] {
+        if viewModel.session != nil {
+            let schemaGroups = SchemaTree.group(
+                objects: viewModel.objects,
+                hasSchemaCapability: viewModel.session?.capabilities.schemas ?? false
+            )
+            var ids: [String] = []
+            if schemaGroups.count == 1 && schemaGroups[0].name == nil {
+                let flat = schemaGroups[0]
+                if (objectTypeFilter == .all || objectTypeFilter == .table) && isKindExpanded(.table) {
+                    ids.append(contentsOf: filteredObjects(in: flat.tables, kind: .table).map(\.id))
+                }
+                if (objectTypeFilter == .all || objectTypeFilter == .view) && isKindExpanded(.view) {
+                    ids.append(contentsOf: filteredObjects(in: flat.views, kind: .view).map(\.id))
+                }
+                if objectTypeFilter == .all || objectTypeFilter == .function {
+                    if isKindExpanded(.function) {
+                        ids.append(contentsOf: filteredObjects(in: flat.functions, kind: .function).map(\.id))
+                    }
+                    if isKindExpanded(.procedure) {
+                        ids.append(contentsOf: filteredObjects(in: flat.procedures, kind: .procedure).map(\.id))
+                    }
+                }
+                if (objectTypeFilter == .all || objectTypeFilter == .trigger) && isKindExpanded(.trigger) {
+                    ids.append(contentsOf: filteredObjects(in: flat.triggers, kind: .trigger).map(\.id))
+                }
+            } else {
+                for group in schemaGroups {
+                    let schemaKey = "schema:\(group.id)"
+                    if !objectSearch.isEmpty || !collapsedGroupKeys.contains(schemaKey) {
+                        let tables = filteredObjects(in: group.tables, kind: .table)
+                        let views = filteredObjects(in: group.views, kind: .view)
+                        let functions = filteredObjects(in: group.functions, kind: .function)
+                        let procedures = filteredObjects(in: group.procedures, kind: .procedure)
+                        let triggers = filteredObjects(in: group.triggers, kind: .trigger)
+
+                        if objectTypeFilter == .all || objectTypeFilter == .table {
+                            if !tables.isEmpty && (isKindExpanded(.table) || objectTypeFilter == .table) {
+                                ids.append(contentsOf: tables.map(\.id))
+                            }
+                        }
+                        if objectTypeFilter == .all || objectTypeFilter == .view {
+                            if !views.isEmpty && (isKindExpanded(.view) || objectTypeFilter == .view) {
+                                ids.append(contentsOf: views.map(\.id))
+                            }
+                        }
+                        if objectTypeFilter == .all || objectTypeFilter == .function {
+                            if !functions.isEmpty && (isKindExpanded(.function) || objectTypeFilter == .function) {
+                                ids.append(contentsOf: functions.map(\.id))
+                            }
+                            if !procedures.isEmpty && (isKindExpanded(.procedure) || objectTypeFilter == .function) {
+                                ids.append(contentsOf: procedures.map(\.id))
+                            }
+                        }
+                        if objectTypeFilter == .all || objectTypeFilter == .trigger {
+                            if !triggers.isEmpty && (isKindExpanded(.trigger) || objectTypeFilter == .trigger) {
+                                ids.append(contentsOf: triggers.map(\.id))
+                            }
+                        }
+                    }
+                }
+            }
+            return ids
+        } else if viewModel.dataSourceSession != nil {
+            var ids: [String] = []
+            for group in DataSourceTree.group(viewModel.collections) {
+                let key = group.database ?? "__default_ds__"
+                let isExpanded = groupExpanded(key).wrappedValue
+                if isExpanded {
+                    ids.append(contentsOf: group.collections.map(\.id))
+                }
+            }
+            return ids
+        }
+        return []
+    }
+
+    private func profileRow(_ profile: ConnectionProfile, group: WorkspaceViewModel.ConnectionGroup, index: Int) -> some View {
         let isSelected = viewModel.activeProfileID == profile.id
         return HStack(spacing: 6) {
             Image(systemName: profile.driver == .sqlite ? "internaldrive" : "cylinder.split.1x2")
@@ -1486,6 +1594,19 @@ public struct WorkspaceView: View {
         .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 5))
         .contentShape(Rectangle())
+        .draggable(profile.id.uuidString)
+        .dropDestination(for: String.self) { (items: [String], _) -> Bool in
+            guard let idStr = items.first,
+                  let sourceID = UUID(uuidString: idStr),
+                  sourceID != profile.id else { return false }
+            guard let fromIdx = group.profiles.firstIndex(where: { $0.id == sourceID }),
+                  let toIdx = group.profiles.firstIndex(where: { $0.id == profile.id }) else {
+                return false
+            }
+            let destOffset = toIdx > fromIdx ? toIdx + 1 : toIdx
+            viewModel.moveProfiles(group: group.name, from: IndexSet(integer: fromIdx), to: destOffset)
+            return true
+        }
         .onTapGesture(count: 2) {
             DispatchQueue.main.async {
                 guard viewModel.beginConnect() else { return }
@@ -1502,6 +1623,19 @@ public struct WorkspaceView: View {
             }
             Button(L("Duplicate")) {
                 viewModel.duplicate(profile: profile)
+            }
+            Divider()
+            if index > 0 {
+                Button(L("Move Up")) {
+                    viewModel.moveProfileUp(id: profile.id)
+                }
+                .accessibilityLabel(L("Move Up"))
+            }
+            if index < group.profiles.count - 1 {
+                Button(L("Move Down")) {
+                    viewModel.moveProfileDown(id: profile.id)
+                }
+                .accessibilityLabel(L("Move Down"))
             }
             Divider()
             Button(L("Delete"), role: .destructive) {
@@ -1529,19 +1663,20 @@ public struct WorkspaceView: View {
         .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 5))
         .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(object.name)
+        .accessibilityValue(isSelected ? L("selected") : "")
         .onTapGesture {
             #if os(macOS)
             let flags = NSEvent.modifierFlags
-            if flags.contains(.command) {
-                if viewModel.selectedObjectIDs.contains(object.id) {
-                    viewModel.selectedObjectIDs.remove(object.id)
-                } else {
-                    viewModel.selectedObjectIDs.insert(object.id)
-                }
+            let isShift = flags.contains(.shift)
+            let isCommand = flags.contains(.command)
+            if isShift || isCommand {
+                viewModel.selectObject(id: object.id, isShift: isShift, isCommand: isCommand, visibleIDs: currentVisibleObjectIDs)
                 return
             }
             #endif
-            viewModel.selectedObjectIDs = [object.id]
+            viewModel.selectObject(id: object.id, isShift: false, isCommand: false, visibleIDs: currentVisibleObjectIDs)
             open(object)
         }
         .contextMenu {
@@ -1647,19 +1782,20 @@ public struct WorkspaceView: View {
         .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 5))
         .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(ref.name)
+        .accessibilityValue(isSelected ? L("selected") : "")
         .onTapGesture {
             #if os(macOS)
             let flags = NSEvent.modifierFlags
-            if flags.contains(.command) {
-                if viewModel.selectedObjectIDs.contains(ref.id) {
-                    viewModel.selectedObjectIDs.remove(ref.id)
-                } else {
-                    viewModel.selectedObjectIDs.insert(ref.id)
-                }
+            let isShift = flags.contains(.shift)
+            let isCommand = flags.contains(.command)
+            if isShift || isCommand {
+                viewModel.selectObject(id: ref.id, isShift: isShift, isCommand: isCommand, visibleIDs: currentVisibleObjectIDs)
                 return
             }
             #endif
-            viewModel.selectedObjectIDs = [ref.id]
+            viewModel.selectObject(id: ref.id, isShift: false, isCommand: false, visibleIDs: currentVisibleObjectIDs)
             viewModel.openCollection(ref)
         }
         .contextMenu {

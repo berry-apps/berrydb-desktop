@@ -227,9 +227,119 @@ public final class WorkspaceViewModel {
         didSet {
             selectedObjectID = selectedObjectIDs.first
             selectedCollectionID = selectedObjectIDs.first
+            if selectedObjectIDs.isEmpty {
+                selectionAnchorID = nil
+                selectionLeadID = nil
+            }
         }
     }
     public var selectedObjectID: SchemaObject.ID?
+    public private(set) var selectionAnchorID: String?
+    public private(set) var selectionLeadID: String?
+
+    public func selectObject(
+        id: String,
+        isShift: Bool = false,
+        isCommand: Bool = false,
+        visibleIDs: [String] = []
+    ) {
+        if isShift {
+            let anchor = selectionAnchorID ?? selectedObjectIDs.first ?? id
+            selectionLeadID = id
+            if let anchorIdx = visibleIDs.firstIndex(of: anchor),
+               let targetIdx = visibleIDs.firstIndex(of: id) {
+                let start = min(anchorIdx, targetIdx)
+                let end = max(anchorIdx, targetIdx)
+                selectedObjectIDs = Set(visibleIDs[start...end])
+                if selectionAnchorID == nil {
+                    selectionAnchorID = anchor
+                }
+            } else {
+                selectedObjectIDs = [id]
+                selectionAnchorID = id
+            }
+        } else if isCommand {
+            if selectedObjectIDs.contains(id) {
+                selectedObjectIDs.remove(id)
+            } else {
+                selectedObjectIDs.insert(id)
+            }
+            selectionAnchorID = id
+            selectionLeadID = id
+        } else {
+            selectedObjectIDs = [id]
+            selectionAnchorID = id
+            selectionLeadID = id
+        }
+    }
+
+    public func selectNextObject(visibleIDs: [String], isShift: Bool = false) {
+        guard !visibleIDs.isEmpty else { return }
+        if isShift {
+            let anchor = selectionAnchorID ?? selectedObjectIDs.first ?? visibleIDs[0]
+            let currentLead = selectionLeadID ?? anchor
+            guard let anchorIdx = visibleIDs.firstIndex(of: anchor),
+                  let leadIdx = visibleIDs.firstIndex(of: currentLead) else {
+                return
+            }
+            if leadIdx + 1 < visibleIDs.count {
+                let newLeadIdx = leadIdx + 1
+                let newLead = visibleIDs[newLeadIdx]
+                selectionLeadID = newLead
+                let start = min(anchorIdx, newLeadIdx)
+                let end = max(anchorIdx, newLeadIdx)
+                selectedObjectIDs = Set(visibleIDs[start...end])
+            }
+        } else {
+            let currentID = selectionLeadID ?? selectionAnchorID ?? selectedObjectIDs.first
+            if let current = currentID, let idx = visibleIDs.firstIndex(of: current) {
+                if idx + 1 < visibleIDs.count {
+                    let nextID = visibleIDs[idx + 1]
+                    selectedObjectIDs = [nextID]
+                    selectionAnchorID = nextID
+                    selectionLeadID = nextID
+                }
+            } else if let first = visibleIDs.first {
+                selectedObjectIDs = [first]
+                selectionAnchorID = first
+                selectionLeadID = first
+            }
+        }
+    }
+
+    public func selectPreviousObject(visibleIDs: [String], isShift: Bool = false) {
+        guard !visibleIDs.isEmpty else { return }
+        if isShift {
+            let anchor = selectionAnchorID ?? selectedObjectIDs.first ?? visibleIDs[0]
+            let currentLead = selectionLeadID ?? anchor
+            guard let anchorIdx = visibleIDs.firstIndex(of: anchor),
+                  let leadIdx = visibleIDs.firstIndex(of: currentLead) else {
+                return
+            }
+            if leadIdx > 0 {
+                let newLeadIdx = leadIdx - 1
+                let newLead = visibleIDs[newLeadIdx]
+                selectionLeadID = newLead
+                let start = min(anchorIdx, newLeadIdx)
+                let end = max(anchorIdx, newLeadIdx)
+                selectedObjectIDs = Set(visibleIDs[start...end])
+            }
+        } else {
+            let currentID = selectionLeadID ?? selectionAnchorID ?? selectedObjectIDs.first
+            if let current = currentID, let idx = visibleIDs.firstIndex(of: current) {
+                if idx > 0 {
+                    let prevID = visibleIDs[idx - 1]
+                    selectedObjectIDs = [prevID]
+                    selectionAnchorID = prevID
+                    selectionLeadID = prevID
+                }
+            } else if let last = visibleIDs.last {
+                selectedObjectIDs = [last]
+                selectionAnchorID = last
+                selectionLeadID = last
+            }
+        }
+    }
     public private(set) var errorMessage: String?
     public private(set) var isConnecting = false
 
@@ -605,9 +715,11 @@ public final class WorkspaceViewModel {
         }
     }
 
- /// Saved connections grouped by `groupName`. Ungrouped profiles come
+    public typealias ConnectionGroup = (name: String?, profiles: [ConnectionProfile])
+
+    /// Saved connections grouped by `groupName`. Ungrouped profiles come
     /// first (nil group); within a group, order follows `sortOrder`.
-    public var connectionGroups: [(name: String?, profiles: [ConnectionProfile])] {
+    public var connectionGroups: [ConnectionGroup] {
         Dictionary(grouping: profiles) { $0.groupName }
             .map { (name: $0.key, profiles: $0.value.sorted { $0.sortOrder < $1.sortOrder }) }
             .sorted { ($0.name ?? "") < ($1.name ?? "") }
@@ -626,6 +738,22 @@ public final class WorkspaceViewModel {
             try? store?.save(updated)
         }
         reloadProfiles()
+    }
+
+    public func moveProfileUp(id: UUID) {
+        guard let profile = profiles.first(where: { $0.id == id }) else { return }
+        let group = profile.groupName
+        let inGroup = profiles.filter { $0.groupName == group }.sorted { $0.sortOrder < $1.sortOrder }
+        guard let index = inGroup.firstIndex(where: { $0.id == id }), index > 0 else { return }
+        moveProfiles(group: group, from: IndexSet(integer: index), to: index - 1)
+    }
+
+    public func moveProfileDown(id: UUID) {
+        guard let profile = profiles.first(where: { $0.id == id }) else { return }
+        let group = profile.groupName
+        let inGroup = profiles.filter { $0.groupName == group }.sorted { $0.sortOrder < $1.sortOrder }
+        guard let index = inGroup.firstIndex(where: { $0.id == id }), index < inGroup.count - 1 else { return }
+        moveProfiles(group: group, from: IndexSet(integer: index), to: index + 2)
     }
 
     private func reloadProfiles() {

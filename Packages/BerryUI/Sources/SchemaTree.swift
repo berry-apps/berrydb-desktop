@@ -39,7 +39,7 @@ public enum SchemaTree {
         hasSchemaCapability: Bool
     ) -> [SchemaTreeGroup] {
         let distinctSchemas = Set(objects.compactMap(\.database))
-        guard hasSchemaCapability && distinctSchemas.count > 1 else {
+        guard hasSchemaCapability && !distinctSchemas.isEmpty else {
             return [
                 SchemaTreeGroup(
                     id: "__default__",
