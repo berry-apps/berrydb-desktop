@@ -33,12 +33,23 @@ struct SchemaTreeTests {
         #expect(pub.tables.count == 2)
     }
 
-    @Test func singleSchemaWithCapabilityProducesSingleFlatGroup() {
+    @Test func singleSchemaWithCapabilityProducesSchemaHierarchyGroup() {
         let pgObjects = [
             SchemaObject(kind: .table, name: "users", database: "public"),
             SchemaObject(kind: .table, name: "items", database: "public")
         ]
         let groups = SchemaTree.group(objects: pgObjects, hasSchemaCapability: true)
+        #expect(groups.count == 1)
+        #expect(groups[0].name == "public")
+        #expect(groups[0].tables.count == 2)
+    }
+
+    @Test func singleSchemaWithoutCapabilityProducesSingleFlatGroup() {
+        let mysqlObjects = [
+            SchemaObject(kind: .table, name: "users", database: "berrydb"),
+            SchemaObject(kind: .table, name: "items", database: "berrydb")
+        ]
+        let groups = SchemaTree.group(objects: mysqlObjects, hasSchemaCapability: false)
         #expect(groups.count == 1)
         #expect(groups[0].name == nil)
         #expect(groups[0].tables.count == 2)

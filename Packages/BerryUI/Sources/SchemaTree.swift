@@ -39,7 +39,7 @@ public enum SchemaTree {
         hasSchemaCapability: Bool
     ) -> [SchemaTreeGroup] {
         let distinctSchemas = Set(objects.compactMap(\.database))
-        guard hasSchemaCapability && distinctSchemas.count > 1 else {
+        guard hasSchemaCapability && !distinctSchemas.isEmpty else {
             return [
                 SchemaTreeGroup(
                     id: "__default__",
@@ -53,7 +53,7 @@ public enum SchemaTree {
             ]
         }
 
-        return distinctSchemas.sorted().map { schema in
+        var groups = distinctSchemas.sorted().map { schema in
             let inSchema = objects.filter { $0.database == schema }
             return SchemaTreeGroup(
                 id: schema,
@@ -65,5 +65,20 @@ public enum SchemaTree {
                 triggers: inSchema.filter { $0.kind == .trigger }
             )
         }
+        let unassigned = objects.filter { $0.database == nil }
+        if !unassigned.isEmpty {
+            groups.append(
+                SchemaTreeGroup(
+                    id: "__default__",
+                    name: nil,
+                    tables: unassigned.filter { $0.kind == .table },
+                    views: unassigned.filter { $0.kind == .view },
+                    functions: unassigned.filter { $0.kind == .function },
+                    procedures: unassigned.filter { $0.kind == .procedure },
+                    triggers: unassigned.filter { $0.kind == .trigger }
+                )
+            )
+        }
+        return groups
     }
 }

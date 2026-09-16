@@ -64,6 +64,42 @@ public enum CompletionProvider {
             case .snippet(_, _, let detail): return detail
             }
         }
+
+        /// The text inserted into the editor when this suggestion is chosen.
+        /// Quotes components according to the dialect when needed, and fully
+        /// qualifies table names when `schema` is present.
+        public func insertText(dialect: (any SQLDialect)? = nil) -> String {
+            switch self {
+            case .keyword(let k):
+                return k
+            case .table(let name, let schema):
+                if let schema, !schema.isEmpty {
+                    if let dialect {
+                        return "\(dialect.quoteIdentifier(schema)).\(dialect.quoteIdentifier(name))"
+                    } else {
+                        return "\(schema).\(name)"
+                    }
+                }
+                if let dialect, CompletionProvider.identifierNeedsQuoting(name) {
+                    return dialect.quoteIdentifier(name)
+                }
+                return name
+            case .column(let c, _, _):
+                if let dialect, CompletionProvider.identifierNeedsQuoting(c) {
+                    return dialect.quoteIdentifier(c)
+                }
+                return c
+            case .routine(let n, _):
+                if let dialect, CompletionProvider.identifierNeedsQuoting(n) {
+                    return dialect.quoteIdentifier(n)
+                }
+                return n
+            case .builtin(let f):
+                return f + "()"
+            case .snippet(_, let template, _):
+                return template
+            }
+        }
     }
 
     /// Positions in `candidate` (by character offset) that match `query` as a
@@ -167,7 +203,6 @@ public enum CompletionProvider {
         let statementText = statement?.sql ?? script
         let prefix = currentTokenPrefix(script: script, utf16Cursor: utf16Cursor)
         let relationalObjects = objects.filter { $0.kind.isRelational }
-        let tableNames = relationalObjects.map(\.name)
 
         // Case 1: "alias." or "table." → columns of the resolved table.
         if let qualifier = prefix.qualifier {
@@ -260,11 +295,18 @@ public enum CompletionProvider {
         return rank(pool, by: prefix.text)
     }
 
+    /// Tables referenced by FROM/JOIN in a statement — returns exact TableRefs
+    /// (including schema namespace when qualified) so the editor can pre-fetch
+    /// and cache column metadata without collisions.
+    public static func referencedTableRefs(statement: String, objects: [SchemaObject]) -> [TableRef] {
+        let aliasRefs = aliasRefMap(statement: statement, objects: objects)
+        return Array(Set(aliasRefs.values))
+    }
+
     /// Tables referenced by FROM/JOIN in a statement — the editor pre-fetches
     /// their columns before asking for suggestions.
     public static func referencedTables(statement: String, objects: [SchemaObject]) -> [String] {
-        let aliasRefs = aliasRefMap(statement: statement, objects: objects)
-        return Array(Set(aliasRefs.values.map(\.name)))
+        referencedTableRefs(statement: statement, objects: objects).map(\.name)
     }
 
     // MARK: - Token context

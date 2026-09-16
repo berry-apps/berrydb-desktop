@@ -88,7 +88,7 @@ struct EditorTabView: View {
         }
     }
 
- /// Pre-fetches columns for the tables referenced in the document
+    /// Pre-fetches columns for the tables referenced in the document
     /// so the completion callback can stay synchronous.
     private func warmReferencedColumns() {
         guard let catalog, document.text.utf8.count <= 256 * 1024 else { return }
@@ -98,15 +98,25 @@ struct EditorTabView: View {
             // nanoseconds, not Task.sleep(for:) — see schedulePersist above.
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard !Task.isCancelled else { return }
-            let tables = CompletionProvider.referencedTables(statement: text, objects: snapshotObjects)
-            for table in tables where document.columnsByTable[table] == nil {
+            let tableRefs = CompletionProvider.referencedTableRefs(statement: text, objects: snapshotObjects)
+            for ref in tableRefs where document.tableDetails[ref] == nil {
                 guard !Task.isCancelled else { return }
-                guard let object = snapshotObjects.first(where: {
-                    $0.name.caseInsensitiveCompare(table) == .orderedSame
-                }) else { continue }
-                let ref = TableRef(database: object.database, name: object.name)
-                if let detail = try? await catalog.tableDetail(ref) {
-                    document.columnsByTable[table] = detail.columns.map(\.name)
+                let resolvedRef: TableRef? = {
+                    if ref.database != nil {
+                        return ref
+                    }
+                    let matchingObjects = snapshotObjects.filter {
+                        $0.kind.isRelational && $0.name.caseInsensitiveCompare(ref.name) == .orderedSame
+                    }
+                    if matchingObjects.count == 1 {
+                        return TableRef(database: matchingObjects[0].database, name: matchingObjects[0].name)
+                    }
+                    return nil
+                }()
+                guard let targetRef = resolvedRef else { continue }
+                if let detail = try? await catalog.tableDetail(targetRef) {
+                    document.tableDetails[targetRef] = detail
+                    document.columnsByTable[targetRef.name] = detail.columns.map(\.name)
                 }
             }
         }
@@ -191,29 +201,13 @@ struct EditorTabView: View {
                         utf16Cursor: cursor,
                         objects: objects,
                         columnsByTable: document.columnsByTable,
+                        tableDetails: document.tableDetails,
                         builtins: builtins,
                         statements: statements
                     ).prefix(50).map { suggestion in
-                        let display = suggestion.text
-                        var insert = display
-                        switch suggestion {
-                        case .keyword:
-                            break
-                        case .builtin:
-                            // Built-ins insert callable form, never quoted (P1.4).
-                            insert = display + "()"
-                        case .snippet(_, let template, _):
-                            insert = template
-                        default:
-                            // Quote identifiers that need it so a PascalCase/odd
- // name survives; display stays bare.
-                            if let dialect, CompletionProvider.identifierNeedsQuoting(display) {
-                                insert = dialect.quoteIdentifier(display)
-                            }
-                        }
-                        return CompletionItem(
-                            display: display,
-                            insert: insert,
+                        CompletionItem(
+                            display: suggestion.text,
+                            insert: suggestion.insertText(dialect: dialect),
                             icon: suggestion.iconName,
                             detail: suggestion.detail
                         )

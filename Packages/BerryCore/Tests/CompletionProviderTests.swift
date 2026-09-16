@@ -4,6 +4,11 @@ import Testing
 
 @testable import BerryCore
 
+private struct TestQuoteDialect: SQLDialect {
+    func quoteIdentifier(_ identifier: String) -> String { "\"\(identifier)\"" }
+    func limitClause(_ limit: Int) -> String { "LIMIT \(limit)" }
+}
+
 @Suite("CompletionProvider")
 struct CompletionProviderTests {
     private let objects = [
@@ -286,5 +291,37 @@ struct CompletionProviderTests {
         #expect(!columnNames.contains("sku"))
         let priceSuggestion = suggestions.first { $0.text == "price" }
         #expect(priceSuggestion?.detail == "berry_s1.items")
+    }
+
+    @Test func insertTextWithDialectQualifiesAndQuotesTableComponents() {
+        let dialect = TestQuoteDialect()
+        let qualifiedTable = CompletionProvider.Suggestion.table(name: "items", schema: "schema_b")
+        #expect(qualifiedTable.insertText(dialect: dialect) == "\"schema_b\".\"items\"")
+        #expect(qualifiedTable.insertText(dialect: nil) == "schema_b.items")
+
+        let unqualifiedTable = CompletionProvider.Suggestion.table(name: "items", schema: nil)
+        #expect(unqualifiedTable.insertText(dialect: dialect) == "items")
+        #expect(unqualifiedTable.insertText(dialect: nil) == "items")
+
+        let oddTable = CompletionProvider.Suggestion.table(name: "User Items", schema: "my_schema")
+        #expect(oddTable.insertText(dialect: dialect) == "\"my_schema\".\"User Items\"")
+
+        let builtin = CompletionProvider.Suggestion.builtin("NOW")
+        #expect(builtin.insertText(dialect: dialect) == "NOW()")
+
+        let snippet = CompletionProvider.Suggestion.snippet(label: "crview", template: "CREATE VIEW v AS SELECT 1;", detail: "template")
+        #expect(snippet.insertText(dialect: dialect) == "CREATE VIEW v AS SELECT 1;")
+    }
+
+    @Test func referencedTableRefsExtractsExactSchemaAndName() {
+        let objects = [
+            SchemaObject(kind: .table, name: "items", database: "s1"),
+            SchemaObject(kind: .table, name: "orders", database: "s2")
+        ]
+        let statement = "SELECT * FROM s1.items JOIN s2.orders ON s1.items.id = s2.orders.item_id"
+        let refs = CompletionProvider.referencedTableRefs(statement: statement, objects: objects)
+        #expect(refs.count == 2)
+        #expect(refs.contains(TableRef(database: "s1", name: "items")))
+        #expect(refs.contains(TableRef(database: "s2", name: "orders")))
     }
 }

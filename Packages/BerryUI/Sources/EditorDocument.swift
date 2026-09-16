@@ -69,6 +69,9 @@ public final class EditorDocument: Identifiable {
  /// Column cache for completion, warmed from SchemaCatalog for the
     /// tables referenced in the document.
     public var columnsByTable: [String: [String]] = [:]
+    /// Table details cache for completion, warmed from SchemaCatalog for the
+    /// tables referenced in the document. Keyed by TableRef to prevent cross-schema collisions.
+    public var tableDetails: [TableRef: TableDetail] = [:]
 
     public var initialText: String
     public var isDirty: Bool { text != initialText }
