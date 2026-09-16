@@ -21,6 +21,11 @@ bench:
 run:
 	scripts/run.sh
 
+# Run under LLDB to automatically capture backtrace on any NSTableView reentrancy
+run-trace:
+	bash scripts/run-trace.sh
+
+
 # Rebuild + relaunch the app on every source change (build status via
 # terminal + macOS notifications). Ctrl-C to stop.
 watch:

@@ -101,7 +101,6 @@ public struct DataGridView: NSViewRepresentable {
     }
 
     public func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        // Read the @Observable properties here so SwiftUI re-invokes this when the buffer changes.
         let columns = buffer.columns
         let rowCount = buffer.rowCount
         context.coordinator.parent = self
@@ -121,36 +120,44 @@ public struct DataGridView: NSViewRepresentable {
         /// operation in its NSTableView delegate". The nested call is deferred to
         /// the next runloop tick, where it reloads with the latest buffer state.
         private var isReloading = false
+        private var pendingSync: (buffer: ResultBuffer, columns: [ColumnMeta], rowCount: Int)?
 
         func sync(buffer: ResultBuffer, columns: [ColumnMeta], rowCount: Int) {
             self.buffer = buffer
             guard let tableView else { return }
             if isReloading {
-                DispatchQueue.main.async { [weak self] in
-                    self?.sync(buffer: buffer, columns: columns, rowCount: rowCount)
+                let shouldSchedule = pendingSync == nil
+                pendingSync = (buffer, columns, rowCount)
+                if shouldSchedule {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, let latest = self.pendingSync else { return }
+                        self.pendingSync = nil
+                        self.sync(buffer: latest.buffer, columns: latest.columns, rowCount: latest.rowCount)
+                    }
                 }
                 return
             }
             isReloading = true
             defer { isReloading = false }
 
+            let totalRows = rowCount + (parent?.appendedRowCount ?? 0)
             if columns.count != columnCount || columnsChanged(columns, in: tableView) {
                 rebuildColumns(columns, in: tableView)
                 columnCount = columns.count
-                lastRowCount = 0
+                lastRowCount = totalRows
                 tableView.reloadData()
-            }
-            let totalRows = rowCount + (parent?.appendedRowCount ?? 0)
-            if totalRows != lastRowCount {
+            } else if totalRows != lastRowCount {
                 lastRowCount = totalRows
                 tableView.reloadData()
             } else {
                 // Same row count but overlay may have changed — refresh visible rows.
-                tableView.reloadData(
-                    forRowIndexes: IndexSet(integersIn: tableView.rows(in: tableView.visibleRect).lowerBound
-                        ..< max(tableView.rows(in: tableView.visibleRect).upperBound, 0)),
-                    columnIndexes: IndexSet(0..<max(columnCount, 0))
-                )
+                let visibleRows = tableView.rows(in: tableView.visibleRect)
+                if visibleRows.location != NSNotFound && visibleRows.length > 0 {
+                    tableView.reloadData(
+                        forRowIndexes: IndexSet(integersIn: visibleRows.lowerBound ..< (visibleRows.lowerBound + visibleRows.length)),
+                        columnIndexes: IndexSet(0..<max(columnCount, 0))
+                    )
+                }
             }
         }
 
@@ -182,7 +189,9 @@ public struct DataGridView: NSViewRepresentable {
         ) {
             guard let descriptor = tableView.sortDescriptors.first,
                   let column = descriptor.key else { return }
-            parent?.onSort?(column, descriptor.ascending)
+            DispatchQueue.main.async { [weak self] in
+                self?.parent?.onSort?(column, descriptor.ascending)
+            }
         }
 
         // MARK: Context menu (Set NULL / Delete Row)
@@ -253,7 +262,12 @@ public struct DataGridView: NSViewRepresentable {
         public func controlTextDidEndEditing(_ notification: Notification) {
             guard let field = notification.object as? EditableCellField,
                   let parent, parent.isEditable else { return }
-            parent.onEdit?(field.row, field.columnIndex, field.stringValue)
+            let row = field.row
+            let col = field.columnIndex
+            let val = field.stringValue
+            DispatchQueue.main.async {
+                parent.onEdit?(row, col, val)
+            }
         }
     }
 }

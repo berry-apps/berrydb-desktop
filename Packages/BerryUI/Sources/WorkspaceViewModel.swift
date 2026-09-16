@@ -124,10 +124,20 @@ public enum WorkspaceTab: @preconcurrency Identifiable {
 
     public var title: String {
         switch self {
-        case .table(let state): state.object.name
+        case .table(let state):
+            if let db = state.object.database, !db.isEmpty, db != "public" && db != "dbo" {
+                "\(db).\(state.object.name)"
+            } else {
+                state.object.name
+            }
         case .editor(let document): document.title
         case .tool(let kind): kind.title
-        case .alterTable(let design): L("Edit Table") + ": \(design.name)"
+        case .alterTable(let design):
+            if let db = design.database, !db.isEmpty, db != "public" && db != "dbo" {
+                L("Edit Table") + ": \(db).\(design.name)"
+            } else {
+                L("Edit Table") + ": \(design.name)"
+            }
         case .collection(let state): state.ref.name
         case .mongoShell(let state): state.title
         case .qdrantQuery(let state): state.title
@@ -217,9 +227,119 @@ public final class WorkspaceViewModel {
         didSet {
             selectedObjectID = selectedObjectIDs.first
             selectedCollectionID = selectedObjectIDs.first
+            if selectedObjectIDs.isEmpty {
+                selectionAnchorID = nil
+                selectionLeadID = nil
+            }
         }
     }
     public var selectedObjectID: SchemaObject.ID?
+    public private(set) var selectionAnchorID: String?
+    public private(set) var selectionLeadID: String?
+
+    public func selectObject(
+        id: String,
+        isShift: Bool = false,
+        isCommand: Bool = false,
+        visibleIDs: [String] = []
+    ) {
+        if isShift {
+            let anchor = selectionAnchorID ?? selectedObjectIDs.first ?? id
+            selectionLeadID = id
+            if let anchorIdx = visibleIDs.firstIndex(of: anchor),
+               let targetIdx = visibleIDs.firstIndex(of: id) {
+                let start = min(anchorIdx, targetIdx)
+                let end = max(anchorIdx, targetIdx)
+                selectedObjectIDs = Set(visibleIDs[start...end])
+                if selectionAnchorID == nil {
+                    selectionAnchorID = anchor
+                }
+            } else {
+                selectedObjectIDs = [id]
+                selectionAnchorID = id
+            }
+        } else if isCommand {
+            if selectedObjectIDs.contains(id) {
+                selectedObjectIDs.remove(id)
+            } else {
+                selectedObjectIDs.insert(id)
+            }
+            selectionAnchorID = id
+            selectionLeadID = id
+        } else {
+            selectedObjectIDs = [id]
+            selectionAnchorID = id
+            selectionLeadID = id
+        }
+    }
+
+    public func selectNextObject(visibleIDs: [String], isShift: Bool = false) {
+        guard !visibleIDs.isEmpty else { return }
+        if isShift {
+            let anchor = selectionAnchorID ?? selectedObjectIDs.first ?? visibleIDs[0]
+            let currentLead = selectionLeadID ?? anchor
+            guard let anchorIdx = visibleIDs.firstIndex(of: anchor),
+                  let leadIdx = visibleIDs.firstIndex(of: currentLead) else {
+                return
+            }
+            if leadIdx + 1 < visibleIDs.count {
+                let newLeadIdx = leadIdx + 1
+                let newLead = visibleIDs[newLeadIdx]
+                selectionLeadID = newLead
+                let start = min(anchorIdx, newLeadIdx)
+                let end = max(anchorIdx, newLeadIdx)
+                selectedObjectIDs = Set(visibleIDs[start...end])
+            }
+        } else {
+            let currentID = selectionLeadID ?? selectionAnchorID ?? selectedObjectIDs.first
+            if let current = currentID, let idx = visibleIDs.firstIndex(of: current) {
+                if idx + 1 < visibleIDs.count {
+                    let nextID = visibleIDs[idx + 1]
+                    selectedObjectIDs = [nextID]
+                    selectionAnchorID = nextID
+                    selectionLeadID = nextID
+                }
+            } else if let first = visibleIDs.first {
+                selectedObjectIDs = [first]
+                selectionAnchorID = first
+                selectionLeadID = first
+            }
+        }
+    }
+
+    public func selectPreviousObject(visibleIDs: [String], isShift: Bool = false) {
+        guard !visibleIDs.isEmpty else { return }
+        if isShift {
+            let anchor = selectionAnchorID ?? selectedObjectIDs.first ?? visibleIDs[0]
+            let currentLead = selectionLeadID ?? anchor
+            guard let anchorIdx = visibleIDs.firstIndex(of: anchor),
+                  let leadIdx = visibleIDs.firstIndex(of: currentLead) else {
+                return
+            }
+            if leadIdx > 0 {
+                let newLeadIdx = leadIdx - 1
+                let newLead = visibleIDs[newLeadIdx]
+                selectionLeadID = newLead
+                let start = min(anchorIdx, newLeadIdx)
+                let end = max(anchorIdx, newLeadIdx)
+                selectedObjectIDs = Set(visibleIDs[start...end])
+            }
+        } else {
+            let currentID = selectionLeadID ?? selectionAnchorID ?? selectedObjectIDs.first
+            if let current = currentID, let idx = visibleIDs.firstIndex(of: current) {
+                if idx > 0 {
+                    let prevID = visibleIDs[idx - 1]
+                    selectedObjectIDs = [prevID]
+                    selectionAnchorID = prevID
+                    selectionLeadID = prevID
+                }
+            } else if let last = visibleIDs.last {
+                selectedObjectIDs = [last]
+                selectionAnchorID = last
+                selectionLeadID = last
+            }
+        }
+    }
     public private(set) var errorMessage: String?
     public private(set) var isConnecting = false
 
@@ -595,9 +715,11 @@ public final class WorkspaceViewModel {
         }
     }
 
- /// Saved connections grouped by `groupName`. Ungrouped profiles come
+    public typealias ConnectionGroup = (name: String?, profiles: [ConnectionProfile])
+
+    /// Saved connections grouped by `groupName`. Ungrouped profiles come
     /// first (nil group); within a group, order follows `sortOrder`.
-    public var connectionGroups: [(name: String?, profiles: [ConnectionProfile])] {
+    public var connectionGroups: [ConnectionGroup] {
         Dictionary(grouping: profiles) { $0.groupName }
             .map { (name: $0.key, profiles: $0.value.sorted { $0.sortOrder < $1.sortOrder }) }
             .sorted { ($0.name ?? "") < ($1.name ?? "") }
@@ -616,6 +738,22 @@ public final class WorkspaceViewModel {
             try? store?.save(updated)
         }
         reloadProfiles()
+    }
+
+    public func moveProfileUp(id: UUID) {
+        guard let profile = profiles.first(where: { $0.id == id }) else { return }
+        let group = profile.groupName
+        let inGroup = profiles.filter { $0.groupName == group }.sorted { $0.sortOrder < $1.sortOrder }
+        guard let index = inGroup.firstIndex(where: { $0.id == id }), index > 0 else { return }
+        moveProfiles(group: group, from: IndexSet(integer: index), to: index - 1)
+    }
+
+    public func moveProfileDown(id: UUID) {
+        guard let profile = profiles.first(where: { $0.id == id }) else { return }
+        let group = profile.groupName
+        let inGroup = profiles.filter { $0.groupName == group }.sorted { $0.sortOrder < $1.sortOrder }
+        guard let index = inGroup.firstIndex(where: { $0.id == id }), index < inGroup.count - 1 else { return }
+        moveProfiles(group: group, from: IndexSet(integer: index), to: index + 2)
     }
 
     private func reloadProfiles() {
@@ -664,12 +802,19 @@ public final class WorkspaceViewModel {
         if let clone = pendingSecretClones[profile.id] {
             await clone.value
         }
- // Single Keychain read point: secrets go straight into
-        // the in-RAM config, never stored on the profile.
+        // Read Keychain secrets off the main actor to avoid blocking the UI runloop
+        // or triggering modal delegate reentrancy if macOS prompts for authorization.
+        let (password, sshPassword, sshPassphrase) = await Task.detached {
+            (
+                KeychainService.readPassword(kind: .database, profileID: profile.id),
+                KeychainService.readPassword(kind: .ssh, profileID: profile.id),
+                KeychainService.readPassword(kind: .sshPassphrase, profileID: profile.id)
+            )
+        }.value
         let config = profile.makeConfig(
-            password: KeychainService.readPassword(kind: .database, profileID: profile.id),
-            sshPassword: KeychainService.readPassword(kind: .ssh, profileID: profile.id),
-            sshPassphrase: KeychainService.readPassword(kind: .sshPassphrase, profileID: profile.id)
+            password: password,
+            sshPassword: sshPassword,
+            sshPassphrase: sshPassphrase
         )
         await open(
             config: config,
@@ -1326,6 +1471,12 @@ public final class WorkspaceViewModel {
         objects.filter { $0.kind.isRelational }.map(\.name).sorted()
     }
 
+    /// Distinct schemas available in the active session when driver supports schemas.
+    public var availableSchemas: [String] {
+        guard session?.capabilities.schemas == true else { return [] }
+        return Array(Set(objects.compactMap(\.database))).sorted()
+    }
+
     /// Runs a CSV import through the importer and formats a user-facing result
  /// `records` are the data rows (header already stripped).
     public func runImport(
@@ -1509,6 +1660,7 @@ public final class WorkspaceViewModel {
         guard let session else { return }
         guard let object = objects.first(where: {
             $0.kind == .table
+                && (fk.referencedSchema == nil || $0.database?.caseInsensitiveCompare(fk.referencedSchema!) == .orderedSame)
                 && $0.name.caseInsensitiveCompare(fk.referencedTable) == .orderedSame
         }) else { return }
         let clause = "\(session.dialect.quoteIdentifier(fk.referencedColumn)) = \(session.dialect.literal(value))"
@@ -2664,9 +2816,15 @@ public final class WorkspaceViewModel {
             errorMessage = "Driver \(profile.driverID) is not registered"
             return
         }
+        let (password, elasticsearchAPIKey) = await Task.detached {
+            (
+                KeychainService.readPassword(kind: .database, profileID: profile.id),
+                KeychainService.readPassword(kind: .elasticsearchAPIKey, profileID: profile.id)
+            )
+        }.value
         let config = profile.makeConfig(
-            password: KeychainService.readPassword(kind: .database, profileID: profile.id),
-            elasticsearchAPIKey: KeychainService.readPassword(kind: .elasticsearchAPIKey, profileID: profile.id)
+            password: password,
+            elasticsearchAPIKey: elasticsearchAPIKey
         )
         do {
             let (effectiveConfig, tunnel) = try await prepareDataSourceEndpoint(config)
@@ -2761,8 +2919,11 @@ public final class WorkspaceViewModel {
             errorMessage = "Driver \(profile.driverID) is not registered"
             return
         }
+        let password = await Task.detached {
+            KeychainService.readPassword(kind: .database, profileID: profile.id)
+        }.value
         let config = profile.makeConfig(
-            password: KeychainService.readPassword(kind: .database, profileID: profile.id)
+            password: password
         )
         do {
             let (effectiveConfig, tunnel) = try await prepareKeyValueEndpoint(config)

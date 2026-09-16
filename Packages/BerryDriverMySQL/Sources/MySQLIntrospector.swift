@@ -112,7 +112,7 @@ public struct MySQLIntrospector: Introspector {
 
         let fkRows = try await connection.queryAll(
             """
-            SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+            SELECT COLUMN_NAME, REFERENCED_TABLE_SCHEMA, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
             FROM information_schema.KEY_COLUMN_USAGE
             WHERE TABLE_SCHEMA = \(schemaExpr) AND TABLE_NAME = '\(table)'
               AND REFERENCED_TABLE_NAME IS NOT NULL
@@ -120,9 +120,15 @@ public struct MySQLIntrospector: Introspector {
         )
         let foreignKeys: [ForeignKeyInfo] = fkRows.compactMap { row in
             guard case .text(let column) = row[0],
-                  case .text(let refTable) = row[1],
-                  case .text(let refColumn) = row[2] else { return nil }
-            return ForeignKeyInfo(column: column, referencedTable: refTable, referencedColumn: refColumn)
+                  case .text(let refSchema) = row[1],
+                  case .text(let refTable) = row[2],
+                  case .text(let refColumn) = row[3] else { return nil }
+            return ForeignKeyInfo(
+                column: column,
+                referencedSchema: refSchema,
+                referencedTable: refTable,
+                referencedColumn: refColumn
+            )
         }
 
         return TableDetail(ref: ref, columns: columns, indexes: indexes, foreignKeys: foreignKeys)

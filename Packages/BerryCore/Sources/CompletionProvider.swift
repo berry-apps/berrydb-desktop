@@ -9,29 +9,37 @@ import Foundation
 public enum CompletionProvider {
     public enum Suggestion: Equatable, Sendable {
         case keyword(String)
-        case table(String)
-        case column(name: String, table: String)
- /// Function / procedure / trigger (objects) — offered in the
+        case table(name: String, schema: String?)
+        case column(name: String, table: String, schema: String?)
+        /// Function / procedure / trigger (objects) — offered in the
         /// general pool but never as a table name after FROM/JOIN.
         case routine(name: String, kind: SchemaObjectKind)
         /// Engine built-in function (NOW, COALESCE, …) — inserted with parens,
- /// never quoted (P1.4).
+        /// never quoted (P1.4).
         case builtin(String)
         /// DDL template snippet (crview, crfunc, crtrig) — inserted as full DDL text.
         case snippet(label: String, template: String, detail: String)
 
+        public static func table(_ name: String) -> Suggestion {
+            .table(name: name, schema: nil)
+        }
+
+        public static func column(name: String, table: String) -> Suggestion {
+            .column(name: name, table: table, schema: nil)
+        }
+
         public var text: String {
             switch self {
             case .keyword(let k): return k
-            case .table(let t): return t
-            case .column(let c, _): return c
+            case .table(let t, _): return t
+            case .column(let c, _, _): return c
             case .routine(let n, _): return n
             case .builtin(let f): return f
             case .snippet(let label, _, _): return label
             }
         }
 
- /// SF Symbol representing the suggestion type (custom popup).
+        /// SF Symbol representing the suggestion type (custom popup).
         public var iconName: String {
             switch self {
             case .keyword: return "textformat.abc"
@@ -49,11 +57,47 @@ public enum CompletionProvider {
         public var detail: String {
             switch self {
             case .keyword: return "keyword"
-            case .table: return "table"
-            case .column(_, let table): return table
+            case .table(_, let schema): return schema ?? "table"
+            case .column(_, let table, let schema): return schema.map { "\($0).\(table)" } ?? table
             case .routine(_, let kind): return kind.rawValue
             case .builtin: return "built-in"
             case .snippet(_, _, let detail): return detail
+            }
+        }
+
+        /// The text inserted into the editor when this suggestion is chosen.
+        /// Quotes components according to the dialect when needed, and fully
+        /// qualifies table names when `schema` is present.
+        public func insertText(dialect: (any SQLDialect)? = nil) -> String {
+            switch self {
+            case .keyword(let k):
+                return k
+            case .table(let name, let schema):
+                if let schema, !schema.isEmpty {
+                    if let dialect {
+                        return "\(dialect.quoteIdentifier(schema)).\(dialect.quoteIdentifier(name))"
+                    } else {
+                        return "\(schema).\(name)"
+                    }
+                }
+                if let dialect, CompletionProvider.identifierNeedsQuoting(name) {
+                    return dialect.quoteIdentifier(name)
+                }
+                return name
+            case .column(let c, _, _):
+                if let dialect, CompletionProvider.identifierNeedsQuoting(c) {
+                    return dialect.quoteIdentifier(c)
+                }
+                return c
+            case .routine(let n, _):
+                if let dialect, CompletionProvider.identifierNeedsQuoting(n) {
+                    return dialect.quoteIdentifier(n)
+                }
+                return n
+            case .builtin(let f):
+                return f + "()"
+            case .snippet(_, let template, _):
+                return template
             }
         }
     }
@@ -127,31 +171,81 @@ public enum CompletionProvider {
     /// - `columnsByTable`: pre-fetched columns for tables that appear in the
     ///   statement (the editor warms this from SchemaCatalog).
     public static func suggestions(
+        for script: String,
+        cursor: Int,
+        objects: [SchemaObject],
+        tableDetails: [TableRef: TableDetail] = [:],
+        columnsByTable: [String: [String]] = [:],
+        builtins: [String] = [],
+        statements: [String] = []
+    ) -> [Suggestion] {
+        suggestions(
+            script: script,
+            utf16Cursor: cursor,
+            objects: objects,
+            columnsByTable: columnsByTable,
+            tableDetails: tableDetails,
+            builtins: builtins,
+            statements: statements
+        )
+    }
+
+    public static func suggestions(
         script: String,
         utf16Cursor: Int,
         objects: [SchemaObject],
         columnsByTable: [String: [String]] = [:],
+        tableDetails: [TableRef: TableDetail] = [:],
         builtins: [String] = [],
         statements: [String] = []
     ) -> [Suggestion] {
         let statement = StatementSplitter.statement(at: utf16Cursor, in: script)
         let statementText = statement?.sql ?? script
         let prefix = currentTokenPrefix(script: script, utf16Cursor: utf16Cursor)
-        let tableNames = objects.filter { $0.kind.isRelational }.map(\.name)
+        let relationalObjects = objects.filter { $0.kind.isRelational }
 
         // Case 1: "alias." or "table." → columns of the resolved table.
         if let qualifier = prefix.qualifier {
-            let aliases = aliasMap(statement: statementText, tableNames: tableNames)
-            let table = aliases[qualifier.lowercased()] ?? qualifier
-            let columns = columnsByTable.first { $0.key.caseInsensitiveCompare(table) == .orderedSame }?.value ?? []
-            return rank(columns.map { .column(name: $0, table: table) }, by: prefix.text)
+            let aliasRefs = aliasRefMap(statement: statementText, objects: relationalObjects)
+            let resolvedRef = aliasRefs[qualifier.lowercased()]
+            let parsedQualifier: (schema: String?, table: String) = {
+                if let resolvedRef {
+                    return (schema: resolvedRef.database, table: resolvedRef.name)
+                }
+                let qParts = qualifier.split(separator: ".").map(String.init)
+                if qParts.count == 2 {
+                    return (schema: qParts[0], table: qParts[1])
+                }
+                return (schema: nil, table: qualifier)
+            }()
+            let targetTable = parsedQualifier.table
+            let targetSchema = parsedQualifier.schema
+
+            var colSuggestions: [Suggestion] = []
+            let matchingDetails = tableDetails.filter { detailRef, _ in
+                guard detailRef.name.caseInsensitiveCompare(targetTable) == .orderedSame else { return false }
+                if let targetSchema {
+                    return detailRef.database?.caseInsensitiveCompare(targetSchema) == .orderedSame
+                }
+                return true
+            }
+            if !matchingDetails.isEmpty {
+                for (ref, detail) in matchingDetails {
+                    colSuggestions += detail.columns.map { .column(name: $0.name, table: ref.name, schema: ref.database) }
+                }
+            } else {
+                let columns = columnsByTable.first { $0.key.caseInsensitiveCompare(targetTable) == .orderedSame }?.value ?? []
+                let schema = targetSchema ?? relationalObjects.first { $0.name.caseInsensitiveCompare(targetTable) == .orderedSame }?.database
+                colSuggestions = columns.map { .column(name: $0, table: targetTable, schema: schema) }
+            }
+            return rank(colSuggestions, by: prefix.text)
         }
 
         // Case 2: right after FROM/JOIN/INTO/UPDATE/TABLE → tables first.
         let previous = previousSignificantWord(script: script, utf16Cursor: utf16Cursor, skipping: prefix.text)
         let tableLeaders: Set<String> = ["from", "join", "into", "update", "table", "view"]
         if let previous, tableLeaders.contains(previous.lowercased()) {
-            return rank(tableNames.map { .table($0) }, by: prefix.text)
+            return rank(relationalObjects.map { .table(name: $0.name, schema: $0.database) }, by: prefix.text)
         }
 
         // Default: keywords + snippets + tables + routines + columns.
@@ -174,24 +268,45 @@ public enum CompletionProvider {
                 detail: "CREATE TRIGGER template"
             )
         ]
-        pool += tableNames.map { .table($0) }
+        pool += relationalObjects.map { .table(name: $0.name, schema: $0.database) }
         pool += objects
             .filter { !$0.kind.isRelational }
             .map { .routine(name: $0.name, kind: $0.kind) }
         pool += builtins.map { .builtin($0) }
-        let aliases = aliasMap(statement: statementText, tableNames: tableNames)
-        for table in Set(aliases.values) {
-            let columns = columnsByTable.first { $0.key.caseInsensitiveCompare(table) == .orderedSame }?.value ?? []
-            pool += columns.map { .column(name: $0, table: table) }
+        let aliasRefs = aliasRefMap(statement: statementText, objects: relationalObjects)
+        for ref in Set(aliasRefs.values) {
+            let matchingDetails = tableDetails.filter { detailRef, _ in
+                guard detailRef.name.caseInsensitiveCompare(ref.name) == .orderedSame else { return false }
+                if let schema = ref.database {
+                    return detailRef.database?.caseInsensitiveCompare(schema) == .orderedSame
+                }
+                return true
+            }
+            if !matchingDetails.isEmpty {
+                for (detailRef, detail) in matchingDetails {
+                    pool += detail.columns.map { .column(name: $0.name, table: detailRef.name, schema: detailRef.database) }
+                }
+            } else {
+                let columns = columnsByTable.first { $0.key.caseInsensitiveCompare(ref.name) == .orderedSame }?.value ?? []
+                let schema = ref.database ?? relationalObjects.first { $0.name.caseInsensitiveCompare(ref.name) == .orderedSame }?.database
+                pool += columns.map { .column(name: $0, table: ref.name, schema: schema) }
+            }
         }
         return rank(pool, by: prefix.text)
+    }
+
+    /// Tables referenced by FROM/JOIN in a statement — returns exact TableRefs
+    /// (including schema namespace when qualified) so the editor can pre-fetch
+    /// and cache column metadata without collisions.
+    public static func referencedTableRefs(statement: String, objects: [SchemaObject]) -> [TableRef] {
+        let aliasRefs = aliasRefMap(statement: statement, objects: objects)
+        return Array(Set(aliasRefs.values))
     }
 
     /// Tables referenced by FROM/JOIN in a statement — the editor pre-fetches
     /// their columns before asking for suggestions.
     public static func referencedTables(statement: String, objects: [SchemaObject]) -> [String] {
-        let tableNames = objects.filter { $0.kind.isRelational }.map(\.name)
-        return Array(Set(aliasMap(statement: statement, tableNames: tableNames).values))
+        referencedTableRefs(statement: statement, objects: objects).map(\.name)
     }
 
     // MARK: - Token context
@@ -216,11 +331,20 @@ public enum CompletionProvider {
             start -= 1
         }
         let token = text.substring(with: NSRange(location: start, length: cursor - start))
-        // Qualified? Look for "<identifier>." just before the token.
+        // Qualified? Look for "<identifier>." or "<schema>.<identifier>." just before the token.
         if start > 0, text.character(at: start - 1) == unichar(UInt8(ascii: ".")) {
             var qualifierStart = start - 1
             while qualifierStart > 0, isIdentifierChar(text.character(at: qualifierStart - 1)) {
                 qualifierStart -= 1
+            }
+            if qualifierStart > 1, text.character(at: qualifierStart - 1) == unichar(UInt8(ascii: ".")) {
+                var schemaStart = qualifierStart - 1
+                while schemaStart > 0, isIdentifierChar(text.character(at: schemaStart - 1)) {
+                    schemaStart -= 1
+                }
+                if schemaStart < qualifierStart - 1 {
+                    qualifierStart = schemaStart
+                }
             }
             let qualifier = text.substring(with: NSRange(location: qualifierStart, length: (start - 1) - qualifierStart))
             if !qualifier.isEmpty {
@@ -237,6 +361,105 @@ public enum CompletionProvider {
             words.removeLast()
         }
         return words.last.map(String.init)
+    }
+
+    /// "FROM s1.items i JOIN s2.orders AS o" →
+    /// ["i": TableRef(database: "s1", name: "items"),
+    ///  "o": TableRef(database: "s2", name: "orders"), ...]
+    static func aliasRefMap(statement: String, objects: [SchemaObject]) -> [String: TableRef] {
+        var map: [String: TableRef] = [:]
+        let relational = objects.filter { $0.kind.isRelational }
+        let knownByBare = Dictionary(relational.map { ($0.name.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
+        let knownByQualified = Dictionary(relational.compactMap { obj -> (String, SchemaObject)? in
+            guard let db = obj.database else { return nil }
+            return ("\(db).\(obj.name)".lowercased(), obj)
+        }, uniquingKeysWith: { first, _ in first })
+
+        let words = statement
+            .replacingOccurrences(of: ",", with: " , ")
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+
+        var index = 0
+        while index < words.count {
+            let word = words[index].lowercased()
+            if word == "from" || word == "join" || word == "into" || word == "update" {
+                var cursor = index + 1
+                while cursor < words.count {
+                    let rawTable = words[cursor].trimmingCharacters(in: CharacterSet(charactersIn: "\"`;,()"))
+                    guard !rawTable.isEmpty, rawTable != "." else { break }
+
+                    let parts = rawTable.split(separator: ".").map {
+                        $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"`;,() "))
+                    }.filter { !$0.isEmpty }
+
+                    let resolvedRef: TableRef?
+                    if parts.count == 2 {
+                        let schema = parts[0]
+                        let table = parts[1]
+                        let qualifiedKey = "\(schema).\(table)".lowercased()
+                        if let matched = knownByQualified[qualifiedKey] {
+                            resolvedRef = TableRef(database: matched.database, name: matched.name)
+                        } else if let matched = relational.first(where: {
+                            $0.name.caseInsensitiveCompare(table) == .orderedSame
+                                && $0.database?.caseInsensitiveCompare(schema) == .orderedSame
+                        }) {
+                            resolvedRef = TableRef(database: matched.database, name: matched.name)
+                        } else {
+                            resolvedRef = TableRef(database: schema, name: table)
+                        }
+                    } else if parts.count == 1 {
+                        let table = parts[0]
+                        let matches = relational.filter { $0.name.caseInsensitiveCompare(table) == .orderedSame }
+                        if matches.count == 1 {
+                            resolvedRef = TableRef(database: matches[0].database, name: matches[0].name)
+                        } else if matches.count > 1 {
+                            resolvedRef = TableRef(database: nil, name: matches[0].name)
+                        } else if let matched = knownByBare[table.lowercased()] {
+                            resolvedRef = TableRef(database: matched.database, name: matched.name)
+                        } else {
+                            resolvedRef = nil
+                        }
+                    } else {
+                        resolvedRef = nil
+                    }
+
+                    guard let ref = resolvedRef else { break }
+                    map[ref.name.lowercased()] = ref
+                    if let db = ref.database {
+                        map["\(db).\(ref.name)".lowercased()] = ref
+                    }
+                    if rawTable.caseInsensitiveCompare(ref.name) != .orderedSame {
+                        map[rawTable.lowercased()] = ref
+                    }
+
+                    var next = cursor + 1
+                    if next < words.count, words[next].caseInsensitiveCompare("AS") == .orderedSame {
+                        next += 1
+                    }
+                    if next < words.count {
+                        let candidate = words[next].trimmingCharacters(in: CharacterSet(charactersIn: "\"`;,()"))
+                        let stopWords: Set<String> = [
+                            "on", "where", "join", "left", "right", "inner", "outer",
+                            "group", "order", "limit", "set", "using", ",",
+                        ]
+                        if !candidate.isEmpty,
+                           !stopWords.contains(candidate.lowercased()),
+                           knownByBare[candidate.lowercased()] == nil {
+                            map[candidate.lowercased()] = ref
+                            next += 1
+                        }
+                    }
+                    if next < words.count, words[next] == "," {
+                        cursor = next + 1
+                        continue
+                    }
+                    break
+                }
+            }
+            index += 1
+        }
+        return map
     }
 
     /// "FROM users u JOIN orders AS o" → ["u": "users", "o": "orders",
@@ -260,8 +483,13 @@ public enum CompletionProvider {
                 // Chain of "table [AS] [alias]" segments separated by commas.
                 while cursor < words.count {
                     let rawTable = words[cursor].trimmingCharacters(in: CharacterSet(charactersIn: "\"`;,()"))
-                    guard let table = known[rawTable.lowercased()] else { break }
+                    guard !rawTable.isEmpty, rawTable != "." else { break }
+                    let bareTable = rawTable.split(separator: ".").last.map(String.init) ?? rawTable
+                    guard let table = known[rawTable.lowercased()] ?? known[bareTable.lowercased()] else { break }
                     map[table.lowercased()] = table
+                    if rawTable.caseInsensitiveCompare(table) != .orderedSame {
+                        map[rawTable.lowercased()] = table
+                    }
                     var next = cursor + 1
                     if next < words.count, words[next].caseInsensitiveCompare("AS") == .orderedSame {
                         next += 1
@@ -310,8 +538,8 @@ public enum CompletionProvider {
             let key: String
             switch suggestion {
             case .keyword(let k): key = "k:\(k.lowercased())"
-            case .table(let t): key = "t:\(t.lowercased())"
-            case .column(let c, let t): key = "c:\(t.lowercased()).\(c.lowercased())"
+            case .table(let t, let schema): key = "t:\(schema ?? "").\(t.lowercased())"
+            case .column(let c, let t, let schema): key = "c:\(schema ?? "").\(t.lowercased()).\(c.lowercased())"
             case .routine(let n, let kind): key = "r:\(kind.rawValue).\(n.lowercased())"
             case .builtin(let f): key = "b:\(f.lowercased())"
             case .snippet(let label, _, _): key = "sn:\(label.lowercased())"

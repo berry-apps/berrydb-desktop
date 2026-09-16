@@ -3,6 +3,10 @@ import BerryDriverKit
 import BerryStore
 import Foundation
 
+extension String: @retroactive LocalizedError {
+    public var errorDescription: String? { self }
+}
+
 /// User-facing approval for an AI-proposed statement.
 /// Rendered inline in the AI panel: the SQL is shown with [Deny]/[Run]. Writes
 /// and DDL ALWAYS prompt; a plain SELECT may auto-approve per setting.
@@ -394,9 +398,9 @@ public final class QueryToolExecutor: AIToolExecutor {
             let relational = objects
                 .filter { $0.kind == .table || $0.kind == .view }
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            let digest = relational.map { "\($0.kind.rawValue):\($0.name)" }.joined(separator: "\n")
+            let digest = relational.map { "\($0.kind.rawValue):\($0.database ?? "").\($0.name)" }.joined(separator: "\n")
             let bounded = relational.prefix(limit)
-            let entries = bounded.map { ["name": $0.name, "kind": $0.kind.rawValue] }
+            let entries = bounded.map { ["name": $0.name, "kind": $0.kind.rawValue, "schema": $0.database ?? ""] }
             return OverviewFetch(digest: digest, entries: entries)
         }
         overviewInFlight = task
@@ -419,7 +423,11 @@ public final class QueryToolExecutor: AIToolExecutor {
         let objects = try await catalog.objects()
         guard lease.isValid else { return .denied }
         let matches = objects
-            .filter { ($0.kind == .table || $0.kind == .view) && wanted.contains($0.name.lowercased()) }
+            .filter {
+                ($0.kind == .table || $0.kind == .view)
+                    && (wanted.contains($0.name.lowercased())
+                        || wanted.contains("\($0.database ?? "").\($0.name)".lowercased()))
+            }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         var entries: [[String: Any]] = []
         for object in matches {
@@ -440,6 +448,30 @@ public final class QueryToolExecutor: AIToolExecutor {
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
             .filter { !$0.isEmpty })
+    }
+
+    public static func parseTableRef(_ input: String, in objects: [SchemaObject]) -> Result<TableRef, String> {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.contains(".") {
+            let parts = trimmed.split(separator: ".", maxSplits: 1).map {
+                $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"`;,() "))
+            }
+            if parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty {
+                return .success(TableRef(database: parts[0], name: parts[1]))
+            }
+        }
+        let cleanName = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "\"`;,() "))
+        let matching = objects.filter {
+            ($0.kind == .table || $0.kind == .view)
+                && $0.name.caseInsensitiveCompare(cleanName) == .orderedSame
+        }
+        if matching.count == 1 {
+            return .success(TableRef(database: matching[0].database, name: matching[0].name))
+        } else if matching.count > 1 {
+            let schemas = matching.compactMap(\.database).sorted().joined(separator: ", ")
+            return .failure("Table '\(cleanName)' is ambiguous across schemas (\(schemas)). Please specify schema qualification (e.g. '\(matching[0].database ?? "schema").\(cleanName)').")
+        }
+        return .success(TableRef(name: cleanName))
     }
 
     // MARK: - propose_sql (harmless — inserts into the editor, never runs)
@@ -516,8 +548,17 @@ public final class QueryToolExecutor: AIToolExecutor {
         guard let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .failed("get_sample_rows requires 'table'")
         }
+        let objects = (try? await catalog?.objects()) ?? []
+        guard lease.isValid else { return .denied }
+        let tableRef: TableRef
+        switch Self.parseTableRef(name, in: objects) {
+        case .success(let ref):
+            tableRef = ref
+        case .failure(let error):
+            return .failed(error)
+        }
         let sql = session.dialect.select(
-            from: TableRef(name: name), whereClause: nil, orderBy: nil, limit: Self.sampleRowsLimit
+            from: tableRef, whereClause: nil, orderBy: nil, limit: Self.sampleRowsLimit
         )
         guard lease.isValid else { return .denied }
         do { return .ok(Self.json(try await drainSample(sql, lease: lease))) }

@@ -52,11 +52,12 @@ public enum SchemaGraphBuilder {
             }
 
             for fk in detail.foreignKeys {
-                let parentID = GraphID.node(.table, database: ref.database, name: fk.referencedTable)
+                let parentSchema = fk.referencedSchema ?? ref.database
+                let parentID = GraphID.node(.table, database: parentSchema, name: fk.referencedTable)
                 // A referenced table not in `objects` still gets a stub node so
                 // the reference edge is meaningful for blast-radius queries.
                 if graph.nodes[parentID] == nil {
-                    graph.addNode(GraphNode(id: parentID, kind: .table, name: fk.referencedTable, database: ref.database))
+                    graph.addNode(GraphNode(id: parentID, kind: .table, name: fk.referencedTable, database: parentSchema))
                 }
                 graph.addEdge(GraphEdge(
                     src: tableID, dst: parentID, kind: .references,

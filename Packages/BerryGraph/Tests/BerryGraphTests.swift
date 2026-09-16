@@ -140,4 +140,23 @@ struct SchemaGraphBuilderTests {
         #expect(graph.nodes[customersID]?.kind == .table)
         #expect(graph.blastRadius(of: customersID).contains(GraphID.node(.table, database: nil, name: "orders")))
     }
+
+    @Test func crossSchemaForeignKeyCreatesTargetNodeInReferencedSchema() {
+        let objects = [
+            SchemaObject(kind: .table, name: "orders", database: "sales"),
+            SchemaObject(kind: .table, name: "items", database: "inventory")
+        ]
+        let ordersDetail = TableDetail(
+            ref: TableRef(database: "sales", name: "orders"),
+            columns: [ColumnInfo(name: "id", declaredType: "INTEGER", isNullable: false, defaultValue: nil, isPrimaryKey: true)],
+            indexes: [],
+            foreignKeys: [
+                ForeignKeyInfo(column: "item_id", referencedSchema: "inventory", referencedTable: "items", referencedColumn: "id")
+            ]
+        )
+        let graph = SchemaGraphBuilder.build(objects: objects, details: [ordersDetail.ref: ordersDetail])
+        let expectedTargetID = GraphID.node(.table, database: "inventory", name: "items")
+        #expect(graph.nodes[expectedTargetID] != nil)
+        #expect(graph.edges.contains { $0.src == "table:sales.orders" && $0.dst == expectedTargetID })
+    }
 }

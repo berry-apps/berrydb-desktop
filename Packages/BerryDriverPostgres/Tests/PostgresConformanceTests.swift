@@ -312,4 +312,61 @@ struct PostgresConformanceTests {
             throw error
         }
     }
+
+    @Test func multiSchemaSameTableNameIsolation() async throws {
+        let conn = try await harness.makeConnection()
+        defer { Task { await conn.close() } }
+        let s1 = "berry_s1_\(String(UUID().uuidString.prefix(6)).lowercased())"
+        let s2 = "berry_s2_\(String(UUID().uuidString.prefix(6)).lowercased())"
+
+        try await harness.exec(conn, [
+            "CREATE SCHEMA \(s1)",
+            "CREATE TABLE \(s1).items (id bigint PRIMARY KEY, name text NOT NULL, price numeric(10,2) NOT NULL)",
+            "INSERT INTO \(s1).items VALUES (1, 'Widget', 19.99)",
+            "CREATE SCHEMA \(s2)",
+            "CREATE TABLE \(s2).items (id bigint PRIMARY KEY, sku text NOT NULL, quantity int NOT NULL, is_active bool NOT NULL, details jsonb)",
+            "INSERT INTO \(s2).items VALUES (1, 'SKU-99', 100, true, '{\"color\": \"red\"}')",
+            "CREATE TABLE \(s2).orders (id bigint PRIMARY KEY, item_id bigint REFERENCES \(s2).items(id))",
+            "INSERT INTO \(s2).orders VALUES (101, 1)"
+        ])
+
+        func cleanup() async {
+            _ = try? await harness.exec(conn, [
+                "DROP SCHEMA \(s2) CASCADE",
+                "DROP SCHEMA \(s1) CASCADE"
+            ])
+        }
+
+        do {
+            let introspector = conn.introspector
+
+            // 1. Objects listing returns both schemas
+            let objects = try await introspector.objects(in: nil)
+            let s1Item = try #require(objects.first { $0.database == s1 && $0.name == "items" })
+            let s2Item = try #require(objects.first { $0.database == s2 && $0.name == "items" })
+            #expect(s1Item.id != s2Item.id)
+
+            // 2. Column shapes are strictly isolated
+            let s1Detail = try await introspector.tableDetail(TableRef(database: s1, name: "items"))
+            #expect(s1Detail.columns.map(\.name) == ["id", "name", "price"])
+
+            let s2Detail = try await introspector.tableDetail(TableRef(database: s2, name: "items"))
+            #expect(s2Detail.columns.map(\.name) == ["id", "sku", "quantity", "is_active", "details"])
+
+            // 3. Execution (selectAll) retrieves s2's columns without fallback to s1
+            let s2Stream = conn.execute(PostgresDialect().selectAll(from: TableRef(database: s2, name: "items"), limit: 10))
+            let s2Result = try await harness.drain(s2Stream)
+            #expect(s2Result.columns.map(\.name) == ["id", "sku", "quantity", "is_active", "details"])
+
+            // 4. Foreign key reflects exact referenced schema
+            let orderDetail = try await introspector.tableDetail(TableRef(database: s2, name: "orders"))
+            let fk = try #require(orderDetail.foreignKeys.first)
+            #expect(fk.referencedSchema == s2)
+            #expect(fk.referencedTable == "items")
+        } catch {
+            await cleanup()
+            throw error
+        }
+        await cleanup()
+    }
 }
