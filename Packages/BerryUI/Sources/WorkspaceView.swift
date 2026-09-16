@@ -1232,7 +1232,9 @@ public struct WorkspaceView: View {
         .padding(.top, paddingTop)
         .contentShape(Rectangle())
         .onTapGesture {
-            binding?.wrappedValue.toggle()
+            DispatchQueue.main.async {
+                binding?.wrappedValue.toggle()
+            }
         }
     }
 
@@ -1394,8 +1396,10 @@ public struct WorkspaceView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
-            guard viewModel.beginConnect() else { return }
-            Task { await connect(profile) }
+            DispatchQueue.main.async {
+                guard viewModel.beginConnect() else { return }
+                Task { await connect(profile) }
+            }
         }
         .contextMenu {
             Button(L("Connect")) {
