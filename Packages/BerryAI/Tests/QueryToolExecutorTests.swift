@@ -747,10 +747,17 @@ struct QueryToolExecutorTests {
     @Test func runTabStatementsStopsEarlyWhenCumulativeExecutionExceedsBudget() async throws {
         final class DelayOnSecondStatementGate: AIApprovalGate {
             var count = 0
+            func approve(sql: String, danger: DangerLevel, autoApprovable: Bool, timeoutSeconds: TimeInterval) async -> Bool {
+                count += 1
+                if count == 2 {
+                    try? await Task.sleep(nanoseconds: 250_000_000) // 250ms
+                }
+                return true
+            }
             func approve(sql: String, danger: DangerLevel, autoApprovable: Bool) async -> Bool {
                 count += 1
                 if count == 2 {
-                    try? await Task.sleep(nanoseconds: 60_000_000) // 60ms
+                    try? await Task.sleep(nanoseconds: 250_000_000) // 250ms
                 }
                 return true
             }
@@ -763,11 +770,11 @@ struct QueryToolExecutorTests {
             activeTabStatements: { _ in ["SELECT 1", "SELECT 2"] },
             executeStatement: { sql, lease in
                 if sql == "SELECT 1" {
-                    try? await Task.sleep(nanoseconds: 20_000_000) // 20ms
+                    try? await Task.sleep(nanoseconds: 30_000_000) // 30ms
                 }
                 return .payload(["rows": []])
             },
-            executionDeadlineSeconds: 0.05 // 50ms budget
+            executionDeadlineSeconds: 0.2 // 200ms budget
         )
 
         let outcome = await executor.execute(AIToolCall(id: "c", name: "run_tab_statements", args: ["which": "all"]))
@@ -793,7 +800,7 @@ struct QueryToolExecutorTests {
                 }
                 return .payload(["rows": []])
             },
-            executionDeadlineSeconds: 0.08 // 80ms budget
+            executionDeadlineSeconds: 0.15 // 150ms budget
         )
 
         let outcome = await executor.execute(AIToolCall(id: "c", name: "run_tab_statements", args: ["which": "all"]))
@@ -1066,10 +1073,10 @@ struct QueryToolExecutorTests {
         let executor = QueryToolExecutor(
             session: session,
             catalog: SchemaCatalog(session: session),
-            gate: DelayedApprovalGate(delayNanos: 60_000_000),
+            gate: DelayedApprovalGate(delayNanos: 150_000_000),
             onPropose: { _, _ in },
             activeTabStatements: { _ in ["SELECT id FROM t"] },
-            executionDeadlineSeconds: 0.04
+            executionDeadlineSeconds: 0.08
         )
 
         let outcome = await executor.execute(AIToolCall(id: "c", name: "explain_query", args: [:]))
