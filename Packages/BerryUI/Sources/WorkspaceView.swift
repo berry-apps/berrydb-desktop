@@ -952,8 +952,10 @@ public struct WorkspaceView: View {
             Divider()
 
             if sidebarTab == .connections {
+                let _ = print("[DIAG 8] sidebar: rendering connectionList")
                 connectionList
             } else {
+                let _ = print("[DIAG 9] sidebar: rendering objectList")
                 objectList
             }
         }
@@ -1060,12 +1062,14 @@ public struct WorkspaceView: View {
                         objectTypeFilterBar
                     }
                     List(selection: $viewModel.selectedObjectIDs) {
+                        let _ = print("[DIAG 10] objectList: List evaluating")
                         if viewModel.session != nil {
                             if !viewModel.objects.isEmpty {
                                 objectFilterField
                             }
                             let hasSchemas = viewModel.session?.capabilities.schemas ?? false
                             let schemaGroups = SchemaTree.group(objects: viewModel.objects, hasSchemaCapability: hasSchemas)
+                            let _ = print("[DIAG 11] objectList: schemaGroups=\(schemaGroups.count), hasSchemas=\(hasSchemas)")
                             if schemaGroups.count == 1 && schemaGroups[0].name == nil {
                                 let flat = schemaGroups[0]
                                 if objectTypeFilter == .all || objectTypeFilter == .table {
@@ -1292,6 +1296,7 @@ public struct WorkspaceView: View {
 
     @ViewBuilder
     private func schemaGroupContent(_ group: SchemaTreeGroup) -> some View {
+        let _ = print("[DIAG 12] schemaGroupContent for group: \(group.name ?? "nil"), tables: \(group.tables.count)")
         let tables = filteredObjects(in: group.tables, kind: .table)
         let views = filteredObjects(in: group.views, kind: .view)
         let functions = filteredObjects(in: group.functions, kind: .function)
@@ -1396,8 +1401,14 @@ public struct WorkspaceView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
+            print("[DIAG 1] profileRow onTapGesture(count: 2) for: \(profile.name)")
             DispatchQueue.main.async {
-                guard viewModel.beginConnect() else { return }
+                print("[DIAG 2] profileRow async block: calling beginConnect")
+                guard viewModel.beginConnect() else {
+                    print("[DIAG 2b] beginConnect returned false")
+                    return
+                }
+                print("[DIAG 3] spawning connect Task")
                 Task { await connect(profile) }
             }
         }
@@ -1775,9 +1786,7 @@ public struct WorkspaceView: View {
  /// driver — the two `DriverRegistry`/
     /// `DataSourceRegistry` families stay separate all the way up to here.
     private func connect(_ profile: ConnectionProfile) async {
-        // alreadyBegun: true — every caller of this wrapper already called
-        // viewModel.beginConnect() synchronously before creating the Task
-        // this runs in (see the two call sites above).
+        print("[DIAG 4] connect(profile) start: \(profile.name)")
         switch profile.driver {
         case .mongodb, .qdrant, .elasticsearch:
             await viewModel.connectDataSource(profile: profile, alreadyBegun: true)
@@ -1786,8 +1795,11 @@ public struct WorkspaceView: View {
         default:
             await viewModel.connect(profile: profile, alreadyBegun: true)
         }
+        print("[DIAG 5] viewModel.connect done, objects count: \(viewModel.objects.count)")
         if viewModel.session != nil || viewModel.dataSourceSession != nil || viewModel.keyValueSession != nil {
+            print("[DIAG 6] setting sidebarTab = .objects")
             sidebarTab = .objects
+            print("[DIAG 7] sidebarTab is now .objects")
         }
     }
 
