@@ -701,40 +701,179 @@ public final class QueryToolExecutor: AIToolExecutor {
         // can't be satisfied by the chat's Deny/Run-only card, and letting
         // it through to QueryService's `dangerPreconfirmed: true` call below
         // would surface a second, invisible, blocking NSAlert instead.
-        if case .typedConfirm = danger { return .denied }
-        let approvalTimeout = executionDeadlineSeconds ?? 110
-        guard await gate.approve(sql: sql, danger: danger, autoApprovable: false, timeoutSeconds: approvalTimeout) else { return .denied }
+        let startTime = Date()
+        let maxDuration = executionDeadlineSeconds
+        let durationLabel = (maxDuration ?? 110) > 0 ? "\(Int(maxDuration ?? 110))s" : "110s"
+        if let maxDuration, Date().timeIntervalSince(startTime) >= maxDuration {
+            return .failed("Execution stopped: tool deadline (\(durationLabel)) exceeded")
+        }
+
+        let remainingForApproval = maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
+        guard await gate.approve(sql: sql, danger: danger, autoApprovable: false, timeoutSeconds: remainingForApproval ?? 110) else { return .denied }
         guard lease.isValid else { return .denied }
+
+        let remainingForQuery = maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
+        if let remaining = remainingForQuery, remaining <= 0 {
+            return .failed("Execution stopped: tool deadline (\(durationLabel)) exceeded")
+        }
 
         let explainSQL = "\(session.dialect.explainPrefix(analyze: analyze)) \(sql)"
         do {
+            let result = try await drainExplain(explainSQL, session: session, lease: lease, timeoutOverrideSeconds: remainingForQuery)
+            return .ok(Self.json(result))
+        } catch is CancellationError {
+            return .denied
+        } catch {
+            guard lease.isValid else { return .denied }
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    private final class ResultBox: @unchecked Sendable {
+        var payload: [String: Any]?
+        init(_ payload: [String: Any]? = nil) { self.payload = payload }
+    }
+
+    /// Races an async operation against a timeout without blocking the caller on
+    /// cancellation when child tasks are stuck on wedged sockets or non-cooperative loops.
+    private final class UnstoppableTimeoutRace: @unchecked Sendable {
+        private let lock = NSLock()
+        private var isResolved = false
+        private var continuation: CheckedContinuation<ResultBox, any Error>?
+        private var workTask: Task<Void, Never>?
+        private var timeoutTask: Task<Void, Never>?
+
+        static func run(
+            timeoutSeconds: TimeInterval,
+            timeoutError: any Error,
+            work: @escaping @MainActor () async throws -> [String: Any]
+        ) async throws -> [String: Any] {
+            let raceBox = RaceHolder()
+            let box = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ResultBox, any Error>) in
+                    let race = UnstoppableTimeoutRace(continuation: continuation)
+                    raceBox.race = race
+
+                    race.lock.lock()
+                    let workTask = Task { @MainActor in
+                        do {
+                            let result = try await work()
+                            race.resolve(with: .success(ResultBox(result)))
+                        } catch {
+                            race.resolve(with: .failure(error))
+                        }
+                    }
+                    race.workTask = workTask
+
+                    let timeoutTask = Task {
+                        let nanos = UInt64(max(0, timeoutSeconds) * 1_000_000_000)
+                        do {
+                            try await Task.sleep(nanoseconds: nanos)
+                        } catch {
+                            return
+                        }
+                        workTask.cancel()
+                        race.resolve(with: .failure(timeoutError))
+                    }
+                    race.timeoutTask = timeoutTask
+                    race.lock.unlock()
+                }
+            } onCancel: {
+                raceBox.cancel()
+            }
+            guard let payload = box.payload else { throw CancellationError() }
+            return payload
+        }
+
+        private init(continuation: CheckedContinuation<ResultBox, any Error>) {
+            self.continuation = continuation
+        }
+
+        func cancel() {
+            resolve(with: .failure(CancellationError()))
+        }
+
+        private func resolve(with result: Result<ResultBox, any Error>) {
+            lock.lock()
+            guard !isResolved else {
+                lock.unlock()
+                return
+            }
+            isResolved = true
+            let cont = continuation
+            continuation = nil
+            let tTask = timeoutTask
+            let wTask = workTask
+            lock.unlock()
+
+            tTask?.cancel()
+            if case .failure = result {
+                wTask?.cancel()
+            }
+            cont?.resume(with: result)
+        }
+    }
+
+    private final class RaceHolder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _race: UnstoppableTimeoutRace?
+        var race: UnstoppableTimeoutRace? {
+            get { lock.withLock { _race } }
+            set { lock.withLock { _race = newValue } }
+        }
+        func cancel() {
+            let r = lock.withLock { _race }
+            r?.cancel()
+        }
+    }
+
+    private func drainExplain(
+        _ explainSQL: String,
+        session: Session,
+        lease: AIExecutionLease,
+        timeoutOverrideSeconds: TimeInterval? = nil
+    ) async throws -> [String: Any] {
+        guard lease.isValid else { throw CancellationError() }
+        let effectiveTimeout: TimeInterval
+        if let timeoutOverrideSeconds {
+            effectiveTimeout = min(Double(aiQueryTimeoutSeconds), max(0, timeoutOverrideSeconds))
+        } else {
+            effectiveTimeout = Double(aiQueryTimeoutSeconds)
+        }
+
+        let timeoutLabel = effectiveTimeout < 1 && effectiveTimeout > 0 ? String(format: "%.1f", effectiveTimeout) : "\(Int(ceil(effectiveTimeout)))"
+        let timeoutError = DriverError.queryFailed(
+            message: "Query timed out after \(timeoutLabel)s — the connection may be stuck; try reconnecting.",
+            code: nil
+        )
+
+        return try await UnstoppableTimeoutRace.run(timeoutSeconds: effectiveTimeout, timeoutError: timeoutError) {
+            guard lease.isValid else { throw CancellationError() }
             var columnMetas: [ColumnMeta] = []
             var rawRows: [[BerryValue]] = []
-            guard lease.isValid else { return .denied }
             // Same double-gate as drainSample below: `gate.approve` above
             // already classified and confirmed the raw `sql` via the chat
             // card, so QueryService must not re-confirm the wrapped
             // EXPLAIN statement through its own blocking native alert.
             for try await event in QueryService.execute(explainSQL, on: session, autoLimit: nil, dangerPreconfirmed: true) {
-                guard lease.isValid else { return .denied }
+                try Task.checkCancellation()
+                guard lease.isValid else { throw CancellationError() }
                 switch event {
                 case let .columns(metas): columnMetas = metas
                 case let .rows(batch): rawRows.append(contentsOf: batch)
                 case .complete: break
                 }
             }
-            guard lease.isValid else { return .denied }
+            try Task.checkCancellation()
+            guard lease.isValid else { throw CancellationError() }
             if let plan = ExplainTreeParser.parse(columns: columnMetas, rows: rawRows) {
-                return .ok(Self.json(["plan": Self.planJSON(plan)]))
+                return ["plan": Self.planJSON(plan)]
             }
             // Unrecognized EXPLAIN shape → raw grid, same shape as run_sql.
-            return .ok(Self.json([
+            return [
                 "columns": columnMetas.map(\.name),
                 "rows": rawRows.map { $0.map(Self.jsonValue) },
-            ]))
-        } catch {
-            guard lease.isValid else { return .denied }
-            return .failed(error.localizedDescription)
+            ]
         }
     }
 
@@ -1074,48 +1213,28 @@ public final class QueryToolExecutor: AIToolExecutor {
             effectiveTimeout = Double(aiQueryTimeoutSeconds)
         }
 
-        final class ResultBox: @unchecked Sendable {
-            var payload: [String: Any]?
-        }
-        let box = ResultBox()
-        let queryTask = Task { @MainActor in
+        let timeoutLabel = effectiveTimeout < 1 && effectiveTimeout > 0 ? String(format: "%.1f", effectiveTimeout) : "\(Int(ceil(effectiveTimeout)))"
+        let timeoutError = DriverError.queryFailed(
+            message: "Query timed out after \(timeoutLabel)s — the connection may be stuck; try reconnecting.",
+            code: nil
+        )
+
+        return try await UnstoppableTimeoutRace.run(timeoutSeconds: effectiveTimeout, timeoutError: timeoutError) {
             guard let session = self.session else {
                 if let executeStatement = self.executeStatement {
                     guard lease.isValid else { throw CancellationError() }
                     switch await executeStatement(sql, lease) {
                     case .payload(let payload):
                         guard lease.isValid else { throw CancellationError() }
-                        box.payload = payload
-                        return
+                        return payload
                     case .denied:
                         throw CancellationError()
                     }
                 }
-                box.payload = ["error": "Direct query execution unavailable for this connection"]
-                return
+                return ["error": "Direct query execution unavailable for this connection"]
             }
-            box.payload = try await self.runDatabaseQuery(sql, session: session, lease: lease)
+            return try await self.runDatabaseQuery(sql, session: session, lease: lease)
         }
-
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask { try await queryTask.value }
-            group.addTask {
-                let timeoutNanos = UInt64(effectiveTimeout * 1_000_000_000)
-                try await Task.sleep(nanoseconds: timeoutNanos)
-                let timeoutLabel = effectiveTimeout < 1 && effectiveTimeout > 0 ? String(format: "%.1f", effectiveTimeout) : "\(Int(ceil(effectiveTimeout)))"
-                throw DriverError.queryFailed(
-                    message: "Query timed out after \(timeoutLabel)s — the connection may be stuck; try reconnecting.",
-                    code: nil
-                )
-            }
-            defer {
-                group.cancelAll()
-                queryTask.cancel()
-            }
-            try await group.next()
-        }
-        guard let payload = box.payload else { throw CancellationError() }
-        return payload
     }
 
     /// `approve(_:)` already gated this exact statement through the chat's

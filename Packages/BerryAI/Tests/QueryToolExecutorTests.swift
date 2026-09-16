@@ -842,6 +842,71 @@ struct QueryToolExecutorTests {
         #expect(gate.asked.count == 1)
     }
 
+    @Test func drainSampleTimesOutPromptlyEvenWhenQueryIgnoresCancellation() async throws {
+        final class HungContinuationHolder: @unchecked Sendable {
+            var cont: CheckedContinuation<Void, Never>?
+        }
+        let holder = HungContinuationHolder()
+        defer {
+            holder.cont?.resume()
+        }
+
+        let executor = QueryToolExecutor(
+            gate: ScriptedGate(true),
+            onPropose: { _, _ in },
+            executeStatement: { _, _ in
+                // Simulates a stuck thread/socket that completely ignores cancellation
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    holder.cont = continuation
+                }
+                return .payload([:])
+            },
+            queryTimeoutSeconds: 0
+        )
+
+        let start = Date()
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "run_sql", args: ["sql": "SELECT 1"]))
+        let elapsed = Date().timeIntervalSince(start)
+
+        #expect(outcome.status == "error")
+        #expect(outcome.resultJSON?.contains("timed out") == true)
+        #expect(elapsed < 1.0)
+    }
+
+    @Test func explainQueryStopsWhenExecutionDeadlineExpires() async throws {
+        let session = try await makeSession()
+        let executor = QueryToolExecutor(
+            session: session,
+            catalog: SchemaCatalog(session: session),
+            gate: ScriptedGate(true),
+            onPropose: { _, _ in },
+            activeTabStatements: { _ in ["SELECT id FROM t"] },
+            executionDeadlineSeconds: 0
+        )
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "explain_query", args: [:]))
+
+        #expect(outcome.status == "error")
+        #expect(outcome.resultJSON?.contains("deadline") == true)
+    }
+
+    @Test func explainQueryTimesOutWhenExecutionExceedsRemainingBudget() async throws {
+        let session = try await makeSession()
+        let executor = QueryToolExecutor(
+            session: session,
+            catalog: SchemaCatalog(session: session),
+            gate: ScriptedGate(true),
+            onPropose: { _, _ in },
+            activeTabStatements: { _ in ["SELECT id FROM t"] },
+            queryTimeoutSeconds: 0
+        )
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "explain_query", args: [:]))
+
+        #expect(outcome.status == "error")
+        #expect(outcome.resultJSON?.contains("timed out") == true)
+    }
+
     @Test func advertisesAllSqlAndTabTools() async throws {
         let session = try await makeSession()
         let executor = makeExecutor(session: session, gate: ScriptedGate(false))
