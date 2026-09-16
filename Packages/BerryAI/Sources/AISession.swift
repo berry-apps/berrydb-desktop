@@ -3443,11 +3443,14 @@ public final class AISession {
         }
     }
 
-    private static func describe(_ error: Error) -> String {
+    static func describe(_ error: Error) -> String {
         if let transport = error as? AITransportError {
             switch transport {
             case let .badResponse(code, message):
                 if let message, !message.isEmpty {
+                    if message.contains("control_token_expired") || message.contains("control_token_unknown") {
+                        return "The tool execution timed out on the AI Server (exceeded time limit). Please ask again to retry."
+                    }
                     return "AI Server error (HTTP \(code)): \(message)"
                 }
                 return "AI Server returned an unexpected status (HTTP \(code))."

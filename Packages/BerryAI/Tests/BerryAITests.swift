@@ -5851,3 +5851,44 @@ private func makeSessionWithConfirmedReport(
     #expect(session.requiresClientUpdate)
     #expect(session.lastError != nil)
 }
+
+@MainActor
+@Test func describeTranslatesToolResultRejectedControlTokenExpiredOrUnknown() {
+    // 1. When server returns {"code":"tool_result_rejected","reason":"control_token_unknown"}
+    let unknownError = AITransportError.badResponse(
+        statusCode: 400,
+        message: "{\"code\":\"tool_result_rejected\",\"reason\":\"control_token_unknown\"}"
+    )
+    let unknownDesc = AISession.describe(unknownError)
+    #expect(!unknownDesc.contains("{\"code\":"))
+    #expect(unknownDesc.contains("timed out") || unknownDesc.contains("expired"))
+
+    // 2. When server returns {"code":"tool_result_rejected","reason":"control_token_expired"}
+    let expiredError = AITransportError.badResponse(
+        statusCode: 400,
+        message: "{\"code\":\"tool_result_rejected\",\"reason\":\"control_token_expired\"}"
+    )
+    let expiredDesc = AISession.describe(expiredError)
+    #expect(!expiredDesc.contains("{\"code\":"))
+    #expect(expiredDesc.contains("timed out") || expiredDesc.contains("expired"))
+}
+
+@Test func parseErrorMessageTranslatesStructuredControlErrors() {
+    let unknownJson = Data("{\"code\":\"tool_result_rejected\",\"reason\":\"control_token_unknown\"}".utf8)
+    let unknownMsg = AIClient.parseErrorMessage(from: unknownJson)
+    #expect(unknownMsg == "The tool execution timed out or its authorization expired on the server. Please retry with a new turn.")
+
+    let expiredJson = Data("{\"code\":\"tool_result_rejected\",\"reason\":\"control_token_expired\"}".utf8)
+    let expiredMsg = AIClient.parseErrorMessage(from: expiredJson)
+    #expect(expiredMsg == "The tool execution timed out or its authorization expired on the server. Please retry with a new turn.")
+
+    let otherRejected = Data("{\"code\":\"tool_result_rejected\",\"reason\":\"signature_invalid\"}".utf8)
+    let otherRejectedMsg = AIClient.parseErrorMessage(from: otherRejected)
+    #expect(otherRejectedMsg == "Tool result was rejected by server: signature_invalid.")
+
+    let genericStructured = Data("{\"code\":\"rate_limit_exceeded\",\"reason\":\"quota_depleted\"}".utf8)
+    let genericStructuredMsg = AIClient.parseErrorMessage(from: genericStructured)
+    #expect(genericStructuredMsg == "rate_limit_exceeded: quota_depleted")
+}
+
+
