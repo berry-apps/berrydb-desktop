@@ -744,6 +744,70 @@ struct QueryToolExecutorTests {
         #expect(stmts.first?["error"] as? String == "Execution stopped: tool deadline (110s) exceeded")
     }
 
+    @Test func runTabStatementsStopsEarlyWhenCumulativeExecutionExceedsBudget() async throws {
+        final class DelayOnSecondStatementGate: AIApprovalGate {
+            var count = 0
+            func approve(sql: String, danger: DangerLevel, autoApprovable: Bool) async -> Bool {
+                count += 1
+                if count == 2 {
+                    try? await Task.sleep(nanoseconds: 60_000_000) // 60ms
+                }
+                return true
+            }
+        }
+        let gate = DelayOnSecondStatementGate()
+        let executor = QueryToolExecutor(
+            gate: gate,
+            options: .init(autoApproveSelects: false),
+            onPropose: { _, _ in },
+            activeTabStatements: { _ in ["SELECT 1", "SELECT 2"] },
+            executeStatement: { sql, lease in
+                if sql == "SELECT 1" {
+                    try? await Task.sleep(nanoseconds: 20_000_000) // 20ms
+                }
+                return .payload(["rows": []])
+            },
+            executionDeadlineSeconds: 0.05 // 50ms budget
+        )
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "run_tab_statements", args: ["which": "all"]))
+
+        #expect(outcome.status == "ok")
+        let obj = decode(outcome)
+        #expect(obj["stopped_early"] as? Bool == true)
+        let stmts = obj["statements"] as? [[String: Any]] ?? []
+        #expect(stmts.count == 2)
+        #expect(stmts[0]["sql"] as? String == "SELECT 1")
+        #expect(stmts[1]["sql"] as? String == "SELECT 2")
+        #expect((stmts[1]["error"] as? String)?.contains("deadline") == true)
+    }
+
+    @Test func runTabStatementsQueryTimesOutWhenRemainingBudgetIsExceeded() async throws {
+        let executor = QueryToolExecutor(
+            gate: ScriptedGate(true),
+            onPropose: { _, _ in },
+            activeTabStatements: { _ in ["SELECT 1", "SELECT 2"] },
+            executeStatement: { sql, lease in
+                if sql == "SELECT 2" {
+                    try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+                }
+                return .payload(["rows": []])
+            },
+            executionDeadlineSeconds: 0.08 // 80ms budget
+        )
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "run_tab_statements", args: ["which": "all"]))
+
+        #expect(outcome.status == "ok")
+        let obj = decode(outcome)
+        #expect(obj["stopped_early"] as? Bool == true)
+        let stmts = obj["statements"] as? [[String: Any]] ?? []
+        #expect(stmts.count == 2)
+        #expect(stmts[0]["sql"] as? String == "SELECT 1")
+        #expect(stmts[1]["sql"] as? String == "SELECT 2")
+        #expect((stmts[1]["error"] as? String)?.contains("timed out") == true)
+    }
+
     @Test func explainQueryReturnsPlanTree() async throws {
         let session = try await makeSession()
         let executor = QueryToolExecutor(
