@@ -223,7 +223,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         linkArtifact: @escaping (String, UUID) -> Void = { _, _ in },
         /// Test-only override for `aiQueryTimeoutSeconds`'s default — a real
         /// 90s wait isn't practical in a test.
-        queryTimeoutSeconds: UInt64 = 90,
+        queryTimeoutSeconds: TimeInterval = 90,
         executionDeadlineSeconds: TimeInterval? = 110
     ) {
         self.session = session
@@ -697,10 +697,12 @@ public final class QueryToolExecutor: AIToolExecutor {
             return .failed("No statement under the cursor to explain")
         }
         let danger = DangerGuard.classify(sql, isProduction: session.isProduction)
- // Same reasoning as `approve(_:)` above: a `.typedConfirm`
+        // Same reasoning as `approve(_:)` above: a `.typedConfirm`
         // can't be satisfied by the chat's Deny/Run-only card, and letting
         // it through to QueryService's `dangerPreconfirmed: true` call below
         // would surface a second, invisible, blocking NSAlert instead.
+        if case .typedConfirm = danger { return .denied }
+
         let startTime = Date()
         let maxDuration = executionDeadlineSeconds
         let durationLabel = (maxDuration ?? 110) > 0 ? "\(Int(maxDuration ?? 110))s" : "110s"
@@ -729,14 +731,14 @@ public final class QueryToolExecutor: AIToolExecutor {
         }
     }
 
-    private final class ResultBox: @unchecked Sendable {
+    final class ResultBox: @unchecked Sendable {
         var payload: [String: Any]?
         init(_ payload: [String: Any]? = nil) { self.payload = payload }
     }
 
     /// Races an async operation against a timeout without blocking the caller on
     /// cancellation when child tasks are stuck on wedged sockets or non-cooperative loops.
-    private final class UnstoppableTimeoutRace: @unchecked Sendable {
+    final class UnstoppableTimeoutRace: @unchecked Sendable {
         private let lock = NSLock()
         private var isResolved = false
         private var continuation: CheckedContinuation<ResultBox, any Error>?
@@ -748,35 +750,18 @@ public final class QueryToolExecutor: AIToolExecutor {
             timeoutError: any Error,
             work: @escaping @MainActor () async throws -> [String: Any]
         ) async throws -> [String: Any] {
+            try Task.checkCancellation()
+
             let raceBox = RaceHolder()
             let box = try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ResultBox, any Error>) in
                     let race = UnstoppableTimeoutRace(continuation: continuation)
-                    raceBox.race = race
-
-                    race.lock.lock()
-                    let workTask = Task { @MainActor in
-                        do {
-                            let result = try await work()
-                            race.resolve(with: .success(ResultBox(result)))
-                        } catch {
-                            race.resolve(with: .failure(error))
-                        }
+                    let shouldStart = raceBox.setRace(race)
+                    guard shouldStart else {
+                        race.cancel()
+                        return
                     }
-                    race.workTask = workTask
-
-                    let timeoutTask = Task {
-                        let nanos = UInt64(max(0, timeoutSeconds) * 1_000_000_000)
-                        do {
-                            try await Task.sleep(nanoseconds: nanos)
-                        } catch {
-                            return
-                        }
-                        workTask.cancel()
-                        race.resolve(with: .failure(timeoutError))
-                    }
-                    race.timeoutTask = timeoutTask
-                    race.lock.unlock()
+                    race.start(timeoutSeconds: timeoutSeconds, timeoutError: timeoutError, work: work)
                 }
             } onCancel: {
                 raceBox.cancel()
@@ -785,12 +770,46 @@ public final class QueryToolExecutor: AIToolExecutor {
             return payload
         }
 
-        private init(continuation: CheckedContinuation<ResultBox, any Error>) {
+        init(continuation: CheckedContinuation<ResultBox, any Error>) {
             self.continuation = continuation
         }
 
         func cancel() {
             resolve(with: .failure(CancellationError()))
+        }
+
+        func start(
+            timeoutSeconds: TimeInterval,
+            timeoutError: any Error,
+            work: @escaping @MainActor () async throws -> [String: Any]
+        ) {
+            lock.lock()
+            guard !isResolved else {
+                lock.unlock()
+                return
+            }
+            let workTask = Task { @MainActor in
+                do {
+                    let result = try await work()
+                    self.resolve(with: .success(ResultBox(result)))
+                } catch {
+                    self.resolve(with: .failure(error))
+                }
+            }
+            self.workTask = workTask
+
+            let timeoutTask = Task {
+                let nanos = UInt64(max(0, timeoutSeconds) * 1_000_000_000)
+                do {
+                    try await Task.sleep(nanoseconds: nanos)
+                } catch {
+                    return
+                }
+                workTask.cancel()
+                self.resolve(with: .failure(timeoutError))
+            }
+            self.timeoutTask = timeoutTask
+            lock.unlock()
         }
 
         private func resolve(with result: Result<ResultBox, any Error>) {
@@ -814,15 +833,26 @@ public final class QueryToolExecutor: AIToolExecutor {
         }
     }
 
-    private final class RaceHolder: @unchecked Sendable {
+    final class RaceHolder: @unchecked Sendable {
         private let lock = NSLock()
         private var _race: UnstoppableTimeoutRace?
-        var race: UnstoppableTimeoutRace? {
-            get { lock.withLock { _race } }
-            set { lock.withLock { _race = newValue } }
+        private var _isCancelled = false
+
+        func setRace(_ race: UnstoppableTimeoutRace) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            if _isCancelled {
+                return false
+            }
+            _race = race
+            return true
         }
+
         func cancel() {
-            let r = lock.withLock { _race }
+            lock.lock()
+            _isCancelled = true
+            let r = _race
+            lock.unlock()
             r?.cancel()
         }
     }
@@ -836,9 +866,9 @@ public final class QueryToolExecutor: AIToolExecutor {
         guard lease.isValid else { throw CancellationError() }
         let effectiveTimeout: TimeInterval
         if let timeoutOverrideSeconds {
-            effectiveTimeout = min(Double(aiQueryTimeoutSeconds), max(0, timeoutOverrideSeconds))
+            effectiveTimeout = min(aiQueryTimeoutSeconds, max(0, timeoutOverrideSeconds))
         } else {
-            effectiveTimeout = Double(aiQueryTimeoutSeconds)
+            effectiveTimeout = aiQueryTimeoutSeconds
         }
 
         let timeoutLabel = effectiveTimeout < 1 && effectiveTimeout > 0 ? String(format: "%.1f", effectiveTimeout) : "\(Int(ceil(effectiveTimeout)))"
@@ -1195,7 +1225,7 @@ public final class QueryToolExecutor: AIToolExecutor {
     /// (`PostgresDriverConnection.swift`), so cancelling the losing side of
     /// this race tears the stuck query down properly instead of just
     /// abandoning it.
-    private let aiQueryTimeoutSeconds: UInt64
+    private let aiQueryTimeoutSeconds: TimeInterval
 
     /// Drains a statement through the single SQL path (N1) into a bounded result
     /// payload. Keeps reading past the cap so history records a clean success;
@@ -1208,9 +1238,9 @@ public final class QueryToolExecutor: AIToolExecutor {
         guard lease.isValid else { throw CancellationError() }
         let effectiveTimeout: TimeInterval
         if let timeoutOverrideSeconds {
-            effectiveTimeout = min(Double(aiQueryTimeoutSeconds), max(0, timeoutOverrideSeconds))
+            effectiveTimeout = min(aiQueryTimeoutSeconds, max(0, timeoutOverrideSeconds))
         } else {
-            effectiveTimeout = Double(aiQueryTimeoutSeconds)
+            effectiveTimeout = aiQueryTimeoutSeconds
         }
 
         let timeoutLabel = effectiveTimeout < 1 && effectiveTimeout > 0 ? String(format: "%.1f", effectiveTimeout) : "\(Int(ceil(effectiveTimeout)))"
