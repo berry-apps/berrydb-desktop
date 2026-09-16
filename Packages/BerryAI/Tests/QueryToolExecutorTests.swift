@@ -723,6 +723,27 @@ struct QueryToolExecutorTests {
         #expect(outcome.status == "error")
     }
 
+    @Test func runTabStatementsStopsEarlyWhenDeadlineExpires() async throws {
+        let session = try await makeSession()
+        let executor = QueryToolExecutor(
+            session: session,
+            catalog: SchemaCatalog(session: session),
+            gate: ScriptedGate(true),
+            onPropose: { _, _ in },
+            activeTabStatements: { _ in ["SELECT id FROM t ORDER BY id", "SELECT name FROM t"] },
+            executionDeadlineSeconds: 0
+        )
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "run_tab_statements", args: ["which": "all"]))
+
+        #expect(outcome.status == "ok")
+        let obj = decode(outcome)
+        #expect(obj["stopped_early"] as? Bool == true)
+        let stmts = obj["statements"] as? [[String: Any]] ?? []
+        #expect(stmts.count == 1)
+        #expect(stmts.first?["error"] as? String == "Execution stopped: tool deadline (110s) exceeded")
+    }
+
     @Test func explainQueryReturnsPlanTree() async throws {
         let session = try await makeSession()
         let executor = QueryToolExecutor(

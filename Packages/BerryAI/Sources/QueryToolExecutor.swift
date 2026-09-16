@@ -195,6 +195,8 @@ public final class QueryToolExecutor: AIToolExecutor {
     /// fetches of an unchanged schema all produce the same digest).
     private(set) var overviewFetchCount = 0
 
+    private let executionDeadlineSeconds: TimeInterval?
+
     public init(
         session: Session? = nil,
         catalog: SchemaCatalog? = nil,
@@ -214,7 +216,8 @@ public final class QueryToolExecutor: AIToolExecutor {
         linkArtifact: @escaping (String, UUID) -> Void = { _, _ in },
         /// Test-only override for `aiQueryTimeoutSeconds`'s default — a real
         /// 90s wait isn't practical in a test.
-        queryTimeoutSeconds: UInt64 = 90
+        queryTimeoutSeconds: UInt64 = 90,
+        executionDeadlineSeconds: TimeInterval? = 110
     ) {
         self.session = session
         self.catalog = catalog
@@ -233,6 +236,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         self.executeStatement = executeStatement
         self.listCollections = listCollections
         self.aiQueryTimeoutSeconds = queryTimeoutSeconds
+        self.executionDeadlineSeconds = executionDeadlineSeconds
     }
 
  /// The tools this executor advertises to the gateway.
@@ -620,8 +624,19 @@ public final class QueryToolExecutor: AIToolExecutor {
         }
         var results: [[String: Any]] = []
         var stoppedEarly = false
+        let startTime = Date()
         for sql in statements {
+            if let maxDuration = executionDeadlineSeconds, Date().timeIntervalSince(startTime) >= maxDuration {
+                stoppedEarly = true
+                results.append(["sql": sql, "error": "Execution stopped: tool deadline (110s) exceeded"])
+                break
+            }
             guard await approve(sql) else { stoppedEarly = true; break }
+            if let maxDuration = executionDeadlineSeconds, Date().timeIntervalSince(startTime) >= maxDuration {
+                stoppedEarly = true
+                results.append(["sql": sql, "error": "Execution stopped: tool deadline (110s) exceeded"])
+                break
+            }
             guard lease.isValid else { return .denied }
             do {
                 var payload = try await drainSample(sql, lease: lease)

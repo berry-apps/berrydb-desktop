@@ -28,12 +28,31 @@ public final class AIPanelController {
         case ready
     }
 
- /// A statement the agent wants to run, awaiting the user's decision.
+     /// A statement the agent wants to run, awaiting the user's decision.
     public struct PendingApproval: Identifiable, Equatable {
-        public let id = UUID()
+        public let id: UUID
         public let sql: String
         public let danger: DangerLevel
+        public let createdAt: Date
+        public let timeoutSeconds: TimeInterval
         public var isDangerous: Bool { danger != .safe }
+        public var isExpired: Bool {
+            Date().timeIntervalSince(createdAt) >= timeoutSeconds
+        }
+
+        public init(
+            id: UUID = UUID(),
+            sql: String,
+            danger: DangerLevel,
+            createdAt: Date = Date(),
+            timeoutSeconds: TimeInterval = 110
+        ) {
+            self.id = id
+            self.sql = sql
+            self.danger = danger
+            self.createdAt = createdAt
+            self.timeoutSeconds = timeoutSeconds
+        }
     }
 
  /// An MCP tool call awaiting the user's decision.
@@ -1214,9 +1233,11 @@ public final class AIPanelController {
     /// button, only ever offered on a statement already classified safe —
     /// this still approves that current statement too, not just future ones.
     public func resolveApproval(_ approved: Bool, trustRemainingSafeThisTurn: Bool = false) {
-        if trustRemainingSafeThisTurn { autoApproveSafeThisTurn = true }
+        let isExpired = pendingApproval?.isExpired ?? false
+        if trustRemainingSafeThisTurn && !isExpired { autoApproveSafeThisTurn = true }
+        let effectiveApproved = isExpired ? false : approved
         pendingApproval = nil
-        approvalContinuation?.resume(returning: approved)
+        approvalContinuation?.resume(returning: effectiveApproved)
         approvalContinuation = nil
     }
 
