@@ -151,45 +151,65 @@ struct SidebarSelectionTests {
         #expect(vm.selectionAnchorID == "b")
     }
 
-    // MARK: - Round 4 regressions
+    // MARK: - Round 5 regressions
 
-    /// Finding 1: selection must only contain IDs that are actually rendered.
-    /// When a schema group is collapsed, its objects must not appear in visibleIDs
-    /// regardless of whether there is an active search.
-    @Test func collapsedSchemaObjectsAreExcludedFromVisibleIDsEvenWithSearch() throws {
+    /// Model contract: selectObject only includes IDs present in visibleIDs for Shift ranges.
+    /// Production enforcement happens in currentVisibleObjectIDs (WorkspaceView); this test
+    /// verifies the model layer correctly restricts selection to what's passed as visibleIDs.
+    @Test func selectObjectRespectsBoundaryOfVisibleIDs() throws {
         let vm = try makeViewModel()
+        // Simulates: search active, public expanded (audited collapsed not in list).
+        let visible = ["public.users", "public.items"]
 
-        // Simulate: schema "public" is expanded (in visibleIDs), schema "audit" is collapsed.
-        // objectSearch is non-empty ("items").
-        // Only expanded-schema objects should be selectable.
-        let visibleWhenPublicExpandedAuditCollapsed = ["public.users", "public.items"]
-        let visibleWhenBothCollapsed: [String] = []
+        vm.selectObject(id: "public.users", visibleIDs: visible)
+        vm.selectObject(id: "public.items", isShift: true, visibleIDs: visible)
 
-        vm.selectObject(id: "public.users", isShift: false, isCommand: false,
-                        visibleIDs: visibleWhenPublicExpandedAuditCollapsed)
-        vm.selectObject(id: "public.items", isShift: true, isCommand: false,
-                        visibleIDs: visibleWhenPublicExpandedAuditCollapsed)
-
-        // Only visible IDs selected — collapsed-schema objects absent.
         #expect(vm.selectedObjectIDs == ["public.users", "public.items"])
+        // "audit.items" was never in visibleIDs — model must not add it.
         #expect(!vm.selectedObjectIDs.contains("audit.items"))
 
-        // If both schemas collapse, shift-click on an item with empty visible list falls back to single.
-        vm.selectObject(id: "public.users", isShift: true, isCommand: false,
-                        visibleIDs: visibleWhenBothCollapsed)
+        // Simulates: schemas all collapse, visible becomes empty.
+        // Shift with stale anchor and empty visible falls back to single-selection on tapped ID.
+        vm.selectObject(id: "public.users", isShift: true, visibleIDs: [])
         #expect(vm.selectedObjectIDs == ["public.users"])
     }
 
-    /// Finding 2: Return key must open selectionLeadID, not Set.first.
-    /// After B → Shift+Down → Shift+Down the lead is D; the anchor is B.
-    /// selectionLeadID must be D.
+    /// Return key target resolution: lead must be visible AND selected.
+    /// This tests the model state that WorkspaceView.onKeyPress(.return) reads:
+    ///   - leadID valid → open lead
+    ///   - lead hidden (not in visible) → open first visible-selected
+    ///   - no visible-selected → ignore
+    @Test func returnKeyTargetPrefersLeadWhenVisible() throws {
+        let vm = try makeViewModel()
+        let visible = ["a", "b", "c", "d"]
+
+        // Select b → Shift+Down×2 → lead is d, range is b..d
+        vm.selectObject(id: "b", visibleIDs: visible)
+        vm.selectNextObject(visibleIDs: visible, isShift: true) // lead = c
+        vm.selectNextObject(visibleIDs: visible, isShift: true) // lead = d
+
+        #expect(vm.selectionLeadID == "d")
+        #expect(vm.selectedObjectIDs.contains("d"))
+        #expect(vm.selectedObjectIDs.contains("b"))
+
+        // Simulate: filter hides d (d no longer in currentVisibleObjectIDs).
+        let visibleAfterFilter = ["b", "c"]  // d collapsed/filtered out
+        // Lead (d) is NOT in visibleAfterFilter → Return should open first visible-selected.
+        let firstVisibleSelected = visibleAfterFilter.first(where: { vm.selectedObjectIDs.contains($0) })
+        #expect(firstVisibleSelected == "b")  // b is first visible selected
+
+        // Simulate: all filtered out → no target → Return should ignore.
+        let visibleAllHidden: [String] = []
+        let noTarget = visibleAllHidden.first(where: { vm.selectedObjectIDs.contains($0) })
+        #expect(noTarget == nil)
+    }
+
+    /// After B → Shift+Down×2 the lead is D; the anchor is B.
     @Test func shiftArrowTwiceLeadIsLastArrowTarget() throws {
         let vm = try makeViewModel()
         let visible = ["a", "b", "c", "d"]
 
         vm.selectObject(id: "b", visibleIDs: visible)
-        #expect(vm.selectionLeadID == nil || vm.selectionLeadID == "b")
-
         vm.selectNextObject(visibleIDs: visible, isShift: true) // lead → c
         #expect(vm.selectionLeadID == "c")
         #expect(vm.selectionAnchorID == "b")
@@ -197,9 +217,7 @@ struct SidebarSelectionTests {
         vm.selectNextObject(visibleIDs: visible, isShift: true) // lead → d
         #expect(vm.selectionLeadID == "d")
         #expect(vm.selectionAnchorID == "b")
-        #expect(vm.selectedObjectIDs.contains("d"))
-        // selectedObjectID (Set.first) is NOT guaranteed to be "d":
-        // Confirm lead is distinct from anchor.
+        #expect(vm.selectedObjectIDs == ["b", "c", "d"])
         #expect(vm.selectionLeadID != vm.selectionAnchorID)
     }
 }

@@ -1077,7 +1077,7 @@ public struct WorkspaceView: View {
                                 } else {
                                     ForEach(schemaGroups) { group in
                                         schemaGroupHeader(group)
-                                        if !collapsedGroupKeys.contains("schema:\(group.id)") {
+                                        if !objectSearch.isEmpty || !collapsedGroupKeys.contains("schema:\(group.id)") {
                                             schemaGroupContent(group)
                                                 .padding(.leading, 12)
                                         }
@@ -1112,20 +1112,20 @@ public struct WorkspaceView: View {
                         return .handled
                     }
                     .onKeyPress(.return) {
-                        // Use selectionLeadID (keyboard focus end) when valid and still selected;
-                        // fall back to selectedObjectID (Set.first) for single-selection.
+                        let visible = currentVisibleObjectIDs
+                        // Resolve lead: must be both selected and visible.
                         let leadID = viewModel.selectionLeadID.flatMap {
-                            viewModel.selectedObjectIDs.contains($0) ? $0 : nil
+                            viewModel.selectedObjectIDs.contains($0) && visible.contains($0) ? $0 : nil
                         }
-                        let targetObjectID = leadID ?? viewModel.selectedObjectID
-                        if let selectedID = targetObjectID,
+                        // Fall back to first visible-selected item (not nondeterministic Set.first).
+                        let targetID = leadID ?? visible.first(where: { viewModel.selectedObjectIDs.contains($0) })
+                        if let selectedID = targetID,
                            let object = viewModel.objects.first(where: { $0.id == selectedID }) {
                             open(object)
                             return .handled
                         }
-                        let targetColID = leadID ?? viewModel.selectedCollectionID
-                        if let selectedColID = targetColID,
-                           let col = viewModel.collections.first(where: { $0.id == selectedColID }) {
+                        if let selectedID = targetID,
+                           let col = viewModel.collections.first(where: { $0.id == selectedID }) {
                             viewModel.openCollection(col)
                             return .handled
                         }
@@ -1533,7 +1533,7 @@ public struct WorkspaceView: View {
             } else {
                 for group in schemaGroups {
                     let schemaKey = "schema:\(group.id)"
-                    if !collapsedGroupKeys.contains(schemaKey) {
+                    if !objectSearch.isEmpty || !collapsedGroupKeys.contains(schemaKey) {
                         let tables = filteredObjects(in: group.tables, kind: .table)
                         let views = filteredObjects(in: group.views, kind: .view)
                         let functions = filteredObjects(in: group.functions, kind: .function)
