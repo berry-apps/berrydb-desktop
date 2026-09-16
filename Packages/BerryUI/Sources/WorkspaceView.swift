@@ -952,10 +952,8 @@ public struct WorkspaceView: View {
             Divider()
 
             if sidebarTab == .connections {
-                let _ = print("[DIAG 8] sidebar: rendering connectionList")
                 connectionList
             } else {
-                let _ = print("[DIAG 9] sidebar: rendering objectList")
                 objectList
             }
         }
@@ -971,35 +969,38 @@ public struct WorkspaceView: View {
     }
 
     private var connectionList: some View {
-        List {
-            if viewModel.profiles.isEmpty {
-                Section {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 1) {
+                if viewModel.profiles.isEmpty {
+                    sectionHeader(L("Connections"), paddingTop: 6, onAdd: { connectionSheetTarget = .new })
                     Text(L("No connections yet — press ＋"))
                         .foregroundStyle(.secondary)
                         .font(.callout)
-                } header: {
-                    sectionHeader(L("Connections"), paddingTop: 6)
-                }
-            } else {
-                let firstGroupName = viewModel.connectionGroups.first?.name
-                ForEach(viewModel.connectionGroups, id: \.name) { group in
-                    let key = group.name ?? "__default__"
-                    let isFirst = group.name == firstGroupName
-                    Section(isExpanded: groupExpanded(key)) {
-                        ForEach(group.profiles) { profile in
-                            profileRow(profile)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                } else {
+                    let firstGroupName = viewModel.connectionGroups.first?.name
+                    ForEach(viewModel.connectionGroups, id: \.name) { group in
+                        let key = group.name ?? "__default__"
+                        let isFirst = group.name == firstGroupName
+                        let isExpanded = !collapsedGroupKeys.contains(key)
+                        sectionHeader(
+                            group.name ?? L("Connections"),
+                            binding: groupExpanded(key),
+                            paddingTop: isFirst ? 6 : 4,
+                            onAdd: { connectionSheetTarget = .new }
+                        )
+                        if isExpanded {
+                            ForEach(group.profiles) { profile in
+                                profileRow(profile)
+                            }
                         }
-                        .onMove { source, destination in
-                            viewModel.moveProfiles(group: group.name, from: source, to: destination)
-                        }
-                    } header: {
-                        sectionHeader(group.name ?? L("Connections"), binding: groupExpanded(key), paddingTop: isFirst ? 6 : 0)
                     }
                 }
             }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
         }
-        .listStyle(.sidebar)
-        .controlSize(.small)
     }
 
     private var objectTypeFilterBar: some View {
@@ -1060,145 +1061,171 @@ public struct WorkspaceView: View {
                 VStack(spacing: 0) {
                     if viewModel.session != nil {
                         objectTypeFilterBar
-                    }
-                    List(selection: $viewModel.selectedObjectIDs) {
-                        let _ = print("[DIAG 10] objectList: List evaluating")
-                        if viewModel.session != nil {
-                            if !viewModel.objects.isEmpty {
-                                objectFilterField
-                            }
-                            let hasSchemas = viewModel.session?.capabilities.schemas ?? false
-                            let schemaGroups = SchemaTree.group(objects: viewModel.objects, hasSchemaCapability: hasSchemas)
-                            let _ = print("[DIAG 11] objectList: schemaGroups=\(schemaGroups.count), hasSchemas=\(hasSchemas)")
-                            if schemaGroups.count == 1 && schemaGroups[0].name == nil {
-                                let flat = schemaGroups[0]
-                                if objectTypeFilter == .all || objectTypeFilter == .table {
-                                    let tables = filteredObjects(in: flat.tables, kind: .table)
-                                    Section(isExpanded: expanded(.table)) {
-                                        ForEach(tables) { object in
-                                            objectRow(object, icon: "tablecells")
-                                        }
-                                    } header: {
-                                        sectionHeader(L("Tables (\(tables.count))"), binding: expanded(.table))
-                                    }
-                                }
-                                if objectTypeFilter == .all || objectTypeFilter == .view {
-                                    let views = filteredObjects(in: flat.views, kind: .view)
-                                    if !views.isEmpty || objectTypeFilter == .view {
-                                        Section(isExpanded: expanded(.view)) {
-                                            ForEach(views) { object in
-                                                objectRow(object, icon: "rectangle.on.rectangle")
-                                            }
-                                        } header: {
-                                            sectionHeader(L("Views (\(views.count))"), binding: expanded(.view), onAdd: { createViewTemplate() })
-                                        }
-                                    }
-                                }
-                                if objectTypeFilter == .all || objectTypeFilter == .function {
-                                    let functions = filteredObjects(in: flat.functions, kind: .function)
-                                    if !functions.isEmpty || objectTypeFilter == .function {
-                                        Section(isExpanded: expanded(.function)) {
-                                            ForEach(functions) { object in
-                                                objectRow(object, icon: "function")
-                                            }
-                                        } header: {
-                                            sectionHeader(L("Functions (\(functions.count))"), binding: expanded(.function), onAdd: { createFunctionTemplate() })
-                                        }
-                                    }
-                                    let procedures = filteredObjects(in: flat.procedures, kind: .procedure)
-                                    if !procedures.isEmpty || objectTypeFilter == .function {
-                                        Section(isExpanded: expanded(.procedure)) {
-                                            ForEach(procedures) { object in
-                                                objectRow(object, icon: "gearshape.2")
-                                            }
-                                        } header: {
-                                            sectionHeader(L("Procedures (\(procedures.count))"), binding: expanded(.procedure), onAdd: { createProcedureTemplate() })
-                                        }
-                                    }
-                                }
-                                if objectTypeFilter == .all || objectTypeFilter == .trigger {
-                                    let triggers = filteredObjects(in: flat.triggers, kind: .trigger)
-                                    if !triggers.isEmpty || objectTypeFilter == .trigger {
-                                        Section(isExpanded: expanded(.trigger)) {
-                                            ForEach(triggers) { object in
-                                                objectRow(object, icon: "bolt")
-                                            }
-                                        } header: {
-                                            sectionHeader(L("Triggers (\(triggers.count))"), binding: expanded(.trigger), onAdd: { createTriggerTemplate() })
-                                        }
-                                    }
-                                }
-                            } else {
-                                ForEach(schemaGroups) { group in
-                                    Section(isExpanded: schemaExpanded(group.id)) {
-                                        schemaGroupContent(group)
-                                    } header: {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "folder")
-                                                .font(.system(size: 11))
-                                                .foregroundStyle(.secondary)
-                                            Text(group.name ?? "")
-                                                .font(BerryTheme.Typeface.sidebarSection)
-                                            Spacer()
-                                            Text("(\(group.totalCount))")
-                                                .font(BerryTheme.Typeface.sidebarSection)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                }
-                            }
-                        } else if let dataSourceSession = viewModel.dataSourceSession {
-                            ForEach(DataSourceTree.group(viewModel.collections)) { group in
-                                let key = group.database ?? "__default_ds__"
-                                Section(isExpanded: groupExpanded(key)) {
-                                    ForEach(group.collections) { ref in
-                                        collectionRow(ref, kind: dataSourceSession.kind)
-                                    }
-                                } header: {
-                                    sectionHeader(
-                                        group.database.map { "\($0) (\(group.collections.count))" }
-                                            ?? L("Collections (\(group.collections.count))"),
-                                        binding: groupExpanded(key)
-                                    )
-                                }
-                            }
-                        } else if let keyValueSession = viewModel.keyValueSession {
-                            keyValueSidebarContent(keyValueSession)
+                        if !viewModel.objects.isEmpty {
+                            objectFilterField
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
                         }
                     }
-                    .listStyle(.sidebar)
-                    .controlSize(.small)
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 1) {
+                            if viewModel.session != nil {
+                                let hasSchemas = viewModel.session?.capabilities.schemas ?? false
+                                let schemaGroups = SchemaTree.group(objects: viewModel.objects, hasSchemaCapability: hasSchemas)
+                                if schemaGroups.count == 1 && schemaGroups[0].name == nil {
+                                    flatSchemaContent(schemaGroups[0])
+                                } else {
+                                    ForEach(schemaGroups) { group in
+                                        schemaGroupHeader(group)
+                                        if !collapsedGroupKeys.contains("schema:\(group.id)") {
+                                            schemaGroupContent(group)
+                                                .padding(.leading, 12)
+                                        }
+                                    }
+                                }
+                            } else if let dataSourceSession = viewModel.dataSourceSession {
+                                dataSourceContent(dataSourceSession)
+                            } else if let keyValueSession = viewModel.keyValueSession {
+                                keyValueSidebarContent(keyValueSession)
+                            }
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 4)
+                    }
                 }
             }
         }
     }
 
-    /// Redis has no table/collection hierarchy, so unlike `session`/
-    /// `dataSourceSession` this isn't a tree — a small connection-info card
-    /// instead of the SQL/Mongo object list. Before this, a key-value-only
-    /// session fell through to the generic "No Active Connection" empty
-    /// state (`objectList`'s old top-level condition ignored
-    /// `keyValueSession` entirely) even though a connection genuinely was
-    /// active — key browsing itself lives in `KeyValueBrowserView`'s own
-    /// SCAN/pattern search in the main panel, not duplicated here.
+    @ViewBuilder
+    private func flatSchemaContent(_ flat: SchemaTreeGroup) -> some View {
+        let tables = filteredObjects(in: flat.tables, kind: .table)
+        let views = filteredObjects(in: flat.views, kind: .view)
+        let functions = filteredObjects(in: flat.functions, kind: .function)
+        let procedures = filteredObjects(in: flat.procedures, kind: .procedure)
+        let triggers = filteredObjects(in: flat.triggers, kind: .trigger)
+
+        if objectTypeFilter == .all || objectTypeFilter == .table {
+            sectionHeader(L("Tables (\(tables.count))"), binding: expanded(.table))
+            if expanded(.table).wrappedValue {
+                ForEach(tables) { object in
+                    objectRow(object, icon: "tablecells")
+                }
+            }
+        }
+        if objectTypeFilter == .all || objectTypeFilter == .view {
+            if !views.isEmpty || objectTypeFilter == .view {
+                sectionHeader(L("Views (\(views.count))"), binding: expanded(.view), onAdd: { createViewTemplate() })
+                if expanded(.view).wrappedValue {
+                    ForEach(views) { object in
+                        objectRow(object, icon: "rectangle.on.rectangle")
+                    }
+                }
+            }
+        }
+        if objectTypeFilter == .all || objectTypeFilter == .function {
+            if !functions.isEmpty || objectTypeFilter == .function {
+                sectionHeader(L("Functions (\(functions.count))"), binding: expanded(.function), onAdd: { createFunctionTemplate() })
+                if expanded(.function).wrappedValue {
+                    ForEach(functions) { object in
+                        objectRow(object, icon: "function")
+                    }
+                }
+            }
+            if !procedures.isEmpty || objectTypeFilter == .function {
+                sectionHeader(L("Procedures (\(procedures.count))"), binding: expanded(.procedure), onAdd: { createProcedureTemplate() })
+                if expanded(.procedure).wrappedValue {
+                    ForEach(procedures) { object in
+                        objectRow(object, icon: "gearshape.2")
+                    }
+                }
+            }
+        }
+        if objectTypeFilter == .all || objectTypeFilter == .trigger {
+            if !triggers.isEmpty || objectTypeFilter == .trigger {
+                sectionHeader(L("Triggers (\(triggers.count))"), binding: expanded(.trigger), onAdd: { createTriggerTemplate() })
+                if expanded(.trigger).wrappedValue {
+                    ForEach(triggers) { object in
+                        objectRow(object, icon: "bolt")
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func dataSourceContent(_ dataSourceSession: DataSourceSession) -> some View {
+        ForEach(DataSourceTree.group(viewModel.collections)) { group in
+            let key = group.database ?? "__default_ds__"
+            let isExpanded = groupExpanded(key).wrappedValue
+            sectionHeader(
+                group.database.map { "\($0) (\(group.collections.count))" }
+                    ?? L("Collections (\(group.collections.count))"),
+                binding: groupExpanded(key)
+            )
+            if isExpanded {
+                ForEach(group.collections) { ref in
+                    collectionRow(ref, kind: dataSourceSession.kind)
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private func keyValueSidebarContent(_ session: KeyValueSession) -> some View {
-        Section {
-            LabeledContent(L("Driver"), value: session.driverDisplayName)
+        VStack(alignment: .leading, spacing: 6) {
+            sectionHeader(session.displayName, paddingTop: 6)
+            HStack {
+                Text(L("Driver"))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(session.driverDisplayName)
+            }
+            .font(BerryTheme.Typeface.sidebarRow)
+            .padding(.horizontal, 8)
             if session.isProduction {
                 Label(L("Production"), systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
+                    .padding(.horizontal, 8)
             }
-        } header: {
-            sectionHeader(session.displayName, paddingTop: 6)
-        }
-        Section {
             Text(L("Redis has no table/collection tree — browse and search keys directly in the main panel (Scan)."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 8)
+                .padding(.top, 4)
         }
+    }
+
+    private func schemaGroupHeader(_ group: SchemaTreeGroup) -> some View {
+        let isExpanded = schemaExpanded(group.id).wrappedValue
+        return HStack(spacing: 4) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    schemaExpanded(group.id).wrappedValue.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                    Image(systemName: "folder")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Text(group.name ?? "")
+                        .font(BerryTheme.Typeface.sidebarSection)
+                    Spacer()
+                    Text("(\(group.totalCount))")
+                        .font(BerryTheme.Typeface.sidebarSection)
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 3)
     }
 
     private func groupExpanded(_ key: String) -> Binding<Bool> {
@@ -1216,11 +1243,31 @@ public struct WorkspaceView: View {
         paddingTop: CGFloat = 0,
         onAdd: (() -> Void)? = nil
     ) -> some View {
-        HStack {
-            Text(title)
-                .font(BerryTheme.Typeface.sidebarSection)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 0)
+        HStack(spacing: 4) {
+            if let binding {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        binding.wrappedValue.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: binding.wrappedValue ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                        Text(title)
+                            .font(BerryTheme.Typeface.sidebarSection)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text(title)
+                    .font(BerryTheme.Typeface.sidebarSection)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
             if let onAdd {
                 Button {
                     onAdd()
@@ -1234,12 +1281,8 @@ public struct WorkspaceView: View {
             }
         }
         .padding(.top, paddingTop)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            DispatchQueue.main.async {
-                binding?.wrappedValue.toggle()
-            }
-        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 3)
     }
 
  /// Inline filter over the table/view lists.
@@ -1294,75 +1337,114 @@ public struct WorkspaceView: View {
         )
     }
 
+    private func isKindExpanded(_ kind: SchemaObjectKind) -> Bool {
+        !objectSearch.isEmpty || !collapsedKinds.contains(kind)
+    }
+
+    private func subgroupHeader(_ title: String, kind: SchemaObjectKind, onAdd: (() -> Void)? = nil) -> some View {
+        HStack(spacing: 4) {
+            Button {
+                DispatchQueue.main.async {
+                    if collapsedKinds.contains(kind) {
+                        collapsedKinds.remove(kind)
+                    } else {
+                        collapsedKinds.insert(kind)
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: isKindExpanded(kind) ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                    Text(title)
+                        .font(BerryTheme.Typeface.sidebarSection)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if let onAdd {
+                Button {
+                    onAdd()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(L("New"))
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+    }
+
     @ViewBuilder
     private func schemaGroupContent(_ group: SchemaTreeGroup) -> some View {
-        let _ = print("[DIAG 12] schemaGroupContent for group: \(group.name ?? "nil"), tables: \(group.tables.count)")
         let tables = filteredObjects(in: group.tables, kind: .table)
         let views = filteredObjects(in: group.views, kind: .view)
         let functions = filteredObjects(in: group.functions, kind: .function)
         let procedures = filteredObjects(in: group.procedures, kind: .procedure)
         let triggers = filteredObjects(in: group.triggers, kind: .trigger)
+        let hasMultipleKinds = [!tables.isEmpty, !views.isEmpty, !functions.isEmpty, !procedures.isEmpty, !triggers.isEmpty].filter { $0 }.count > 1
 
         if objectTypeFilter == .all || objectTypeFilter == .table {
             if !tables.isEmpty {
-                DisclosureGroup(isExpanded: expanded(.table)) {
+                if hasMultipleKinds && objectTypeFilter == .all {
+                    subgroupHeader(L("Tables (\(tables.count))"), kind: .table)
+                }
+                if isKindExpanded(.table) || objectTypeFilter == .table {
                     ForEach(tables) { object in
                         objectRow(object, icon: "tablecells")
                     }
-                } label: {
-                    Text(L("Tables (\(tables.count))"))
-                        .font(BerryTheme.Typeface.sidebarSection)
-                        .foregroundStyle(.secondary)
                 }
             }
         }
         if objectTypeFilter == .all || objectTypeFilter == .view {
             if !views.isEmpty || objectTypeFilter == .view {
-                DisclosureGroup(isExpanded: expanded(.view)) {
+                if hasMultipleKinds && objectTypeFilter == .all {
+                    subgroupHeader(L("Views (\(views.count))"), kind: .view, onAdd: { createViewTemplate() })
+                }
+                if isKindExpanded(.view) || objectTypeFilter == .view {
                     ForEach(views) { object in
                         objectRow(object, icon: "rectangle.on.rectangle")
                     }
-                } label: {
-                    Text(L("Views (\(views.count))"))
-                        .font(BerryTheme.Typeface.sidebarSection)
-                        .foregroundStyle(.secondary)
                 }
             }
         }
         if objectTypeFilter == .all || objectTypeFilter == .function {
             if !functions.isEmpty || objectTypeFilter == .function {
-                DisclosureGroup(isExpanded: expanded(.function)) {
+                if hasMultipleKinds && objectTypeFilter == .all {
+                    subgroupHeader(L("Functions (\(functions.count))"), kind: .function, onAdd: { createFunctionTemplate() })
+                }
+                if isKindExpanded(.function) || objectTypeFilter == .function {
                     ForEach(functions) { object in
                         objectRow(object, icon: "function")
                     }
-                } label: {
-                    Text(L("Functions (\(functions.count))"))
-                        .font(BerryTheme.Typeface.sidebarSection)
-                        .foregroundStyle(.secondary)
                 }
             }
             if !procedures.isEmpty || objectTypeFilter == .function {
-                DisclosureGroup(isExpanded: expanded(.procedure)) {
+                if hasMultipleKinds && objectTypeFilter == .all {
+                    subgroupHeader(L("Procedures (\(procedures.count))"), kind: .procedure, onAdd: { createProcedureTemplate() })
+                }
+                if isKindExpanded(.procedure) || objectTypeFilter == .function {
                     ForEach(procedures) { object in
                         objectRow(object, icon: "gearshape.2")
                     }
-                } label: {
-                    Text(L("Procedures (\(procedures.count))"))
-                        .font(BerryTheme.Typeface.sidebarSection)
-                        .foregroundStyle(.secondary)
                 }
             }
         }
         if objectTypeFilter == .all || objectTypeFilter == .trigger {
             if !triggers.isEmpty || objectTypeFilter == .trigger {
-                DisclosureGroup(isExpanded: expanded(.trigger)) {
+                if hasMultipleKinds && objectTypeFilter == .all {
+                    subgroupHeader(L("Triggers (\(triggers.count))"), kind: .trigger, onAdd: { createTriggerTemplate() })
+                }
+                if isKindExpanded(.trigger) || objectTypeFilter == .trigger {
                     ForEach(triggers) { object in
                         objectRow(object, icon: "bolt")
                     }
-                } label: {
-                    Text(L("Triggers (\(triggers.count))"))
-                        .font(BerryTheme.Typeface.sidebarSection)
-                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -1384,13 +1466,15 @@ public struct WorkspaceView: View {
     }
 
     private func profileRow(_ profile: ConnectionProfile) -> some View {
-        HStack(spacing: 6) {
+        let isSelected = viewModel.activeProfileID == profile.id
+        return HStack(spacing: 6) {
             Image(systemName: profile.driver == .sqlite ? "internaldrive" : "cylinder.split.1x2")
-                .foregroundStyle(viewModel.activeProfileID == profile.id ? .green : .secondary)
+                .foregroundStyle(isSelected ? .green : .secondary)
                 .font(.system(size: 12))
+                .frame(width: 18)
             Text(profile.name)
                 .font(BerryTheme.Typeface.sidebarRow)
-                .fontWeight(viewModel.activeProfileID == profile.id ? .semibold : .regular)
+                .fontWeight(isSelected ? .semibold : .regular)
             Spacer()
             if profile.envColor == "production" {
                 ProductionBadge()
@@ -1399,16 +1483,12 @@ public struct WorkspaceView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
-            print("[DIAG 1] profileRow onTapGesture(count: 2) for: \(profile.name)")
             DispatchQueue.main.async {
-                print("[DIAG 2] profileRow async block: calling beginConnect")
-                guard viewModel.beginConnect() else {
-                    print("[DIAG 2b] beginConnect returned false")
-                    return
-                }
-                print("[DIAG 3] spawning connect Task")
+                guard viewModel.beginConnect() else { return }
                 Task { await connect(profile) }
             }
         }
@@ -1431,46 +1511,39 @@ public struct WorkspaceView: View {
     }
 
     private func objectRow(_ object: SchemaObject, icon: String) -> some View {
- // Whole-row hit target (the <li>/<a> split): the List row
-        // itself (<li>) carries no padding and no gesture — it just wraps
-        // tightly around this content. ALL padding, sizing, and events
-        // (contentShape/onTapGesture/tag) live on the content (<a>) below,
-        // so there's no second box with its own geometry to fall out of sync
-        // with. Do not add .listRowInsets/.listRowBackground etc. here.
-        HStack(spacing: 6) {
+        let isSelected = viewModel.selectedObjectIDs.contains(object.id)
+        return HStack(spacing: 6) {
             Image(systemName: icon)
- .font(.system(size: 13, weight: .medium)) // SF Symbols 13pt medium,
-                .foregroundStyle(.secondary)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                 .frame(width: 18)
- .allowsHitTesting(false) // let every click fall through to the row's own tap gesture
+                .allowsHitTesting(false)
             Text(object.name)
                 .font(BerryTheme.Typeface.sidebarRow)
                 .allowsHitTesting(false)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.vertical, 3)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
         .contentShape(Rectangle())
         .onTapGesture {
             #if os(macOS)
             let flags = NSEvent.modifierFlags
-            if flags.contains(.command) || flags.contains(.shift) {
+            if flags.contains(.command) {
+                if viewModel.selectedObjectIDs.contains(object.id) {
+                    viewModel.selectedObjectIDs.remove(object.id)
+                } else {
+                    viewModel.selectedObjectIDs.insert(object.id)
+                }
                 return
             }
             #endif
-            // The active-row highlight is SwiftUI's native List click-to-select
-            // (via .tag below), which is unreliable when a click lands on the
-            // label's glyph area specifically because of this competing
-            // onTapGesture — open(object) always fired, but the highlight
-            // didn't (#1). Set it explicitly on the next runloop turn to prevent
-            // reentrancy in NSTableView delegate.
-            DispatchQueue.main.async {
-                viewModel.selectedObjectIDs = [object.id]
-                open(object)
-            }
+            viewModel.selectedObjectIDs = [object.id]
+            open(object)
         }
-        .tag(object.id)
         .contextMenu {
             if object.kind.isRelational {
                 Button(L("Open Data")) { viewModel.select(object) }
@@ -1556,36 +1629,39 @@ public struct WorkspaceView: View {
  /// One row in the Mongo/Qdrant collection tree
     /// — the `CollectionRef` sibling of `objectRow`.
     private func collectionRow(_ ref: CollectionRef, kind: DataSourceKind) -> some View {
-        HStack(spacing: 6) {
+        let isSelected = viewModel.selectedObjectIDs.contains(ref.id)
+        return HStack(spacing: 6) {
             Image(systemName: kind == .vector ? "point.3.filled.connected.trianglepath.dotted" : "tray.full")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                 .frame(width: 18)
- .allowsHitTesting(false) // let every click fall through to the row's own tap gesture
+                .allowsHitTesting(false)
             Text(ref.name)
                 .font(BerryTheme.Typeface.sidebarRow)
                 .allowsHitTesting(false)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.vertical, 3)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
         .contentShape(Rectangle())
         .onTapGesture {
             #if os(macOS)
             let flags = NSEvent.modifierFlags
-            if flags.contains(.command) || flags.contains(.shift) {
+            if flags.contains(.command) {
+                if viewModel.selectedObjectIDs.contains(ref.id) {
+                    viewModel.selectedObjectIDs.remove(ref.id)
+                } else {
+                    viewModel.selectedObjectIDs.insert(ref.id)
+                }
                 return
             }
             #endif
- // Same fix as objectRow above (#1) — don't rely
-            // on the native List click-to-select highlight, set it explicitly.
-            DispatchQueue.main.async {
-                viewModel.selectedObjectIDs = [ref.id]
-                viewModel.openCollection(ref)
-            }
+            viewModel.selectedObjectIDs = [ref.id]
+            viewModel.openCollection(ref)
         }
-        .tag(ref.id)
         .contextMenu {
             Button(L("Copy Name")) {
                 let pasteboard = NSPasteboard.general
@@ -1786,7 +1862,6 @@ public struct WorkspaceView: View {
  /// driver — the two `DriverRegistry`/
     /// `DataSourceRegistry` families stay separate all the way up to here.
     private func connect(_ profile: ConnectionProfile) async {
-        print("[DIAG 4] connect(profile) start: \(profile.name)")
         switch profile.driver {
         case .mongodb, .qdrant, .elasticsearch:
             await viewModel.connectDataSource(profile: profile, alreadyBegun: true)
@@ -1795,11 +1870,10 @@ public struct WorkspaceView: View {
         default:
             await viewModel.connect(profile: profile, alreadyBegun: true)
         }
-        print("[DIAG 5] viewModel.connect done, objects count: \(viewModel.objects.count)")
         if viewModel.session != nil || viewModel.dataSourceSession != nil || viewModel.keyValueSession != nil {
-            print("[DIAG 6] setting sidebarTab = .objects")
-            sidebarTab = .objects
-            print("[DIAG 7] sidebarTab is now .objects")
+            DispatchQueue.main.async {
+                sidebarTab = .objects
+            }
         }
     }
 

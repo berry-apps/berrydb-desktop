@@ -674,12 +674,19 @@ public final class WorkspaceViewModel {
         if let clone = pendingSecretClones[profile.id] {
             await clone.value
         }
- // Single Keychain read point: secrets go straight into
-        // the in-RAM config, never stored on the profile.
+        // Read Keychain secrets off the main actor to avoid blocking the UI runloop
+        // or triggering modal delegate reentrancy if macOS prompts for authorization.
+        let (password, sshPassword, sshPassphrase) = await Task.detached {
+            (
+                KeychainService.readPassword(kind: .database, profileID: profile.id),
+                KeychainService.readPassword(kind: .ssh, profileID: profile.id),
+                KeychainService.readPassword(kind: .sshPassphrase, profileID: profile.id)
+            )
+        }.value
         let config = profile.makeConfig(
-            password: KeychainService.readPassword(kind: .database, profileID: profile.id),
-            sshPassword: KeychainService.readPassword(kind: .ssh, profileID: profile.id),
-            sshPassphrase: KeychainService.readPassword(kind: .sshPassphrase, profileID: profile.id)
+            password: password,
+            sshPassword: sshPassword,
+            sshPassphrase: sshPassphrase
         )
         await open(
             config: config,
@@ -2681,9 +2688,15 @@ public final class WorkspaceViewModel {
             errorMessage = "Driver \(profile.driverID) is not registered"
             return
         }
+        let (password, elasticsearchAPIKey) = await Task.detached {
+            (
+                KeychainService.readPassword(kind: .database, profileID: profile.id),
+                KeychainService.readPassword(kind: .elasticsearchAPIKey, profileID: profile.id)
+            )
+        }.value
         let config = profile.makeConfig(
-            password: KeychainService.readPassword(kind: .database, profileID: profile.id),
-            elasticsearchAPIKey: KeychainService.readPassword(kind: .elasticsearchAPIKey, profileID: profile.id)
+            password: password,
+            elasticsearchAPIKey: elasticsearchAPIKey
         )
         do {
             let (effectiveConfig, tunnel) = try await prepareDataSourceEndpoint(config)
@@ -2778,8 +2791,11 @@ public final class WorkspaceViewModel {
             errorMessage = "Driver \(profile.driverID) is not registered"
             return
         }
+        let password = await Task.detached {
+            KeychainService.readPassword(kind: .database, profileID: profile.id)
+        }.value
         let config = profile.makeConfig(
-            password: KeychainService.readPassword(kind: .database, profileID: profile.id)
+            password: password
         )
         do {
             let (effectiveConfig, tunnel) = try await prepareKeyValueEndpoint(config)

@@ -81,7 +81,6 @@ public struct DataGridView: NSViewRepresentable {
     }
 
     public func makeNSView(context: Context) -> NSScrollView {
-        print("[DIAG 13] DataGridView.makeNSView")
         let tableView = NSTableView()
         tableView.style = .plain
         tableView.usesAlternatingRowBackgroundColors = true
@@ -104,7 +103,6 @@ public struct DataGridView: NSViewRepresentable {
     public func updateNSView(_ scrollView: NSScrollView, context: Context) {
         let columns = buffer.columns
         let rowCount = buffer.rowCount
-        print("[DIAG 14] DataGridView.updateNSView: \(rowCount) rows, \(columns.count) cols")
         context.coordinator.parent = self
         context.coordinator.sync(buffer: buffer, columns: columns, rowCount: rowCount)
     }
@@ -125,7 +123,6 @@ public struct DataGridView: NSViewRepresentable {
         private var pendingSync: (buffer: ResultBuffer, columns: [ColumnMeta], rowCount: Int)?
 
         func sync(buffer: ResultBuffer, columns: [ColumnMeta], rowCount: Int) {
-            print("[DIAG 15] DataGridView.Coordinator.sync (isReloading: \(isReloading))")
             self.buffer = buffer
             guard let tableView else { return }
             if isReloading {

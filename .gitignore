@@ -37,4 +37,5 @@ venv/
 test_icon.swift
 image.png
 test_processed.png
+reentrancy_trace.log
 !deploy/.env.example
