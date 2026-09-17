@@ -458,14 +458,28 @@ public struct AIClient: AITransport {
         return request
     }
 
-    private func parseErrorMessage(from data: Data) -> String? {
+    static func parseErrorMessage(from data: Data) -> String? {
         if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             if let err = object["error"] as? String, !err.isEmpty { return err }
             if let msg = object["message"] as? String, !msg.isEmpty { return msg }
             if let detail = object["detail"] as? String, !detail.isEmpty { return detail }
+            // Handle structured capability protocol errors: {"code": "...", "reason": "..."}
+            if let code = object["code"] as? String, let reason = object["reason"] as? String {
+                if code == "tool_result_rejected" {
+                    if reason == "control_token_expired" || reason == "control_token_unknown" {
+                        return "The tool execution timed out or its authorization expired on the server. Please retry with a new turn."
+                    }
+                    return "Tool result was rejected by server: \(reason)."
+                }
+                return "\(code): \(reason)"
+            }
         }
         let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return text.isEmpty ? nil : text
+    }
+
+    func parseErrorMessage(from data: Data) -> String? {
+        Self.parseErrorMessage(from: data)
     }
 
     private func parseCapabilityProtocolCode(from data: Data) -> String? {

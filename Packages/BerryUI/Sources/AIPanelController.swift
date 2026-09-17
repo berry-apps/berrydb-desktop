@@ -28,12 +28,31 @@ public final class AIPanelController {
         case ready
     }
 
- /// A statement the agent wants to run, awaiting the user's decision.
+     /// A statement the agent wants to run, awaiting the user's decision.
     public struct PendingApproval: Identifiable, Equatable {
-        public let id = UUID()
+        public let id: UUID
         public let sql: String
         public let danger: DangerLevel
+        public let createdAt: Date
+        public let timeoutSeconds: TimeInterval
         public var isDangerous: Bool { danger != .safe }
+        public var isExpired: Bool {
+            Date().timeIntervalSince(createdAt) >= timeoutSeconds
+        }
+
+        public init(
+            id: UUID = UUID(),
+            sql: String,
+            danger: DangerLevel,
+            createdAt: Date = Date(),
+            timeoutSeconds: TimeInterval = 110
+        ) {
+            self.id = id
+            self.sql = sql
+            self.danger = danger
+            self.createdAt = createdAt
+            self.timeoutSeconds = timeoutSeconds
+        }
     }
 
  /// An MCP tool call awaiting the user's decision.
@@ -372,6 +391,7 @@ public final class AIPanelController {
 
     public private(set) var pendingApproval: PendingApproval?
     private var approvalContinuation: CheckedContinuation<Bool, Never>?
+    private var approvalTimeoutTask: Task<Void, Never>?
  /// Set by an approval card's "Run All Safe" button — subsequent
     /// safe statements this turn skip the prompt entirely instead of
     /// re-asking one by one (e.g. running many SELECTs from a tab). Reset
@@ -682,6 +702,8 @@ public final class AIPanelController {
         }
 
         // Abandon any approval left pending on the previous connection.
+        approvalTimeoutTask?.cancel()
+        approvalTimeoutTask = nil
         approvalContinuation?.resume(returning: false)
         approvalContinuation = nil
         pendingApproval = nil
@@ -1202,11 +1224,22 @@ public final class AIPanelController {
 
  // MARK: - Approval gate backing
 
-    func requestApproval(sql: String, danger: DangerLevel) async -> Bool {
+    func requestApproval(sql: String, danger: DangerLevel, timeoutSeconds: TimeInterval = 110) async -> Bool {
         if danger == .safe, autoApproveSafeThisTurn { return true }
+        approvalTimeoutTask?.cancel()
         return await withCheckedContinuation { continuation in
             approvalContinuation = continuation
-            pendingApproval = PendingApproval(sql: sql, danger: danger)
+            pendingApproval = PendingApproval(sql: sql, danger: danger, timeoutSeconds: timeoutSeconds)
+            approvalTimeoutTask = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(max(0, timeoutSeconds) * 1_000_000_000))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                guard let self, self.pendingApproval != nil else { return }
+                self.resolveApproval(false)
+            }
         }
     }
 
@@ -1214,9 +1247,13 @@ public final class AIPanelController {
     /// button, only ever offered on a statement already classified safe —
     /// this still approves that current statement too, not just future ones.
     public func resolveApproval(_ approved: Bool, trustRemainingSafeThisTurn: Bool = false) {
-        if trustRemainingSafeThisTurn { autoApproveSafeThisTurn = true }
+        approvalTimeoutTask?.cancel()
+        approvalTimeoutTask = nil
+        let isExpired = pendingApproval?.isExpired ?? false
+        if trustRemainingSafeThisTurn && !isExpired { autoApproveSafeThisTurn = true }
+        let effectiveApproved = isExpired ? false : approved
         pendingApproval = nil
-        approvalContinuation?.resume(returning: approved)
+        approvalContinuation?.resume(returning: effectiveApproved)
         approvalContinuation = nil
     }
 
@@ -1350,6 +1387,10 @@ private final class ApprovalGateAdapter: AIApprovalGate {
 
     func approve(sql: String, danger: DangerLevel, autoApprovable: Bool) async -> Bool {
         await controller?.requestApproval(sql: sql, danger: danger) ?? false
+    }
+
+    func approve(sql: String, danger: DangerLevel, autoApprovable: Bool, timeoutSeconds: TimeInterval) async -> Bool {
+        await controller?.requestApproval(sql: sql, danger: danger, timeoutSeconds: timeoutSeconds) ?? false
     }
 }
 

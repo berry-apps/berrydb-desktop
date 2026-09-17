@@ -58,11 +58,11 @@ private final class LeaseInvalidator {
 @MainActor
 @Suite("QueryToolExecutor", .serialized)
 struct QueryToolExecutorTests {
-    private func makeSession() async throws -> Session {
+    private func makeSession(isProduction: Bool = false) async throws -> Session {
         DriverRegistry.register(SQLiteDriver.self)
         let path = NSTemporaryDirectory() + "berrydb-ai-\(UUID().uuidString).sqlite"
         FileManager.default.createFile(atPath: path, contents: nil)
-        let session = try await ConnectionManager().open(.sqlite(path: path))
+        let session = try await ConnectionManager().open(.sqlite(path: path), isProduction: isProduction)
         try await drain("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)", on: session)
         try await drain("INSERT INTO t (id, name) VALUES (1, 'ann'), (2, 'bob')", on: session)
         return session
@@ -84,7 +84,7 @@ struct QueryToolExecutorTests {
         gate: ScriptedGate,
         options: QueryToolExecutor.Options = .init(),
         onPropose: @escaping (String, String?) -> Void = { _, _ in },
-        queryTimeoutSeconds: UInt64 = 90
+        queryTimeoutSeconds: TimeInterval = 90
     ) -> QueryToolExecutor {
         QueryToolExecutor(
             session: session,
@@ -723,6 +723,98 @@ struct QueryToolExecutorTests {
         #expect(outcome.status == "error")
     }
 
+    @Test func runTabStatementsStopsEarlyWhenDeadlineExpires() async throws {
+        let session = try await makeSession()
+        let executor = QueryToolExecutor(
+            session: session,
+            catalog: SchemaCatalog(session: session),
+            gate: ScriptedGate(true),
+            onPropose: { _, _ in },
+            activeTabStatements: { _ in ["SELECT id FROM t ORDER BY id", "SELECT name FROM t"] },
+            executionDeadlineSeconds: 0
+        )
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "run_tab_statements", args: ["which": "all"]))
+
+        #expect(outcome.status == "ok")
+        let obj = decode(outcome)
+        #expect(obj["stopped_early"] as? Bool == true)
+        let stmts = obj["statements"] as? [[String: Any]] ?? []
+        #expect(stmts.count == 1)
+        #expect(stmts.first?["error"] as? String == "Execution stopped: tool deadline (110s) exceeded")
+    }
+
+    @Test func runTabStatementsStopsEarlyWhenCumulativeExecutionExceedsBudget() async throws {
+        final class DelayOnSecondStatementGate: AIApprovalGate {
+            var count = 0
+            func approve(sql: String, danger: DangerLevel, autoApprovable: Bool, timeoutSeconds: TimeInterval) async -> Bool {
+                count += 1
+                if count == 2 {
+                    try? await Task.sleep(nanoseconds: 250_000_000) // 250ms
+                }
+                return true
+            }
+            func approve(sql: String, danger: DangerLevel, autoApprovable: Bool) async -> Bool {
+                count += 1
+                if count == 2 {
+                    try? await Task.sleep(nanoseconds: 250_000_000) // 250ms
+                }
+                return true
+            }
+        }
+        let gate = DelayOnSecondStatementGate()
+        let executor = QueryToolExecutor(
+            gate: gate,
+            options: .init(autoApproveSelects: false),
+            onPropose: { _, _ in },
+            activeTabStatements: { _ in ["SELECT 1", "SELECT 2"] },
+            executeStatement: { sql, lease in
+                if sql == "SELECT 1" {
+                    try? await Task.sleep(nanoseconds: 30_000_000) // 30ms
+                }
+                return .payload(["rows": []])
+            },
+            executionDeadlineSeconds: 0.2 // 200ms budget
+        )
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "run_tab_statements", args: ["which": "all"]))
+
+        #expect(outcome.status == "ok")
+        let obj = decode(outcome)
+        #expect(obj["stopped_early"] as? Bool == true)
+        let stmts = obj["statements"] as? [[String: Any]] ?? []
+        #expect(stmts.count == 2)
+        #expect(stmts[0]["sql"] as? String == "SELECT 1")
+        #expect(stmts[1]["sql"] as? String == "SELECT 2")
+        #expect((stmts[1]["error"] as? String)?.contains("deadline") == true)
+    }
+
+    @Test func runTabStatementsQueryTimesOutWhenRemainingBudgetIsExceeded() async throws {
+        let executor = QueryToolExecutor(
+            gate: ScriptedGate(true),
+            onPropose: { _, _ in },
+            activeTabStatements: { _ in ["SELECT 1", "SELECT 2"] },
+            executeStatement: { sql, lease in
+                if sql == "SELECT 2" {
+                    try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+                }
+                return .payload(["rows": []])
+            },
+            executionDeadlineSeconds: 0.15 // 150ms budget
+        )
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "run_tab_statements", args: ["which": "all"]))
+
+        #expect(outcome.status == "ok")
+        let obj = decode(outcome)
+        #expect(obj["stopped_early"] as? Bool == true)
+        let stmts = obj["statements"] as? [[String: Any]] ?? []
+        #expect(stmts.count == 2)
+        #expect(stmts[0]["sql"] as? String == "SELECT 1")
+        #expect(stmts[1]["sql"] as? String == "SELECT 2")
+        #expect((stmts[1]["error"] as? String)?.contains("timed out") == true)
+    }
+
     @Test func explainQueryReturnsPlanTree() async throws {
         let session = try await makeSession()
         let executor = QueryToolExecutor(
@@ -755,6 +847,259 @@ struct QueryToolExecutorTests {
         // denial stops it.
         #expect(outcome.status == "denied")
         #expect(gate.asked.count == 1)
+    }
+
+    @Test func explainQueryDeniesTypedConfirmWithoutAskingGate() async throws {
+        let session = try await makeSession(isProduction: true)
+        let gate = ScriptedGate(true)
+        let executor = QueryToolExecutor(
+            session: session,
+            catalog: SchemaCatalog(session: session),
+            gate: gate,
+            onPropose: { _, _ in },
+            activeTabStatements: { _ in ["DROP TABLE t"] }
+        )
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "explain_query", args: [:]))
+
+        #expect(outcome.status == "denied")
+        #expect(gate.asked.isEmpty)
+    }
+
+    @Test func drainSampleTimesOutPromptlyEvenWhenQueryIgnoresCancellation() async throws {
+        final class HungContinuationHolder: @unchecked Sendable {
+            var cont: CheckedContinuation<Void, Never>?
+        }
+        let holder = HungContinuationHolder()
+        defer {
+            holder.cont?.resume()
+        }
+
+        final class WorkStartedSignal: @unchecked Sendable {
+            private let lock = NSLock()
+            private var isStarted = false
+            private var waiter: CheckedContinuation<Void, Never>?
+
+            func signalStarted() {
+                lock.lock()
+                isStarted = true
+                let cont = waiter
+                waiter = nil
+                lock.unlock()
+                cont?.resume()
+            }
+
+            func waitUntilStarted() async {
+                await withCheckedContinuation { cont in
+                    lock.lock()
+                    if isStarted {
+                        lock.unlock()
+                        cont.resume()
+                    } else {
+                        waiter = cont
+                        lock.unlock()
+                    }
+                }
+            }
+        }
+        let signal = WorkStartedSignal()
+
+        let executor = QueryToolExecutor(
+            gate: ScriptedGate(true),
+            onPropose: { _, _ in },
+            executeStatement: { _, _ in
+                signal.signalStarted()
+                // Simulates a stuck thread/socket that completely ignores cancellation
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    holder.cont = continuation
+                }
+                return .payload([:])
+            },
+            queryTimeoutSeconds: 0.1 // Positive timeout!
+        )
+
+        let start = Date()
+        let executeTask = Task {
+            await executor.execute(AIToolCall(id: "c", name: "run_sql", args: ["sql": "SELECT 1"]))
+        }
+
+        // Handshake: Wait until the query has actually started and is stuck
+        await signal.waitUntilStarted()
+
+        let outcome = await executeTask.value
+        let elapsed = Date().timeIntervalSince(start)
+
+        #expect(outcome.status == "error")
+        #expect(outcome.resultJSON?.contains("timed out") == true)
+        #expect(elapsed >= 0.08)
+        #expect(elapsed < 1.0)
+    }
+
+    @Test func timeoutRacePreCancelledTaskThrowsCancellationAndNeverRunsWork() async throws {
+        final class WorkFlag: @unchecked Sendable {
+            var executed = false
+        }
+        let flag = WorkFlag()
+        let task = Task<Void, any Error> {
+            try await Task.sleep(nanoseconds: 1_000_000)
+            _ = try await QueryToolExecutor.UnstoppableTimeoutRace.run(
+                timeoutSeconds: 5.0,
+                timeoutError: DriverError.queryFailed(message: "timeout", code: nil)
+            ) {
+                flag.executed = true
+                return QueryToolExecutor.ResultBox()
+            }
+        }
+        task.cancel()
+        do {
+            try await task.value
+            Issue.record("Expected cancellation error")
+        } catch {
+            #expect(error is CancellationError)
+        }
+        #expect(flag.executed == false)
+    }
+
+    @Test func raceHolderCancelledBeforeSetRacePreventsWorkStart() async throws {
+        let holder = QueryToolExecutor.RaceHolder()
+        holder.cancel() // Cancelled BEFORE setRace
+
+        final class WorkFlag: @unchecked Sendable {
+            var executed = false
+        }
+        let flag = WorkFlag()
+
+        do {
+            _ = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<QueryToolExecutor.ResultBox, any Error>) in
+                    let race = QueryToolExecutor.UnstoppableTimeoutRace(continuation: continuation)
+                    let shouldStart = holder.setRace(race)
+                    #expect(shouldStart == false)
+                    guard shouldStart else {
+                        race.cancel()
+                        return
+                    }
+                    race.start(timeoutSeconds: 5.0, timeoutError: DriverError.queryFailed(message: "timeout", code: nil)) {
+                        flag.executed = true
+                        return QueryToolExecutor.ResultBox()
+                    }
+                }
+            } onCancel: {
+                holder.cancel()
+            }
+            Issue.record("Expected cancellation error")
+        } catch {
+            #expect(error is CancellationError)
+            #expect(flag.executed == false)
+        }
+    }
+
+    @Test func timeoutRaceParentCancellationUnblocksImmediatelyEvenWhenWorkIgnoresCancellation() async throws {
+        final class HungContinuationHolder: @unchecked Sendable {
+            var cont: CheckedContinuation<Void, Never>?
+        }
+        let holder = HungContinuationHolder()
+        defer { holder.cont?.resume() }
+
+        final class WorkStartedSignal: @unchecked Sendable {
+            private let lock = NSLock()
+            private var isStarted = false
+            private var waiter: CheckedContinuation<Void, Never>?
+
+            func signalStarted() {
+                lock.lock()
+                isStarted = true
+                let cont = waiter
+                waiter = nil
+                lock.unlock()
+                cont?.resume()
+            }
+
+            func waitUntilStarted() async {
+                await withCheckedContinuation { cont in
+                    lock.lock()
+                    if isStarted {
+                        lock.unlock()
+                        cont.resume()
+                    } else {
+                        waiter = cont
+                        lock.unlock()
+                    }
+                }
+            }
+        }
+        let signal = WorkStartedSignal()
+
+        let task = Task<Void, any Error> {
+            _ = try await QueryToolExecutor.UnstoppableTimeoutRace.run(
+                timeoutSeconds: 10.0,
+                timeoutError: DriverError.queryFailed(message: "timeout", code: nil)
+            ) {
+                signal.signalStarted()
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    holder.cont = continuation
+                }
+                return QueryToolExecutor.ResultBox()
+            }
+        }
+
+        await signal.waitUntilStarted()
+
+        let start = Date()
+        task.cancel()
+
+        do {
+            try await task.value
+            Issue.record("Expected cancellation error")
+        } catch {
+            #expect(error is CancellationError)
+        }
+        let elapsed = Date().timeIntervalSince(start)
+
+        #expect(elapsed < 1.0)
+    }
+
+    @Test func explainQueryStopsWhenExecutionDeadlineExpires() async throws {
+        let session = try await makeSession()
+        final class DelayedApprovalGate: AIApprovalGate {
+            let delayNanos: UInt64
+            init(delayNanos: UInt64) { self.delayNanos = delayNanos }
+            func approve(sql: String, danger: DangerLevel, autoApprovable: Bool) async -> Bool { true }
+            func approve(sql: String, danger: DangerLevel, autoApprovable: Bool, timeoutSeconds: TimeInterval) async -> Bool {
+                try? await Task.sleep(nanoseconds: delayNanos)
+                return true
+            }
+        }
+        let executor = QueryToolExecutor(
+            session: session,
+            catalog: SchemaCatalog(session: session),
+            gate: DelayedApprovalGate(delayNanos: 150_000_000),
+            onPropose: { _, _ in },
+            activeTabStatements: { _ in ["SELECT id FROM t"] },
+            executionDeadlineSeconds: 0.08
+        )
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "explain_query", args: [:]))
+
+        #expect(outcome.status == "error")
+        #expect(outcome.resultJSON?.contains("deadline") == true)
+    }
+
+    @Test func explainQueryTimesOutWhenExecutionExceedsRemainingBudget() async throws {
+        let session = try await makeSession()
+        let executor = QueryToolExecutor(
+            session: session,
+            catalog: SchemaCatalog(session: session),
+            gate: ScriptedGate(true),
+            onPropose: { _, _ in },
+            activeTabStatements: { _ in ["SELECT id FROM t"] },
+            queryTimeoutSeconds: 0
+        )
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "explain_query", args: [:]))
+
+        #expect(outcome.status == "error")
+        #expect(outcome.resultJSON?.contains("timed out") == true)
     }
 
     @Test func advertisesAllSqlAndTabTools() async throws {
