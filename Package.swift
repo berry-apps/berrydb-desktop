@@ -9,6 +9,7 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .executable(name: "BerryApp", targets: ["BerryApp"]),
+        .executable(name: "MCPCompatibilitySpike", targets: ["MCPCompatibilitySpike"]),
         .library(name: "BerryDriverKit", targets: ["BerryDriverKit"]),
         .library(name: "BerryDataSourceKit", targets: ["BerryDataSourceKit"]),
         .library(name: "BerryCore", targets: ["BerryCore"]),
@@ -42,6 +43,12 @@ let package = Package(
         // embeds and signs it unconditionally too, so there is no
         // dependency-free build variant to preserve here. See deploy/README.md.
         .package(url: "https://github.com/sparkle-project/Sparkle.git", from: "2.6.0"),
+        // Official Model Context Protocol Swift SDK. Pre-1.0 releases are
+        // pinned exactly so a protocol or API change cannot enter implicitly.
+        .package(
+            url: "https://github.com/modelcontextprotocol/swift-sdk.git",
+            exact: "0.12.1"
+        ),
     ],
     targets: [
  // MARK: Driver contracts — no dependencies
@@ -305,6 +312,13 @@ let package = Package(
             ],
             path: "App/Sources"
         ),
+        .executableTarget(
+            name: "MCPCompatibilitySpike",
+            dependencies: [
+                .product(name: "MCP", package: "swift-sdk"),
+            ],
+            path: "MCP/CompatibilitySpike/Sources"
+        ),
         // BerryApp has no other consumer to exercise its launch-time
         // scheduling logic (UpdaterAutoStart) against — Sparkle itself can't
         // be driven in a test, but the decision of *when* to call
@@ -475,6 +489,11 @@ let package = Package(
                 "BerryStore", "BerryGraph",
             ],
             path: "Packages/BerryAI/Tests"
+        ),
+        .testTarget(
+            name: "MCPCompatibilitySpikeTests",
+            dependencies: ["MCPCompatibilitySpike"],
+            path: "Tests/MCPCompatibilitySpikeTests"
         ),
 
  // MARK: Performance benchmarks (M7) — opt-in
