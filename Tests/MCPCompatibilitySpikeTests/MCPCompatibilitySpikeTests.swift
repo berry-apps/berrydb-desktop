@@ -21,6 +21,57 @@ struct MCPCompatibilitySpikeTests {
         }
     }
 
+    @Test("Codex compatibility sanitizer changes only experimental initialize capabilities")
+    func codexSanitizerScope() throws {
+        let nonInitialize = Data(#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"experimental":{"keep":{}}}}"#.utf8)
+        #expect(CodexCompatibleStdioTransport.sanitizeIncomingMessage(nonInitialize) == nonInitialize)
+
+        let initializeWithoutExperimental = Data(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"codex-mcp-client","version":"0.154.0"}}}"#.utf8)
+        #expect(
+            CodexCompatibleStdioTransport.sanitizeIncomingMessage(initializeWithoutExperimental)
+                == initializeWithoutExperimental
+        )
+
+        let codexInitialize = Data(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"experimental":{"codex/auth-change":{}},"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"codex-mcp-client","version":"0.154.0"}}}"#.utf8)
+        let sanitized = CodexCompatibleStdioTransport.sanitizeIncomingMessage(codexInitialize)
+        let envelope = try #require(
+            JSONSerialization.jsonObject(with: sanitized) as? [String: Any]
+        )
+        #expect(envelope["jsonrpc"] as? String == "2.0")
+        #expect(envelope["id"] as? Int == 1)
+        #expect(envelope["method"] as? String == "initialize")
+        let params = try #require(envelope["params"] as? [String: Any])
+        #expect(params["protocolVersion"] as? String == "2025-06-18")
+        #expect(params["clientInfo"] as? [String: String] == [
+            "name": "codex-mcp-client", "version": "0.154.0",
+        ])
+        let capabilities = try #require(params["capabilities"] as? [String: Any])
+        #expect(capabilities["experimental"] == nil)
+        let elicitation = try #require(capabilities["elicitation"] as? [String: Any])
+        #expect((elicitation["form"] as? [String: Any])?.isEmpty == true)
+        #expect((elicitation["url"] as? [String: Any])?.isEmpty == true)
+    }
+
+    @Test("Codex compatibility sanitizer preserves supported experimental entries")
+    func codexSanitizerPreservesStrings() throws {
+        let stringOnly = Data(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"experimental":{"berry/mode":"safe","berry/version":"1"},"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"test","version":"1"}}}"#.utf8)
+        #expect(CodexCompatibleStdioTransport.sanitizeIncomingMessage(stringOnly) == stringOnly)
+
+        let mixed = Data(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"experimental":{"keep":"supported","object":{},"array":[],"null":null,"number":1,"boolean":true},"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"test","version":"1"}}}"#.utf8)
+        let sanitized = CodexCompatibleStdioTransport.sanitizeIncomingMessage(mixed)
+        let envelope = try #require(
+            JSONSerialization.jsonObject(with: sanitized) as? [String: Any]
+        )
+        let params = try #require(envelope["params"] as? [String: Any])
+        let capabilities = try #require(params["capabilities"] as? [String: Any])
+        let experimental = try #require(capabilities["experimental"] as? [String: Any])
+        #expect(experimental.count == 1)
+        #expect(experimental["keep"] as? String == "supported")
+        let elicitation = try #require(capabilities["elicitation"] as? [String: Any])
+        #expect((elicitation["form"] as? [String: Any])?.isEmpty == true)
+        #expect((elicitation["url"] as? [String: Any])?.isEmpty == true)
+    }
+
     @Test("stdio executable completes the strict lifecycle and validates calls")
     func stdioLifecycle() throws {
         let process = try SpikeProcess()
@@ -81,6 +132,46 @@ struct MCPCompatibilitySpikeTests {
         let invalid = try process.response(id: 4)
         let error = try #require(invalid["error"] as? [String: Any])
         #expect(error["code"] as? Int == -32602)
+
+        try process.closeInputAndWaitForExit()
+        #expect(process.hasOnlyJSONStdout)
+    }
+
+    @Test("stdio executable accepts the Codex 0.154.0 initialize payload")
+    func codexInitializeCompatibility() throws {
+        let process = try SpikeProcess()
+        defer { process.stopIfNeeded() }
+
+        try process.send([
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": [
+                "protocolVersion": "2025-06-18",
+                "capabilities": [
+                    "experimental": ["codex/auth-change": [:]],
+                    "elicitation": ["form": [:], "url": [:]],
+                ],
+                "clientInfo": ["name": "codex-mcp-client", "version": "0.154.0"],
+            ],
+        ])
+        let initialize = try process.response(id: 1)
+        let result = try #require(initialize["result"] as? [String: Any])
+        #expect(result["protocolVersion"] as? String == "2025-06-18")
+
+        try process.send(["jsonrpc": "2.0", "method": "notifications/initialized"])
+        try process.send([
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": [:],
+        ])
+        let list = try process.response(id: 2)
+        let tools = try #require((list["result"] as? [String: Any])?["tools"] as? [[String: Any]])
+        #expect(tools.map { $0["name"] as? String } == ["berrydb_compatibility_echo"])
+
+        try process.send([
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": ["name": "berrydb_compatibility_echo", "arguments": [:]],
+        ])
+        let call = try process.response(id: 3)
+        let content = try #require((call["result"] as? [String: Any])?["content"] as? [[String: Any]])
+        #expect(content.first?["text"] as? String == "berrydb-mcp-compatible")
 
         try process.closeInputAndWaitForExit()
         #expect(process.hasOnlyJSONStdout)
