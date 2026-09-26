@@ -1,13 +1,10 @@
+import CoreFoundation
 import Foundation
 import MCP
 
-/// Compatibility boundary for swift-sdk #262.
-///
-/// swift-sdk 0.12.1 decodes `Client.Capabilities.experimental` as
-/// `[String: String]`, while Codex 0.154.0 sends object-valued entries. Retain
-/// the string-valued entries that 0.12.1 can decode and remove only unsupported
-/// values until the upstream decoder accepts arbitrary JSON objects.
-actor CodexCompatibleStdioTransport: Transport {
+/// Compatibility boundary for host messages that swift-sdk 0.12.1 cannot
+/// process correctly while this server remains on legacy MCP 2025-11-25.
+actor HostCompatibleStdioTransport: Transport {
     private let base: StdioTransport
     private let stream: AsyncThrowingStream<Data, Swift.Error>
     private let continuation: AsyncThrowingStream<Data, Swift.Error>.Continuation
@@ -32,6 +29,10 @@ actor CodexCompatibleStdioTransport: Transport {
             do {
                 let upstream = await base.receive()
                 for try await message in upstream {
+                    if let response = Self.legacyDiscoveryFallbackResponse(for: message) {
+                        try await base.send(response)
+                        continue
+                    }
                     continuation.yield(Self.sanitizeIncomingMessage(message))
                 }
                 continuation.finish()
@@ -56,6 +57,40 @@ actor CodexCompatibleStdioTransport: Transport {
         stream
     }
 
+    /// `server/discover` is a 2026-07-28 probe. The pinned SDK applies its
+    /// pre-initialize state guard first and returns `-32600`, which prevents
+    /// dual-era clients such as Antigravity 1.2.11 from falling back. Replying
+    /// `-32601` truthfully says this legacy server does not implement discovery.
+    static func legacyDiscoveryFallbackResponse(for data: Data) -> Data? {
+        guard
+            let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            envelope["jsonrpc"] as? String == "2.0",
+            envelope["method"] as? String == "server/discover",
+            let id = envelope["id"],
+            Self.isValidRequestID(id)
+        else {
+            return nil
+        }
+
+        let response: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": ["code": -32601, "message": "Method not found"],
+        ]
+        return try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
+    }
+
+    private static func isValidRequestID(_ value: Any) -> Bool {
+        if value is String { return true }
+        guard let number = value as? NSNumber else { return false }
+        // JSONSerialization bridges both JSON numbers and Booleans through
+        // NSNumber. JSON-RPC request IDs permit numbers, never Booleans.
+        return CFGetTypeID(number) != CFBooleanGetTypeID()
+    }
+
+    /// swift-sdk 0.12.1 decodes `Client.Capabilities.experimental` as
+    /// `[String: String]`, while Codex 0.154.0 sends object-valued entries.
+    /// Retain decodable strings and remove only unsupported values.
     static func sanitizeIncomingMessage(_ data: Data) -> Data {
         guard
             var envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

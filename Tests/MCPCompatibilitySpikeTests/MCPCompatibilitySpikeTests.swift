@@ -24,16 +24,16 @@ struct MCPCompatibilitySpikeTests {
     @Test("Codex compatibility sanitizer changes only experimental initialize capabilities")
     func codexSanitizerScope() throws {
         let nonInitialize = Data(#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"experimental":{"keep":{}}}}"#.utf8)
-        #expect(CodexCompatibleStdioTransport.sanitizeIncomingMessage(nonInitialize) == nonInitialize)
+        #expect(HostCompatibleStdioTransport.sanitizeIncomingMessage(nonInitialize) == nonInitialize)
 
         let initializeWithoutExperimental = Data(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"codex-mcp-client","version":"0.154.0"}}}"#.utf8)
         #expect(
-            CodexCompatibleStdioTransport.sanitizeIncomingMessage(initializeWithoutExperimental)
+            HostCompatibleStdioTransport.sanitizeIncomingMessage(initializeWithoutExperimental)
                 == initializeWithoutExperimental
         )
 
         let codexInitialize = Data(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"experimental":{"codex/auth-change":{}},"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"codex-mcp-client","version":"0.154.0"}}}"#.utf8)
-        let sanitized = CodexCompatibleStdioTransport.sanitizeIncomingMessage(codexInitialize)
+        let sanitized = HostCompatibleStdioTransport.sanitizeIncomingMessage(codexInitialize)
         let envelope = try #require(
             JSONSerialization.jsonObject(with: sanitized) as? [String: Any]
         )
@@ -55,10 +55,10 @@ struct MCPCompatibilitySpikeTests {
     @Test("Codex compatibility sanitizer preserves supported experimental entries")
     func codexSanitizerPreservesStrings() throws {
         let stringOnly = Data(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"experimental":{"berry/mode":"safe","berry/version":"1"},"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"test","version":"1"}}}"#.utf8)
-        #expect(CodexCompatibleStdioTransport.sanitizeIncomingMessage(stringOnly) == stringOnly)
+        #expect(HostCompatibleStdioTransport.sanitizeIncomingMessage(stringOnly) == stringOnly)
 
         let mixed = Data(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"experimental":{"keep":"supported","object":{},"array":[],"null":null,"number":1,"boolean":true},"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"test","version":"1"}}}"#.utf8)
-        let sanitized = CodexCompatibleStdioTransport.sanitizeIncomingMessage(mixed)
+        let sanitized = HostCompatibleStdioTransport.sanitizeIncomingMessage(mixed)
         let envelope = try #require(
             JSONSerialization.jsonObject(with: sanitized) as? [String: Any]
         )
@@ -70,6 +70,53 @@ struct MCPCompatibilitySpikeTests {
         let elicitation = try #require(capabilities["elicitation"] as? [String: Any])
         #expect((elicitation["form"] as? [String: Any])?.isEmpty == true)
         #expect((elicitation["url"] as? [String: Any])?.isEmpty == true)
+    }
+
+    @Test("legacy discovery fallback is narrow and preserves request identifiers")
+    func legacyDiscoveryFallbackScope() throws {
+        let list = Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#.utf8)
+        #expect(HostCompatibleStdioTransport.legacyDiscoveryFallbackResponse(for: list) == nil)
+
+        let notification = Data(#"{"jsonrpc":"2.0","method":"server/discover","params":{}}"#.utf8)
+        #expect(HostCompatibleStdioTransport.legacyDiscoveryFallbackResponse(for: notification) == nil)
+
+        let invalidRequests = [
+            #"{"id":1,"method":"server/discover","params":{}}"#,
+            #"{"jsonrpc":"1.0","id":1,"method":"server/discover","params":{}}"#,
+            #"{"jsonrpc":"2.0","id":null,"method":"server/discover","params":{}}"#,
+            #"{"jsonrpc":"2.0","id":true,"method":"server/discover","params":{}}"#,
+            #"{"jsonrpc":"2.0","id":{},"method":"server/discover","params":{}}"#,
+            #"{"jsonrpc":"2.0","id":[],"method":"server/discover","params":{}}"#,
+        ]
+        for invalid in invalidRequests {
+            #expect(
+                HostCompatibleStdioTransport.legacyDiscoveryFallbackResponse(
+                    for: Data(invalid.utf8)
+                ) == nil
+            )
+        }
+
+        let request = Data(#"{"jsonrpc":"2.0","id":"discover-1","method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#.utf8)
+        let responseData = try #require(
+            HostCompatibleStdioTransport.legacyDiscoveryFallbackResponse(for: request)
+        )
+        let response = try #require(
+            JSONSerialization.jsonObject(with: responseData) as? [String: Any]
+        )
+        #expect(response["jsonrpc"] as? String == "2.0")
+        #expect(response["id"] as? String == "discover-1")
+        let error = try #require(response["error"] as? [String: Any])
+        #expect(error["code"] as? Int == -32601)
+        #expect(error["message"] as? String == "Method not found")
+
+        let numericRequest = Data(#"{"jsonrpc":"2.0","id":7.5,"method":"server/discover","params":{}}"#.utf8)
+        let numericResponseData = try #require(
+            HostCompatibleStdioTransport.legacyDiscoveryFallbackResponse(for: numericRequest)
+        )
+        let numericResponse = try #require(
+            JSONSerialization.jsonObject(with: numericResponseData) as? [String: Any]
+        )
+        #expect(numericResponse["id"] as? Double == 7.5)
     }
 
     @Test("stdio executable completes the strict lifecycle and validates calls")
@@ -170,6 +217,65 @@ struct MCPCompatibilitySpikeTests {
             "params": ["name": "berrydb_compatibility_echo", "arguments": [:]],
         ])
         let call = try process.response(id: 3)
+        let content = try #require((call["result"] as? [String: Any])?["content"] as? [[String: Any]])
+        #expect(content.first?["text"] as? String == "berrydb-mcp-compatible")
+
+        try process.closeInputAndWaitForExit()
+        #expect(process.hasOnlyJSONStdout)
+    }
+
+    @Test("stdio executable exposes the server-side legacy discovery contract")
+    func legacyDiscoveryServerContract() throws {
+        let process = try SpikeProcess()
+        defer { process.stopIfNeeded() }
+
+        // Captured verbatim from authenticated Antigravity CLI 1.2.11. The
+        // fixture is intentionally a 2025-11-25 server, so it must reject the
+        // modern discovery method with Method not found instead of claiming
+        // support for the stateless 2026-07-28 protocol. The remainder drives
+        // the server-side legacy lifecycle; client fallback is host evidence.
+        try process.send([
+            "jsonrpc": "2.0", "id": 1, "method": "server/discover",
+            "params": [
+                "_meta": [
+                    "io.modelcontextprotocol/clientCapabilities": [
+                        "elicitation": ["form": [:], "url": [:]],
+                        "roots": ["listChanged": true],
+                    ],
+                    "io.modelcontextprotocol/clientInfo": [
+                        "name": "antigravity-client", "version": "v1.0.0",
+                    ],
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                ],
+            ],
+        ])
+        let discovery = try process.response(id: 1)
+        let discoveryError = try #require(discovery["error"] as? [String: Any])
+        #expect(discoveryError["code"] as? Int == -32601)
+
+        try process.send([
+            "jsonrpc": "2.0", "id": 2, "method": "initialize",
+            "params": [
+                "protocolVersion": "2025-11-25",
+                "capabilities": [:],
+                "clientInfo": ["name": "antigravity-client", "version": "v1.0.0"],
+            ],
+        ])
+        let initialize = try process.response(id: 2)
+        #expect((initialize["result"] as? [String: Any])?["protocolVersion"] as? String == "2025-11-25")
+        try process.send(["jsonrpc": "2.0", "method": "notifications/initialized"])
+        try process.send([
+            "jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": [:],
+        ])
+        let list = try process.response(id: 3)
+        let tools = try #require((list["result"] as? [String: Any])?["tools"] as? [[String: Any]])
+        #expect(tools.map { $0["name"] as? String } == ["berrydb_compatibility_echo"])
+
+        try process.send([
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": ["name": "berrydb_compatibility_echo", "arguments": [:]],
+        ])
+        let call = try process.response(id: 4)
         let content = try #require((call["result"] as? [String: Any])?["content"] as? [[String: Any]])
         #expect(content.first?["text"] as? String == "berrydb-mcp-compatible")
 
