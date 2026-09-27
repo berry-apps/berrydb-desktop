@@ -1,4 +1,5 @@
 import BerryCore
+import BerryCredentials
 import BerryDriverKit
 import BerryStore
 import SwiftUI

@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "BerryDriverKit", targets: ["BerryDriverKit"]),
         .library(name: "BerryDataSourceKit", targets: ["BerryDataSourceKit"]),
         .library(name: "BerryCore", targets: ["BerryCore"]),
+        .library(name: "BerryCredentials", targets: ["BerryCredentials"]),
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
@@ -51,6 +52,12 @@ let package = Package(
         ),
     ],
     targets: [
+        // MARK: Credential storage — Security.framework only, no UI dependencies
+        .target(
+            name: "BerryCredentials",
+            path: "Packages/BerryCredentials/Sources"
+        ),
+
  // MARK: Driver contracts — no dependencies
         .target(
             name: "BerryDriverKit",
@@ -285,7 +292,7 @@ let package = Package(
             // SSHTunnel directly (BerryCore's ConnectionManager.prepareEndpoint
             // has no DataSourceDriver/KeyValueDriver equivalent to reuse).
             dependencies: [
-                "BerryCore", "BerryStore", "BerryLicense", "BerryAI", "BerryGraph",
+                "BerryCore", "BerryCredentials", "BerryStore", "BerryLicense", "BerryAI", "BerryGraph",
                 "BerryDataSourceKit", "BerryKeyValueKit", "BerryTunnel",
             ],
             path: "Packages/BerryUI/Sources",
@@ -337,6 +344,11 @@ let package = Package(
             name: "BerryDriverTestKit",
             dependencies: ["BerryDriverKit"],
             path: "Packages/BerryDriverTestKit/Sources"
+        ),
+        .testTarget(
+            name: "BerryCredentialsTests",
+            dependencies: ["BerryCredentials"],
+            path: "Packages/BerryCredentials/Tests"
         ),
         .testTarget(
             name: "BerryDriverKitTests",
@@ -472,7 +484,7 @@ let package = Package(
  // has its own Docker/local-server-gated
             // conformance suite here too, same pattern as Mongo/Qdrant above.
             dependencies: [
-                "BerryUI", "BerryCore", "BerryStore", "BerryGraph", "BerryAI",
+                "BerryUI", "BerryCore", "BerryCredentials", "BerryStore", "BerryGraph", "BerryAI",
                 "BerryDriverKit", "BerryDriverSQLite",
                 "BerryDataSourceKit", "BerryDriverMongo", "BerryDriverQdrant", "BerryDriverTestKit",
                 "BerryKeyValueKit", "BerryDriverRedis",

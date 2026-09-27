@@ -5,17 +5,16 @@ import Security
 /// Secrets are keyed by profile UUID, live only in RAM after reading, and are
 /// never logged or persisted anywhere else.
 public enum KeychainService {
-    public enum SecretKind: String, CaseIterable {
+    public enum SecretKind: String, CaseIterable, Sendable {
         case database = "db"
         case ssh = "ssh"
         case sshPassphrase = "sshpp"
- /// Elasticsearch API-key auth mode — a real
-        /// second secret shape, not another `password`-reuse hack like
-        /// Qdrant's API key.
+        /// Elasticsearch API-key auth mode — a real second secret shape, not
+        /// another `password`-reuse hack like Qdrant's API key.
         case elasticsearchAPIKey = "esapikey"
     }
 
-    private static func service(_ kind: SecretKind, _ profileID: UUID) -> String {
+    static func service(_ kind: SecretKind, _ profileID: UUID) -> String {
         "dev.berrydb.\(kind.rawValue).\(profileID.uuidString.lowercased())"
     }
 
@@ -63,8 +62,7 @@ public enum KeychainService {
         return String(data: data, encoding: .utf8)
     }
 
-    /// Deleting a profile must also delete its secrets — no orphaned entries
- ///
+    /// Deleting a profile must also delete its secrets — no orphaned entries.
     public static func deleteSecrets(profileID: UUID) {
         for kind in SecretKind.allCases {
             let query: [String: Any] = [
