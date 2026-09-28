@@ -6,12 +6,11 @@ import Testing
 
 @Suite("MCP projects")
 struct MCPProjectTests {
-    @Test func roundTripsHeterogeneousProfilesInDeterministicOrder() throws {
+    @Test func roundTripsPerProfileAccessInDeterministicOrder() throws {
         let store = try BerryStore(path: ":memory:")
         let postgres = ConnectionProfile(
             id: UUID(uuidString: "ffffffff-ffff-ffff-ffff-ffffffffffff")!,
-            driverID: "postgres", name: "Production", groupName: "shared",
-            host: "postgres.internal"
+            driverID: "postgres", name: "Orders", groupName: "shared", host: "db.internal"
         )
         let dynamo = ConnectionProfile(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
@@ -21,22 +20,31 @@ struct MCPProjectTests {
         try store.save(dynamo)
 
         let project = MCPProject(
-            name: "Agent project",
-            workspaceRoots: ["/z/repo/./Sources/..", "/a/repo", "/z/repo"],
-            profileIDs: [postgres.id, dynamo.id, postgres.id],
-            enabledCapabilities: [.readQuery, .schema, .graph],
-            productionAccess: .snapshotsOnly,
+            name: "Project A",
+            isEnabled: true,
+            workspaceRoots: ["/z/repo/./Sources/..", "/a/repo"],
+            profiles: [
+                MCPProfileAccess(profileID: postgres.id, liveRead: true, redactedColumns: ["Email", "email", "ssn"]),
+                MCPProfileAccess(profileID: dynamo.id),
+            ],
             createdAt: Date(timeIntervalSince1970: 1),
             updatedAt: Date(timeIntervalSince1970: 2)
         )
         try store.saveMCPProject(project)
 
         let loaded = try #require(try store.mcpProject(id: project.id))
-        #expect(loaded.name == project.name)
+        #expect(loaded.isEnabled)
         #expect(loaded.workspaceRoots == ["/a/repo", "/z/repo"])
-        #expect(loaded.profileIDs == [dynamo.id, postgres.id])
-        #expect(loaded.enabledCapabilities == project.enabledCapabilities)
-        #expect(loaded.productionAccess == .snapshotsOnly)
+        #expect(loaded.profiles.map(\.profileID) == [dynamo.id, postgres.id])
+        #expect(loaded.profiles[0] == MCPProfileAccess(profileID: dynamo.id, liveRead: false, redactedColumns: []))
+        #expect(loaded.profiles[1].liveRead)
+        #expect(loaded.profiles[1].redactedColumns == ["email", "ssn"])
+    }
+
+    @Test func liveReadDefaultsToOffAndProjectsDefaultToDisabled() {
+        let access = MCPProfileAccess(profileID: UUID())
+        #expect(access.liveRead == false)
+        #expect(MCPProject(name: "New").isEnabled == false)
     }
 
     @Test func rejectsRelativeWorkspaceRootsAtSaveBoundary() throws {
@@ -59,14 +67,12 @@ struct MCPProjectTests {
             try db.execute(
                 sql: """
                 INSERT INTO mcp_project
-                    (id, name, workspaceRootsJSON, enabledCapabilitiesJSON,
-                     productionAccess, createdAt, updatedAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (id, name, isEnabled, workspaceRootsJSON, createdAt, updatedAt)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 arguments: [
-                    projectID, "Legacy",
+                    projectID, "Legacy", false,
                     #"["/z/repo/./Sources/..","/a/repo","/z/repo"]"#,
-                    "[]", MCPProductionAccess.disabled.rawValue,
                     Date(timeIntervalSince1970: 1), Date(timeIntervalSince1970: 1),
                 ]
             )
@@ -86,13 +92,11 @@ struct MCPProjectTests {
             try db.execute(
                 sql: """
                 INSERT INTO mcp_project
-                    (id, name, workspaceRootsJSON, enabledCapabilitiesJSON,
-                     productionAccess, createdAt, updatedAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (id, name, isEnabled, workspaceRootsJSON, createdAt, updatedAt)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 arguments: [
-                    projectID, "Legacy", #"["relative/repo"]"#, "[]",
-                    MCPProductionAccess.disabled.rawValue,
+                    projectID, "Legacy", false, #"["relative/repo"]"#,
                     Date(timeIntervalSince1970: 1), Date(timeIntervalSince1970: 1),
                 ]
             )
@@ -131,14 +135,14 @@ struct MCPProjectTests {
         try store.save(explicitlyAllowed)
         try store.save(sameGroup)
         let project = MCPProject(
-            name: "Repo", workspaceRoots: ["/repo"], profileIDs: [explicitlyAllowed.id],
-            enabledCapabilities: [.schema]
+            name: "Repo", workspaceRoots: ["/repo"],
+            profiles: [MCPProfileAccess(profileID: explicitlyAllowed.id)]
         )
         try store.saveMCPProject(project)
 
         let loaded = try #require(try store.mcpProject(id: project.id))
-        #expect(loaded.profileIDs == [explicitlyAllowed.id])
-        #expect(!loaded.profileIDs.contains(sameGroup.id))
+        #expect(loaded.profiles.map(\.profileID) == [explicitlyAllowed.id])
+        #expect(!loaded.profiles.map(\.profileID).contains(sameGroup.id))
     }
 
     @Test func deletingAProfileRemovesItFromEffectiveProjectAccess() throws {
@@ -147,11 +151,14 @@ struct MCPProjectTests {
         let removed = ConnectionProfile(driverID: "mongodb", name: "Removed")
         try store.save(first)
         try store.save(removed)
-        let project = MCPProject(name: "Project", profileIDs: [first.id, removed.id])
+        let project = MCPProject(
+            name: "Project",
+            profiles: [MCPProfileAccess(profileID: first.id), MCPProfileAccess(profileID: removed.id)]
+        )
         try store.saveMCPProject(project)
 
         try store.deleteProfile(id: removed.id)
-        #expect(try store.mcpProject(id: project.id)?.profileIDs == [first.id])
+        #expect(try store.mcpProject(id: project.id)?.profiles.map(\.profileID) == [first.id])
     }
 
     @Test func v30ForwardMigrationPreservesV29FixtureAndRollsBackFailedMigration() throws {
@@ -167,7 +174,9 @@ struct MCPProjectTests {
         }
         try BerryStore.migrator.migrate(queue)
         #expect(try queue.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM connection_profile") } == 1)
-        #expect(try queue.read { try $0.tableExists("mcp_project_grant") })
+        #expect(try queue.read { try $0.tableExists("mcp_project") })
+        #expect(try queue.read { try $0.tableExists("mcp_project_profile") })
+        #expect(try queue.read { try !$0.tableExists("mcp_project_grant") })
 
         var rollbackMigrator = DatabaseMigrator()
         rollbackMigrator.registerMigration("base") { db in try db.create(table: "base") { $0.autoIncrementedPrimaryKey("id") } }

@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import GRDB
 
@@ -460,13 +459,13 @@ public final class BerryStore: Sendable {
                 )
             }
         }
-        migrator.registerMigration("v30-mcp-project-grant") { db in
+        migrator.registerMigration("v30-mcp-project") { db in
             try db.create(table: "mcp_project") { t in
                 t.primaryKey("id", .blob)
                 t.column("name", .text).notNull()
+                t.column("isEnabled", .boolean).notNull().defaults(to: false)
                 t.column("workspaceRootsJSON", .text).notNull()
-                t.column("enabledCapabilitiesJSON", .text).notNull()
-                t.column("productionAccess", .text).notNull()
+                t.column("integrityTag", .blob)
                 t.column("createdAt", .datetime).notNull()
                 t.column("updatedAt", .datetime).notNull()
             }
@@ -475,17 +474,10 @@ public final class BerryStore: Sendable {
                     .references("mcp_project", onDelete: .cascade)
                 t.column("profileID", .blob).notNull()
                     .references("connection_profile", onDelete: .cascade)
+                t.column("liveRead", .boolean).notNull().defaults(to: false)
+                t.column("redactedColumnsJSON", .text).notNull().defaults(to: "[]")
+                t.column("integrityTag", .blob)
                 t.primaryKey(["projectID", "profileID"])
-            }
-            try db.create(table: "mcp_project_grant") { t in
-                t.primaryKey("id", .blob)
-                t.column("projectID", .blob).notNull().indexed()
-                    .references("mcp_project", onDelete: .cascade)
-                t.column("tokenHash", .blob).notNull().unique()
-                t.column("createdAt", .datetime).notNull()
-                t.column("expiresAt", .datetime)
-                t.column("revokedAt", .datetime)
-                t.column("lastUsedAt", .datetime)
             }
         }
         return migrator
@@ -516,7 +508,7 @@ public final class BerryStore: Sendable {
         }
     }
 
-    // MARK: - MCP projects and scoped grants
+    // MARK: - MCP projects
 
     public func mcpProjects() throws -> [MCPProject] {
         try dbQueue.read { db in
@@ -537,25 +529,32 @@ public final class BerryStore: Sendable {
     public func saveMCPProject(_ project: MCPProject) throws {
         let encoder = JSONEncoder()
         let roots = try MCPProject.canonicalWorkspaceRoots(project.workspaceRoots)
-        let capabilities = project.enabledCapabilities.map(\.rawValue).sorted()
         let record = MCPProjectRecord(
             id: project.id,
             name: project.name,
+            isEnabled: project.isEnabled,
             workspaceRootsJSON: String(decoding: try encoder.encode(roots), as: UTF8.self),
-            enabledCapabilitiesJSON: String(decoding: try encoder.encode(capabilities), as: UTF8.self),
-            productionAccess: project.productionAccess.rawValue,
+            integrityTag: nil,
             createdAt: project.createdAt,
             updatedAt: project.updatedAt
         )
         try dbQueue.write { db in
             try record.save(db)
-            try MCPProjectProfileRecord
-                .filter(Column("projectID") == project.id)
-                .deleteAll(db)
-            for profileID in Set(project.profileIDs).sorted(by: Self.uuidLessThan) {
-                // The foreign key deliberately rejects unpersisted profiles:
-                // metadata such as group/cwd can never manufacture access.
-                try MCPProjectProfileRecord(projectID: project.id, profileID: profileID).insert(db)
+            try MCPProjectProfileRecord.filter(Column("projectID") == project.id).deleteAll(db)
+            var seen = Set<UUID>()
+            for access in project.profiles where seen.insert(access.profileID).inserted {
+                // The foreign key rejects unsaved profiles, so metadata such as
+                // a group name or workspace path can never manufacture access.
+                try MCPProjectProfileRecord(
+                    projectID: project.id,
+                    profileID: access.profileID,
+                    liveRead: access.liveRead,
+                    redactedColumnsJSON: String(
+                        decoding: try encoder.encode(MCPProfileAccess.normalizedColumns(access.redactedColumns)),
+                        as: UTF8.self
+                    ),
+                    integrityTag: nil
+                ).insert(db)
             }
         }
     }
@@ -566,114 +565,27 @@ public final class BerryStore: Sendable {
         }
     }
 
-    public func createMCPGrant(projectID: UUID, expiresAt: Date?) throws -> IssuedMCPGrant {
-        let now = Date()
-        return try dbQueue.write { db in
-            guard try MCPProjectRecord.fetchOne(db, key: projectID) != nil else {
-                throw DatabaseError(resultCode: .SQLITE_CONSTRAINT_FOREIGNKEY, message: "MCP project does not exist")
-            }
-            let tokenBytes = Data(SymmetricKey(size: .bits256).withUnsafeBytes { Array($0) })
-            let token = tokenBytes.base64EncodedString()
-                .replacingOccurrences(of: "+", with: "-")
-                .replacingOccurrences(of: "/", with: "_")
-                .replacingOccurrences(of: "=", with: "")
-            let record = MCPProjectGrantRecord(
-                id: UUID(), projectID: projectID,
-                tokenHash: Self.mcpGrantHash(token), createdAt: now,
-                expiresAt: expiresAt, revokedAt: nil, lastUsedAt: nil
-            )
-            try record.insert(db)
-            return IssuedMCPGrant(
-                id: record.id, projectID: projectID, token: token,
-                createdAt: now, expiresAt: expiresAt
-            )
-        }
-    }
-
-    public func validateMCPGrant(
-        projectID: UUID, token: String, now: Date
-    ) throws -> MCPGrantValidation {
-        let candidateHash = Self.mcpGrantHash(token)
-        return try dbQueue.write { db in
-            let records = try MCPProjectGrantRecord
-                .filter(Column("projectID") == projectID)
-                .order(Column("createdAt").asc, Column("id").asc)
-                .fetchAll(db)
-
-            // Compare every candidate rather than using tokenHash in a SQL
-            // predicate. A dummy digest keeps the no-grant path on the same
-            // fixed-width comparison primitive.
-            var matchingRecord: MCPProjectGrantRecord?
-            if records.isEmpty {
-                _ = Self.constantTimeEqual(candidateHash, Data(repeating: 0, count: 32))
-            } else {
-                for record in records {
-                    let matches = Self.constantTimeEqual(candidateHash, record.tokenHash)
-                    if matches { matchingRecord = record }
-                }
-            }
-            guard var grant = matchingRecord,
-                  grant.revokedAt == nil,
-                  grant.expiresAt.map({ now < $0 }) ?? true,
-                  let projectRecord = try MCPProjectRecord.fetchOne(db, key: projectID)
-            else { return .invalid }
-
-            grant.lastUsedAt = now
-            try grant.update(db)
-            let project = try Self.makeMCPProject(record: projectRecord, db: db)
-            return .valid(ValidatedMCPGrant(grantID: grant.id, project: project))
-        }
-    }
-
-    public func revokeMCPGrant(id: UUID, revokedAt: Date) throws {
-        try dbQueue.write { db in
-            try db.execute(
-                sql: "UPDATE mcp_project_grant SET revokedAt = ? WHERE id = ? AND revokedAt IS NULL",
-                arguments: [revokedAt, id]
-            )
-        }
-    }
-
     private static func makeMCPProject(record: MCPProjectRecord, db: Database) throws -> MCPProject {
         let decoder = JSONDecoder()
-        let persistedRoots = try decoder.decode([String].self, from: Data(record.workspaceRootsJSON.utf8))
-        let roots = try MCPProject.canonicalWorkspaceRoots(persistedRoots)
-        let capabilityValues = try decoder.decode([String].self, from: Data(record.enabledCapabilitiesJSON.utf8))
-        let capabilities = Set(capabilityValues.compactMap(MCPProjectCapability.init(rawValue:)))
-        let profileIDs = try UUID.fetchAll(
-            db,
-            sql: "SELECT profileID FROM mcp_project_profile WHERE projectID = ? ORDER BY lower(hex(profileID)) ASC",
-            arguments: [record.id]
+        let roots = try MCPProject.canonicalWorkspaceRoots(
+            try decoder.decode([String].self, from: Data(record.workspaceRootsJSON.utf8))
         )
-        guard let productionAccess = MCPProductionAccess(rawValue: record.productionAccess) else {
-            throw DatabaseError(resultCode: .SQLITE_CORRUPT, message: "Invalid MCP production access value")
+        let rows = try MCPProjectProfileRecord
+            .filter(Column("projectID") == record.id)
+            .fetchAll(db)
+            .sorted { $0.profileID.uuidString.lowercased() < $1.profileID.uuidString.lowercased() }
+        let profiles = try rows.map { row in
+            MCPProfileAccess(
+                profileID: row.profileID,
+                liveRead: row.liveRead,
+                redactedColumns: try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8))
+            )
         }
         return MCPProject(
-            id: record.id, name: record.name, workspaceRoots: roots,
-            profileIDs: profileIDs, enabledCapabilities: capabilities,
-            productionAccess: productionAccess, createdAt: record.createdAt,
-            updatedAt: record.updatedAt
+            id: record.id, name: record.name, isEnabled: record.isEnabled,
+            workspaceRoots: roots, profiles: profiles,
+            createdAt: record.createdAt, updatedAt: record.updatedAt
         )
-    }
-
-    private static func uuidLessThan(_ lhs: UUID, _ rhs: UUID) -> Bool {
-        lhs.uuidString.lowercased() < rhs.uuidString.lowercased()
-    }
-
-    private static func mcpGrantHash(_ token: String) -> Data {
-        Data(SHA256.hash(data: Data(token.utf8)))
-    }
-
-    /// Fixed-width digest comparison with no data-dependent early return.
-    static func constantTimeEqual(_ lhs: Data, _ rhs: Data) -> Bool {
-        var difference = UInt8(truncatingIfNeeded: lhs.count ^ rhs.count)
-        let count = max(lhs.count, rhs.count)
-        for index in 0..<count {
-            let left = index < lhs.count ? lhs[index] : 0
-            let right = index < rhs.count ? rhs[index] : 0
-            difference |= left ^ right
-        }
-        return difference == 0
     }
 
  // MARK: - Query history

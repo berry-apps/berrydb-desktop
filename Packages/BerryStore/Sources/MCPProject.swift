@@ -1,53 +1,58 @@
 import Foundation
 import GRDB
 
-public enum MCPProjectCapability: String, Codable, CaseIterable, Sendable {
-    case schema
-    case graph
-    case readQuery = "read_query"
-    case sampleRows = "sample_rows"
-}
-
-public enum MCPProductionAccess: String, Codable, Sendable {
-    /// Production profiles may not be opened by the MCP process.
-    case disabled
-    /// Persisted schema and graph snapshots may be shared, but live access is denied.
-    case snapshotsOnly = "snapshots_only"
-}
-
 public enum MCPProjectError: Error, Equatable, Sendable {
     case workspaceRootMustBeAbsolute(String)
 }
 
-/// An explicit, persisted authorization boundary for one coding-agent project.
-/// Workspace roots are descriptive configuration metadata; only `profileIDs`
-/// and `enabledCapabilities` grant access.
+/// Access one MCP project grants to one saved connection profile.
+///
+/// `liveRead` is the only switch that lets the MCP helper open a connection
+/// for this profile; it defaults to off so adding a profile to a project
+/// exposes schema and graph metadata only.
+public struct MCPProfileAccess: Codable, Equatable, Sendable {
+    public let profileID: UUID
+    public var liveRead: Bool
+    /// Column names redacted from live results; stored lowercased, deduped and sorted.
+    public var redactedColumns: [String]
+
+    public init(profileID: UUID, liveRead: Bool = false, redactedColumns: [String] = []) {
+        self.profileID = profileID
+        self.liveRead = liveRead
+        self.redactedColumns = Self.normalizedColumns(redactedColumns)
+    }
+
+    static func normalizedColumns(_ columns: [String]) -> [String] {
+        Set(columns.map { $0.lowercased() }).sorted()
+    }
+}
+
+/// A coding-agent project: the workspace roots that select it and the
+/// profiles it exposes. Selection by workspace is a convenience, not an
+/// authorization boundary (spec §4); access is decided per profile.
 public struct MCPProject: Identifiable, Codable, Equatable, Sendable {
     public let id: UUID
     public var name: String
+    public var isEnabled: Bool
     public var workspaceRoots: [String]
-    public var profileIDs: [UUID]
-    public var enabledCapabilities: Set<MCPProjectCapability>
-    public var productionAccess: MCPProductionAccess
+    public var profiles: [MCPProfileAccess]
     public var createdAt: Date
     public var updatedAt: Date
 
     public init(
         id: UUID = UUID(),
         name: String,
+        isEnabled: Bool = false,
         workspaceRoots: [String] = [],
-        profileIDs: [UUID] = [],
-        enabledCapabilities: Set<MCPProjectCapability> = [],
-        productionAccess: MCPProductionAccess = .disabled,
+        profiles: [MCPProfileAccess] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
         self.id = id
         self.name = name
+        self.isEnabled = isEnabled
         self.workspaceRoots = workspaceRoots
-        self.profileIDs = profileIDs
-        self.enabledCapabilities = enabledCapabilities
-        self.productionAccess = productionAccess
+        self.profiles = profiles
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -55,21 +60,22 @@ public struct MCPProject: Identifiable, Codable, Equatable, Sendable {
 
 struct MCPProjectRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "mcp_project"
-
     var id: UUID
     var name: String
+    var isEnabled: Bool
     var workspaceRootsJSON: String
-    var enabledCapabilitiesJSON: String
-    var productionAccess: String
+    var integrityTag: Data?
     var createdAt: Date
     var updatedAt: Date
 }
 
 struct MCPProjectProfileRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "mcp_project_profile"
-
     var projectID: UUID
     var profileID: UUID
+    var liveRead: Bool
+    var redactedColumnsJSON: String
+    var integrityTag: Data?
 }
 
 extension MCPProject {
