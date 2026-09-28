@@ -393,7 +393,10 @@ public struct BerryGraphQueryService: Sendable {
     }
 
     /// Exact stable id wins. Qualified `database.name` is next, followed by an
-    /// unqualified case-insensitive name. Ambiguity is reported deterministically.
+    /// unqualified case-insensitive name. Under `.strict`, more than one match
+    /// at a step is reported deterministically as `ambiguousNode`; under
+    /// `.legacyFirstStableID`, every step picks the smallest stable id instead
+    /// and never reports ambiguity.
     private func resolve(
         _ raw: String, in graph: SchemaGraph, policy: ResolutionPolicy
     ) throws -> GraphNode {
@@ -406,7 +409,7 @@ public struct BerryGraphQueryService: Sendable {
             guard let database = $0.database else { return false }
             return "\(database).\($0.name)".lowercased() == key
         }
-        if let match = try unique(qualified, raw: query) { return match }
+        if let match = try select(qualified, raw: query, policy: policy) { return match }
 
         let preferred = allNodes.filter {
             ($0.kind == .table || $0.kind == .view) && $0.name.lowercased() == key

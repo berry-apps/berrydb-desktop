@@ -57,6 +57,28 @@ struct BerryGraphQueryServiceTests {
         #expect(try query.neighbors(profileID: profileID, node: "b.users").node == "users")
     }
 
+    /// Two nodes can share a qualified `database.name` (here a table and a
+    /// view). Strict resolution reports that; legacy resolution picks the
+    /// smallest stable ID at this step too, as it does for bare names.
+    @Test func legacyResolutionPicksSmallestStableIDForAQualifiedNameCollision() throws {
+        var graph = SchemaGraph()
+        graph.addNode(GraphNode(id: "table:shop.orders", kind: .table, name: "orders", database: "shop"))
+        graph.addNode(GraphNode(id: "view:shop.orders", kind: .view, name: "orders", database: "shop"))
+        graph.addNode(GraphNode(id: "table:shop.customers", kind: .table, name: "customers", database: "shop"))
+        graph.addNode(GraphNode(id: "table:shop.products", kind: .table, name: "products", database: "shop"))
+        graph.addEdge(GraphEdge(src: "table:shop.orders", dst: "table:shop.customers", kind: .references))
+        graph.addEdge(GraphEdge(src: "view:shop.orders", dst: "table:shop.products", kind: .derivesFrom))
+        let query = try service(graph: graph)
+
+        #expect(throws: BerryGraphQueryService.QueryError.ambiguousNode(
+            name: "shop.orders", matches: ["shop.orders", "shop.orders"]
+        )) {
+            try query.neighbors(profileID: profileID, node: "shop.orders")
+        }
+        let legacy = try query.neighbors(profileID: profileID, node: "shop.orders", resolution: .legacyFirstStableID)
+        #expect(legacy.dependsOn == ["customers"])
+    }
+
     @Test func neighborsUseOnlyDependencyKindsAndSortNames() throws {
         let result = try service(graph: graph()).neighbors(profileID: profileID, node: "orders")
         #expect(result.dependsOn == ["customers"])
