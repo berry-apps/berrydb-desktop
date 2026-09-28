@@ -11,16 +11,18 @@ import Foundation
 /// Ops: `neighbors`, `path`, `blast_radius`, `scc`, `top_centrality`.
 @MainActor
 public final class GraphToolExecutor: AIToolExecutor {
-    /// Dependency edges that matter for impact analysis — FK and view
-    /// derivation. Columns/indexes are excluded (get_schema covers those).
-    private static let dependencyKinds: Set<EdgeKind> = [.references, .derivesFrom]
     private static let topKDefault = 10
 
-    private let store: GraphStore
+    private let service: BerryGraphQueryService
     private let profileID: UUID
 
     public init(store: GraphStore, profileID: UUID) {
-        self.store = store
+        self.service = BerryGraphQueryService(store: store)
+        self.profileID = profileID
+    }
+
+    init(service: BerryGraphQueryService, profileID: UUID) {
+        self.service = service
         self.profileID = profileID
     }
 
@@ -36,27 +38,26 @@ public final class GraphToolExecutor: AIToolExecutor {
             return .failed("Unknown tool '\(call.name)'")
         }
 
-        let graph: SchemaGraph
         do {
-            graph = try store.loadGraph(profileID: profileID)
+            if call.name == "get_stats" { return try getStats(call.args) }
+
+            switch (call.args["op"] ?? "").lowercased() {
+            case "neighbors": return try neighbors(call.args)
+            case "path": return try path(call.args)
+            case "blast_radius": return try blastRadius(call.args)
+            case "scc", "circular_dependencies": return try scc()
+            case "top_centrality": return try topCentrality(call.args)
+            case let op:
+                // Preserve the legacy executor's error precedence: an empty
+                // profile reports the missing harvest before an invalid op.
+                // Valid operations load exactly one persisted snapshot inside
+                // the query service rather than preflighting it here.
+                try service.validateSnapshot(profileID: profileID)
+                return .failed("graph_query: unknown op '\(op)' " +
+                    "(neighbors|path|blast_radius|scc|top_centrality)")
+            }
         } catch {
             return .failed(error.localizedDescription)
-        }
-        guard graph.nodeCount > 0 else {
-            return .failed("No schema graph has been harvested yet for this connection.")
-        }
-
-        if call.name == "get_stats" { return getStats(graph, call.args) }
-
-        switch (call.args["op"] ?? "").lowercased() {
-        case "neighbors": return neighbors(graph, call.args)
-        case "path": return path(graph, call.args)
-        case "blast_radius": return blastRadius(graph, call.args)
-        case "scc", "circular_dependencies": return scc(graph)
-        case "top_centrality": return topCentrality(graph, call.args)
-        case let op:
-            return .failed("graph_query: unknown op '\(op)' " +
-                "(neighbors|path|blast_radius|scc|top_centrality)")
         }
     }
 
@@ -69,124 +70,81 @@ public final class GraphToolExecutor: AIToolExecutor {
 
     // MARK: - Ops
 
-    private func neighbors(_ graph: SchemaGraph, _ args: [String: String]) -> ToolOutcome {
-        guard let node = node(named: args["node"], in: graph) else {
-            return notFound(args["node"], in: graph)
-        }
-        let kinds = Self.dependencyKinds
-        let dependsOn = names(graph.neighbors(of: node.id, direction: .outgoing, kinds: kinds), in: graph)
-        let dependedOnBy = names(graph.neighbors(of: node.id, direction: .incoming, kinds: kinds), in: graph)
-        return .ok(Self.json([
-            "node": node.name,
-            "depends_on": dependsOn,
-            "depended_on_by": dependedOnBy,
-        ]))
-    }
-
-    private func path(_ graph: SchemaGraph, _ args: [String: String]) -> ToolOutcome {
-        guard let from = node(named: args["from"], in: graph) else { return notFound(args["from"], in: graph) }
-        guard let to = node(named: args["to"], in: graph) else { return notFound(args["to"], in: graph) }
-        let chain = graph.shortestPath(
-            from: from.id, to: to.id, direction: .outgoing, kinds: Self.dependencyKinds
+    private func neighbors(_ args: [String: String]) throws -> ToolOutcome {
+        let result = try service.neighbors(
+            profileID: profileID, node: args["node"] ?? "", resolution: .legacyFirstStableID
         )
-        // Order is meaningful here — map to names without sorting.
         return .ok(Self.json([
-            "from": from.name,
-            "to": to.name,
-            "reachable": chain != nil,
-            "path": chain?.map { graph.nodes[$0]?.name ?? $0 } ?? [],
+            "node": result.node,
+            "depends_on": result.dependsOn,
+            "depended_on_by": result.dependedOnBy,
         ]))
     }
 
-    private func blastRadius(_ graph: SchemaGraph, _ args: [String: String]) -> ToolOutcome {
-        guard let node = node(named: args["node"], in: graph) else {
-            return notFound(args["node"], in: graph)
-        }
-        let impacted = graph.blastRadius(of: node.id).sorted()
+    private func path(_ args: [String: String]) throws -> ToolOutcome {
+        let result = try service.path(
+            profileID: profileID, from: args["from"] ?? "", to: args["to"] ?? "",
+            resolution: .legacyFirstStableID
+        )
         return .ok(Self.json([
-            "node": node.name,
-            "impacted": names(impacted, in: graph),
-            "count": impacted.count,
+            "from": result.from,
+            "to": result.to,
+            "reachable": result.reachable,
+            "path": result.path,
         ]))
     }
 
-    private func scc(_ graph: SchemaGraph) -> ToolOutcome {
-        let cycles = graph.circularDependencies().map { names($0, in: graph) }
+    private func blastRadius(_ args: [String: String]) throws -> ToolOutcome {
+        let result = try service.blastRadius(
+            profileID: profileID, node: args["node"] ?? "", resolution: .legacyFirstStableID
+        )
         return .ok(Self.json([
-            "circular_dependencies": cycles,
-            "has_cycles": !cycles.isEmpty,
+            "node": result.node,
+            "impacted": result.impacted,
+            "count": result.count,
         ]))
     }
 
-    private func topCentrality(_ graph: SchemaGraph, _ args: [String: String]) -> ToolOutcome {
+    private func scc() throws -> ToolOutcome {
+        let result = try service.circularDependencies(profileID: profileID)
+        return .ok(Self.json([
+            "circular_dependencies": result.components,
+            "has_cycles": result.hasCycles,
+        ]))
+    }
+
+    private func topCentrality(_ args: [String: String]) throws -> ToolOutcome {
         let k = args["k"].flatMap(Int.init) ?? Self.topKDefault
-        let top = graph.topByInDegree(max(1, k), kinds: Self.dependencyKinds).map {
-            ["node": graph.nodes[$0.id]?.name ?? $0.id, "in_degree": $0.inDegree] as [String: Any]
+        let top = try service.topCentrality(profileID: profileID, limit: k).map {
+            ["node": $0.node, "in_degree": $0.inDegree] as [String: Any]
         }
         return .ok(Self.json(["top_by_dependents": top]))
     }
 
- // MARK: - get_stats
+    // MARK: - get_stats
 
     /// Reads harvested statistics off the persisted DSG node attrs — table size /
     /// rows / scan counts and unused indexes. Metadata only; no DBMS access.
     /// With `table`, returns that table's stats plus its indexes; without,
     /// returns a per-table summary and the list of unused indexes.
-    private func getStats(_ graph: SchemaGraph, _ args: [String: String]) -> ToolOutcome {
+    private func getStats(_ args: [String: String]) throws -> ToolOutcome {
         if let name = args["table"], !name.trimmingCharacters(in: .whitespaces).isEmpty {
-            guard let node = node(named: name, in: graph) else { return notFound(name, in: graph) }
-            var payload = statFields(node.attrs)
-            payload["table"] = node.name
-            payload["indexes"] = graph.neighbors(of: node.id, direction: .outgoing, kinds: [.hasIndex])
-                .compactMap { graph.nodes[$0] }
-                .sorted { $0.name < $1.name }
-                .map { idx -> [String: Any] in
-                    (["name": idx.name] as [String: Any]).merging(statFields(idx.attrs)) { _, new in new }
-                }
+            let result = try service.statistics(
+                profileID: profileID, table: name, resolution: .legacyFirstStableID
+            )
+            var payload = result.fields as [String: Any]
+            payload["table"] = result.table
+            payload["indexes"] = result.indexes.map { index -> [String: Any] in
+                (["name": index.name] as [String: Any]).merging(index.fields) { _, new in new }
+            }
             return .ok(Self.json(payload))
         }
 
-        let tables = graph.nodes.values
-            .filter { $0.kind == .table }
-            .sorted { $0.name < $1.name }
-            .map { t -> [String: Any] in
-                (["name": t.name] as [String: Any]).merging(statFields(t.attrs)) { _, new in new }
-            }
-        let unusedIndexes = graph.nodes.values
-            .filter { $0.kind == .index && $0.attrs["unused"] == "true" }
-            .map(\.name).sorted()
-        return .ok(Self.json(["tables": tables, "unused_indexes": unusedIndexes]))
-    }
-
-    /// The harvested stat attrs present on a node (skips structural attrs like
-    /// column type). Values are the stringified numbers the harvester stored.
-    private func statFields(_ attrs: [String: String]) -> [String: Any] {
-        let keys = ["rows", "size_bytes", "seq_scan", "idx_scan", "unused"]
-        return attrs.filter { keys.contains($0.key) }
-    }
-
-    // MARK: - Name resolution
-
-    /// Resolves a caller-supplied name to a node: an exact id, else a table/view
-    /// by name (case-insensitive), else any node by name.
-    private func node(named raw: String?, in graph: SchemaGraph) -> GraphNode? {
-        guard let raw, !raw.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-        if let exact = graph.nodes[raw] { return exact }
-        let key = raw.lowercased()
-        return graph.nodes.values.first { ($0.kind == .table || $0.kind == .view) && $0.name.lowercased() == key }
-            ?? graph.nodes.values.first { $0.name.lowercased() == key }
-    }
-
-    private func names(_ ids: [String], in graph: SchemaGraph) -> [String] {
-        ids.map { graph.nodes[$0]?.name ?? $0 }.sorted()
-    }
-
-    private func notFound(_ name: String?, in graph: SchemaGraph) -> ToolOutcome {
-        let tables = graph.nodes.values
-            .filter { $0.kind == .table || $0.kind == .view }
-            .map(\.name).sorted()
-        return .failed("Node '\(name ?? "")' not found. Available: " +
-            tables.prefix(50).joined(separator: ", "))
+        let result = try service.statistics(profileID: profileID)
+        let tables = result.tables.map { table -> [String: Any] in
+            (["name": table.name] as [String: Any]).merging(table.fields) { _, new in new }
+        }
+        return .ok(Self.json(["tables": tables, "unused_indexes": result.unusedIndexes]))
     }
 
     private static func json(_ object: [String: Any]) -> String {

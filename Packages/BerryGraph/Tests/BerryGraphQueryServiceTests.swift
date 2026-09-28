@@ -1,0 +1,134 @@
+import BerryStore
+import Foundation
+import Testing
+
+@testable import BerryGraph
+
+@Suite("BerryGraphQueryService")
+struct BerryGraphQueryServiceTests {
+    private let profileID = UUID()
+
+    private func service(graph: SchemaGraph? = nil) throws -> BerryGraphQueryService {
+        let store = GraphStore(store: try BerryStore(path: ":memory:"))
+        if let graph {
+            try store.persist(graph, profileID: profileID, now: Date(timeIntervalSince1970: 1_000))
+        }
+        return BerryGraphQueryService(store: store)
+    }
+
+    private func graph() -> SchemaGraph {
+        var graph = SchemaGraph()
+        for name in ["customers", "orders", "order_items", "products"] {
+            graph.addNode(GraphNode(id: "table:shop.\(name)", kind: .table, name: name, database: "shop"))
+        }
+        graph.addNode(GraphNode(id: "view:shop.order_summary", kind: .view, name: "order_summary", database: "shop"))
+        graph.addNode(GraphNode(id: "index:shop.orders.z", kind: .index, name: "z_idx", database: "shop", attrs: ["unused": "true", "idx_scan": "0"]))
+        graph.addNode(GraphNode(id: "index:shop.orders.a", kind: .index, name: "a_idx", database: "shop", attrs: ["unused": "false", "idx_scan": "9"]))
+        graph.addNode(GraphNode(id: "table:shop.metrics", kind: .table, name: "metrics", database: "shop", attrs: ["rows": "12", "size_bytes": "40", "type": "ignored"]))
+        graph.addEdge(GraphEdge(src: "table:shop.orders", dst: "table:shop.customers", kind: .references))
+        graph.addEdge(GraphEdge(src: "table:shop.order_items", dst: "table:shop.orders", kind: .references))
+        graph.addEdge(GraphEdge(src: "table:shop.order_items", dst: "table:shop.products", kind: .references))
+        graph.addEdge(GraphEdge(src: "view:shop.order_summary", dst: "table:shop.orders", kind: .derivesFrom))
+        graph.addEdge(GraphEdge(src: "table:shop.metrics", dst: "table:shop.orders", kind: .reads))
+        graph.addEdge(GraphEdge(src: "table:shop.orders", dst: "index:shop.orders.z", kind: .hasIndex))
+        graph.addEdge(GraphEdge(src: "table:shop.orders", dst: "index:shop.orders.a", kind: .hasIndex))
+        return graph
+    }
+
+    @Test func noSnapshotIsTyped() throws {
+        let query = try service()
+        #expect(throws: BerryGraphQueryService.QueryError.noSnapshot) {
+            try query.circularDependencies(profileID: profileID)
+        }
+    }
+
+    @Test func qualifiedNameResolvesAmbiguity() throws {
+        var graph = SchemaGraph()
+        graph.addNode(GraphNode(id: "table:a.users", kind: .table, name: "users", database: "a"))
+        graph.addNode(GraphNode(id: "table:b.users", kind: .table, name: "users", database: "b"))
+        let query = try service(graph: graph)
+
+        #expect(throws: BerryGraphQueryService.QueryError.ambiguousNode(
+            name: "users", matches: ["a.users", "b.users"]
+        )) {
+            try query.neighbors(profileID: profileID, node: "users")
+        }
+        #expect(try query.neighbors(profileID: profileID, node: "b.users").node == "users")
+    }
+
+    @Test func neighborsUseOnlyDependencyKindsAndSortNames() throws {
+        let result = try service(graph: graph()).neighbors(profileID: profileID, node: "orders")
+        #expect(result.dependsOn == ["customers"])
+        #expect(result.dependedOnBy == ["order_items", "order_summary"])
+    }
+
+    @Test func pathPreservesTraversalOrderAndReportsUnreachable() throws {
+        let query = try service(graph: graph())
+        let path = try query.path(profileID: profileID, from: "order_items", to: "customers")
+        #expect(path.path == ["order_items", "orders", "customers"])
+        #expect(path.reachable)
+        let missing = try query.path(profileID: profileID, from: "customers", to: "products")
+        #expect(!missing.reachable)
+        #expect(missing.path.isEmpty)
+    }
+
+    @Test func blastRadiusIsTransitiveSortedAndExcludesWorkloadEdges() throws {
+        let result = try service(graph: graph()).blastRadius(profileID: profileID, node: "customers")
+        #expect(result.impacted == ["order_items", "order_summary", "orders"])
+        #expect(result.count == 3)
+    }
+
+    @Test func circularDependenciesAreDeterministic() throws {
+        var graph = SchemaGraph()
+        for name in ["d", "c", "b", "a"] {
+            graph.addNode(GraphNode(id: name, kind: .table, name: name))
+        }
+        graph.addEdge(GraphEdge(src: "b", dst: "a", kind: .references))
+        graph.addEdge(GraphEdge(src: "a", dst: "b", kind: .references))
+        graph.addEdge(GraphEdge(src: "d", dst: "c", kind: .references))
+        graph.addEdge(GraphEdge(src: "c", dst: "d", kind: .references))
+        let result = try service(graph: graph).circularDependencies(profileID: profileID)
+        #expect(result.components == [["a", "b"], ["c", "d"]])
+        #expect(result.hasCycles)
+    }
+
+    @Test func centralityHasStableTieBreakAndHonorsLimit() throws {
+        let query = try service(graph: graph())
+        let top = try query.topCentrality(profileID: profileID, limit: 2)
+        #expect(top == [
+            .init(node: "orders", inDegree: 2),
+            .init(node: "customers", inDegree: 1),
+        ])
+        #expect(try query.topCentrality(profileID: profileID, limit: 0).count == 1)
+    }
+
+    @Test func statisticsAreTypedFilteredAndSorted() throws {
+        let query = try service(graph: graph())
+        let summary = try query.statistics(profileID: profileID)
+        #expect(summary.tables.map(\.name) == ["customers", "metrics", "order_items", "orders", "products"])
+        #expect(summary.tables.first { $0.name == "metrics" }?.fields == ["rows": "12", "size_bytes": "40"])
+        #expect(summary.unusedIndexes == ["z_idx"])
+
+        let table = try query.statistics(profileID: profileID, table: "orders")
+        #expect(table.indexes.map(\.name) == ["a_idx", "z_idx"])
+        #expect(table.indexes[0].fields == ["idx_scan": "9", "unused": "false"])
+    }
+
+    @Test func missingNodeDiagnosticIsSortedAndCapped() throws {
+        var graph = SchemaGraph()
+        for index in (0..<60).reversed() {
+            let name = String(format: "table_%02d", index)
+            graph.addNode(GraphNode(id: name, kind: .table, name: name))
+        }
+        let query = try service(graph: graph)
+        do {
+            _ = try query.neighbors(profileID: profileID, node: "missing")
+            Issue.record("Expected missing-node error")
+        } catch let BerryGraphQueryService.QueryError.nodeNotFound(_, available) {
+            #expect(available.count == BerryGraphQueryService.maximumDiagnosticNames)
+            #expect(available == available.sorted())
+            #expect(available.first == "table_00")
+            #expect(available.last == "table_49")
+        }
+    }
+}
