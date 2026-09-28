@@ -123,14 +123,16 @@ public struct MCPConnectionFactories: Sendable {
 
 /// Cancel and close actions for one opened connection and its tunnel.
 ///
-/// `cancel` runs at most once. `close` runs the connection close and then
-/// the tunnel close exactly once; concurrent and later callers await that
-/// same close and observe its result.
+/// The driver's cancel and close never run concurrently: the cancel action
+/// runs at most once and never after close started, and close waits for an
+/// in-flight cancel before closing the connection. Close runs the
+/// connection close and then the tunnel close exactly once; concurrent and
+/// later callers await that same close and observe its result.
 public actor MCPConnectionLifecycle {
     private let cancelAction: @Sendable () async -> Void
     private let closeConnectionAction: @Sendable () async throws -> Void
     private let closeTunnelAction: @Sendable () async -> Void
-    private var didCancel = false
+    private var cancelTask: Task<Void, Never>?
     private var closeTask: Task<Void, Error>?
 
     /// `cancel` interrupts the connection's running query; `closeConnection`
@@ -145,23 +147,34 @@ public actor MCPConnectionLifecycle {
         closeTunnelAction = closeTunnel
     }
 
-    /// Runs the cancel action at most once, and never once `close()` has
-    /// started, so a driver cancel cannot reach a closed handle.
+    /// Runs the cancel action at most once and never once `close()` has
+    /// started; returns when the action returns. Later calls return at once.
     public func cancel() async {
-        guard !didCancel, closeTask == nil else { return }
-        didCancel = true
-        await cancelAction()
+        await startCancel()?.value
     }
 
-    /// Closes the connection, then the tunnel, exactly once. The close is
-    /// recorded before the first suspension, so a later `cancel()` is a no-op.
+    /// Records the cancel as a task before any suspension, so a close that
+    /// starts afterwards waits for it; nil when a cancel ran or close started.
+    private func startCancel() -> Task<Void, Never>? {
+        guard cancelTask == nil, closeTask == nil else { return nil }
+        let cancelAction = self.cancelAction
+        let task = Task { await cancelAction() }
+        cancelTask = task
+        return task
+    }
+
+    /// Closes the connection, then the tunnel, exactly once, after any
+    /// in-flight cancel has returned. The close is recorded before the first
+    /// suspension, so a later `cancel()` is a no-op.
     public func close() async throws {
         if let closeTask {
             return try await closeTask.value
         }
+        let pendingCancel = cancelTask
         let closeConnectionAction = self.closeConnectionAction
         let closeTunnelAction = self.closeTunnelAction
         let task = Task {
+            await pendingCancel?.value
             do {
                 try await closeConnectionAction()
                 await closeTunnelAction()
@@ -310,9 +323,10 @@ public actor MCPConnectionCoordinator {
         guard var request = active[requestID], token == nil || request.token == token else { return }
         request.cancelled = true
         active[requestID] = request
-        // Driver cancel first: once the task unwinds, close starts and cancel becomes a no-op.
-        await request.lifecycle?.cancel()
+        // Task first, so a driver cancel that never returns cannot block it. The
+        // lifecycle hop is queued before this actor is released, ahead of any close.
         request.cancelTask()
+        await request.lifecycle?.cancel()
     }
 
     /// Cancels every request, closes what it can, and returns within

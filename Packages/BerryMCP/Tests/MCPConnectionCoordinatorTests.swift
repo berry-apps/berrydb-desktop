@@ -337,7 +337,7 @@ struct MCPConnectionCoordinatorTests {
                 await gate.wait() // deliberately ignores task cancellation
             }
         }
-        await fixture.tracker.waitForOpen()
+        await gate.waitUntilBlocked()
         let shutdownReturned = Flag()
         let shutdown = Task {
             _ = await fixture.coordinator.closeAll()
@@ -345,9 +345,11 @@ struct MCPConnectionCoordinatorTests {
         }
         await Task.yield()
         #expect(await shutdownReturned.value == false)
+        await fixture.tracker.waitForCancels(1)
         await gate.open()
         _ = try? await operation.value
         await shutdown.value
+        #expect(await fixture.tracker.cancels == 1)
         #expect(await fixture.tracker.closes == 1)
         #expect(await fixture.tracker.tunnelCloses == 1)
     }
@@ -498,6 +500,71 @@ struct MCPConnectionCoordinatorTests {
         #expect(await tracker.cancels == 0)
     }
 
+    @Test func closeWaitsForAnInFlightDriverCancel() async throws {
+        let tracker = Tracker()
+        let gate = AsyncGate()
+        let lifecycle = MCPConnectionLifecycle(
+            cancel: {
+                await gate.wait()
+                await tracker.cancelled()
+            },
+            closeConnection: { try await tracker.closed(number: 1) },
+            closeTunnel: { await tracker.tunnelClosed() }
+        )
+        let cancel = Task { await lifecycle.cancel() }
+        await gate.waitUntilBlocked()
+        let close = Task { try await lifecycle.close() }
+        // Gives an overlapping close time to run; a correct close stays parked on the cancel.
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await tracker.closes == 0)
+        await gate.open()
+        await cancel.value
+        try await close.value
+        #expect(await tracker.cancels == 1)
+        #expect(await tracker.closes == 1)
+        #expect(await tracker.tunnelCloses == 1)
+        await lifecycle.cancel()
+        #expect(await tracker.cancels == 1)
+    }
+
+    @Test func cancelByIDCancelsTheOperationEvenIfTheDriverCancelNeverReturns() async throws {
+        let profileID = UUID()
+        let started = AsyncStream<Void>.makeStream()
+        let observed = AsyncStream<Bool>.makeStream()
+        let coordinator = MCPConnectionCoordinator(
+            resolver: liveResolver(for: [profileID]),
+            sqlFactory: { _ in
+                MCPSQLSession(
+                    connection: FakeSQLConnection(),
+                    lifecycle: MCPConnectionLifecycle(
+                        cancel: { await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in } },
+                        closeConnection: {}
+                    )
+                )
+            }
+        )
+        _ = Task {
+            try await coordinator.withSQLSession(requestID: "hung-driver-cancel", profileID: profileID) { _ in
+                started.continuation.yield()
+                do {
+                    try await Task.sleep(for: .seconds(10))
+                    observed.continuation.yield(false)
+                } catch {
+                    observed.continuation.yield(true)
+                    throw error
+                }
+            }
+        }
+        for await _ in started.stream { break }
+        _ = Task { await coordinator.cancel(requestID: "hung-driver-cancel") }
+        var operationSawCancellation = false
+        for await value in observed.stream {
+            operationSawCancellation = value
+            break
+        }
+        #expect(operationSawCancellation)
+    }
+
     @Test func cancellingTheCallerCancelsTheDriverAndTheOperation() async throws {
         let fixture = Fixture()
         let started = AsyncStream<Void>.makeStream()
@@ -593,6 +660,9 @@ private actor Tracker {
     func waitForOpen() async { await waitForOpens(1) }
     func waitForOpens(_ count: Int) async {
         while opens < count { await Task.yield() }
+    }
+    func waitForCancels(_ count: Int) async {
+        while cancels < count { await Task.yield() }
     }
 }
 
