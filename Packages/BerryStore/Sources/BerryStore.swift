@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 
@@ -526,10 +527,15 @@ public final class BerryStore: Sendable {
         }
     }
 
-    public func saveMCPProject(_ project: MCPProject) throws {
+    /// Test-only raw SQL, used to simulate a process editing the store file directly.
+    func executeForTesting(_ sql: String, arguments: StatementArguments = []) throws {
+        try dbQueue.write { try $0.execute(sql: sql, arguments: arguments) }
+    }
+
+    public func saveMCPProject(_ project: MCPProject, sealingKey: SymmetricKey) throws {
         let encoder = JSONEncoder()
         let roots = try MCPProject.canonicalWorkspaceRoots(project.workspaceRoots)
-        let record = MCPProjectRecord(
+        var record = MCPProjectRecord(
             id: project.id,
             name: project.name,
             isEnabled: project.isEnabled,
@@ -538,6 +544,10 @@ public final class BerryStore: Sendable {
             createdAt: project.createdAt,
             updatedAt: project.updatedAt
         )
+        record.integrityTag = MCPAccessIntegrity.tag(
+            try MCPAccessIntegrity.projectPayload(id: project.id, isEnabled: project.isEnabled, workspaceRoots: roots),
+            key: sealingKey
+        )
         try dbQueue.write { db in
             try record.save(db)
             try MCPProjectProfileRecord.filter(Column("projectID") == project.id).deleteAll(db)
@@ -545,15 +555,23 @@ public final class BerryStore: Sendable {
             for access in project.profiles where seen.insert(access.profileID).inserted {
                 // The foreign key rejects unsaved profiles, so metadata such as
                 // a group name or workspace path can never manufacture access.
+                let normalizedAccess = MCPProfileAccess(
+                    profileID: access.profileID,
+                    liveRead: access.liveRead,
+                    redactedColumns: access.redactedColumns
+                )
                 try MCPProjectProfileRecord(
                     projectID: project.id,
                     profileID: access.profileID,
                     liveRead: access.liveRead,
                     redactedColumnsJSON: String(
-                        decoding: try encoder.encode(MCPProfileAccess.normalizedColumns(access.redactedColumns)),
+                        decoding: try encoder.encode(normalizedAccess.redactedColumns),
                         as: UTF8.self
                     ),
-                    integrityTag: nil
+                    integrityTag: MCPAccessIntegrity.tag(
+                        try MCPAccessIntegrity.profilePayload(projectID: project.id, access: normalizedAccess),
+                        key: sealingKey
+                    )
                 ).insert(db)
             }
         }
@@ -563,6 +581,43 @@ public final class BerryStore: Sendable {
         _ = try dbQueue.write { db in
             try MCPProjectRecord.deleteOne(db, key: id)
         }
+    }
+
+    /// Loads a project and verifies its integrity tags. A missing key, a bad
+    /// project tag, or a bad row tag never throws; it removes live reads, while
+    /// schema/graph metadata (already readable from this file) stays available.
+    public func verifiedMCPProject(id: UUID, key: SymmetricKey?) throws -> MCPVerifiedProject? {
+        try dbQueue.read { db in
+            guard let record = try MCPProjectRecord.fetchOne(db, key: id) else { return nil }
+            let project = try Self.makeMCPProject(record: record, db: db)
+            guard let key,
+                  MCPAccessIntegrity.isValid(
+                      record.integrityTag,
+                      payload: try MCPAccessIntegrity.projectPayload(
+                          id: project.id, isEnabled: project.isEnabled, workspaceRoots: project.workspaceRoots
+                      ),
+                      key: key
+                  )
+            else { return MCPVerifiedProject(project: project, liveReadProfileIDs: []) }
+
+            let rows = try MCPProjectProfileRecord.filter(Column("projectID") == id).fetchAll(db)
+            var live = Set<UUID>()
+            for row in rows where row.liveRead {
+                guard let access = project.profiles.first(where: { $0.profileID == row.profileID }) else { continue }
+                let payload = try MCPAccessIntegrity.profilePayload(projectID: id, access: access)
+                if MCPAccessIntegrity.isValid(row.integrityTag, payload: payload, key: key) {
+                    live.insert(row.profileID)
+                }
+            }
+            return MCPVerifiedProject(project: project, liveReadProfileIDs: live)
+        }
+    }
+
+    /// The helper's view of a project: settings as stored, plus the profiles
+    /// whose live-read switch is proven to have been written by BerryDB.
+    public struct MCPVerifiedProject: Equatable, Sendable {
+        public let project: MCPProject
+        public let liveReadProfileIDs: Set<UUID>
     }
 
     private static func makeMCPProject(record: MCPProjectRecord, db: Database) throws -> MCPProject {

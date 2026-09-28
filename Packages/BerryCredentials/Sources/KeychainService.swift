@@ -24,9 +24,20 @@ public enum KeychainService {
         kind: SecretKind = .database,
         profileID: UUID
     ) -> Bool {
-        let service = service(kind, profileID)
-        let data = Data(password.utf8)
+        saveData(Data(password.utf8), service: service(kind, profileID))
+    }
 
+    public static func readPassword(
+        kind: SecretKind = .database,
+        profileID: UUID
+    ) -> String? {
+        guard let data = readData(service: service(kind, profileID)) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Stores raw bytes under `service` with the attributes every BerryDB secret uses.
+    @discardableResult
+    public static func saveData(_ data: Data, service: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -45,13 +56,11 @@ public enum KeychainService {
         return updateStatus == errSecSuccess
     }
 
-    public static func readPassword(
-        kind: SecretKind = .database,
-        profileID: UUID
-    ) -> String? {
+    /// Reads raw bytes stored under `service`, or nil when absent or inaccessible.
+    public static func readData(service: String) -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service(kind, profileID),
+            kSecAttrService as String: service,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
@@ -59,7 +68,7 @@ public enum KeychainService {
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data
         else { return nil }
-        return String(data: data, encoding: .utf8)
+        return data
     }
 
     /// Deleting a profile must also delete its secrets — no orphaned entries.

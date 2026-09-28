@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 import Testing
@@ -30,7 +31,7 @@ struct MCPProjectTests {
             createdAt: Date(timeIntervalSince1970: 1),
             updatedAt: Date(timeIntervalSince1970: 2)
         )
-        try store.saveMCPProject(project)
+        try store.saveMCPProject(project, sealingKey: SymmetricKey(size: .bits256))
 
         let loaded = try #require(try store.mcpProject(id: project.id))
         #expect(loaded.isEnabled)
@@ -52,7 +53,7 @@ struct MCPProjectTests {
         let project = MCPProject(name: "Relative", workspaceRoots: ["repos/berrydb"])
 
         #expect(throws: MCPProjectError.workspaceRootMustBeAbsolute("repos/berrydb")) {
-            try store.saveMCPProject(project)
+            try store.saveMCPProject(project, sealingKey: SymmetricKey(size: .bits256))
         }
         #expect(try store.mcpProject(id: project.id) == nil)
     }
@@ -117,12 +118,12 @@ struct MCPProjectTests {
             MCPProject(id: zID, name: "Zed"),
             MCPProject(id: a2ID, name: "alpha"),
             MCPProject(id: a1ID, name: "Alpha"),
-        ] { try store.saveMCPProject(project) }
+        ] { try store.saveMCPProject(project, sealingKey: SymmetricKey(size: .bits256)) }
 
         #expect(try store.mcpProjects().map(\.id) == [a1ID, a2ID, zID])
         var updated = try #require(try store.mcpProject(id: zID))
         updated.name = "Beta"
-        try store.saveMCPProject(updated)
+        try store.saveMCPProject(updated, sealingKey: SymmetricKey(size: .bits256))
         #expect(try store.mcpProject(id: zID)?.name == "Beta")
         try store.deleteMCPProject(id: zID)
         #expect(try store.mcpProject(id: zID) == nil)
@@ -138,7 +139,7 @@ struct MCPProjectTests {
             name: "Repo", workspaceRoots: ["/repo"],
             profiles: [MCPProfileAccess(profileID: explicitlyAllowed.id)]
         )
-        try store.saveMCPProject(project)
+        try store.saveMCPProject(project, sealingKey: SymmetricKey(size: .bits256))
 
         let loaded = try #require(try store.mcpProject(id: project.id))
         #expect(loaded.profiles.map(\.profileID) == [explicitlyAllowed.id])
@@ -155,7 +156,7 @@ struct MCPProjectTests {
             name: "Project",
             profiles: [MCPProfileAccess(profileID: first.id), MCPProfileAccess(profileID: removed.id)]
         )
-        try store.saveMCPProject(project)
+        try store.saveMCPProject(project, sealingKey: SymmetricKey(size: .bits256))
 
         try store.deleteProfile(id: removed.id)
         #expect(try store.mcpProject(id: project.id)?.profiles.map(\.profileID) == [first.id])
