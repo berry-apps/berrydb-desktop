@@ -34,53 +34,114 @@ struct BerryStoreReadOnlyTests {
         #expect(throws: BerryStore.ReadOnlyOpenError.self) { try BerryStore.openReadOnly(path: path) }
     }
 
-    /// Runs `sql` to take a lock on `path` from a separate connection on a
-    /// background thread, holds it for `duration`, then commits. Returns
-    /// once the lock is held; `done` is left when it has been released.
-    private func holdLock(_ sql: String, on path: String, for duration: TimeInterval, done: DispatchGroup) throws {
-        let other = try DatabaseQueue(path: path)
-        let held = DispatchSemaphore(value: 0)
-        done.enter()
-        DispatchQueue.global().async {
-            defer { done.leave() }
-            do {
-                try other.inDatabase { db in
-                    try db.execute(sql: sql)
-                    _ = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM grdb_migrations")
-                    held.signal()
-                    Thread.sleep(forTimeInterval: duration)
-                    try db.execute(sql: "COMMIT")
+    /// A lock taken on a store file from a second connection, standing in for
+    /// the other process (app or helper).
+    ///
+    /// The lock runs on a dedicated `Thread`, and the test awaits it through
+    /// continuations. Waiting with a semaphore on work queued to a shared
+    /// pool would block a Swift concurrency thread until that pool serves the
+    /// work, which on a machine with few cores can starve every test thread.
+    private final class HeldLock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var releaseWaiter: CheckedContinuation<Void, Never>?
+        private var isReleased = false
+        private(set) var error: (any Error)?
+
+        /// Takes the lock with `sql`, holds it for `duration`, then commits.
+        /// Returns once the lock is held.
+        static func take(_ sql: String, on path: String, for duration: TimeInterval) async throws -> HeldLock {
+            let other = try DatabaseQueue(path: path)
+            let held = HeldLock()
+            await withCheckedContinuation { (acquired: CheckedContinuation<Void, Never>) in
+                held.setAcquiredWaiter(acquired)
+                Thread {
+                    do {
+                        try other.inDatabase { db in
+                            try db.execute(sql: sql)
+                            _ = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM grdb_migrations")
+                            held.signalAcquired()
+                            Thread.sleep(forTimeInterval: duration)
+                            try db.execute(sql: "COMMIT")
+                        }
+                    } catch {
+                        held.record(error)
+                    }
+                    held.signalAcquired()
+                    held.markReleased()
+                }.start()
+            }
+            return held
+        }
+
+        private var acquiredWaiter: CheckedContinuation<Void, Never>?
+
+        private func setAcquiredWaiter(_ waiter: CheckedContinuation<Void, Never>) {
+            lock.lock()
+            acquiredWaiter = waiter
+            lock.unlock()
+        }
+
+        /// Resumes the acquiring test once, whichever of lock or failure comes first.
+        private func signalAcquired() {
+            lock.lock()
+            let waiter = acquiredWaiter
+            acquiredWaiter = nil
+            lock.unlock()
+            waiter?.resume()
+        }
+
+        /// Suspends until the lock has been released, without blocking a thread.
+        func released() async {
+            await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
+                lock.lock()
+                if isReleased {
+                    lock.unlock()
+                    waiter.resume()
+                } else {
+                    releaseWaiter = waiter
+                    lock.unlock()
                 }
-            } catch {
-                held.signal()
-                Issue.record(error)
             }
         }
-        held.wait()
+
+        private func record(_ error: any Error) {
+            lock.lock()
+            self.error = error
+            lock.unlock()
+        }
+
+        private func markReleased() {
+            lock.lock()
+            isReleased = true
+            let waiter = releaseWaiter
+            releaseWaiter = nil
+            lock.unlock()
+            waiter?.resume()
+        }
     }
 
-    @Test func appWriteWaitsForAHelperReadInsteadOfFailing() throws {
+    @Test func appWriteWaitsForAHelperReadInsteadOfFailing() async throws {
         let path = tempPath()
         let store = try BerryStore(path: path)
-        let released = DispatchGroup()
-        try holdLock("BEGIN DEFERRED", on: path, for: 0.5, done: released)
+        let held = try await HeldLock.take("BEGIN DEFERRED", on: path, for: 0.5)
 
         try store.save(ConnectionProfile(driverID: "sqlite", name: "Saved during a read"))
 
-        released.wait()
+        await held.released()
+        #expect(held.error == nil)
         #expect(try store.allProfiles().map(\.name) == ["Saved during a read"])
     }
 
-    @Test func helperReadWaitsForAnAppWriteInsteadOfFailing() throws {
+    @Test func helperReadWaitsForAnAppWriteInsteadOfFailing() async throws {
         let path = tempPath()
         _ = try BerryStore(path: path)
-        let released = DispatchGroup()
-        try holdLock("BEGIN EXCLUSIVE", on: path, for: 0.5, done: released)
+        let held = try await HeldLock.take("BEGIN EXCLUSIVE", on: path, for: 0.5)
 
         let helper = try BerryStore.openReadOnly(path: path)
         #expect(try helper.mcpProjects().isEmpty)
 
-        released.wait()
+        await held.released()
+        #expect(held.error == nil)
     }
 
     @Test func missingFileIsAnErrorNotACreation() {
