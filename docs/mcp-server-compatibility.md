@@ -274,14 +274,14 @@ on macOS). No persistent host configuration was modified.
 |---|---|---|---|---|---|---|
 | Claude Code | 2.1.283 | `--mcp-config … --strict-mcp-config` | `/tmp/g2-repo` | `CLAUDE_PROJECT_DIR=/private/tmp/g2-repo` | `{"listChanged": true}` | `server/discover`, then `initialize` (`2025-11-25`) |
 | Codex CLI | 0.157.1 | `-c mcp_servers.<name>.command=…` | `/private/tmp/g2-repo` | none | absent | `initialize` (`2025-06-18`) |
-| Antigravity | 1.2.11 | pending | pending | pending | pending | `server/discover` (Phase 0) |
+| Antigravity | 1.2.11 | `agy mcp add` (temporary global entry, removed after the run) | `/tmp/g2-repo` | none | `{"listChanged": true}`; sends `notifications/roots/list_changed` | `server/discover`, then `initialize` (`2025-11-25`) |
 
-Antigravity has no per-invocation MCP configuration; `agy mcp add` writes
-the user's global configuration, so its run is pending approval to add and
-remove a temporary entry there.
+Antigravity has no per-invocation MCP configuration; a temporary entry was
+added with `agy mcp add` and removed with `agy mcp remove` after the run.
 
-Conclusion so far: the process working directory identifies the workspace
-for both tested hosts, and Claude Code additionally offers `roots`. The
+Conclusion: **pass.** The process working directory identifies the
+workspace for all three hosts; Claude Code and Antigravity also offer
+`roots`, Codex does not. The
 selection order in the design (roots, then working directory, then an
 explicit project) is viable. The two hosts spell the same directory
 differently (`/tmp/…` versus `/private/tmp/…`), so selection must compare
