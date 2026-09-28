@@ -24,7 +24,7 @@ struct MCPAccessIntegrityTests {
             MCPProfileAccess(profileID: a.id, liveRead: true),
             MCPProfileAccess(profileID: b.id, liveRead: false),
         ])
-        try store.saveMCPProject(project, sealingKey: key)
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
         let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
         #expect(verified.liveReadProfileIDs == [a.id])
     }
@@ -32,7 +32,7 @@ struct MCPAccessIntegrityTests {
     @Test func directlyEnabledLiveReadIsIgnored() throws {
         let (store, a, _) = try makeStore()
         let project = MCPProject(name: "P", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id)])
-        try store.saveMCPProject(project, sealingKey: key)
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
         try store.executeForTesting("UPDATE mcp_project_profile SET liveRead = 1")
         let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
         #expect(verified.liveReadProfileIDs.isEmpty)
@@ -41,7 +41,7 @@ struct MCPAccessIntegrityTests {
     @Test func insertedRowWithoutTagGrantsNothing() throws {
         let (store, a, b) = try makeStore()
         let project = MCPProject(name: "P", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
-        try store.saveMCPProject(project, sealingKey: key)
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
         try store.executeForTesting(
             "INSERT INTO mcp_project_profile (projectID, profileID, liveRead, redactedColumnsJSON) VALUES (?, ?, 1, '[]')",
             arguments: [project.id, b.id]
@@ -55,7 +55,7 @@ struct MCPAccessIntegrityTests {
         let project = MCPProject(name: "P", isEnabled: true, profiles: [
             MCPProfileAccess(profileID: a.id, liveRead: true, redactedColumns: ["email"]),
         ])
-        try store.saveMCPProject(project, sealingKey: key)
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
         try store.executeForTesting("UPDATE mcp_project_profile SET redactedColumnsJSON = '[]'")
         let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
         #expect(verified.liveReadProfileIDs.isEmpty)
@@ -67,7 +67,7 @@ struct MCPAccessIntegrityTests {
             MCPProfileAccess(profileID: a.id, liveRead: true),
             MCPProfileAccess(profileID: b.id, liveRead: true),
         ])
-        try store.saveMCPProject(project, sealingKey: key)
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
         try store.deleteProfile(id: b.id)
         let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
         #expect(verified.liveReadProfileIDs == [a.id])
@@ -76,7 +76,7 @@ struct MCPAccessIntegrityTests {
     @Test func tamperedProjectRowDisablesAllLiveReads() throws {
         let (store, a, _) = try makeStore()
         let project = MCPProject(name: "P", isEnabled: false, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
-        try store.saveMCPProject(project, sealingKey: key)
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
         try store.executeForTesting("UPDATE mcp_project SET isEnabled = 1")
         let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
         #expect(verified.liveReadProfileIDs.isEmpty)
@@ -85,7 +85,7 @@ struct MCPAccessIntegrityTests {
     @Test func missingKeyDisablesAllLiveReads() throws {
         let (store, a, _) = try makeStore()
         let project = MCPProject(name: "P", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
-        try store.saveMCPProject(project, sealingKey: key)
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
         let verified = try #require(try store.verifiedMCPProject(id: project.id, key: nil))
         #expect(verified.liveReadProfileIDs.isEmpty)
         #expect(verified.project.profiles.count == 1)
@@ -95,8 +95,8 @@ struct MCPAccessIntegrityTests {
         let (store, a, _) = try makeStore()
         let p1 = MCPProject(name: "P1", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
         let p2 = MCPProject(name: "P2", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: false)])
-        try store.saveMCPProject(p1, sealingKey: key)
-        try store.saveMCPProject(p2, sealingKey: key)
+        try store.saveMCPProject(p1, sealingKey: key, previousKey: nil)
+        try store.saveMCPProject(p2, sealingKey: key, previousKey: key)
         try store.executeForTesting(
             "UPDATE mcp_project_profile SET liveRead = 1, integrityTag = (SELECT integrityTag FROM mcp_project_profile WHERE projectID = ?) WHERE projectID = ?",
             arguments: [p1.id, p2.id]
@@ -108,7 +108,7 @@ struct MCPAccessIntegrityTests {
     @Test func disabledProjectHasEmptyLiveReadsButValidProjectTag() throws {
         let (store, a, _) = try makeStore()
         let project = MCPProject(name: "P", isEnabled: false, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
-        try store.saveMCPProject(project, sealingKey: key)
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
         let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
         #expect(verified.liveReadProfileIDs.isEmpty)
         #expect(verified.projectTagValid)
@@ -119,7 +119,7 @@ struct MCPAccessIntegrityTests {
         let project = MCPProject(name: "P", isEnabled: true, profiles: [
             MCPProfileAccess(profileID: a.id, liveRead: true, redactedColumns: ["ssn"]),
         ])
-        try store.saveMCPProject(project, sealingKey: key)
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
 
         // Drop the composite primary key so a second row for the same
         // profile can exist, simulating a foreign process rewriting the
@@ -157,7 +157,7 @@ struct MCPAccessIntegrityTests {
             MCPProfileAccess(profileID: a.id, liveRead: true),
             MCPProfileAccess(profileID: b.id, liveRead: true),
         ])
-        try store.saveMCPProject(project, sealingKey: key)
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
         try store.executeForTesting(
             "UPDATE mcp_project_profile SET integrityTag = (SELECT integrityTag FROM mcp_project_profile WHERE profileID = ?) WHERE profileID = ?",
             arguments: [a.id, b.id]
@@ -174,7 +174,7 @@ struct MCPAccessIntegrityTests {
             name: "P", isEnabled: true, workspaceRoots: ["/repo"],
             profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)]
         )
-        try store.saveMCPProject(project, sealingKey: key)
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
         try store.executeForTesting(#"UPDATE mcp_project SET workspaceRootsJSON = '["/other"]'"#)
 
         let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
@@ -185,7 +185,7 @@ struct MCPAccessIntegrityTests {
     @Test func projectRowWithNullTagInvalidatesProjectTag() throws {
         let (store, a, _) = try makeStore()
         let project = MCPProject(name: "P", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
-        try store.saveMCPProject(project, sealingKey: key)
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
         try store.executeForTesting("UPDATE mcp_project SET integrityTag = NULL")
 
         let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
@@ -193,12 +193,16 @@ struct MCPAccessIntegrityTests {
         #expect(!verified.projectTagValid)
     }
 
-    @Test func staleRowsRestoredAfterKeyRotationDoNotVerifyUnderTheNewKey() throws {
+    /// Regression guard for HMAC's own key-rotation property (a tag signed
+    /// under K1 must not verify under K2) — independent of `reseal`, and not
+    /// evidence of the store's resealing behavior, which the tests below
+    /// cover directly.
+    @Test func staleK1RowsNeverVerifyUnderK2RegressionGuard() throws {
         let (store, a, _) = try makeStore()
         let key1 = SymmetricKey(size: .bits256)
         let key2 = SymmetricKey(size: .bits256)
         let project = MCPProject(name: "P", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
-        try store.saveMCPProject(project, sealingKey: key1)
+        try store.saveMCPProject(project, sealingKey: key1, previousKey: nil)
 
         let snapshot = try store.fetchForTesting(
             "SELECT liveRead, redactedColumnsJSON, integrityTag FROM mcp_project_profile WHERE projectID = ? AND profileID = ?",
@@ -211,7 +215,7 @@ struct MCPAccessIntegrityTests {
 
         var turnedOff = project
         turnedOff.profiles = [MCPProfileAccess(profileID: a.id, liveRead: false)]
-        try store.saveMCPProject(turnedOff, sealingKey: key2)
+        try store.saveMCPProject(turnedOff, sealingKey: key2, previousKey: key1)
 
         try store.executeForTesting(
             "UPDATE mcp_project_profile SET liveRead = ?, redactedColumnsJSON = ?, integrityTag = ? WHERE projectID = ? AND profileID = ?",
@@ -222,19 +226,75 @@ struct MCPAccessIntegrityTests {
         #expect(verified.liveReadProfileIDs.isEmpty)
     }
 
-    @Test func savingOneProjectReSealsAnotherProjectUnderTheNewKey() throws {
+    @Test func untamperedRowsSurviveKeyRotation() throws {
         let (store, a, b) = try makeStore()
         let key1 = SymmetricKey(size: .bits256)
         let key2 = SymmetricKey(size: .bits256)
         let projectA = MCPProject(name: "A", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
         let projectB = MCPProject(name: "B", isEnabled: true, profiles: [MCPProfileAccess(profileID: b.id, liveRead: true)])
-        try store.saveMCPProject(projectA, sealingKey: key1)
-        try store.saveMCPProject(projectB, sealingKey: key1)
+        try store.saveMCPProject(projectA, sealingKey: key1, previousKey: nil)
+        try store.saveMCPProject(projectB, sealingKey: key1, previousKey: key1)
 
-        try store.saveMCPProject(projectA, sealingKey: key2)
+        try store.saveMCPProject(projectB, sealingKey: key2, previousKey: key1)
 
-        let verifiedB = try #require(try store.verifiedMCPProject(id: projectB.id, key: key2))
-        #expect(verifiedB.liveReadProfileIDs == [b.id])
-        #expect(verifiedB.projectTagValid)
+        let verifiedA = try #require(try store.verifiedMCPProject(id: projectA.id, key: key2))
+        #expect(verifiedA.liveReadProfileIDs == [a.id])
+        #expect(verifiedA.projectTagValid)
+    }
+
+    @Test func tamperedRowIsNotLaunderedByAnotherProjectsSave() throws {
+        let (store, a, b) = try makeStore()
+        let key1 = SymmetricKey(size: .bits256)
+        let key2 = SymmetricKey(size: .bits256)
+        let projectA = MCPProject(name: "A", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: false)])
+        let projectB = MCPProject(name: "B", isEnabled: true, profiles: [MCPProfileAccess(profileID: b.id, liveRead: true)])
+        try store.saveMCPProject(projectA, sealingKey: key1, previousKey: nil)
+        try store.saveMCPProject(projectB, sealingKey: key1, previousKey: key1)
+
+        // A same-user process flips A's liveRead directly in the file.
+        try store.executeForTesting(
+            "UPDATE mcp_project_profile SET liveRead = 1 WHERE projectID = ? AND profileID = ?",
+            arguments: [projectA.id, a.id]
+        )
+
+        try store.saveMCPProject(projectB, sealingKey: key2, previousKey: key1)
+
+        let verifiedA = try #require(try store.verifiedMCPProject(id: projectA.id, key: key2))
+        #expect(verifiedA.liveReadProfileIDs.isEmpty)
+        #expect(verifiedA.rejectedLiveReadProfileIDs == [a.id])
+    }
+
+    @Test func tamperedProjectRowIsNotLaunderedByAnotherProjectsSave() throws {
+        let (store, a, b) = try makeStore()
+        let key1 = SymmetricKey(size: .bits256)
+        let key2 = SymmetricKey(size: .bits256)
+        let projectA = MCPProject(name: "A", isEnabled: false, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
+        let projectB = MCPProject(name: "B", isEnabled: true, profiles: [MCPProfileAccess(profileID: b.id, liveRead: true)])
+        try store.saveMCPProject(projectA, sealingKey: key1, previousKey: nil)
+        try store.saveMCPProject(projectB, sealingKey: key1, previousKey: key1)
+
+        // A same-user process flips A's isEnabled directly in the file.
+        try store.executeForTesting("UPDATE mcp_project SET isEnabled = 1 WHERE id = ?", arguments: [projectA.id])
+
+        try store.saveMCPProject(projectB, sealingKey: key2, previousKey: key1)
+
+        let verifiedA = try #require(try store.verifiedMCPProject(id: projectA.id, key: key2))
+        #expect(!verifiedA.projectTagValid)
+    }
+
+    @Test func missingPreviousKeyMakesOtherProjectsRowsUnverifiable() throws {
+        let (store, a, b) = try makeStore()
+        let key1 = SymmetricKey(size: .bits256)
+        let key2 = SymmetricKey(size: .bits256)
+        let projectA = MCPProject(name: "A", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
+        let projectB = MCPProject(name: "B", isEnabled: true, profiles: [MCPProfileAccess(profileID: b.id, liveRead: true)])
+        try store.saveMCPProject(projectA, sealingKey: key1, previousKey: nil)
+        try store.saveMCPProject(projectB, sealingKey: key1, previousKey: key1)
+
+        try store.saveMCPProject(projectB, sealingKey: key2, previousKey: nil)
+
+        let verifiedA = try #require(try store.verifiedMCPProject(id: projectA.id, key: key2))
+        #expect(verifiedA.liveReadProfileIDs.isEmpty)
+        #expect(!verifiedA.projectTagValid)
     }
 }

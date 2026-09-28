@@ -539,13 +539,22 @@ public final class BerryStore: Sendable {
     }
 
     /// Saves `project` sealed under `sealingKey`, then re-seals every other
-    /// stored project's rows under the same key so a rotated key invalidates
-    /// replay across the whole store, not only the project being saved.
-    /// Callers generate a fresh key on every save and persist it via
-    /// `MCPAccessKeyStore.replace(with:)` only once this call returns, so a
-    /// crash mid-save cannot leave the stored key out of step with the rows
-    /// it seals.
-    public func saveMCPProject(_ project: MCPProject, sealingKey: SymmetricKey) throws {
+    /// stored project's rows for the same key rotation. Callers pass
+    /// `previousKey = MCPAccessKeyStore.load()` and a fresh
+    /// `sealingKey = SymmetricKey(size: .bits256)`, then persist the new key
+    /// with `MCPAccessKeyStore.replace(with: sealingKey)` only once this
+    /// call returns, so a crash mid-save cannot leave the stored key out of
+    /// step with the rows it seals.
+    ///
+    /// A row belonging to another project is only carried forward — re-tagged
+    /// under `sealingKey` — when it currently verifies under `previousKey`.
+    /// Any row that does not (no previous key, a NULL tag, a tampered field,
+    /// or a duplicated profile ID) has its tag cleared instead of being
+    /// re-signed from whatever is currently on disk, so a same-user process
+    /// that edits another project's row between saves cannot have that edit
+    /// signed off by a later, unrelated save. A row cleared this way stays
+    /// unverifiable until its own project is saved again by the app.
+    public func saveMCPProject(_ project: MCPProject, sealingKey: SymmetricKey, previousKey: SymmetricKey?) throws {
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
         let roots = try MCPProject.canonicalWorkspaceRoots(project.workspaceRoots)
@@ -588,19 +597,23 @@ public final class BerryStore: Sendable {
                     )
                 ).insert(db)
             }
-            try Self.reseal(otherThan: project.id, sealingKey: sealingKey, db: db, encoder: encoder, decoder: decoder)
+            try Self.reseal(
+                otherThan: project.id, sealingKey: sealingKey, previousKey: previousKey,
+                db: db, encoder: encoder, decoder: decoder
+            )
         }
     }
 
-    /// Re-tags every stored project other than `excludedProjectID` under
-    /// `sealingKey`, keeping their rows verifiable across a key rotation.
-    /// This reads and rewrites each row's own current fields, so a row
-    /// already tampered before this call is re-tagged from its tampered
-    /// fields — the mitigation is that callers rotate the key on every save,
-    /// keeping the window in which a tampered row could be re-legitimized
-    /// short rather than eliminating it.
+    /// Re-tags every stored project other than `excludedProjectID` for a key
+    /// rotation from `previousKey` to `sealingKey`. A row is only carried
+    /// forward — re-tagged under `sealingKey` — when it verifies under
+    /// `previousKey` from its own current fields; anything else (no previous
+    /// key, a bad or missing tag, or a duplicated profile ID) has its tag
+    /// cleared rather than re-signed, so a same-user process that edits
+    /// another project's row between saves cannot have that edit signed off
+    /// by an unrelated save.
     private static func reseal(
-        otherThan excludedProjectID: UUID, sealingKey: SymmetricKey, db: Database,
+        otherThan excludedProjectID: UUID, sealingKey: SymmetricKey, previousKey: SymmetricKey?, db: Database,
         encoder: JSONEncoder, decoder: JSONDecoder
     ) throws {
         let otherProjects = try MCPProjectRecord.filter(Column("id") != excludedProjectID).fetchAll(db)
@@ -608,20 +621,26 @@ public final class BerryStore: Sendable {
             let otherRoots = try MCPProject.canonicalWorkspaceRoots(
                 try decoder.decode([String].self, from: Data(other.workspaceRootsJSON.utf8))
             )
-            other.integrityTag = MCPAccessIntegrity.tag(
-                try MCPAccessIntegrity.projectPayload(id: other.id, isEnabled: other.isEnabled, workspaceRoots: otherRoots),
-                key: sealingKey
+            let projectPayload = try MCPAccessIntegrity.projectPayload(
+                id: other.id, isEnabled: other.isEnabled, workspaceRoots: otherRoots
             )
+            let projectVerified = previousKey.map {
+                MCPAccessIntegrity.isValid(other.integrityTag, payload: projectPayload, key: $0)
+            } ?? false
+            other.integrityTag = projectVerified ? MCPAccessIntegrity.tag(projectPayload, key: sealingKey) : nil
             try other.save(db)
 
             let rows = try MCPProjectProfileRecord.filter(Column("projectID") == other.id).fetchAll(db)
+            var occurrences: [UUID: Int] = [:]
+            for row in rows { occurrences[row.profileID, default: 0] += 1 }
             for var row in rows {
                 let redactedColumns = try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8))
                 let access = MCPProfileAccess(profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns)
-                row.integrityTag = MCPAccessIntegrity.tag(
-                    try MCPAccessIntegrity.profilePayload(projectID: other.id, access: access),
-                    key: sealingKey
-                )
+                let rowPayload = try MCPAccessIntegrity.profilePayload(projectID: other.id, access: access)
+                let rowVerified = occurrences[row.profileID] == 1 && (previousKey.map {
+                    MCPAccessIntegrity.isValid(row.integrityTag, payload: rowPayload, key: $0)
+                } ?? false)
+                row.integrityTag = rowVerified ? MCPAccessIntegrity.tag(rowPayload, key: sealingKey) : nil
                 try row.save(db)
             }
         }
