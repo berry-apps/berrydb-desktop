@@ -297,4 +297,92 @@ struct MCPAccessIntegrityTests {
         #expect(verifiedA.liveReadProfileIDs.isEmpty)
         #expect(!verifiedA.projectTagValid)
     }
+
+    @Test func editingCopyForcesOffATamperedLiveReadRow() throws {
+        let (store, a, _) = try makeStore()
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: false)])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        try store.executeForTesting("UPDATE mcp_project_profile SET liveRead = 1")
+
+        let editing = try #require(try store.mcpProjectForEditing(id: project.id, key: key))
+        #expect(editing.profiles.first?.liveRead == false)
+    }
+
+    @Test func editingCopyForcesProjectDisabledWhenProjectTagInvalid() throws {
+        let (store, a, _) = try makeStore()
+        let project = MCPProject(name: "P", isEnabled: false, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        try store.executeForTesting("UPDATE mcp_project SET isEnabled = 1")
+
+        let editing = try #require(try store.mcpProjectForEditing(id: project.id, key: key))
+        #expect(!editing.isEnabled)
+    }
+
+    @Test func editingCopyKeepsTagVerifiedLiveReadOnADisabledProject() throws {
+        let (store, a, _) = try makeStore()
+        let project = MCPProject(name: "P", isEnabled: false, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+
+        // verifiedMCPProject gates liveReadProfileIDs on isEnabled, so a
+        // disabled project's editing copy must not derive from that set
+        // directly — the row's own tag is still genuinely valid here.
+        let editing = try #require(try store.mcpProjectForEditing(id: project.id, key: key))
+        #expect(editing.profiles.first?.liveRead == true)
+        #expect(!editing.isEnabled)
+    }
+
+    @Test func editingCopyOfUntamperedProjectRoundTripsUnchanged() throws {
+        let (store, a, b) = try makeStore()
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: a.id, liveRead: true, redactedColumns: ["email"]),
+            MCPProfileAccess(profileID: b.id, liveRead: false),
+        ])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+
+        let editing = try #require(try store.mcpProjectForEditing(id: project.id, key: key))
+        let loaded = try #require(try store.mcpProject(id: project.id))
+        #expect(editing == loaded)
+    }
+
+    @Test func savingTheEditingCopyOfATamperedProjectDoesNotProduceAnUngrantedLiveRead() throws {
+        let (store, a, _) = try makeStore()
+        let key2 = SymmetricKey(size: .bits256)
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: false)])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        try store.executeForTesting("UPDATE mcp_project_profile SET liveRead = 1")
+
+        let editing = try #require(try store.mcpProjectForEditing(id: project.id, key: key))
+        try store.saveMCPProject(editing, sealingKey: key2, previousKey: key)
+
+        let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key2))
+        #expect(verified.liveReadProfileIDs.isEmpty)
+    }
+
+    @Test func undecodableForeignProfileRowDoesNotBlockSaveAndIsNotLive() throws {
+        let (store, a, b) = try makeStore()
+        let key1 = SymmetricKey(size: .bits256)
+        let key2 = SymmetricKey(size: .bits256)
+        let projectA = MCPProject(name: "A", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
+        let projectB = MCPProject(name: "B", isEnabled: true, profiles: [MCPProfileAccess(profileID: b.id, liveRead: true)])
+        try store.saveMCPProject(projectA, sealingKey: key1, previousKey: nil)
+        try store.saveMCPProject(projectB, sealingKey: key1, previousKey: key1)
+
+        // A same-user process corrupts B's profile row so it cannot decode.
+        try store.executeForTesting(
+            "UPDATE mcp_project_profile SET redactedColumnsJSON = 'not json' WHERE projectID = ? AND profileID = ?",
+            arguments: [projectB.id, b.id]
+        )
+
+        try store.saveMCPProject(projectA, sealingKey: key2, previousKey: key1)
+
+        let verifiedA = try #require(try store.verifiedMCPProject(id: projectA.id, key: key2))
+        #expect(verifiedA.liveReadProfileIDs == [a.id])
+
+        let rows = try store.fetchForTesting(
+            "SELECT integrityTag FROM mcp_project_profile WHERE projectID = ? AND profileID = ?",
+            arguments: [projectB.id, b.id]
+        )
+        let tag: Data? = try #require(rows.first)["integrityTag"]
+        #expect(tag == nil)
+    }
 }

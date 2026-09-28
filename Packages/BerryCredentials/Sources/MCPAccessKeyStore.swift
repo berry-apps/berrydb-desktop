@@ -70,14 +70,32 @@ public struct MCPAccessKeyStore: Sendable {
         return SymmetricKey(data: data)
     }
 
-    /// Overwrites the stored key. `BerryStore.saveMCPProject` re-seals every
-    /// row under a freshly generated key before this is called, so the
-    /// stored key and the rows it verifies are updated in that order — a
-    /// crash between the two leaves rows sealed under a key that is not yet
-    /// stored, so verification fails closed (no live reads) until the next
-    /// successful save, never an incorrect grant. Throws
-    /// `keychainWriteFailed` and leaves the previously stored key untouched
-    /// if the write fails.
+    /// Rotation-side: the first step of rotating the key (see `replace(with:)`
+    /// for the full order). Distinguishes "no key exists yet" (returns nil —
+    /// the legitimate first-rotation state) from a genuine read failure
+    /// (throws), so a caller rotating the key never mistakes "the Keychain
+    /// refused to answer" for "there is nothing to preserve" and proceeds to
+    /// replace a key it never actually read.
+    public func loadForRotation() throws -> SymmetricKey? {
+        guard let data = try read() else { return nil }
+        guard data.count == Self.keyByteCount else { throw KeyError.invalidStoredKey }
+        return SymmetricKey(data: data)
+    }
+
+    /// Overwrites the stored key. Rotation order (spec §8.4, amended): (1)
+    /// `previousKey = try loadForRotation()`, abort on throw; (2) generate
+    /// `newKey = SymmetricKey(size: .bits256)`; (3) `replace(with: newKey)`,
+    /// abort on throw; (4) `store.saveMCPProject(project, sealingKey: newKey,
+    /// previousKey: previousKey)`. This call runs *before* step 4 reseals
+    /// anything, not after: if step 4 fails or is interrupted once this call
+    /// has already succeeded, every row on disk is still sealed under
+    /// `previousKey`, which is no longer the stored key, so live reads stop
+    /// for every project until each is individually saved again (that save
+    /// reseals its own project's rows from trusted values regardless of
+    /// `previousKey`, recovering it immediately). A restored older copy of
+    /// the store never verifies under the current key, by the same
+    /// mechanism. Throws `keychainWriteFailed` and leaves the previously
+    /// stored key untouched if the write fails.
     public func replace(with key: SymmetricKey) throws {
         guard write(key.withUnsafeBytes { Data($0) }) else { throw KeyError.keychainWriteFailed }
     }

@@ -86,4 +86,27 @@ struct MCPAccessKeyStoreTests {
         let loaded = try #require(store.load())
         #expect(loaded.withUnsafeBytes { Data($0) } == newKey.withUnsafeBytes { Data($0) })
     }
+
+    @Test func loadForRotationReturnsTheKeyWhenPresentAndWellFormed() throws {
+        let box = Box()
+        box.data = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
+        let store = MCPAccessKeyStore(read: { box.data }, write: { _ in true })
+        let key = try store.loadForRotation()
+        #expect(key?.withUnsafeBytes { Data($0) } == box.data)
+    }
+
+    @Test func loadForRotationReturnsNilWhenNotFound() throws {
+        let store = MCPAccessKeyStore(read: { nil }, write: { _ in true })
+        #expect(try store.loadForRotation() == nil)
+    }
+
+    @Test func loadForRotationThrowsInvalidStoredKeyForWrongLength() {
+        let store = MCPAccessKeyStore(read: { Data(repeating: 1, count: 16) }, write: { _ in true })
+        #expect(throws: MCPAccessKeyStore.KeyError.invalidStoredKey) { try store.loadForRotation() }
+    }
+
+    @Test func loadForRotationPropagatesAReadFailureInsteadOfTreatingItAsNoKey() {
+        let store = MCPAccessKeyStore(read: { throw InjectedReadFailure() }, write: { _ in true })
+        #expect(throws: InjectedReadFailure.self) { try store.loadForRotation() }
+    }
 }
