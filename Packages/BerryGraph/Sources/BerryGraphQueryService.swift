@@ -18,15 +18,30 @@ public struct BerryGraphQueryService: Sendable {
     }
 
     private let loadGraph: @Sendable (UUID) throws -> SchemaGraph
+    private let harvestedAt: @Sendable (UUID) throws -> Date?
 
     public init(store: GraphStore) {
         self.loadGraph = { try store.loadGraph(profileID: $0) }
+        self.harvestedAt = { try store.snapshots(profileID: $0).map(\.takenAt).max() }
     }
 
     /// Injectable snapshot source for adapters and deterministic tests. Every
-    /// public operation invokes this closure exactly once.
+    /// public operation invokes this closure exactly once. `harvestedAt`
+    /// always reports `nil`; use `init(loadGraph:harvestedAt:)` to stub it.
     public init(loadGraph: @escaping @Sendable (UUID) throws -> SchemaGraph) {
+        self.init(loadGraph: loadGraph, harvestedAt: { _ in nil })
+    }
+
+    /// Injectable snapshot and harvest-time sources for adapters and
+    /// deterministic tests. Every public operation invokes `loadGraph` exactly
+    /// once; `schema(...)` additionally invokes `harvestedAt` exactly once,
+    /// after `loadGraph` succeeds.
+    public init(
+        loadGraph: @escaping @Sendable (UUID) throws -> SchemaGraph,
+        harvestedAt: @escaping @Sendable (UUID) throws -> Date?
+    ) {
         self.loadGraph = loadGraph
+        self.harvestedAt = harvestedAt
     }
 
     public enum QueryError: Error, Equatable, Sendable, LocalizedError {
@@ -89,6 +104,90 @@ public struct BerryGraphQueryService: Sendable {
     public struct StatisticsSummary: Equatable, Sendable {
         public let tables: [NodeStatistics]
         public let unusedIndexes: [String]
+    }
+
+    /// Level of detail requested from `schema(...)`.
+    public enum SchemaDetail: Sendable {
+        /// Object name and kind only — no columns, indexes, or foreign keys.
+        case overview
+        /// Full column, index, and foreign key detail per object.
+        case full
+    }
+
+    /// One table or view surfaced by `schema(...)`. Under `.overview` detail,
+    /// `columns`, `indexes`, and `foreignKeys` are always empty.
+    public struct SchemaObject: Equatable, Sendable {
+        public struct Column: Equatable, Sendable {
+            public let name: String
+            public let type: String
+            public let nullable: Bool
+            public let primaryKey: Bool
+
+            public init(name: String, type: String, nullable: Bool, primaryKey: Bool) {
+                self.name = name
+                self.type = type
+                self.nullable = nullable
+                self.primaryKey = primaryKey
+            }
+        }
+
+        public struct Index: Equatable, Sendable {
+            public let name: String
+            public let columns: [String]
+            public let unique: Bool
+
+            public init(name: String, columns: [String], unique: Bool) {
+                self.name = name
+                self.columns = columns
+                self.unique = unique
+            }
+        }
+
+        public struct ForeignKey: Equatable, Sendable {
+            public let column: String
+            public let referencedTable: String
+            public let referencedColumn: String
+
+            public init(column: String, referencedTable: String, referencedColumn: String) {
+                self.column = column
+                self.referencedTable = referencedTable
+                self.referencedColumn = referencedColumn
+            }
+        }
+
+        public let name: String
+        public let database: String?
+        public let kind: NodeKind
+        public let columns: [Column]
+        public let indexes: [Index]
+        public let foreignKeys: [ForeignKey]
+
+        public init(
+            name: String, database: String?, kind: NodeKind,
+            columns: [Column] = [], indexes: [Index] = [], foreignKeys: [ForeignKey] = []
+        ) {
+            self.name = name
+            self.database = database
+            self.kind = kind
+            self.columns = columns
+            self.indexes = indexes
+            self.foreignKeys = foreignKeys
+        }
+    }
+
+    /// Result of `schema(...)`: the objects within `limit`, how many matching
+    /// objects were cut by it, and when the underlying graph was last
+    /// harvested (`nil` when the store can't report a snapshot time).
+    public struct SchemaListing: Equatable, Sendable {
+        public let objects: [SchemaObject]
+        public let omittedCount: Int
+        public let harvestedAt: Date?
+
+        public init(objects: [SchemaObject], omittedCount: Int, harvestedAt: Date?) {
+            self.objects = objects
+            self.omittedCount = omittedCount
+            self.harvestedAt = harvestedAt
+        }
     }
 
     /// Validates the persisted-snapshot precondition without exposing the
@@ -174,6 +273,77 @@ public struct BerryGraphQueryService: Sendable {
             .sorted(by: nodeOrder)
             .map { NodeStatistics(name: $0.name, fields: statFields($0.attrs)) }
         return TableStatistics(table: table.name, fields: statFields(table.attrs), indexes: indexes)
+    }
+
+    /// Lists tables and views from the persisted graph, without opening a
+    /// database connection. `objectNames`, when given, filters by name
+    /// case-insensitively; unmatched names are silently dropped, not
+    /// reported as errors. Results are sorted by (`database ?? ""`, `name`)
+    /// and cut at `limit`, with the remainder reported in `omittedCount`.
+    public func schema(
+        profileID: UUID, objectNames: [String]?, detail: SchemaDetail, limit: Int
+    ) throws -> SchemaListing {
+        let graph = try loadedGraph(profileID: profileID)
+        let harvestedAt = try self.harvestedAt(profileID)
+        let wanted = objectNames.map { Set($0.map { $0.lowercased() }) }
+        let matches = graph.nodes.values
+            .filter { $0.kind == .table || $0.kind == .view }
+            .filter { wanted?.contains($0.name.lowercased()) ?? true }
+            .sorted { ($0.database ?? "", $0.name) < ($1.database ?? "", $1.name) }
+        let included = Array(matches.prefix(max(0, limit)))
+        return SchemaListing(
+            objects: included.map { schemaObject(for: $0, in: graph, detail: detail) },
+            omittedCount: matches.count - included.count,
+            harvestedAt: harvestedAt
+        )
+    }
+
+    private func schemaObject(for node: GraphNode, in graph: SchemaGraph, detail: SchemaDetail) -> SchemaObject {
+        guard detail == .full else {
+            return SchemaObject(name: node.name, database: node.database, kind: node.kind)
+        }
+        let columns = graph.neighbors(of: node.id, direction: .outgoing, kinds: [.hasColumn])
+            .compactMap { graph.nodes[$0] }
+            .sorted { $0.name < $1.name }
+            .map {
+                SchemaObject.Column(
+                    name: $0.name,
+                    type: $0.attrs["type"] ?? "",
+                    nullable: $0.attrs["nullable"] == "true",
+                    primaryKey: $0.attrs["primaryKey"] == "true"
+                )
+            }
+        let indexes = graph.neighbors(of: node.id, direction: .outgoing, kinds: [.hasIndex])
+            .compactMap { graph.nodes[$0] }
+            .sorted { $0.name < $1.name }
+            .map {
+                SchemaObject.Index(
+                    name: $0.name,
+                    columns: indexColumns($0.attrs["columns"]),
+                    unique: $0.attrs["unique"] == "true"
+                )
+            }
+        let foreignKeys = graph.edges
+            .filter { $0.src == node.id && $0.kind == .references }
+            .sorted { ($0.attrs["column"] ?? "") < ($1.attrs["column"] ?? "") }
+            .map {
+                SchemaObject.ForeignKey(
+                    column: $0.attrs["column"] ?? "",
+                    referencedTable: graph.nodes[$0.dst]?.name ?? $0.dst,
+                    referencedColumn: $0.attrs["referencedColumn"] ?? ""
+                )
+            }
+        return SchemaObject(
+            name: node.name, database: node.database, kind: node.kind,
+            columns: columns, indexes: indexes, foreignKeys: foreignKeys
+        )
+    }
+
+    private func indexColumns(_ attr: String?) -> [String] {
+        (attr ?? "")
+            .components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
 
     private func loadedGraph(profileID: UUID) throws -> SchemaGraph {

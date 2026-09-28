@@ -1,3 +1,4 @@
+import BerryDriverKit
 import BerryStore
 import Foundation
 import Testing
@@ -112,6 +113,80 @@ struct BerryGraphQueryServiceTests {
         let table = try query.statistics(profileID: profileID, table: "orders")
         #expect(table.indexes.map(\.name) == ["a_idx", "z_idx"])
         #expect(table.indexes[0].fields == ["idx_scan": "9", "unused": "false"])
+    }
+
+    /// Two tables (`orders` referencing `customers`), a unique index on
+    /// `customers.email`, and a view derived from `orders` — the fixture
+    /// `SchemaGraphBuilderTests` also builds, reused here for `schema(...)`.
+    private func schemaFixture() -> SchemaGraph {
+        let objects = [
+            BerryDriverKit.SchemaObject(kind: .table, name: "orders"),
+            BerryDriverKit.SchemaObject(kind: .table, name: "customers"),
+            BerryDriverKit.SchemaObject(kind: .view, name: "recent_orders"),
+        ]
+        let ordersDetail = TableDetail(
+            ref: TableRef(name: "orders"),
+            columns: [
+                ColumnInfo(name: "id", declaredType: "int", isNullable: false, defaultValue: nil, isPrimaryKey: true),
+                ColumnInfo(name: "customer_id", declaredType: "int", isNullable: false, defaultValue: nil, isPrimaryKey: false),
+            ],
+            indexes: [],
+            foreignKeys: [ForeignKeyInfo(column: "customer_id", referencedTable: "customers", referencedColumn: "id")]
+        )
+        let customersDetail = TableDetail(
+            ref: TableRef(name: "customers"),
+            columns: [
+                ColumnInfo(name: "id", declaredType: "int", isNullable: false, defaultValue: nil, isPrimaryKey: true),
+                ColumnInfo(name: "email", declaredType: "text", isNullable: true, defaultValue: nil, isPrimaryKey: false),
+            ],
+            indexes: [IndexInfo(name: "customers_email_key", isUnique: true, columns: ["email"])],
+            foreignKeys: []
+        )
+        return SchemaGraphBuilder.build(
+            objects: objects,
+            details: [ordersDetail.ref: ordersDetail, customersDetail.ref: customersDetail]
+        )
+    }
+
+    @Test func fullSchemaCarriesColumnsIndexesAndForeignKeys() throws {
+        let when = Date(timeIntervalSince1970: 1_700_000_000)
+        let fixture = schemaFixture()
+        let service = BerryGraphQueryService(loadGraph: { _ in fixture }, harvestedAt: { _ in when })
+        let listing = try service.schema(profileID: UUID(), objectNames: nil, detail: .full, limit: 200)
+        #expect(listing.harvestedAt == when)
+        #expect(listing.objects.map(\.name) == ["customers", "orders", "recent_orders"])
+        let orders = try #require(listing.objects.first { $0.name == "orders" })
+        #expect(orders.columns == [
+            .init(name: "customer_id", type: "int", nullable: false, primaryKey: false),
+            .init(name: "id", type: "int", nullable: false, primaryKey: true),
+        ])
+        #expect(orders.foreignKeys == [.init(column: "customer_id", referencedTable: "customers", referencedColumn: "id")])
+        let customers = try #require(listing.objects.first { $0.name == "customers" })
+        #expect(customers.indexes == [.init(name: "customers_email_key", columns: ["email"], unique: true)])
+    }
+
+    @Test func overviewOmitsColumnDetail() throws {
+        let fixture = schemaFixture()
+        let service = BerryGraphQueryService(loadGraph: { _ in fixture }, harvestedAt: { _ in nil })
+        let listing = try service.schema(profileID: UUID(), objectNames: nil, detail: .overview, limit: 200)
+        #expect(listing.objects.allSatisfy { $0.columns.isEmpty && $0.indexes.isEmpty && $0.foreignKeys.isEmpty })
+    }
+
+    @Test func limitReportsOmittedCountAndFilterIsCaseInsensitive() throws {
+        let fixture = schemaFixture()
+        let service = BerryGraphQueryService(loadGraph: { _ in fixture }, harvestedAt: { _ in nil })
+        let limited = try service.schema(profileID: UUID(), objectNames: nil, detail: .overview, limit: 1)
+        #expect(limited.objects.map(\.name) == ["customers"])
+        #expect(limited.omittedCount == 2)
+        let filtered = try service.schema(profileID: UUID(), objectNames: ["ORDERS"], detail: .overview, limit: 200)
+        #expect(filtered.objects.map(\.name) == ["orders"])
+    }
+
+    @Test func emptySchemaGraphIsNoSnapshot() {
+        let service = BerryGraphQueryService(loadGraph: { _ in SchemaGraph() }, harvestedAt: { _ in nil })
+        #expect(throws: BerryGraphQueryService.QueryError.noSnapshot) {
+            try service.schema(profileID: UUID(), objectNames: nil, detail: .full, limit: 200)
+        }
     }
 
     @Test func missingNodeDiagnosticIsSortedAndCapped() throws {
