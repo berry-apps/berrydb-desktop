@@ -104,3 +104,126 @@ This is development evidence, not packaged-release size. The signed release help
 **PASS FOR PHASE 1.** The Phase 0 gate is complete for its explicitly selected host scope: official MCP Inspector plus authenticated Codex 0.154.0, Claude Code 2.1.283, and Antigravity 1.2.11 list-and-call all pass. The standard lifecycle suite, exact Codex initialize regression, and Antigravity discovery/legacy-fallback server regressions pass alongside cancellation, license, and development-size checks. The Antigravity adapter deliberately preserves the declared 2025-11-25 scope rather than pretending to implement stateless MCP 2026-07-28.
 
 Cursor is outside the current authenticated acceptance scope because no Cursor account is available. Its partial evidence remains recorded above, but Phase 0 PASS does not claim Cursor desktop or authenticated Cursor Agent compatibility. Cursor support requires a separate authenticated list-and-call and desktop verification gate.
+
+## G3 Privilege checks
+
+Question: can the helper reject a database session whose role could write,
+before running any agent query? Tested on 2026-09-28 against PostgreSQL
+17.11 and MySQL 8.4.11 in local containers. Amazon RDS itself was not
+available; its `rds_superuser` role was simulated by a plain role of that
+name, so RDS-specific role behavior remains unverified.
+
+### PostgreSQL
+
+The check runs as the connected role and rejects the session when any row
+is returned: superuser; membership in `rds_superuser`; ownership of any
+user relation (through inherited membership); `INSERT`, `UPDATE`,
+`DELETE` or `TRUNCATE` on any user relation; column-level `INSERT` or
+`UPDATE` (`has_any_column_privilege`, which `has_table_privilege`
+does not report); `CREATE` on any user schema or on the database;
+`USAGE`/`UPDATE` on any sequence; membership in any role, inherited or
+`NOINHERIT`, that holds a table or column write privilege (reachable via
+`SET ROLE`).
+
+| Role fixture | Expected | Result |
+|---|---|---|
+| `SELECT` only | pass | pass |
+| `INSERT` on one table | reject | table_write, column_write |
+| inherited `UPDATE` via role | reject | table_write, column_write, setrole_writer |
+| `NOINHERIT` member of a writer role | reject | setrole_writer |
+| owns a table | reject | owner, table_write, column_write |
+| `CREATE` on schema | reject | schema_create |
+| member of `rds_superuser` | reject | rds_superuser |
+| `CREATE` on database | reject | db_create |
+| column-level `UPDATE` only | reject | column_write |
+| `USAGE` on a sequence | reject | sequence_usage |
+| `EXECUTE` on a `SECURITY DEFINER` function that deletes | not detected | pass |
+
+Cost: 40–52 ms for a read-only role over 10,003 relations (worst case,
+every relation scanned); 6 ms when a write privilege is found early.
+
+Read-only transaction behavior (`BEGIN READ ONLY`), observed:
+
+- blocked: `INSERT`; `nextval()`; `UPDATE` after `SET ROLE` to a
+  writer role; `DELETE` inside a `SECURITY DEFINER` function (the one
+  case the privilege check cannot see);
+- not blocked: `SET TRANSACTION READ WRITE` issued before any query in
+  the transaction, `SET default_transaction_read_only = off`, `COMMIT`
+  followed by a write, and `pg_advisory_lock()` (a session-level lock that
+  outlives the transaction).
+
+### MySQL
+
+`SHOW GRANTS FOR CURRENT_USER()` includes privileges of active roles,
+including nested ones, but not of roles granted and not yet active. The
+check therefore runs `SET ROLE ALL` first, then rejects any `GRANT … ON`
+line containing a privilege outside `SELECT`, `SHOW VIEW`, `USAGE`, or
+carrying `WITH GRANT OPTION`.
+
+| User fixture | Expected | Result |
+|---|---|---|
+| `SELECT`, `SHOW VIEW` | pass | pass |
+| `INSERT` on one table | reject | INSERT |
+| `UPDATE` via default role | reject | UPDATE |
+| `UPDATE` via granted, inactive role | reject | UPDATE |
+| `UPDATE` via nested role | reject | UPDATE |
+| `FILE` | reject | FILE |
+| column-level `UPDATE` | reject | UPDATE |
+| `ALL PRIVILEGES` on schema | reject | ALL PRIVILEGES |
+| `EXECUTE` on schema | reject (conservative) | EXECUTE |
+
+Without `SET ROLE ALL`, the inactive-role fixture passes the check; the
+statement is required.
+
+Read-only transaction behavior (`START TRANSACTION READ ONLY`), observed:
+blocked `INSERT` and `UPDATE` after `SET ROLE ALL`; not blocked:
+`COMMIT` followed by a write, `GET_LOCK()`, `SLEEP()`.
+
+### Conclusion
+
+Both dialects: **rigorous** for the tested fixtures; no attestation
+fallback is needed. The layers depend on each other:
+
+1. The helper, not the agent, opens and ends every transaction, verifies
+   `transaction_read_only` is on before running the query, and never
+   reuses a session after an error.
+2. The read policy must keep rejecting transaction control, `SET`,
+   `set_config()`, advisory/user locks and sleep functions, because the
+   database's read-only mode does not stop them.
+3. The privilege check covers the case where layer 2 is bypassed: a role
+   without write privileges cannot write even after escaping the
+   read-only transaction. `SECURITY DEFINER` functions are covered only
+   by layer 1 and by the function allowlist.
+
+### Exact checks used
+
+PostgreSQL (one row per failed condition; empty result passes):
+
+```sql
+SELECT string_agg(reason, ',' ORDER BY reason) FROM (
+SELECT 'superuser' AS reason WHERE (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)
+UNION ALL SELECT 'rds_superuser' WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rds_superuser')
+  AND pg_has_role(current_user, 'rds_superuser', 'MEMBER')
+UNION ALL SELECT 'owner' WHERE EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND pg_has_role(current_user, c.relowner, 'MEMBER'))
+UNION ALL SELECT 'table_write' WHERE EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND c.relkind IN ('r','p','v','m','f')
+  AND has_table_privilege(current_user, c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE'))
+UNION ALL SELECT 'column_write' WHERE EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND c.relkind IN ('r','p','v','m','f')
+  AND has_any_column_privilege(current_user, c.oid, 'INSERT,UPDATE'))
+UNION ALL SELECT 'schema_create' WHERE EXISTS (SELECT 1 FROM pg_namespace n
+  WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND has_schema_privilege(current_user, n.oid, 'CREATE'))
+UNION ALL SELECT 'db_create' WHERE has_database_privilege(current_user, current_database(), 'CREATE')
+UNION ALL SELECT 'sequence_usage' WHERE EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND c.relkind = 'S'
+  AND has_sequence_privilege(current_user, c.oid, 'USAGE,UPDATE'))
+UNION ALL SELECT 'setrole_writer' WHERE EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
+  WHERE pg_has_role(current_user, m.roleid, 'MEMBER') AND r.rolname <> current_user
+  AND (r.rolsuper OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND c.relkind IN ('r','p','v','m','f')
+     AND (has_table_privilege(r.oid, c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege(r.oid, c.oid, 'INSERT,UPDATE')))))
+) x;
+```
+
+MySQL: after `SET ROLE ALL`, for every `SHOW GRANTS FOR CURRENT_USER()` line matching `GRANT <privileges> ON `, split `<privileges>` on commas outside parentheses, drop any column list, uppercase, and reject if any name is outside the allowlist or the line ends with `WITH GRANT OPTION`. Role-membership lines (`GRANT <role> TO`) are skipped because `SET ROLE ALL` has already folded their privileges into the output.
