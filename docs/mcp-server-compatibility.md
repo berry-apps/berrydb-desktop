@@ -259,3 +259,30 @@ and index key schemas from `DescribeTable` at request time.
 DynamoDB Local keeps a separate database per access key and region unless
 started with `-sharedDb`; fixtures must be created with the same credentials
 the driver uses.
+
+## G2 Workspace discovery
+
+Question: how does each host tell a stdio server which workspace it serves?
+Tested on 2026-09-28 by registering a transparent wrapper around the
+compatibility fixture (records the process working directory, workspace
+environment variables and raw stdin/stdout, otherwise forwards unchanged)
+through each host's per-invocation configuration, then starting the host in
+a fresh git repository at `/tmp/g2-repo` (a symlink to `/private/tmp/g2-repo`
+on macOS). No persistent host configuration was modified.
+
+| Host | Version | Configuration | Server cwd | Workspace env | `roots` capability | First method |
+|---|---|---|---|---|---|---|
+| Claude Code | 2.1.283 | `--mcp-config … --strict-mcp-config` | `/tmp/g2-repo` | `CLAUDE_PROJECT_DIR=/private/tmp/g2-repo` | `{"listChanged": true}` | `server/discover`, then `initialize` (`2025-11-25`) |
+| Codex CLI | 0.157.1 | `-c mcp_servers.<name>.command=…` | `/private/tmp/g2-repo` | none | absent | `initialize` (`2025-06-18`) |
+| Antigravity | 1.2.11 | pending | pending | pending | pending | `server/discover` (Phase 0) |
+
+Antigravity has no per-invocation MCP configuration; `agy mcp add` writes
+the user's global configuration, so its run is pending approval to add and
+remove a temporary entry there.
+
+Conclusion so far: the process working directory identifies the workspace
+for both tested hosts, and Claude Code additionally offers `roots`. The
+selection order in the design (roots, then working directory, then an
+explicit project) is viable. The two hosts spell the same directory
+differently (`/tmp/…` versus `/private/tmp/…`), so selection must compare
+symlink-resolved paths.
