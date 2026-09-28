@@ -241,6 +241,40 @@ final class MCPResultLimiterTests: XCTestCase {
         }
     }
 
+    /// At a ceiling just under the exact fit, dropping the excess must
+    /// happen inside `keep(...)`'s own budget accounting, not via the
+    /// final `while` correction loop: the reservation already accounts for
+    /// the true worst-case metadata width, so the loop's single pass
+    /// should always pass, needing no correction (no second whole-result
+    /// encode). A `true`-reservation would under-reserve here and need one
+    /// more whole-result encode to notice and correct the overshoot.
+    func testExactFitMinusOneOrTwoNeedsNoExtraWholeResultEncode() throws {
+        let plainEncoder = JSONEncoder()
+        plainEncoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let rows = (0..<5).map { ["v": "\($0)"] }
+        let generous = MCPResultLimiter(limits: MCPResultLimits(maximumSerializedBytes: 10_000))
+        let full = try generous.limit(rows: rows)
+        let exactSize = try generous.serialized(full).count
+
+        for delta in [1, 2] {
+            final class Counter: @unchecked Sendable { var wholeResultEncodes = 0 }
+            let counter = Counter()
+            let ceiling = exactSize - delta
+            let limiter = MCPResultLimiter(
+                limits: MCPResultLimits(maximumSerializedBytes: ceiling),
+                encode: { value in
+                    if value is MCPBoundedResult { counter.wholeResultEncodes += 1 }
+                    return try plainEncoder.encode(value)
+                }
+            )
+            let result = try limiter.limit(rows: rows)
+            XCTAssertLessThanOrEqual(try plainEncoder.encode(result).count, ceiling, "delta \(delta)")
+            // One encode to size the reservation, one to check the final
+            // result against the ceiling — no correction-loop iterations.
+            XCTAssertEqual(counter.wholeResultEncodes, 2, "delta \(delta)")
+        }
+    }
+
     func testNegativeElapsedInputsFailClosed() {
         XCTAssertThrowsError(try MCPResultLimiter(limits: MCPResultLimits(maximumElapsed: .seconds(-1))).limit())
         XCTAssertThrowsError(try MCPResultLimiter().limit(elapsed: .milliseconds(-1)))

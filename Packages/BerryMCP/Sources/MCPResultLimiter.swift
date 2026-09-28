@@ -80,10 +80,13 @@ public enum MCPResultLimiterError: Error, Equatable {
 /// Bounds a query result to `MCPResultLimits`: caps item counts, truncates
 /// individual cell values, redacts sensitive columns, and enforces an exact
 /// ceiling on the JSON-encoded byte size. `limit(...)`'s cost is linear in
-/// min(the input's item count, the matching `MCPResultLimits` maximum) for
-/// preparation, plus the number of bytes in the items the byte budget
-/// actually keeps — each kept item is encoded exactly once — never
-/// quadratic, and never proportional to the size of an omitted item.
+/// the input size (not just count — redaction and cell truncation scan each
+/// item's content) of the items that survive the count-based trim, plus the
+/// number of bytes in the items the byte budget actually keeps — each kept
+/// item is encoded exactly once — never quadratic in either dimension. A
+/// count-trimmed item that the byte budget later omits still costs
+/// preparation work proportional to its own size; only an item cut by the
+/// count trim itself is free.
 public struct MCPResultLimiter: Sendable {
     public let limits: MCPResultLimits
     private let encode: @Sendable (any Encodable) throws -> Data
@@ -110,12 +113,11 @@ public struct MCPResultLimiter: Sendable {
     /// and returns the result together with metadata describing every
     /// omission, truncation and redaction. The JSON encoding of the
     /// returned value never exceeds `limits.maximumSerializedBytes`. The
-    /// work done to guarantee that is linear in min(input count, the
-    /// matching `MCPResultLimits` maximum) for preparing each of the four
-    /// arrays (count-based trim, redaction, cell truncation), plus the
-    /// number of bytes in the items the byte budget actually keeps — never
-    /// quadratic in either dimension, and never proportional to the bytes
-    /// of items that end up omitted.
+    /// work done to guarantee that is linear in the input size of the items
+    /// that survive each array's count-based trim (redaction and cell
+    /// truncation scan every such item's content, whether or not the byte
+    /// budget later keeps it), plus the number of bytes in the items the
+    /// byte budget actually keeps — never quadratic in either dimension.
     public func limit(
         rows: [[String: String?]] = [],
         objects: [[String: String?]] = [],

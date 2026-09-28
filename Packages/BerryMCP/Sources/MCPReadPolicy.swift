@@ -81,7 +81,19 @@ public struct MCPReadPolicy: Sendable {
                 throw MCPReadPolicyError.unsupportedStatement("WITH without a final SELECT")
             }
             withMainIndex = main
-            cteExemptions = cteDeclarationExemptions(statementTokens, withIndex: 0, mainIndex: main)
+            cteExemptions = try cteDeclarationExemptions(statementTokens, withIndex: 0, mainIndex: main)
+        } else if first == "EXPLAIN",
+                  let withIndex = topLevelWithIndex(statementTokens, from: 1),
+                  let main = topLevelMainStatementIndex(statementTokens, from: withIndex + 1, to: statementTokens.count),
+                  statementTokens[main].text.uppercased() == "SELECT" {
+            // `EXPLAIN WITH ... SELECT ...` has its own WITH-clause CTE
+            // list to exempt, same as a bare `WITH ...` statement. Any
+            // uncertainty here (no WITH found, or it isn't followed by a
+            // proper final SELECT) is left to EXPLAIN's own validation
+            // below rather than raising a new error — an empty exemption
+            // set only makes the function-call check stricter, never
+            // looser.
+            cteExemptions = try cteDeclarationExemptions(statementTokens, withIndex: withIndex, mainIndex: main)
         }
         if first != "PRAGMA" { try validateFunctionCalls(statementTokens, dialect: dialect, cteExemptions: cteExemptions) }
 
@@ -146,6 +158,27 @@ public struct MCPReadPolicy: Sendable {
             } else if token.text == ")" {
                 depth -= 1
             } else if depth == 0, token.isWord, ["SELECT", "INSERT", "UPDATE", "DELETE", "MERGE"].contains(token.text.uppercased()) {
+                return cursor
+            }
+            cursor += 1
+        }
+        return nil
+    }
+
+    /// Finds the first top-level (paren depth 0, searching `[start, ...)`)
+    /// `WITH` keyword — used to locate an `EXPLAIN WITH ...` target's own
+    /// WITH-clause, which does not start at token 0 the way a bare `WITH`
+    /// statement's does.
+    private func topLevelWithIndex(_ tokens: [SQLToken], from start: Int) -> Int? {
+        var depth = 0
+        var cursor = start
+        while cursor < tokens.count {
+            let token = tokens[cursor]
+            if token.text == "(" {
+                depth += 1
+            } else if token.text == ")" {
+                depth -= 1
+            } else if depth == 0, token.isWord, token.text.uppercased() == "WITH" {
                 return cursor
             }
             cursor += 1
@@ -230,8 +263,16 @@ public struct MCPReadPolicy: Sendable {
     ///
     /// A CTE body that is itself `WITH ... SELECT ...` opens its own,
     /// independently scoped CTE list, so its own declarations are
-    /// collected by recursing into it.
-    private func cteDeclarationExemptions(_ tokens: [SQLToken], withIndex: Int, mainIndex: Int) -> Set<Int> {
+    /// collected by recursing into it. `depth` counts WITH-body nesting
+    /// (one Swift call per level) and is capped at
+    /// `maximumWithNestingDepth` to bound recursion against adversarial
+    /// input, rather than trusting caller-supplied SQL to stay shallow.
+    private func cteDeclarationExemptions(
+        _ tokens: [SQLToken], withIndex: Int, mainIndex: Int, depth: Int = 0
+    ) throws -> Set<Int> {
+        guard depth <= Self.maximumWithNestingDepth else {
+            throw MCPReadPolicyError.malformed("WITH nesting exceeds the maximum supported depth")
+        }
         var exemptions = Set<Int>()
         var cursor = withIndex + 1
         if tokens.indices.contains(cursor), tokens[cursor].isWord, tokens[cursor].text.uppercased() == "RECURSIVE" {
@@ -241,23 +282,34 @@ public struct MCPReadPolicy: Sendable {
             guard tokens.indices.contains(cursor), tokens[cursor].isWord else { return exemptions }
             let nameIndex = cursor
             var next = cursor + 1
+            // A column list is only recorded as an exemption once `AS (`
+            // afterward confirms this is a genuine CTE declaration — not
+            // as soon as `name(` is seen, which could be a malformed or
+            // incomplete WITH clause that never actually declares a CTE.
+            var columnListClose: Int?
             if tokens.indices.contains(next), tokens[next].text == "(" {
-                exemptions.insert(nameIndex)
                 // `matchingCloseParen(after:)` takes the index of the token
                 // immediately before the paren it matches, not the paren's
                 // own index.
                 guard let close = matchingCloseParen(after: nameIndex, tokens: tokens) else { return exemptions }
+                columnListClose = close
                 next = close + 1
             }
             guard tokens.indices.contains(next), tokens[next].isWord, tokens[next].text.uppercased() == "AS" else { return exemptions }
             let asIndex = next
             next += 1
             guard tokens.indices.contains(next), tokens[next].text == "(" else { return exemptions }
+            if columnListClose != nil {
+                exemptions.insert(nameIndex)
+            }
             let bodyOpen = next
             guard let bodyClose = matchingCloseParen(after: asIndex, tokens: tokens) else { return exemptions }
             if tokens.indices.contains(bodyOpen + 1), tokens[bodyOpen + 1].isWord, tokens[bodyOpen + 1].text.uppercased() == "WITH",
                let nestedMain = topLevelMainStatementIndex(tokens, from: bodyOpen + 2, to: bodyClose) {
-                exemptions.formUnion(cteDeclarationExemptions(tokens, withIndex: bodyOpen + 1, mainIndex: nestedMain))
+                let nested = try cteDeclarationExemptions(
+                    tokens, withIndex: bodyOpen + 1, mainIndex: nestedMain, depth: depth + 1
+                )
+                exemptions.formUnion(nested)
             }
             cursor = bodyClose + 1
             guard cursor < mainIndex, tokens[cursor].text == "," else { return exemptions }
@@ -265,6 +317,8 @@ public struct MCPReadPolicy: Sendable {
         }
         return exemptions
     }
+
+    private static let maximumWithNestingDepth = 16
 
     private func matchingCloseParen(after index: Int, tokens: [SQLToken]) -> Int? {
         var depth = 0
@@ -372,7 +426,7 @@ private struct SQLTokenizer {
                 continue
             }
             if scalar == "-", peek(1) == "-" {
-                if dialect != .mysql || isWhitespace(peek(2)) {
+                if dialect != .mysql || isMySQLCommentFollower(peek(2)) {
                     skipLineComment(markerLength: 2)
                     continue
                 }
@@ -450,15 +504,57 @@ private struct SQLTokenizer {
 
     private func isWhitespace(_ scalar: Unicode.Scalar?) -> Bool { scalar.map { $0.properties.isWhitespace } ?? false }
 
+    /// MySQL's actual rule for `--` (unlike PostgreSQL/SQLite, where `--`
+    /// is a comment regardless of what follows): the comment starts only
+    /// when the next scalar is <= U+0020 — an ASCII space or a control
+    /// character. Unicode whitespace above that (for example U+00A0
+    /// no-break space) does not count, so this is deliberately narrower
+    /// than `isWhitespace`, which a MySQL-following-scalar check must not
+    /// use: using it either recognizes a comment MySQL would not (hiding
+    /// real SQL from validation that MySQL still executes) or fails to
+    /// recognize one MySQL would (leaving content this validator scans as
+    /// literal SQL that MySQL actually treats as an inert comment) —
+    /// either mismatch is a validator/database parsing disagreement.
+    private func isMySQLCommentFollower(_ scalar: Unicode.Scalar?) -> Bool {
+        guard let scalar else { return false }
+        return scalar.value <= 0x20
+    }
+
+    /// ASCII characters are identifier start/continuation only by the
+    /// ordinary SQL rule (letters, and for continuation also digits, `_`,
+    /// `$`). Every non-ASCII scalar — combining marks, ZWJ, variation
+    /// selectors, non-ASCII digits, anything — counts as both start and
+    /// continuation unconditionally, regardless of its Unicode category.
+    /// This is deliberately over-inclusive: a decorated name (for example
+    /// a function name with a trailing combining mark or variation
+    /// selector) stays one identifier token that then fails the function
+    /// allowlist, rather than splitting into a plain recognizable name
+    /// plus a stray token that never reads as `name(` and so is never
+    /// checked against the allowlist at all.
     private func isIdentifierStart(_ scalar: Unicode.Scalar) -> Bool {
-        scalar.properties.isAlphabetic || scalar == "_"
+        !scalar.isASCII || isASCIILetter(scalar) || scalar == "_"
     }
 
     private func isIdentifierContinuation(_ scalar: Unicode.Scalar) -> Bool {
-        scalar.properties.isAlphabetic || isASCIIDigit(scalar) || scalar == "_" || scalar == "$"
+        !scalar.isASCII || isASCIILetter(scalar) || isASCIIDigit(scalar) || scalar == "_" || scalar == "$"
+    }
+
+    private func isASCIILetter(_ scalar: Unicode.Scalar) -> Bool {
+        (scalar.value >= 0x41 && scalar.value <= 0x5A) || (scalar.value >= 0x61 && scalar.value <= 0x7A)
     }
 
     private func isASCIIDigit(_ scalar: Unicode.Scalar) -> Bool { scalar.value >= 0x30 && scalar.value <= 0x39 }
+
+    /// Narrower than `isIdentifierContinuation`: a dollar-quote tag is
+    /// *delimited* by `$`, so `$` itself must never be part of the tag —
+    /// unlike ordinary identifiers, where `$` is a valid continuation
+    /// character. Scanning a tag with the ordinary identifier-continuation
+    /// rule lets the scanner walk past the real closing `$`, potentially
+    /// matching a later, unrelated `$tag$` as the close and swallowing a
+    /// real statement boundary in between as inert quoted content.
+    private func isDollarQuoteTagContinuation(_ scalar: Unicode.Scalar) -> Bool {
+        scalar != "$" && isIdentifierContinuation(scalar)
+    }
 
     private func string(_ slice: ArraySlice<Unicode.Scalar>) -> String {
         var view = String.UnicodeScalarView()
@@ -558,7 +654,7 @@ private struct SQLTokenizer {
             // A non-empty tag (`$$` alone is the valid empty tag) must not
             // start with a digit.
             guard !isASCIIDigit(scalars[cursor]) else { return nil }
-            while cursor < scalars.count, isIdentifierContinuation(scalars[cursor]) { cursor += 1 }
+            while cursor < scalars.count, isDollarQuoteTagContinuation(scalars[cursor]) { cursor += 1 }
         }
         guard cursor < scalars.count, scalars[cursor] == "$" else { return nil }
         return try consumeDollarQuoteBody(start: start, tagEnd: cursor)

@@ -145,18 +145,101 @@ final class MCPReadPolicyTests: XCTestCase {
         XCTAssertNoThrow(try policy.validate("SELECT $$ embedded ; UPDATE users $$", dialect: .postgresql))
     }
 
+    /// Dollar-quote tag scanning must not accept `$` as a tag-continuation
+    /// character — the tag is delimited *by* `$`, so a scanner that treats
+    /// `$` as part of the tag itself walks past the real closing delimiter
+    /// and (as happened in the prior fix) can end up finding a *later*,
+    /// unrelated `$tag$` as the close, swallowing a real statement boundary
+    /// as inert content in between.
+    func testDollarQuoteTagScanningExcludesDollarItself() {
+        XCTAssertThrowsError(
+            try policy.validate("SELECT $t$'$t$; DELETE FROM users; SELECT $t$'$t$", dialect: .postgresql)
+        )
+        XCTAssertNoThrow(try policy.validate("SELECT $t$ a ; b $t$", dialect: .postgresql))
+        XCTAssertNoThrow(try policy.validate("SELECT $t$ it's $t$", dialect: .postgresql))
+    }
+
+    /// MySQL's `--` comment rule requires the following scalar to be <=
+    /// U+0020 (space, tab, newline, or another control character) — not
+    /// any Unicode whitespace. A scanner using the broader Unicode
+    /// whitespace property both under- and over-recognizes MySQL comments
+    /// relative to what MySQL itself does, in both directions letting a
+    /// real statement boundary hide inside what the validator (wrongly)
+    /// treats as an ordinary string literal or an inert comment.
+    func testMySQLDoubleDashCommentRequiresASCIIControlOrSpace() {
+        XCTAssertThrowsError(
+            try policy.validate("SELECT 1 --\u{1} '\n; DELETE FROM t -- '", dialect: .mysql)
+        )
+        XCTAssertThrowsError(
+            try policy.validate("SELECT 1 --\u{A0}; DELETE FROM t", dialect: .mysql)
+        )
+        XCTAssertNoThrow(try policy.validate("SELECT 1 -- ok\nFROM t", dialect: .mysql))
+    }
+
+    /// Every non-ASCII scalar — combining marks, ZWJ, variation selectors,
+    /// non-ASCII digits — is identifier start and continuation in every
+    /// dialect, so a decorated function name is one token that fails the
+    /// allowlist, rather than splitting into a plain name plus a stray
+    /// token that never reads as `name(` at all and so never gets checked.
+    func testDecoratedIdentifiersStayOneTokenAndFailTheAllowlist() {
+        XCTAssertThrowsError(try policy.validate("SELECT pg_sleep\u{301}(1)", dialect: .postgresql))
+        XCTAssertThrowsError(try policy.validate("SELECT evil\u{FE0F}(1)", dialect: .postgresql))
+        XCTAssertNoThrow(try policy.validate(#"SELECT "tên" FROM t"#, dialect: .postgresql))
+        XCTAssertNoThrow(try policy.validate("SELECT tên FROM t", dialect: .sqlite))
+    }
+
+    /// Discriminating fixtures the re-reviewer confirmed 4f59e05 accepted;
+    /// each must be rejected by the current implementation.
+    func testReReviewerDiscriminatingFixturesAreRejected() {
+        for dialect in MCPSQLDialect.allCases {
+            XCTAssertThrowsError(try policy.validate("SELECT 'a'\u{301}; DELETE FROM t -- '", dialect: dialect), "\(dialect)")
+        }
+        XCTAssertThrowsError(try policy.validate("SELECT 1 # '\n; DELETE FROM t -- '", dialect: .mysql))
+        XCTAssertThrowsError(try policy.validate(#"SELECT "a\" , "; DELETE FROM t; -- ""#, dialect: .mysql))
+    }
+
     func testCTEColumnListExemptionIsStructuralNotHeuristic() {
-        // A function-shaped token that merely looks like a CTE column-list
-        // declaration (comma, then `)`, then `AS (`, then an earlier `WITH`
-        // somewhere at the same depth) but sits after the main statement
-        // keyword — not in the WITH-clause's own CTE list — must still be
-        // treated as an ordinary, non-exempt function call.
+        // `coalesce(NULL::record) AS (a int)` is real PostgreSQL syntax — a
+        // FROM-item function call with an explicit column-definition list —
+        // immediately followed by `, evil(1) AS e`, a second FROM-item that
+        // is a genuine, non-allowlisted function call. Both sit after the
+        // main statement keyword, never inside the WITH-clause's own CTE
+        // list, so neither may be exempted.
         XCTAssertThrowsError(
             try policy.validate(
-                "WITH c AS (SELECT 1) SELECT * FROM c, evil(x) AS (SELECT 1)",
+                "WITH c AS (SELECT 1) SELECT * FROM coalesce(NULL::record) AS (a int), evil(1) AS e",
                 dialect: .postgresql
             )
         )
+    }
+
+    /// `exemptions.insert(nameIndex)` must not happen until `AS (` is
+    /// confirmed — otherwise a `name(...)` that turns out not to be a real
+    /// CTE declaration (missing `AS (...)`) still ends up exempted from the
+    /// function-call check.
+    func testCTEExemptionIsNotRecordedBeforeASIsConfirmed() {
+        XCTAssertThrowsError(try policy.validate("WITH evil(1) SELECT 1", dialect: .postgresql))
+        XCTAssertThrowsError(try policy.validate("WITH a AS (SELECT 1), evil(1) SELECT 1", dialect: .postgresql))
+    }
+
+    /// `EXPLAIN WITH ...` must build the same CTE-declaration exemptions as
+    /// a bare `WITH ...` statement — this worked under 4f59e05's heuristic
+    /// (which did not care about statement type) and must keep working
+    /// under the structural replacement, which has to look for `WITH`
+    /// inside an `EXPLAIN` target rather than only at token 0.
+    func testEXPLAINWithBuildsCTEExemptionsToo() {
+        XCTAssertNoThrow(try policy.validate("EXPLAIN WITH c(x) AS (SELECT 1) SELECT x FROM c", dialect: .postgresql))
+    }
+
+    /// WITH-body nesting recurses one Swift call per level; an attacker
+    /// supplying deeply nested `WITH (WITH (WITH (...)))` bodies must be
+    /// rejected as malformed rather than risking runaway recursion.
+    func testDeeplyNestedWITHBodiesAreRejectedAsMalformed() {
+        let depth = 20
+        var sql = (0..<depth).map { "WITH w\($0) AS (" }.joined()
+        sql += "SELECT 1"
+        sql += stride(from: depth - 1, through: 0, by: -1).map { ") SELECT * FROM w\($0)" }.joined()
+        XCTAssertThrowsError(try policy.validate(sql, dialect: .postgresql))
     }
 
     func testEXPLAINDeniesBritishSpellingAnalyse() {
