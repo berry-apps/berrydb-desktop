@@ -5,18 +5,25 @@ import Security
 /// Secrets are keyed by profile UUID, live only in RAM after reading, and are
 /// never logged or persisted anywhere else.
 public enum KeychainService {
-    public enum SecretKind: String, CaseIterable {
+    public enum SecretKind: String, CaseIterable, Sendable {
         case database = "db"
         case ssh = "ssh"
         case sshPassphrase = "sshpp"
- /// Elasticsearch API-key auth mode — a real
-        /// second secret shape, not another `password`-reuse hack like
-        /// Qdrant's API key.
+        /// Elasticsearch API-key auth mode — a real second secret shape, not
+        /// another `password`-reuse hack like Qdrant's API key.
         case elasticsearchAPIKey = "esapikey"
     }
 
-    private static func service(_ kind: SecretKind, _ profileID: UUID) -> String {
+    static func service(_ kind: SecretKind, _ profileID: UUID) -> String {
         "dev.berrydb.\(kind.rawValue).\(profileID.uuidString.lowercased())"
+    }
+
+    /// A Keychain read that neither found the item nor completed normally.
+    /// Kept distinct from "not found" so a caller like `MCPAccessKeyStore`
+    /// never treats a real failure (permission denied, locked item, …) as
+    /// license to silently create a replacement.
+    enum ReadFailure: Error, Equatable {
+        case unexpectedStatus(OSStatus)
     }
 
     @discardableResult
@@ -25,13 +32,27 @@ public enum KeychainService {
         kind: SecretKind = .database,
         profileID: UUID
     ) -> Bool {
-        let service = service(kind, profileID)
-        let data = Data(password.utf8)
+        saveData(Data(password.utf8), service: service(kind, profileID))
+    }
 
-        let query: [String: Any] = [
+    public static func readPassword(
+        kind: SecretKind = .database,
+        profileID: UUID
+    ) -> String? {
+        guard let data = try? readData(service: service(kind, profileID)) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Stores raw bytes under `service` (and `account`, when given) with the
+    /// attributes every BerryDB secret uses. `account` is nil for every
+    /// existing password item; only the MCP access key sets it.
+    @discardableResult
+    static func saveData(_ data: Data, service: String, account: String? = nil) -> Bool {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
         ]
+        if let account { query[kSecAttrAccount as String] = account }
         let attributes: [String: Any] = [kSecValueData as String: data]
 
         let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
@@ -46,25 +67,32 @@ public enum KeychainService {
         return updateStatus == errSecSuccess
     }
 
-    public static func readPassword(
-        kind: SecretKind = .database,
-        profileID: UUID
-    ) -> String? {
-        let query: [String: Any] = [
+    /// Reads raw bytes stored under `service` (and `account`, when given).
+    /// Returns nil only when no item is stored; any other outcome throws
+    /// `ReadFailure`, so a caller can tell "nothing stored yet" apart from
+    /// "the Keychain refused to answer".
+    static func readData(service: String, account: String? = nil) throws -> Data? {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service(kind, profileID),
+            kSecAttrService as String: service,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
+        if let account { query[kSecAttrAccount as String] = account }
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data
-        else { return nil }
-        return String(data: data, encoding: .utf8)
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        switch status {
+        case errSecSuccess:
+            guard let data = item as? Data else { throw ReadFailure.unexpectedStatus(status) }
+            return data
+        case errSecItemNotFound:
+            return nil
+        default:
+            throw ReadFailure.unexpectedStatus(status)
+        }
     }
 
-    /// Deleting a profile must also delete its secrets — no orphaned entries
- ///
+    /// Deleting a profile must also delete its secrets — no orphaned entries.
     public static func deleteSecrets(profileID: UUID) {
         for kind in SecretKind.allCases {
             let query: [String: Any] = [

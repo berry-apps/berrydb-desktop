@@ -1,5 +1,6 @@
 import BerryAI
 import BerryCore
+import BerryCredentials
 import BerryDataSourceKit
 import BerryDriverKit
 import BerryGraph

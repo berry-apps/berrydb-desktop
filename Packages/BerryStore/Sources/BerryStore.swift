@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 
@@ -26,9 +27,22 @@ public final class BerryStore: Sendable {
         try BerryStore(path: defaultStoreURL().path)
     }
 
+    /// How long a connection waits for another connection's lock on the
+    /// store file before failing with "database is locked". The app and the
+    /// MCP helper open the same file from separate processes, and the store
+    /// uses a rollback journal, so an app commit must wait for any helper
+    /// read in progress and a helper read must wait for an app commit.
+    /// Both sides hold the lock for one short transaction (a settings save,
+    /// a history insert, one verification read), far below this bound; 5
+    /// seconds absorbs a slow disk or a burst of writes without letting a
+    /// stuck peer block the caller indefinitely, and is no longer than the
+    /// request timeout for production-labeled profiles.
+    static let busyTimeout: TimeInterval = 5
+
     /// Store at an arbitrary path — used for tests (`:memory:`).
     public init(path: String) throws {
         var configuration = Configuration()
+        configuration.busyMode = .timeout(Self.busyTimeout)
         configuration.prepareDatabase { db in
             try SQLiteVecExtension.install(into: db)
         }
@@ -42,6 +56,38 @@ public final class BerryStore: Sendable {
     /// exercise `BerryStore`'s own methods against the result.
     init(dbQueue: DatabaseQueue) {
         self.dbQueue = dbQueue
+    }
+
+    /// `openReadOnly(path:)` failure modes.
+    public enum ReadOnlyOpenError: Error, Equatable {
+        /// The file's applied migration set differs from this build's; the
+        /// helper refuses to read a store it cannot be sure it understands,
+        /// and never migrates it either way.
+        case schemaMismatch(applied: [String], expected: [String])
+    }
+
+    /// Opens an existing store for the MCP helper: read-only, no migration.
+    /// The helper and the app may run at the same time; only the app writes.
+    /// SQLite's read-only open mode refuses to create a missing file, so a
+    /// path the app has never written throws rather than starting an empty
+    /// store; the file's applied migration set must also match this build's
+    /// exactly, whether older or newer, or the open is refused the same way.
+    public static func openReadOnly(path: String) throws -> BerryStore {
+        var configuration = Configuration()
+        configuration.readonly = true
+        configuration.busyMode = .timeout(busyTimeout)
+        configuration.prepareDatabase { db in try SQLiteVecExtension.install(into: db) }
+        let queue = try DatabaseQueue(path: path, configuration: configuration)
+        let expected = migrator.migrations
+        // Read the table directly rather than asking the migrator: an identifier
+        // unknown to this build is exactly what reveals a store from a newer app.
+        let applied = try queue.read { db in
+            try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY identifier")
+        }
+        guard Set(applied) == Set(expected) else {
+            throw ReadOnlyOpenError.schemaMismatch(applied: applied, expected: expected)
+        }
+        return BerryStore(dbQueue: queue)
     }
 
     static var migrator: DatabaseMigrator {
@@ -459,6 +505,27 @@ public final class BerryStore: Sendable {
                 )
             }
         }
+        migrator.registerMigration("v30-mcp-project") { db in
+            try db.create(table: "mcp_project") { t in
+                t.primaryKey("id", .blob)
+                t.column("name", .text).notNull()
+                t.column("isEnabled", .boolean).notNull().defaults(to: false)
+                t.column("workspaceRootsJSON", .text).notNull()
+                t.column("integrityTag", .blob)
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+            try db.create(table: "mcp_project_profile") { t in
+                t.column("projectID", .blob).notNull()
+                    .references("mcp_project", onDelete: .cascade)
+                t.column("profileID", .blob).notNull()
+                    .references("connection_profile", onDelete: .cascade)
+                t.column("liveRead", .boolean).notNull().defaults(to: false)
+                t.column("redactedColumnsJSON", .text).notNull().defaults(to: "[]")
+                t.column("integrityTag", .blob)
+                t.primaryKey(["projectID", "profileID"])
+            }
+        }
         return migrator
     }
 
@@ -481,10 +548,383 @@ public final class BerryStore: Sendable {
  /// Delete a profile — the caller MUST also delete the Keychain item.
     /// The key must be the UUID itself: GRDB stores UUID as a 16-byte blob,
     /// so a uuidString key would never match.
+    ///
+    /// The profile's MCP access rows go with it by cascade, without an MCP
+    /// key rotation. A copy of those rows restored into the file, together
+    /// with the profile row, could verify again; that is acceptable because
+    /// the profile's secrets are deleted from the Keychain with it, so the
+    /// helper has no credential to use for it, and a connection that needs
+    /// none is one the same-user process can open without BerryDB.
     public func deleteProfile(id: UUID) throws {
         _ = try dbQueue.write { db in
             try ConnectionProfile.deleteOne(db, key: id)
         }
+    }
+
+    // MARK: - MCP projects
+
+    public func mcpProjects() throws -> [MCPProject] {
+        try dbQueue.read { db in
+            let records = try MCPProjectRecord
+                .order(Column("name").collating(.nocase).asc, Column("id").asc)
+                .fetchAll(db)
+            return try records.map { try Self.makeMCPProject(record: $0, db: db) }
+        }
+    }
+
+    public func mcpProject(id: UUID) throws -> MCPProject? {
+        try dbQueue.read { db in
+            guard let record = try MCPProjectRecord.fetchOne(db, key: id) else { return nil }
+            return try Self.makeMCPProject(record: record, db: db)
+        }
+    }
+
+    /// Test-only raw SQL, used to simulate a process editing the store file directly.
+    func executeForTesting(_ sql: String, arguments: StatementArguments = []) throws {
+        try dbQueue.write { try $0.execute(sql: sql, arguments: arguments) }
+    }
+
+    /// Test-only raw SQL read, used to snapshot exact stored bytes (e.g. a
+    /// tag) before simulating a stale restore or other file-level tampering.
+    func fetchForTesting(_ sql: String, arguments: StatementArguments = []) throws -> [Row] {
+        try dbQueue.read { try Row.fetchAll($0, sql: sql, arguments: arguments) }
+    }
+
+    /// Saves `project` sealed under `sealingKey`, then re-seals every other
+    /// stored project's rows for the same key rotation. `project` must come
+    /// from `mcpProjectForEditing(id:key:)` (or be freshly constructed by the
+    /// app), never from `mcpProject(id:)` or a value round-tripped through
+    /// something else — `mcpProjectForEditing` is the only source that has
+    /// already stripped any `liveRead` this call cannot prove BerryDB itself
+    /// granted.
+    ///
+    /// Callers rotate the key in this order: (1)
+    /// `previousKey = try MCPAccessKeyStore.keychain.loadForRotation()`,
+    /// abort on throw; (2) generate `sealingKey = SymmetricKey(size:
+    /// .bits256)`; (3) `try MCPAccessKeyStore.keychain.replace(with:
+    /// sealingKey)`, abort on throw; (4) this call. The stored key is
+    /// replaced *before* this call reseals anything: if this call fails or
+    /// is interrupted after step 3 already ran, every row still sealed under
+    /// `previousKey` is sealed under a key that is no longer stored, so live
+    /// reads stop for every project. They do not come back on their own: the
+    /// editing copy of such a project (`mcpProjectForEditing`) no longer
+    /// verifies, so it is disabled with every `liveRead` off, and saving it
+    /// seals exactly that. The user has to enable the project and turn live
+    /// reads on again. A restored older copy of the store never verifies
+    /// under the current key, by the same mechanism — expected, not a
+    /// defect.
+    ///
+    /// A row belonging to another project is only carried forward — re-tagged
+    /// under `sealingKey` — when it currently verifies under `previousKey`.
+    /// Any row that does not (no previous key, a NULL tag, a tampered field,
+    /// a duplicated profile ID, or a row whose stored fields cannot even be
+    /// decoded) has its tag cleared instead of being re-signed from whatever
+    /// is currently on disk, so a same-user process that edits another
+    /// project's row between saves cannot have that edit signed off by a
+    /// later, unrelated save.
+    public func saveMCPProject(_ project: MCPProject, sealingKey: SymmetricKey, previousKey: SymmetricKey?) throws {
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let roots = try MCPProject.canonicalWorkspaceRoots(project.workspaceRoots)
+        var record = MCPProjectRecord(
+            id: project.id,
+            name: project.name,
+            isEnabled: project.isEnabled,
+            workspaceRootsJSON: String(decoding: try encoder.encode(roots), as: UTF8.self),
+            integrityTag: nil,
+            createdAt: project.createdAt,
+            updatedAt: project.updatedAt
+        )
+        record.integrityTag = MCPAccessIntegrity.tag(
+            try MCPAccessIntegrity.projectPayload(id: project.id, isEnabled: project.isEnabled, workspaceRoots: roots),
+            key: sealingKey
+        )
+        try dbQueue.write { db in
+            try record.save(db)
+            try MCPProjectProfileRecord.filter(Column("projectID") == project.id).deleteAll(db)
+            var seen = Set<UUID>()
+            for access in project.profiles where seen.insert(access.profileID).inserted {
+                // The foreign key rejects unsaved profiles, so metadata such as
+                // a group name or workspace path can never manufacture access.
+                let normalizedAccess = MCPProfileAccess(
+                    profileID: access.profileID,
+                    liveRead: access.liveRead,
+                    redactedColumns: access.redactedColumns
+                )
+                // The tag binds the row to the profile's endpoint as stored
+                // right now; a missing profile yields no tag and the insert
+                // below fails on the foreign key.
+                let integrityTag = try ConnectionProfile.fetchOne(db, key: access.profileID).map { profile in
+                    MCPAccessIntegrity.tag(
+                        try MCPAccessIntegrity.profilePayload(
+                            projectID: project.id, access: normalizedAccess, profile: profile
+                        ),
+                        key: sealingKey
+                    )
+                }
+                try MCPProjectProfileRecord(
+                    projectID: project.id,
+                    profileID: access.profileID,
+                    liveRead: access.liveRead,
+                    redactedColumnsJSON: String(
+                        decoding: try encoder.encode(normalizedAccess.redactedColumns),
+                        as: UTF8.self
+                    ),
+                    integrityTag: integrityTag
+                ).insert(db)
+            }
+            try Self.reseal(
+                otherThan: project.id, sealingKey: sealingKey, previousKey: previousKey,
+                db: db, encoder: encoder, decoder: decoder
+            )
+        }
+    }
+
+    /// Re-tags every stored project other than `excludedProjectID` for a key
+    /// rotation from `previousKey` to `sealingKey`. A row is only carried
+    /// forward — re-tagged under `sealingKey` — when it verifies under
+    /// `previousKey` from its own current fields; anything else (no previous
+    /// key, a bad or missing tag, a duplicated profile ID, or a row whose
+    /// stored fields cannot even be decoded — a foreign process can write
+    /// anything to the file) has its tag cleared rather than re-signed, so a
+    /// same-user process that edits another project's row between saves
+    /// cannot have that edit signed off by an unrelated save. A row this
+    /// cannot decode never blocks the save in progress; it is simply left
+    /// unverifiable, same as any other row that fails to verify.
+    private static func reseal(
+        otherThan excludedProjectID: UUID, sealingKey: SymmetricKey, previousKey: SymmetricKey?, db: Database,
+        encoder: JSONEncoder, decoder: JSONDecoder
+    ) throws {
+        let otherProjects = try MCPProjectRecord.filter(Column("id") != excludedProjectID).fetchAll(db)
+        for var other in otherProjects {
+            other.integrityTag = Self.resealedProjectTag(
+                other, sealingKey: sealingKey, previousKey: previousKey, decoder: decoder
+            )
+            try other.save(db)
+
+            let rows = try MCPProjectProfileRecord.filter(Column("projectID") == other.id).fetchAll(db)
+            var occurrences: [UUID: Int] = [:]
+            for row in rows { occurrences[row.profileID, default: 0] += 1 }
+            for var row in rows {
+                row.integrityTag = Self.resealedProfileTag(
+                    row, projectID: other.id, isDuplicated: occurrences[row.profileID] != 1,
+                    sealingKey: sealingKey, previousKey: previousKey, decoder: decoder, db: db
+                )
+                try row.save(db)
+            }
+        }
+    }
+
+    /// The re-sealed tag for another project's row, or nil when it cannot be
+    /// carried forward — no `previousKey`, a tag that does not verify, or
+    /// stored fields (`workspaceRootsJSON`, a non-absolute root) that cannot
+    /// even be decoded. Never throws: a decode failure here is data, not a
+    /// programming error, and must not abort the save of an unrelated
+    /// project.
+    private static func resealedProjectTag(
+        _ record: MCPProjectRecord, sealingKey: SymmetricKey, previousKey: SymmetricKey?, decoder: JSONDecoder
+    ) -> Data? {
+        guard let previousKey else { return nil }
+        guard let roots = try? MCPProject.canonicalWorkspaceRoots(
+            try decoder.decode([String].self, from: Data(record.workspaceRootsJSON.utf8))
+        ) else { return nil }
+        guard let payload = try? MCPAccessIntegrity.projectPayload(
+            id: record.id, isEnabled: record.isEnabled, workspaceRoots: roots
+        ) else { return nil }
+        guard MCPAccessIntegrity.isValid(record.integrityTag, payload: payload, key: previousKey) else { return nil }
+        return MCPAccessIntegrity.tag(payload, key: sealingKey)
+    }
+
+    /// The re-sealed tag for another project's profile row, or nil when it
+    /// cannot be carried forward — no `previousKey`, a duplicated profile
+    /// ID, a tag that does not verify (including because the profile's
+    /// endpoint changed since the row was sealed), a profile row that is
+    /// missing or cannot be decoded, or a `redactedColumnsJSON` that cannot
+    /// even be decoded. Never throws, for the same reason as
+    /// `resealedProjectTag`.
+    private static func resealedProfileTag(
+        _ row: MCPProjectProfileRecord, projectID: UUID, isDuplicated: Bool,
+        sealingKey: SymmetricKey, previousKey: SymmetricKey?, decoder: JSONDecoder, db: Database
+    ) -> Data? {
+        guard !isDuplicated, let previousKey else { return nil }
+        guard let redactedColumns = try? decoder.decode(
+            [String].self, from: Data(row.redactedColumnsJSON.utf8)
+        ) else { return nil }
+        guard let profile = try? ConnectionProfile.fetchOne(db, key: row.profileID) else { return nil }
+        let access = MCPProfileAccess(profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns)
+        guard let payload = try? MCPAccessIntegrity.profilePayload(
+            projectID: projectID, access: access, profile: profile
+        ) else {
+            return nil
+        }
+        guard MCPAccessIntegrity.isValid(row.integrityTag, payload: payload, key: previousKey) else { return nil }
+        return MCPAccessIntegrity.tag(payload, key: sealingKey)
+    }
+
+    /// Deletes a project as a settings change: the project's rows go (its
+    /// profile-access rows by cascade) and every other project's rows are
+    /// re-sealed for the same key rotation `saveMCPProject` performs, with
+    /// the same caller contract — read `previousKey` with
+    /// `MCPAccessKeyStore.loadForRotation()`, store `sealingKey` with
+    /// `replace(with:)`, then call this. Without the rotation, a copy of the
+    /// deleted rows restored into the file would still carry tags that
+    /// verify under the stored key and bring the project's live reads back.
+    /// Rows of other projects that do not verify under `previousKey` are
+    /// left untagged, exactly as in `saveMCPProject`.
+    public func deleteMCPProject(id: UUID, sealingKey: SymmetricKey, previousKey: SymmetricKey?) throws {
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        try dbQueue.write { db in
+            _ = try MCPProjectRecord.deleteOne(db, key: id)
+            try Self.reseal(
+                otherThan: id, sealingKey: sealingKey, previousKey: previousKey,
+                db: db, encoder: encoder, decoder: decoder
+            )
+        }
+    }
+
+    /// Loads a project and verifies its integrity tags. A missing key, a bad
+    /// project tag, or a bad row tag never throws; it removes live reads,
+    /// while schema/graph metadata (already readable from this file) stays
+    /// available. Each profile row is verified from its own decoded fields,
+    /// never from a same-profile-ID lookup elsewhere, so a duplicated or
+    /// cross-wired row cannot borrow another row's payload: any profile ID
+    /// that appears on more than one row is treated as tampered and rejected
+    /// outright. A verified but disabled project always yields an empty
+    /// `liveReadProfileIDs`.
+    public func verifiedMCPProject(id: UUID, key: SymmetricKey?) throws -> MCPVerifiedProject? {
+        try dbQueue.read { db in
+            guard let record = try MCPProjectRecord.fetchOne(db, key: id) else { return nil }
+            let project = try Self.makeMCPProject(record: record, db: db)
+
+            guard let key else {
+                return MCPVerifiedProject(project: project, liveReadProfileIDs: [], projectTagValid: false)
+            }
+            let projectPayload = try MCPAccessIntegrity.projectPayload(
+                id: project.id, isEnabled: project.isEnabled, workspaceRoots: project.workspaceRoots
+            )
+            guard MCPAccessIntegrity.isValid(record.integrityTag, payload: projectPayload, key: key) else {
+                return MCPVerifiedProject(project: project, liveReadProfileIDs: [], projectTagValid: false)
+            }
+
+            let rows = try MCPProjectProfileRecord.filter(Column("projectID") == id).fetchAll(db)
+            let (verifiedLive, rejected) = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, db: db)
+            let live = project.isEnabled ? verifiedLive : []
+            return MCPVerifiedProject(project: project, liveReadProfileIDs: live, rejectedLiveReadProfileIDs: rejected)
+        }
+    }
+
+    /// The only safe source for a `MCPProject` value passed back into
+    /// `saveMCPProject`: `liveRead` is forced false on every profile that is
+    /// not in `verifiedMCPProject(id:key:).liveReadProfileIDs`, and
+    /// `isEnabled` is forced false when the project's own tag does not
+    /// verify. One case is handled independently of `liveReadProfileIDs`:
+    /// when the project tag verifies but the project is disabled,
+    /// `verifiedMCPProject` reports an empty `liveReadProfileIDs` purely
+    /// because it gates on `isEnabled` — using that set here would strip
+    /// `liveRead` from every profile just because the project happened to be
+    /// disabled at edit time. Instead, a disabled-but-verified project keeps
+    /// each row's own tag-verified `liveRead`, so re-enabling and saving the
+    /// editing copy restores exactly what was there before, no more and no
+    /// less.
+    ///
+    /// `key` must be the currently stored key — the `previousKey` read with
+    /// `MCPAccessKeyStore.loadForRotation()` before `replace(with:)` — never
+    /// the new key about to be written: rows are sealed under the stored
+    /// key, so any other key makes every row look unverified and the
+    /// editing copy comes back disabled with every `liveRead` off.
+    public func mcpProjectForEditing(id: UUID, key: SymmetricKey?) throws -> MCPProject? {
+        try dbQueue.read { db in
+            guard let record = try MCPProjectRecord.fetchOne(db, key: id) else { return nil }
+            var project = try Self.makeMCPProject(record: record, db: db)
+
+            let projectTagValid: Bool
+            if let key {
+                let projectPayload = try MCPAccessIntegrity.projectPayload(
+                    id: project.id, isEnabled: project.isEnabled, workspaceRoots: project.workspaceRoots
+                )
+                projectTagValid = MCPAccessIntegrity.isValid(record.integrityTag, payload: projectPayload, key: key)
+            } else {
+                projectTagValid = false
+            }
+
+            guard projectTagValid, let key else {
+                project.isEnabled = false
+                for index in project.profiles.indices { project.profiles[index].liveRead = false }
+                return project
+            }
+
+            let rows = try MCPProjectProfileRecord.filter(Column("projectID") == id).fetchAll(db)
+            let (live, _) = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, db: db)
+            for index in project.profiles.indices where !live.contains(project.profiles[index].profileID) {
+                project.profiles[index].liveRead = false
+            }
+            return project
+        }
+    }
+
+    /// Rows whose own decoded fields produce a tag that verifies under
+    /// `key`, split into those with `liveRead` on (`live`) and those that
+    /// claim `liveRead` but fail verification or share a duplicated profile
+    /// ID (`rejected`). Deliberately does not apply the project's own
+    /// `isEnabled` gate — `verifiedMCPProject` applies it afterward for its
+    /// public `liveReadProfileIDs`, while `mcpProjectForEditing` needs the
+    /// ungated result so editing a currently-disabled project does not
+    /// discard a row's tag-verified `liveRead`. The payload is rebuilt with
+    /// the endpoint of the profile row as it is now, so a row whose profile
+    /// is missing, cannot be decoded, or was pointed at another endpoint
+    /// since sealing is rejected.
+    private static func verifiedProfileRows(
+        projectID: UUID, rows: [MCPProjectProfileRecord], key: SymmetricKey, db: Database
+    ) throws -> (live: Set<UUID>, rejected: Set<UUID>) {
+        var occurrences: [UUID: Int] = [:]
+        for row in rows { occurrences[row.profileID, default: 0] += 1 }
+
+        let decoder = JSONDecoder()
+        var live = Set<UUID>()
+        var rejected = Set<UUID>()
+        for row in rows where row.liveRead {
+            guard occurrences[row.profileID] == 1 else {
+                rejected.insert(row.profileID)
+                continue
+            }
+            let redactedColumns = try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8))
+            guard let profile = try? ConnectionProfile.fetchOne(db, key: row.profileID) else {
+                rejected.insert(row.profileID)
+                continue
+            }
+            let access = MCPProfileAccess(profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns)
+            let payload = try MCPAccessIntegrity.profilePayload(projectID: projectID, access: access, profile: profile)
+            guard MCPAccessIntegrity.isValid(row.integrityTag, payload: payload, key: key) else {
+                rejected.insert(row.profileID)
+                continue
+            }
+            live.insert(row.profileID)
+        }
+        return (live, rejected)
+    }
+
+    private static func makeMCPProject(record: MCPProjectRecord, db: Database) throws -> MCPProject {
+        let decoder = JSONDecoder()
+        let roots = try MCPProject.canonicalWorkspaceRoots(
+            try decoder.decode([String].self, from: Data(record.workspaceRootsJSON.utf8))
+        )
+        let rows = try MCPProjectProfileRecord
+            .filter(Column("projectID") == record.id)
+            .fetchAll(db)
+            .sorted { $0.profileID.uuidString.lowercased() < $1.profileID.uuidString.lowercased() }
+        let profiles = try rows.map { row in
+            MCPProfileAccess(
+                profileID: row.profileID,
+                liveRead: row.liveRead,
+                redactedColumns: try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8))
+            )
+        }
+        return MCPProject(
+            id: record.id, name: record.name, isEnabled: record.isEnabled,
+            workspaceRoots: roots, profiles: profiles,
+            createdAt: record.createdAt, updatedAt: record.updatedAt
+        )
     }
 
  // MARK: - Query history

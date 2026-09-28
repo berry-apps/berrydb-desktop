@@ -9,9 +9,14 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .executable(name: "BerryApp", targets: ["BerryApp"]),
+        .executable(name: "MCPCompatibilitySpike", targets: ["MCPCompatibilitySpike"]),
+        .executable(name: "berrydb-mcp", targets: ["BerryDBMCP"]),
         .library(name: "BerryDriverKit", targets: ["BerryDriverKit"]),
         .library(name: "BerryDataSourceKit", targets: ["BerryDataSourceKit"]),
         .library(name: "BerryCore", targets: ["BerryCore"]),
+        .library(name: "BerryCredentials", targets: ["BerryCredentials"]),
+        .library(name: "BerryMCP", targets: ["BerryMCP"]),
+        .library(name: "BerryDriverBootstrap", targets: ["BerryDriverBootstrap"]),
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
@@ -42,8 +47,20 @@ let package = Package(
         // embeds and signs it unconditionally too, so there is no
         // dependency-free build variant to preserve here. See deploy/README.md.
         .package(url: "https://github.com/sparkle-project/Sparkle.git", from: "2.6.0"),
+        // Official Model Context Protocol Swift SDK. Pre-1.0 releases are
+        // pinned exactly so a protocol or API change cannot enter implicitly.
+        .package(
+            url: "https://github.com/modelcontextprotocol/swift-sdk.git",
+            exact: "0.12.1"
+        ),
     ],
     targets: [
+        // MARK: Credential storage — Security.framework only, no UI dependencies
+        .target(
+            name: "BerryCredentials",
+            path: "Packages/BerryCredentials/Sources"
+        ),
+
  // MARK: Driver contracts — no dependencies
         .target(
             name: "BerryDriverKit",
@@ -188,6 +205,26 @@ let package = Package(
             path: "Packages/BerryDriverRedis/Sources"
         ),
 
+        // MARK: Concrete driver composition shared by executable roots
+        //
+        // This target deliberately sits above the contract and concrete-driver
+        // modules. Keeping it separate preserves BerryCore's dependency rule:
+        // business logic never imports concrete drivers.
+        .target(
+            name: "BerryDriverBootstrap",
+            dependencies: [
+                "BerryDriverKit", "BerryDataSourceKit", "BerryKeyValueKit",
+                "BerryDriverSQLite", "BerryDriverPostgres", "BerryDriverMySQL",
+                "BerryDriverSQLServer", "BerryDriverDynamoDB",
+                "BerryDriverQdrant", "BerryDriverMongo", "BerryDriverElasticsearch",
+                // BerryDriverRedis is @available(macOS 15, *) throughout; the
+                // package's macOS 15 deployment target lets this composition
+                // target depend on it unconditionally.
+                "BerryDriverRedis",
+            ],
+            path: "Packages/BerryDriverBootstrap/Sources"
+        ),
+
  // MARK: SSH tunnel — local forwarder over Citadel
         .target(
             name: "BerryTunnel",
@@ -278,7 +315,7 @@ let package = Package(
             // SSHTunnel directly (BerryCore's ConnectionManager.prepareEndpoint
             // has no DataSourceDriver/KeyValueDriver equivalent to reuse).
             dependencies: [
-                "BerryCore", "BerryStore", "BerryLicense", "BerryAI", "BerryGraph",
+                "BerryCore", "BerryCredentials", "BerryStore", "BerryLicense", "BerryAI", "BerryGraph",
                 "BerryDataSourceKit", "BerryKeyValueKit", "BerryTunnel",
             ],
             path: "Packages/BerryUI/Sources",
@@ -289,21 +326,31 @@ let package = Package(
         .executableTarget(
             name: "BerryApp",
             dependencies: [
-                "BerryUI", "BerryCore",
-                "BerryDriverSQLite", "BerryDriverPostgres", "BerryDriverMySQL",
-                "BerryDriverSQLServer",
-                "BerryDriverQdrant", "BerryDriverDynamoDB", "BerryDriverMongo",
-                "BerryDriverElasticsearch",
-                // BerryKeyValueKit: KeyValueRegistry.register(...) call below.
-                // BerryDriverRedis: @available(macOS 15, *) throughout — see
-                // its own registration call for why this app target can still
-                // depend on it unconditionally at the macOS 15 deployment target.
-                "BerryKeyValueKit", "BerryDriverRedis",
+                "BerryUI", "BerryCore", "BerryDriverBootstrap",
                 // Sparkle product — unconditional, see the dependency
                 // comment above.
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "App/Sources"
+        ),
+        .executableTarget(
+            name: "MCPCompatibilitySpike",
+            dependencies: [
+                .product(name: "MCP", package: "swift-sdk"),
+            ],
+            path: "MCP/CompatibilitySpike/Sources"
+        ),
+        .target(
+            name: "BerryMCP",
+            dependencies: [
+                "BerryCredentials", "BerryCore", "BerryDriverKit", "BerryStore", "BerryTunnel",
+            ],
+            path: "Packages/BerryMCP/Sources"
+        ),
+        .executableTarget(
+            name: "BerryDBMCP",
+            dependencies: ["BerryDriverBootstrap"],
+            path: "MCP/Sources"
         ),
         // BerryApp has no other consumer to exercise its launch-time
         // scheduling logic (UpdaterAutoStart) against — Sparkle itself can't
@@ -314,7 +361,7 @@ let package = Package(
         // Packages/*/Tests directory.
         .testTarget(
             name: "BerryAppTests",
-            dependencies: ["BerryApp"],
+            dependencies: ["BerryApp", "BerryDriverBootstrap"],
             path: "App/Tests"
         ),
 
@@ -323,6 +370,11 @@ let package = Package(
             name: "BerryDriverTestKit",
             dependencies: ["BerryDriverKit"],
             path: "Packages/BerryDriverTestKit/Sources"
+        ),
+        .testTarget(
+            name: "BerryCredentialsTests",
+            dependencies: ["BerryCredentials"],
+            path: "Packages/BerryCredentials/Tests"
         ),
         .testTarget(
             name: "BerryDriverKitTests",
@@ -458,7 +510,7 @@ let package = Package(
  // has its own Docker/local-server-gated
             // conformance suite here too, same pattern as Mongo/Qdrant above.
             dependencies: [
-                "BerryUI", "BerryCore", "BerryStore", "BerryGraph", "BerryAI",
+                "BerryUI", "BerryCore", "BerryCredentials", "BerryStore", "BerryGraph", "BerryAI",
                 "BerryDriverKit", "BerryDriverSQLite",
                 "BerryDataSourceKit", "BerryDriverMongo", "BerryDriverQdrant", "BerryDriverTestKit",
                 "BerryKeyValueKit", "BerryDriverRedis",
@@ -475,6 +527,23 @@ let package = Package(
                 "BerryStore", "BerryGraph",
             ],
             path: "Packages/BerryAI/Tests"
+        ),
+        .testTarget(
+            name: "MCPCompatibilitySpikeTests",
+            dependencies: ["MCPCompatibilitySpike"],
+            path: "Tests/MCPCompatibilitySpikeTests"
+        ),
+        .testTarget(
+            name: "BerryMCPTests",
+            dependencies: [
+                "BerryMCP", "BerryCredentials", "BerryDriverKit", "BerryStore", "BerryDriverSQLite",
+            ],
+            path: "Packages/BerryMCP/Tests"
+        ),
+        .testTarget(
+            name: "BerryDBMCPTests",
+            dependencies: ["BerryDBMCP", "BerryDriverBootstrap"],
+            path: "MCP/Tests"
         ),
 
  // MARK: Performance benchmarks (M7) — opt-in

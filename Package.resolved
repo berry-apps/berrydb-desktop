@@ -1,5 +1,5 @@
 {
-  "originHash" : "bc690bb03b20e55e27967802d5301975ae90f5883998eefa88cfde01dc079542",
+  "originHash" : "818f45af90e98af89167fc03561747b430f5176ed2fab0facb5b90a125ea1b44",
   "pins" : [
     {
       "identity" : "bigint",
@@ -16,6 +16,15 @@
       "location" : "https://github.com/quangtaned/Citadel.git",
       "state" : {
         "revision" : "aef7eebf90860a6abca4580c31e85b88ab9ce832"
+      }
+    },
+    {
+      "identity" : "eventsource",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mattt/eventsource.git",
+      "state" : {
+        "revision" : "86b5096ac59ab46e66bd1f6377c604bc1dab0bc2",
+        "version" : "1.5.1"
       }
     },
     {
@@ -187,6 +196,15 @@
       "state" : {
         "revision" : "0c0290ff6b24942dadb83a929ffaaa1481df04a2",
         "version" : "1.1.1"
+      }
+    },
+    {
+      "identity" : "swift-sdk",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/modelcontextprotocol/swift-sdk.git",
+      "state" : {
+        "revision" : "a0ae212ebf6eab5f754c3129608bc5557637e605",
+        "version" : "0.12.1"
       }
     },
     {
