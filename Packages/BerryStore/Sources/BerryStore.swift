@@ -606,11 +606,13 @@ public final class BerryStore: Sendable {
     /// replaced *before* this call reseals anything: if this call fails or
     /// is interrupted after step 3 already ran, every row still sealed under
     /// `previousKey` is sealed under a key that is no longer stored, so live
-    /// reads stop for every project until each is individually saved again
-    /// (which reseals that project's own rows from trusted values regardless
-    /// of `previousKey`, recovering it immediately). A restored older copy
-    /// of the store never verifies under the current key, by the same
-    /// mechanism — expected, not a defect.
+    /// reads stop for every project. They do not come back on their own: the
+    /// editing copy of such a project (`mcpProjectForEditing`) no longer
+    /// verifies, so it is disabled with every `liveRead` off, and saving it
+    /// seals exactly that. The user has to enable the project and turn live
+    /// reads on again. A restored older copy of the store never verifies
+    /// under the current key, by the same mechanism — expected, not a
+    /// defect.
     ///
     /// A row belonging to another project is only carried forward — re-tagged
     /// under `sealingKey` — when it currently verifies under `previousKey`.
@@ -825,6 +827,12 @@ public final class BerryStore: Sendable {
     /// each row's own tag-verified `liveRead`, so re-enabling and saving the
     /// editing copy restores exactly what was there before, no more and no
     /// less.
+    ///
+    /// `key` must be the currently stored key — the `previousKey` read with
+    /// `MCPAccessKeyStore.loadForRotation()` before `replace(with:)` — never
+    /// the new key about to be written: rows are sealed under the stored
+    /// key, so any other key makes every row look unverified and the
+    /// editing copy comes back disabled with every `liveRead` off.
     public func mcpProjectForEditing(id: UUID, key: SymmetricKey?) throws -> MCPProject? {
         try dbQueue.read { db in
             guard let record = try MCPProjectRecord.fetchOne(db, key: id) else { return nil }

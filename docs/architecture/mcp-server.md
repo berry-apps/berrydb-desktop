@@ -166,10 +166,18 @@ Keychain with it: the helper has no credential to send, and a connection
 that needs none is one the same-user process can already open without
 BerryDB.
 
-Known limitation: with legacy file-keychain items, a process that creates the
-HMAC key item before BerryDB does could choose the key's value. Closing this
-gap needs a data-protection Keychain access group or an app-written ACL and
-is part of the packaging work (gate G1, see
+Redaction by result-column name is best effort, not a boundary. The name it
+matches is whatever the query labels a result column, so an alias
+(`SELECT email AS x`), an expression over the column, or a whole-row value
+(`SELECT u FROM users u`) carries a sensitive value past it. Database column
+privileges on the MCP profile's database user are the boundary for sensitive
+columns: a column the user cannot select cannot be returned under any name.
+
+Known limitation: with legacy file-keychain items, a same-user process able
+to delete or pre-create the HMAC key item could choose the key, and with it
+sign access settings BerryDB never wrote. Closing this needs a
+data-protection Keychain access group or an app-written ACL on the key item,
+which is packaging work (gate G1, see
 [`../mcp-server-compatibility.md`](../mcp-server-compatibility.md)).
 
 ## Read-only enforcement layers
@@ -252,4 +260,5 @@ G3) and for SQLite (sessions opened with `SQLITE_OPEN_READONLY`); DynamoDB
 `Query` support (never `Scan`); and the production consent and limits rules.
 
 PR 3 adds the audit log, packaging (including closing the Keychain
-pre-creation gap noted above), and the public setup documentation.
+key-planting gap noted above: deleting or pre-creating the key item), and the
+public setup documentation.

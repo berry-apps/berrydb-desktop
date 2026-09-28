@@ -1,11 +1,14 @@
 import Foundation
 import GRDB
 
+/// Rejections of MCP project settings at the store boundary.
 public enum MCPProjectError: Error, Equatable, Sendable {
+    /// A workspace root was not an absolute path; nothing is saved or
+    /// loaded, since a relative root has no stable meaning across processes.
     case workspaceRootMustBeAbsolute(String)
 }
 
-/// Access one MCP project grants to one saved connection profile.
+/// The settings one MCP project holds for one saved connection profile.
 ///
 /// `liveRead` is the only switch that lets the MCP helper open a connection
 /// for this profile; it defaults to off so adding a profile to a project

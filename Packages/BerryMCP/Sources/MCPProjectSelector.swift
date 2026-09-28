@@ -1,6 +1,10 @@
 import BerryStore
 import Foundation
 
+/// The outcome of choosing the project a helper process serves. Only
+/// `.selected` names a project; `.noMatch` and `.ambiguous` leave the helper
+/// serving no project, and `.ambiguous` lists the tied candidates instead of
+/// picking one. Selection is not authorization (see `MCPProjectSelector`).
 public enum MCPProjectSelection: Equatable, Sendable {
     case selected(UUID)
     case noMatch

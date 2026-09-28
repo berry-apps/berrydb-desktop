@@ -282,8 +282,8 @@ added with `agy mcp add` and removed with `agy mcp remove` after the run.
 Conclusion: **pass.** The process working directory identifies the
 workspace for all three hosts; Claude Code and Antigravity also offer
 `roots`, Codex does not. The
-selection order in the design (roots, then working directory, then an
-explicit project) is viable. The two hosts spell the same directory
+selection order in the design (an explicit `--project` first, then roots,
+then the working directory) is viable. The two hosts spell the same directory
 differently (`/tmp/…` versus `/private/tmp/…`), so selection must compare
 symlink-resolved paths.
 

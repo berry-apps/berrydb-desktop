@@ -86,18 +86,19 @@ public struct MCPAccessKeyStore: Sendable {
     /// `previousKey = try loadForRotation()`, abort on throw; (2) generate
     /// `newKey = SymmetricKey(size: .bits256)`; (3) `replace(with: newKey)`,
     /// abort on throw; (4) `store.saveMCPProject(project, sealingKey: newKey,
-    /// previousKey: previousKey)`, or `store.deleteMCPProject(id:sealingKey:
-    /// previousKey:)` when the change is a deletion. This call runs *before*
-    /// step 4 reseals anything, not after: if step 4 fails or is
-    /// interrupted once this call has already succeeded, every row on disk
-    /// is still sealed under `previousKey`, which is no longer the stored
-    /// key, so live reads stop
-    /// for every project until each is individually saved again (that save
-    /// reseals its own project's rows from trusted values regardless of
-    /// `previousKey`, recovering it immediately). A restored older copy of
-    /// the store never verifies under the current key, by the same
-    /// mechanism. Throws `keychainWriteFailed` and leaves the previously
-    /// stored key untouched if the write fails.
+    /// previousKey: previousKey)`, where `project` was built from
+    /// `store.mcpProjectForEditing(id:key: previousKey)`, or
+    /// `store.deleteMCPProject(id:sealingKey:previousKey:)` when the change
+    /// is a deletion. This call runs *before* step 4 reseals anything, not
+    /// after: if step 4 fails or is interrupted once this call has already
+    /// succeeded, every row on disk is still sealed under `previousKey`,
+    /// which is no longer the stored key, so live reads stop for every
+    /// project. They stay off: the editing copy of each project no longer
+    /// verifies, so it comes back disabled with every `liveRead` off, and
+    /// the user has to enable the project and its live reads again. A
+    /// restored older copy of the store never verifies under the current
+    /// key, by the same mechanism. Throws `keychainWriteFailed` and leaves
+    /// the previously stored key untouched if the write fails.
     public func replace(with key: SymmetricKey) throws {
         guard write(key.withUnsafeBytes { Data($0) }) else { throw KeyError.keychainWriteFailed }
     }

@@ -10,6 +10,11 @@ public enum MCPAccessLevel: Sendable {
     case liveRead
 }
 
+/// Why `MCPProjectResolver.resolve(profileID:access:)` refused a profile.
+/// With the store-backed resolver every case is raised before any
+/// credential is read or connection opened. `unauthorizedProfile` is
+/// reported the same way whether or not the profile exists, so the error
+/// never reveals profiles outside the selected project.
 public enum MCPProjectResolutionError: Error, Equatable, Sendable {
     case projectNotFound
     case projectDisabled
@@ -19,6 +24,10 @@ public enum MCPProjectResolutionError: Error, Equatable, Sendable {
     case unsupportedDriver(String)
 }
 
+/// A resolved profile ready for the connection coordinator: its ID, driver,
+/// and a `ConnectionConfig` that carries the profile's Keychain secrets in
+/// memory. Only produced by `MCPProjectResolver` after the project and
+/// access checks pass, and never serialized or returned to an MCP client.
 public struct MCPConnectionProfile: Sendable {
     public let id: UUID
     public let driverID: DriverID
@@ -31,6 +40,10 @@ public struct MCPConnectionProfile: Sendable {
     }
 }
 
+/// Reads a profile's secrets for the helper. Injectable so tests never
+/// touch the real Keychain; `keychain` reads them through
+/// `KeychainService`, whose items only BerryDB-signed binaries can read.
+/// The returned secrets stay in memory and are never logged or emitted.
 public struct MCPCredentialResolver: Sendable {
     public let resolve: @Sendable (UUID) async throws -> ConnectionSecrets
 
@@ -57,6 +70,10 @@ public struct MCPProjectResolver: Sendable {
     private let loadProject: @Sendable () async throws -> MCPVerifiedProject?
     private let loadProfile: @Sendable (UUID) async throws -> MCPConnectionProfile?
 
+    /// Injectable sources for tests. `loadProject` must return a freshly
+    /// verified view of the selected project on every call (it is invoked
+    /// once per `resolve`), and `profile` is only called after every access
+    /// check has passed, so a refused request never reads credentials.
     public init(
         loadProject: @escaping @Sendable () async throws -> MCPVerifiedProject?,
         profile: @escaping @Sendable (UUID) async throws -> MCPConnectionProfile?
@@ -65,6 +82,11 @@ public struct MCPProjectResolver: Sendable {
         self.loadProfile = profile
     }
 
+    /// Resolves against `store` for the project `projectID`. Every call
+    /// re-verifies the project's integrity tags with the key `keyStore`
+    /// loads at that moment (a missing key means no live reads), and reads
+    /// secrets through `credentialResolver` only for a profile that passed
+    /// those checks.
     public init(
         store: BerryStore,
         projectID: UUID,
@@ -91,11 +113,10 @@ public struct MCPProjectResolver: Sendable {
         }
     }
 
-    /// Resolves `profileID` against the freshly loaded project. Metadata
-    /// tools (PR 2) need no credentials; for now `.metadata` still loads
-    /// credentials through `loadProfile` too — acceptable because the
-    /// coordinator (Task 10) is the only caller today and always uses
-    /// `.liveRead`.
+    /// Resolves `profileID` against the freshly loaded project. `.metadata`
+    /// access needs no credentials, but this call still loads them through
+    /// `loadProfile` for either access level; the connection coordinator,
+    /// its only caller, always requests `.liveRead`.
     public func resolve(profileID: UUID, access: MCPAccessLevel) async throws -> MCPConnectionProfile {
         guard let verified = try await loadProject() else { throw MCPProjectResolutionError.projectNotFound }
         guard verified.project.isEnabled else { throw MCPProjectResolutionError.projectDisabled }

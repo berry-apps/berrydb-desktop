@@ -5,10 +5,17 @@ import Foundation
 /// The service deliberately contains no UI or AI concerns. It loads one
 /// snapshot per operation and delegates traversal to `SchemaGraph`.
 public struct BerryGraphQueryService: Sendable {
+    /// Edge kinds that count as a dependency for neighbors, paths, blast
+    /// radius, cycles and centrality; workload edges such as `.reads` are
+    /// deliberately excluded so query traffic never reads as schema coupling.
     public static let dependencyKinds: Set<EdgeKind> = [.references, .derivesFrom]
+    /// Entries `topCentrality` returns when the caller gives no limit.
     public static let defaultCentralityLimit = 10
+    /// Cap on names listed in a `nodeNotFound` error, so a large schema
+    /// cannot turn one failed lookup into an unbounded message.
     public static let maximumDiagnosticNames = 50
 
+    /// How a node reference that matches more than one node is resolved.
     public enum ResolutionPolicy: Sendable {
         /// Reject an unqualified reference when more than one node matches.
         case strict
@@ -20,6 +27,8 @@ public struct BerryGraphQueryService: Sendable {
     private let loadGraph: @Sendable (UUID) throws -> SchemaGraph
     private let harvestedAt: @Sendable (UUID) throws -> Date?
 
+    /// Reads snapshots and harvest times from `store`; never opens a
+    /// database connection.
     public init(store: GraphStore) {
         self.loadGraph = { try store.loadGraph(profileID: $0) }
         self.harvestedAt = { try store.snapshots(profileID: $0).map(\.takenAt).max() }
@@ -44,6 +53,9 @@ public struct BerryGraphQueryService: Sendable {
         self.harvestedAt = harvestedAt
     }
 
+    /// Expected failures of a graph query. Messages name schema objects
+    /// only, never data, and `nodeNotFound` lists at most
+    /// `maximumDiagnosticNames` names.
     public enum QueryError: Error, Equatable, Sendable, LocalizedError {
         case noSnapshot
         case nodeNotFound(name: String, available: [String])
@@ -61,12 +73,15 @@ public struct BerryGraphQueryService: Sendable {
         }
     }
 
+    /// Direct dependencies of one node in both directions, by name, sorted.
     public struct Neighbors: Equatable, Sendable {
         public let node: String
         public let dependsOn: [String]
         public let dependedOnBy: [String]
     }
 
+    /// The shortest dependency chain from one node to another; `path` is
+    /// in traversal order and empty when `reachable` is false.
     public struct Path: Equatable, Sendable {
         public let from: String
         public let to: String
@@ -74,33 +89,42 @@ public struct BerryGraphQueryService: Sendable {
         public let path: [String]
     }
 
+    /// Every node that transitively depends on one node, by name, sorted.
     public struct BlastRadius: Equatable, Sendable {
         public let node: String
         public let impacted: [String]
         public let count: Int
     }
 
+    /// Dependency cycles as components of node names, in a deterministic
+    /// order.
     public struct CircularDependencies: Equatable, Sendable {
         public let components: [[String]]
         public var hasCycles: Bool { !components.isEmpty }
     }
 
+    /// One node and how many dependency edges point at it.
     public struct CentralityEntry: Equatable, Sendable {
         public let node: String
         public let inDegree: Int
     }
 
+    /// Harvested statistics of one table or index, limited to the
+    /// statistic keys (`rows`, `size_bytes`, `seq_scan`, `idx_scan`,
+    /// `unused`) so other node attributes are never surfaced.
     public struct NodeStatistics: Equatable, Sendable {
         public let name: String
         public let fields: [String: String]
     }
 
+    /// Statistics of one table and of each of its indexes.
     public struct TableStatistics: Equatable, Sendable {
         public let table: String
         public let fields: [String: String]
         public let indexes: [NodeStatistics]
     }
 
+    /// Statistics of every table plus the names of indexes marked unused.
     public struct StatisticsSummary: Equatable, Sendable {
         public let tables: [NodeStatistics]
         public let unusedIndexes: [String]
@@ -210,6 +234,8 @@ public struct BerryGraphQueryService: Sendable {
         _ = try loadedGraph(profileID: profileID)
     }
 
+    /// Direct dependencies of the node `name` resolves to, under
+    /// `resolution`, from the persisted graph of `profileID`.
     public func neighbors(
         profileID: UUID, node name: String, resolution: ResolutionPolicy = .strict
     ) throws -> Neighbors {
@@ -222,6 +248,8 @@ public struct BerryGraphQueryService: Sendable {
         )
     }
 
+    /// Shortest dependency path between two nodes, following outgoing
+    /// dependency edges only.
     public func path(
         profileID: UUID, from fromName: String, to toName: String,
         resolution: ResolutionPolicy = .strict
@@ -240,6 +268,7 @@ public struct BerryGraphQueryService: Sendable {
         )
     }
 
+    /// Every node that transitively depends on the node `name` resolves to.
     public func blastRadius(
         profileID: UUID, node name: String, resolution: ResolutionPolicy = .strict
     ) throws -> BlastRadius {
@@ -249,6 +278,7 @@ public struct BerryGraphQueryService: Sendable {
         return BlastRadius(node: node.name, impacted: impacted, count: impacted.count)
     }
 
+    /// Every dependency cycle in the persisted graph of `profileID`.
     public func circularDependencies(profileID: UUID) throws -> CircularDependencies {
         let graph = try loadedGraph(profileID: profileID)
         let components = graph.circularDependencies()
@@ -257,6 +287,8 @@ public struct BerryGraphQueryService: Sendable {
         return CircularDependencies(components: components)
     }
 
+    /// The nodes with the most incoming dependency edges; `limit` is
+    /// clamped to at least 1.
     public func topCentrality(profileID: UUID, limit: Int = defaultCentralityLimit) throws -> [CentralityEntry] {
         let graph = try loadedGraph(profileID: profileID)
         return graph.topByInDegree(max(1, limit), kinds: Self.dependencyKinds).map {
@@ -264,6 +296,7 @@ public struct BerryGraphQueryService: Sendable {
         }
     }
 
+    /// Harvested statistics of every table, sorted by name then stable id.
     public func statistics(profileID: UUID) throws -> StatisticsSummary {
         let graph = try loadedGraph(profileID: profileID)
         let tables = graph.nodes.values
@@ -277,6 +310,7 @@ public struct BerryGraphQueryService: Sendable {
         return StatisticsSummary(tables: tables, unusedIndexes: unusedIndexes)
     }
 
+    /// Harvested statistics of one table and its indexes.
     public func statistics(
         profileID: UUID, table name: String, resolution: ResolutionPolicy = .strict
     ) throws -> TableStatistics {
