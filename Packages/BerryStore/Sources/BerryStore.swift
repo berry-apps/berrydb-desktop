@@ -27,9 +27,22 @@ public final class BerryStore: Sendable {
         try BerryStore(path: defaultStoreURL().path)
     }
 
+    /// How long a connection waits for another connection's lock on the
+    /// store file before failing with "database is locked". The app and the
+    /// MCP helper open the same file from separate processes, and the store
+    /// uses a rollback journal, so an app commit must wait for any helper
+    /// read in progress and a helper read must wait for an app commit.
+    /// Both sides hold the lock for one short transaction (a settings save,
+    /// a history insert, one verification read), far below this bound; 5
+    /// seconds absorbs a slow disk or a burst of writes without letting a
+    /// stuck peer block the caller indefinitely, and is no longer than the
+    /// request timeout for production-labeled profiles.
+    static let busyTimeout: TimeInterval = 5
+
     /// Store at an arbitrary path — used for tests (`:memory:`).
     public init(path: String) throws {
         var configuration = Configuration()
+        configuration.busyMode = .timeout(Self.busyTimeout)
         configuration.prepareDatabase { db in
             try SQLiteVecExtension.install(into: db)
         }
@@ -62,6 +75,7 @@ public final class BerryStore: Sendable {
     public static func openReadOnly(path: String) throws -> BerryStore {
         var configuration = Configuration()
         configuration.readonly = true
+        configuration.busyMode = .timeout(busyTimeout)
         configuration.prepareDatabase { db in try SQLiteVecExtension.install(into: db) }
         let queue = try DatabaseQueue(path: path, configuration: configuration)
         let expected = migrator.migrations
