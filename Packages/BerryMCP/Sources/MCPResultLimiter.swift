@@ -380,11 +380,47 @@ public struct MCPResultLimiter: Sendable {
     /// up being in the final output, which would truncate more than
     /// necessary.
     private func truncateCell(_ value: String, maximumEncodedBytes: Int, encoder: JSONEncoder) -> String {
+        Self.truncatedCell(value, maximumEncodedBytes: maximumEncodedBytes, encoder: encoder).value
+    }
+
+    /// Truncates `value` to the longest whole-character prefix that, with
+    /// a trailing `…`, encodes within `maximumEncodedBytes`; returns it with
+    /// the number of characters indexed to find it, which tests use to
+    /// check the work stays bounded by the ceiling rather than by the cell.
+    ///
+    /// JSON encoding writes each UTF-8 byte as one to six bytes, plus two
+    /// quotes. So a value of at most `(maximumEncodedBytes - 2) / 6` UTF-8
+    /// bytes always fits and is returned without encoding; a value whose
+    /// UTF-8 count alone exceeds the ceiling never fits and is never encoded
+    /// whole. When truncating, no prefix longer than the ceiling minus the
+    /// encoded marker in UTF-8 bytes can fit, so characters are indexed
+    /// only up to that many bytes — at most `maximumEncodedBytes`
+    /// characters, however long the cell is — before the binary search.
+    /// Indexing stays on `Character` boundaries, so a grapheme cluster is
+    /// never split and no replacement character is introduced.
+    static func truncatedCell(
+        _ value: String, maximumEncodedBytes: Int, encoder: JSONEncoder
+    ) -> (value: String, examinedCharacters: Int) {
         func size(_ string: String) -> Int { (try? encoder.encode(string).count) ?? Int.max }
-        guard size(value) > maximumEncodedBytes else { return value }
+        let utf8Count = value.utf8.count
+        if utf8Count <= (maximumEncodedBytes - 2) / 6 { return (value, 0) }
+        if utf8Count + 2 <= maximumEncodedBytes, size(value) <= maximumEncodedBytes { return (value, 0) }
         let marker = "…"
-        if size(marker) > maximumEncodedBytes { return "" }
-        let boundaries = Array(value.indices) + [value.endIndex]
+        let markerSize = size(marker)
+        if markerSize > maximumEncodedBytes { return ("", 0) }
+        let prefixByteBudget = maximumEncodedBytes - markerSize
+        var boundaries = [value.startIndex]
+        var examined = 0
+        var prefixBytes = 0
+        var index = value.startIndex
+        while index < value.endIndex {
+            let next = value.index(after: index)
+            examined += 1
+            prefixBytes += value.utf8.distance(from: index, to: next)
+            guard prefixBytes <= prefixByteBudget else { break }
+            boundaries.append(next)
+            index = next
+        }
         var low = 0
         var high = boundaries.count - 1
         while low < high {
@@ -396,7 +432,7 @@ public struct MCPResultLimiter: Sendable {
                 high = midpoint - 1
             }
         }
-        return String(value[..<boundaries[low]]) + marker
+        return (String(value[..<boundaries[low]]) + marker, examined)
     }
 
     private func emptyResult(with metadata: MCPTruncationMetadata) -> MCPBoundedResult {

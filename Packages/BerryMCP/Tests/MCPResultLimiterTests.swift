@@ -87,6 +87,46 @@ struct MCPResultLimiterTests {
         }
     }
 
+    /// A multi-megabyte cell must cost work bounded by the cell ceiling, not
+    /// by its own length: only a prefix of at most `maximumCellBytes`
+    /// characters can ever fit, so nothing past it is indexed.
+    @Test(arguments: [
+        ("a", 8 << 20),
+        ("😀", 2 << 20),
+        ("\u{0}", 4 << 20),
+        ("e\u{301}", 2 << 20),
+    ])
+    func multiMegabyteCellWorkIsBoundedByTheCellCeiling(unit: String, repetitions: Int) throws {
+        let input = String(repeating: unit, count: repetitions)
+        let ceiling = 65_536
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+
+        let truncated = MCPResultLimiter.truncatedCell(input, maximumEncodedBytes: ceiling, encoder: encoder)
+
+        #expect(truncated.examinedCharacters <= ceiling)
+        #expect(truncated.value.hasSuffix("…"))
+        #expect(input.hasPrefix(String(truncated.value.dropLast())))
+        #expect(try encoder.encode(truncated.value).count <= ceiling)
+
+        let limiter = MCPResultLimiter(limits: MCPResultLimits(maximumRows: 1, maximumCellBytes: ceiling))
+        let result = try limiter.limit(rows: [["value": input]])
+        let kept = try #require(result.rows.first?["value"] ?? nil)
+        #expect(try encoder.encode(kept).count <= ceiling)
+        #expect(result.metadata.truncatedCells == 1)
+    }
+
+    @Test func cellThatAlreadyFitsIsNotIndexed() {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let input = String(repeating: "a", count: 1_000)
+
+        let result = MCPResultLimiter.truncatedCell(input, maximumEncodedBytes: 65_536, encoder: encoder)
+
+        #expect(result.value == input)
+        #expect(result.examinedCharacters == 0)
+    }
+
     @Test func existingReplacementCharacterIsPreservedWhenItFits() throws {
         let input = "ok\u{FFFD}" + String(repeating: "x", count: 30)
         let limiter = MCPResultLimiter(limits: MCPResultLimits(maximumRows: 1, maximumCellBytes: 14, maximumSerializedBytes: 2_000))
