@@ -227,3 +227,35 @@ UNION ALL SELECT 'setrole_writer' WHERE EXISTS (SELECT 1 FROM pg_auth_members m 
 ```
 
 MySQL: after `SET ROLE ALL`, for every `SHOW GRANTS FOR CURRENT_USER()` line matching `GRANT <privileges> ON `, split `<privileges>` on commas outside parentheses, drop any column list, uppercase, and reject if any name is outside the allowlist or the line ends with `WITH GRANT OPTION`. Role-membership lines (`GRANT <role> TO`) are skipped because `SET ROLE ALL` has already folded their privileges into the output.
+
+## G4 DynamoDB harvest
+
+Question: does the existing `SchemaHarvester` produce a usable schema graph
+for a DynamoDB profile? Tested on 2026-09-28 against `amazon/dynamodb-local`
+with table `orders` (partition key `pk` S, sort key `sk` S, global secondary
+index `by_status` on `status` S, one item with an extra `total` N
+attribute), using the DynamoDB driver through `ConnectionManager`,
+`SchemaCatalog` and `SchemaHarvester.buildGraph`.
+
+Harvested graph: 4 nodes, 3 edges.
+
+| Node | Attributes |
+|---|---|
+| table `orders` | none |
+| column `pk` | `type` "String (S)", `primaryKey` true, `nullable` false |
+| column `sk` | `type` "String (S)", `primaryKey` true, `nullable` false |
+| index `by_status` | `columns` "status", `unique` false |
+
+Edges: `orders → pk` and `orders → sk` (`hasColumn`), `orders → by_status`
+(`hasIndex`).
+
+Conclusion: **harvest usable** for schema and graph tools; the
+`DescribeTable` fallback is not needed. Two limits carry into the DynamoDB
+query tool: partition and sort keys are both marked `primaryKey` without
+their `HASH`/`RANGE` role, and non-key attributes are absent because
+DynamoDB has no declared schema. The query tool therefore reads key roles
+and index key schemas from `DescribeTable` at request time.
+
+DynamoDB Local keeps a separate database per access key and region unless
+started with `-sharedDb`; fixtures must be created with the same credentials
+the driver uses.
