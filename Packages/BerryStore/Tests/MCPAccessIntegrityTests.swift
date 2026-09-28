@@ -358,6 +358,48 @@ struct MCPAccessIntegrityTests {
         #expect(verified.liveReadProfileIDs.isEmpty)
     }
 
+    @Test func deletingAProjectRevokesARestoredCopyAndKeepsOtherProjectsLive() throws {
+        let (store, a, b) = try makeStore()
+        let key1 = SymmetricKey(size: .bits256)
+        let key2 = SymmetricKey(size: .bits256)
+        let projectA = MCPProject(name: "A", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
+        let projectB = MCPProject(name: "B", isEnabled: true, profiles: [MCPProfileAccess(profileID: b.id, liveRead: true)])
+        try store.saveMCPProject(projectA, sealingKey: key1, previousKey: nil)
+        try store.saveMCPProject(projectB, sealingKey: key1, previousKey: key1)
+
+        let projectRows = try store.fetchForTesting("SELECT * FROM mcp_project WHERE id = ?", arguments: [projectA.id])
+        let profileRows = try store.fetchForTesting(
+            "SELECT * FROM mcp_project_profile WHERE projectID = ?", arguments: [projectA.id]
+        )
+
+        try store.deleteMCPProject(id: projectA.id, sealingKey: key2, previousKey: key1)
+        #expect(try store.mcpProject(id: projectA.id) == nil)
+
+        // A same-user process restores the deleted project's rows, tags included.
+        for row in projectRows {
+            try store.executeForTesting(
+                "INSERT INTO mcp_project VALUES (\(Self.placeholders(row)))",
+                arguments: StatementArguments(Array(row.databaseValues))
+            )
+        }
+        for row in profileRows {
+            try store.executeForTesting(
+                "INSERT INTO mcp_project_profile VALUES (\(Self.placeholders(row)))",
+                arguments: StatementArguments(Array(row.databaseValues))
+            )
+        }
+
+        let restored = try #require(try store.verifiedMCPProject(id: projectA.id, key: key2))
+        #expect(restored.liveReadProfileIDs.isEmpty)
+        #expect(!restored.projectTagValid)
+        let verifiedB = try #require(try store.verifiedMCPProject(id: projectB.id, key: key2))
+        #expect(verifiedB.liveReadProfileIDs == [b.id])
+    }
+
+    private static func placeholders(_ row: Row) -> String {
+        Array(repeating: "?", count: row.count).joined(separator: ", ")
+    }
+
     @Test func undecodableForeignProfileRowDoesNotBlockSaveAndIsNotLive() throws {
         let (store, a, b) = try makeStore()
         let key1 = SymmetricKey(size: .bits256)

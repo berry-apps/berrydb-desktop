@@ -86,10 +86,12 @@ public struct MCPAccessKeyStore: Sendable {
     /// `previousKey = try loadForRotation()`, abort on throw; (2) generate
     /// `newKey = SymmetricKey(size: .bits256)`; (3) `replace(with: newKey)`,
     /// abort on throw; (4) `store.saveMCPProject(project, sealingKey: newKey,
-    /// previousKey: previousKey)`. This call runs *before* step 4 reseals
-    /// anything, not after: if step 4 fails or is interrupted once this call
-    /// has already succeeded, every row on disk is still sealed under
-    /// `previousKey`, which is no longer the stored key, so live reads stop
+    /// previousKey: previousKey)`, or `store.deleteMCPProject(id:sealingKey:
+    /// previousKey:)` when the change is a deletion. This call runs *before*
+    /// step 4 reseals anything, not after: if step 4 fails or is
+    /// interrupted once this call has already succeeded, every row on disk
+    /// is still sealed under `previousKey`, which is no longer the stored
+    /// key, so live reads stop
     /// for every project until each is individually saved again (that save
     /// reseals its own project's rows from trusted values regardless of
     /// `previousKey`, recovering it immediately). A restored older copy of

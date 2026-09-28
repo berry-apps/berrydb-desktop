@@ -125,7 +125,7 @@ struct MCPProjectTests {
         updated.name = "Beta"
         try store.saveMCPProject(updated, sealingKey: SymmetricKey(size: .bits256), previousKey: nil)
         #expect(try store.mcpProject(id: zID)?.name == "Beta")
-        try store.deleteMCPProject(id: zID)
+        try store.deleteMCPProject(id: zID, sealingKey: SymmetricKey(size: .bits256), previousKey: nil)
         #expect(try store.mcpProject(id: zID) == nil)
     }
 

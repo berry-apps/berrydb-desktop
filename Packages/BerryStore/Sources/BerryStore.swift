@@ -534,6 +534,13 @@ public final class BerryStore: Sendable {
  /// Delete a profile — the caller MUST also delete the Keychain item.
     /// The key must be the UUID itself: GRDB stores UUID as a 16-byte blob,
     /// so a uuidString key would never match.
+    ///
+    /// The profile's MCP access rows go with it by cascade, without an MCP
+    /// key rotation. A copy of those rows restored into the file, together
+    /// with the profile row, could verify again; that is acceptable because
+    /// the profile's secrets are deleted from the Keychain with it, so the
+    /// helper has no credential to use for it, and a connection that needs
+    /// none is one the same-user process can open without BerryDB.
     public func deleteProfile(id: UUID) throws {
         _ = try dbQueue.write { db in
             try ConnectionProfile.deleteOne(db, key: id)
@@ -725,9 +732,25 @@ public final class BerryStore: Sendable {
         return MCPAccessIntegrity.tag(payload, key: sealingKey)
     }
 
-    public func deleteMCPProject(id: UUID) throws {
-        _ = try dbQueue.write { db in
-            try MCPProjectRecord.deleteOne(db, key: id)
+    /// Deletes a project as a settings change: the project's rows go (its
+    /// profile-access rows by cascade) and every other project's rows are
+    /// re-sealed for the same key rotation `saveMCPProject` performs, with
+    /// the same caller contract — read `previousKey` with
+    /// `MCPAccessKeyStore.loadForRotation()`, store `sealingKey` with
+    /// `replace(with:)`, then call this. Without the rotation, a copy of the
+    /// deleted rows restored into the file would still carry tags that
+    /// verify under the stored key and bring the project's live reads back.
+    /// Rows of other projects that do not verify under `previousKey` are
+    /// left untagged, exactly as in `saveMCPProject`.
+    public func deleteMCPProject(id: UUID, sealingKey: SymmetricKey, previousKey: SymmetricKey?) throws {
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        try dbQueue.write { db in
+            _ = try MCPProjectRecord.deleteOne(db, key: id)
+            try Self.reseal(
+                otherThan: id, sealingKey: sealingKey, previousKey: previousKey,
+                db: db, encoder: encoder, decoder: decoder
+            )
         }
     }
 

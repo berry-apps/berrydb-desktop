@@ -138,6 +138,16 @@ unverified project is forced disabled, so a save never signs a value the app
 did not itself show as current. The key item is addressed by service and
 account so a second item cannot shadow it.
 
+Deleting a project is a settings change like any other: the key is rotated
+in the same order and every remaining project's verifiable rows are
+re-sealed, so a copy of the deleted project's rows restored into the file
+does not verify. Deleting a connection profile removes its access rows by
+cascade without a rotation. A restored copy of those rows could verify
+again, which is acceptable because the profile's secrets are deleted from
+Keychain with it: the helper has no credential to send, and a connection
+that needs none is one the same-user process can already open without
+BerryDB.
+
 Known limitation: with legacy file-keychain items, a process that creates the
 HMAC key item before BerryDB does could choose the key's value. Closing this
 gap needs a data-protection Keychain access group or an app-written ACL and
