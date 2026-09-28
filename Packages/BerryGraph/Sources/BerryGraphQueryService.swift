@@ -117,6 +117,8 @@ public struct BerryGraphQueryService: Sendable {
     /// One table or view surfaced by `schema(...)`. Under `.overview` detail,
     /// `columns`, `indexes`, and `foreignKeys` are always empty.
     public struct SchemaObject: Equatable, Sendable {
+        /// One column of the object, as harvested by `SchemaGraphBuilder`
+        /// from a `.hasColumn` node's attrs.
         public struct Column: Equatable, Sendable {
             public let name: String
             public let type: String
@@ -131,6 +133,9 @@ public struct BerryGraphQueryService: Sendable {
             }
         }
 
+        /// One index on the object, as harvested by `SchemaGraphBuilder`
+        /// from a `.hasIndex` node's attrs. `columns` preserves harvest order
+        /// (the key order for a composite index), not alphabetical order.
         public struct Index: Equatable, Sendable {
             public let name: String
             public let columns: [String]
@@ -143,13 +148,22 @@ public struct BerryGraphQueryService: Sendable {
             }
         }
 
+        /// One outgoing foreign key of the object, as harvested by
+        /// `SchemaGraphBuilder` onto the `.references` edge to the parent
+        /// table. `referencedDatabase` is the parent table's database, which
+        /// can differ from the child's for a cross-database reference.
         public struct ForeignKey: Equatable, Sendable {
             public let column: String
+            public let referencedDatabase: String?
             public let referencedTable: String
             public let referencedColumn: String
 
-            public init(column: String, referencedTable: String, referencedColumn: String) {
+            public init(
+                column: String, referencedDatabase: String? = nil,
+                referencedTable: String, referencedColumn: String
+            ) {
                 self.column = column
+                self.referencedDatabase = referencedDatabase
                 self.referencedTable = referencedTable
                 self.referencedColumn = referencedColumn
             }
@@ -276,29 +290,54 @@ public struct BerryGraphQueryService: Sendable {
     }
 
     /// Lists tables and views from the persisted graph, without opening a
-    /// database connection. `objectNames`, when given, filters by name
-    /// case-insensitively; unmatched names are silently dropped, not
-    /// reported as errors. Results are sorted by (`database ?? ""`, `name`)
-    /// and cut at `limit`, with the remainder reported in `omittedCount`.
+    /// database connection. `objectNames`, when given, filters case-
+    /// insensitively: an entry containing a `.` matches the qualified
+    /// `database.name` (empty string for a nil database, e.g. `.orders`);
+    /// an entry without a `.` matches the bare name in every database.
+    /// Unmatched names are silently dropped, not reported as errors. Results
+    /// are sorted by (`database ?? ""`, `name`) and cut at `limit` — `0`
+    /// returns no objects and reports every match as omitted — with the
+    /// remainder reported in `omittedCount`.
     public func schema(
         profileID: UUID, objectNames: [String]?, detail: SchemaDetail, limit: Int
     ) throws -> SchemaListing {
         let graph = try loadedGraph(profileID: profileID)
         let harvestedAt = try self.harvestedAt(profileID)
-        let wanted = objectNames.map { Set($0.map { $0.lowercased() }) }
+        let wanted = objectNames?.map { $0.lowercased() }
         let matches = graph.nodes.values
             .filter { $0.kind == .table || $0.kind == .view }
-            .filter { wanted?.contains($0.name.lowercased()) ?? true }
+            .filter { matchesWanted($0, wanted: wanted) }
             .sorted { ($0.database ?? "", $0.name) < ($1.database ?? "", $1.name) }
         let included = Array(matches.prefix(max(0, limit)))
+        // Single pass over all edges, not one filter per object: keeps
+        // schema() linear in graph size instead of quadratic in object count.
+        let referencesBySource = detail == .full ? referenceEdgesBySource(in: graph) : [:]
         return SchemaListing(
-            objects: included.map { schemaObject(for: $0, in: graph, detail: detail) },
+            objects: included.map { schemaObject(for: $0, in: graph, detail: detail, referencesBySource: referencesBySource) },
             omittedCount: matches.count - included.count,
             harvestedAt: harvestedAt
         )
     }
 
-    private func schemaObject(for node: GraphNode, in graph: SchemaGraph, detail: SchemaDetail) -> SchemaObject {
+    private func matchesWanted(_ node: GraphNode, wanted: [String]?) -> Bool {
+        guard let wanted else { return true }
+        let bare = node.name.lowercased()
+        let qualified = "\(node.database ?? "").\(node.name)".lowercased()
+        return wanted.contains { $0.contains(".") ? $0 == qualified : $0 == bare }
+    }
+
+    private func referenceEdgesBySource(in graph: SchemaGraph) -> [String: [GraphEdge]] {
+        var result: [String: [GraphEdge]] = [:]
+        for edge in graph.edges where edge.kind == .references {
+            result[edge.src, default: []].append(edge)
+        }
+        return result
+    }
+
+    private func schemaObject(
+        for node: GraphNode, in graph: SchemaGraph, detail: SchemaDetail,
+        referencesBySource: [String: [GraphEdge]]
+    ) -> SchemaObject {
         guard detail == .full else {
             return SchemaObject(name: node.name, database: node.database, kind: node.kind)
         }
@@ -323,14 +362,15 @@ public struct BerryGraphQueryService: Sendable {
                     unique: $0.attrs["unique"] == "true"
                 )
             }
-        let foreignKeys = graph.edges
-            .filter { $0.src == node.id && $0.kind == .references }
+        let foreignKeys = (referencesBySource[node.id] ?? [])
             .sorted { ($0.attrs["column"] ?? "") < ($1.attrs["column"] ?? "") }
-            .map {
-                SchemaObject.ForeignKey(
-                    column: $0.attrs["column"] ?? "",
-                    referencedTable: graph.nodes[$0.dst]?.name ?? $0.dst,
-                    referencedColumn: $0.attrs["referencedColumn"] ?? ""
+            .map { edge -> SchemaObject.ForeignKey in
+                let parent = graph.nodes[edge.dst]
+                return SchemaObject.ForeignKey(
+                    column: edge.attrs["column"] ?? "",
+                    referencedDatabase: parent?.database,
+                    referencedTable: parent?.name ?? edge.dst,
+                    referencedColumn: edge.attrs["referencedColumn"] ?? ""
                 )
             }
         return SchemaObject(

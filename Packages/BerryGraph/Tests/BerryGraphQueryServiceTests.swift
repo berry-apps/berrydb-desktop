@@ -189,6 +189,61 @@ struct BerryGraphQueryServiceTests {
         }
     }
 
+    @Test func objectNamesFilterHandlesQualifiedAndUnqualifiedAcrossDatabases() throws {
+        let objects = [
+            BerryDriverKit.SchemaObject(kind: .table, name: "orders", database: "ops"),
+            BerryDriverKit.SchemaObject(kind: .table, name: "orders", database: "sales"),
+        ]
+        let graph = SchemaGraphBuilder.build(objects: objects, details: [:])
+        let service = BerryGraphQueryService(loadGraph: { _ in graph }, harvestedAt: { _ in nil })
+
+        let unqualified = try service.schema(profileID: UUID(), objectNames: ["orders"], detail: .overview, limit: 200)
+        #expect(unqualified.objects.map { ($0.database ?? "") + "." + $0.name } == ["ops.orders", "sales.orders"])
+
+        let qualified = try service.schema(profileID: UUID(), objectNames: ["SALES.orders"], detail: .overview, limit: 200)
+        #expect(qualified.objects.map { ($0.database ?? "") + "." + $0.name } == ["sales.orders"])
+    }
+
+    @Test func foreignKeyRecordsReferencedDatabase() throws {
+        let objects = [
+            BerryDriverKit.SchemaObject(kind: .table, name: "orders", database: "sales"),
+            BerryDriverKit.SchemaObject(kind: .table, name: "customers", database: "crm"),
+        ]
+        let ordersDetail = TableDetail(
+            ref: TableRef(database: "sales", name: "orders"),
+            columns: [ColumnInfo(name: "id", declaredType: "int", isNullable: false, defaultValue: nil, isPrimaryKey: true)],
+            indexes: [],
+            foreignKeys: [
+                ForeignKeyInfo(column: "customer_id", referencedSchema: "crm", referencedTable: "customers", referencedColumn: "id"),
+            ]
+        )
+        let graph = SchemaGraphBuilder.build(objects: objects, details: [ordersDetail.ref: ordersDetail])
+        let service = BerryGraphQueryService(loadGraph: { _ in graph }, harvestedAt: { _ in nil })
+        let listing = try service.schema(profileID: UUID(), objectNames: nil, detail: .full, limit: 200)
+        let orders = try #require(listing.objects.first { $0.name == "orders" })
+        #expect(orders.foreignKeys == [
+            .init(column: "customer_id", referencedDatabase: "crm", referencedTable: "customers", referencedColumn: "id"),
+        ])
+    }
+
+    @Test func compositeIndexRoundTripsAllColumns() throws {
+        let objects = [BerryDriverKit.SchemaObject(kind: .table, name: "orders")]
+        let detail = TableDetail(
+            ref: TableRef(name: "orders"),
+            columns: [
+                ColumnInfo(name: "a", declaredType: "int", isNullable: false, defaultValue: nil, isPrimaryKey: false),
+                ColumnInfo(name: "b", declaredType: "int", isNullable: false, defaultValue: nil, isPrimaryKey: false),
+            ],
+            indexes: [IndexInfo(name: "orders_ab_idx", isUnique: false, columns: ["a", "b"])],
+            foreignKeys: []
+        )
+        let graph = SchemaGraphBuilder.build(objects: objects, details: [detail.ref: detail])
+        let service = BerryGraphQueryService(loadGraph: { _ in graph }, harvestedAt: { _ in nil })
+        let listing = try service.schema(profileID: UUID(), objectNames: nil, detail: .full, limit: 200)
+        let orders = try #require(listing.objects.first { $0.name == "orders" })
+        #expect(orders.indexes == [.init(name: "orders_ab_idx", columns: ["a", "b"], unique: false)])
+    }
+
     @Test func missingNodeDiagnosticIsSortedAndCapped() throws {
         var graph = SchemaGraph()
         for index in (0..<60).reversed() {
