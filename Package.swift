@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "BerryDataSourceKit", targets: ["BerryDataSourceKit"]),
         .library(name: "BerryCore", targets: ["BerryCore"]),
         .library(name: "BerryCredentials", targets: ["BerryCredentials"]),
+        .library(name: "BerryMCP", targets: ["BerryMCP"]),
         .library(name: "BerryDriverBootstrap", targets: ["BerryDriverBootstrap"]),
     ],
     dependencies: [
@@ -338,6 +339,14 @@ let package = Package(
             ],
             path: "MCP/CompatibilitySpike/Sources"
         ),
+        .target(
+            name: "BerryMCP",
+            dependencies: [
+                "BerryCredentials", "BerryCore", "BerryDriverKit",
+                "BerryDataSourceKit", "BerryKeyValueKit", "BerryStore", "BerryTunnel",
+            ],
+            path: "Packages/BerryMCP/Sources"
+        ),
         .executableTarget(
             name: "BerryDBMCP",
             dependencies: ["BerryDriverBootstrap"],
@@ -523,6 +532,14 @@ let package = Package(
             name: "MCPCompatibilitySpikeTests",
             dependencies: ["MCPCompatibilitySpike"],
             path: "Tests/MCPCompatibilitySpikeTests"
+        ),
+        .testTarget(
+            name: "BerryMCPTests",
+            dependencies: [
+                "BerryMCP", "BerryCredentials", "BerryDriverKit", "BerryDataSourceKit",
+                "BerryKeyValueKit", "BerryStore", "BerryDriverSQLite",
+            ],
+            path: "Packages/BerryMCP/Tests"
         ),
         .testTarget(
             name: "BerryDBMCPTests",

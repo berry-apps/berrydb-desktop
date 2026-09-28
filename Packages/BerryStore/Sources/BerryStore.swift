@@ -45,6 +45,37 @@ public final class BerryStore: Sendable {
         self.dbQueue = dbQueue
     }
 
+    /// `openReadOnly(path:)` failure modes.
+    public enum ReadOnlyOpenError: Error, Equatable {
+        /// The file's applied migration set differs from this build's; the
+        /// helper refuses to read a store it cannot be sure it understands,
+        /// and never migrates it either way.
+        case schemaMismatch(applied: [String], expected: [String])
+    }
+
+    /// Opens an existing store for the MCP helper: read-only, no migration.
+    /// The helper and the app may run at the same time; only the app writes.
+    /// SQLite's read-only open mode refuses to create a missing file, so a
+    /// path the app has never written throws rather than starting an empty
+    /// store; the file's applied migration set must also match this build's
+    /// exactly, whether older or newer, or the open is refused the same way.
+    public static func openReadOnly(path: String) throws -> BerryStore {
+        var configuration = Configuration()
+        configuration.readonly = true
+        configuration.prepareDatabase { db in try SQLiteVecExtension.install(into: db) }
+        let queue = try DatabaseQueue(path: path, configuration: configuration)
+        let expected = migrator.migrations
+        // Read the table directly rather than asking the migrator: an identifier
+        // unknown to this build is exactly what reveals a store from a newer app.
+        let applied = try queue.read { db in
+            try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY identifier")
+        }
+        guard Set(applied) == Set(expected) else {
+            throw ReadOnlyOpenError.schemaMismatch(applied: applied, expected: expected)
+        }
+        return BerryStore(dbQueue: queue)
+    }
+
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1-connection-profile") { db in
