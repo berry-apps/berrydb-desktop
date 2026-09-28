@@ -396,6 +396,121 @@ struct MCPAccessIntegrityTests {
         #expect(verifiedB.liveReadProfileIDs == [b.id])
     }
 
+    /// A profile with every endpoint field set, so each edit below changes a
+    /// stored value rather than filling in a missing one.
+    private static func endpointProfile() -> ConnectionProfile {
+        ConnectionProfile(
+            driverID: "postgres", name: "Orders", groupName: "team", envColor: "blue",
+            filePath: "/data/orders.sqlite", host: "db.internal", port: 5432,
+            username: "reader", database: "orders", tlsMode: "require",
+            tlsCACertPath: "/certs/ca.pem", tlsClientCertPath: "/certs/client.pem",
+            tlsClientKeyPath: "/certs/client.key", mongoAdditionalHosts: "db2.internal:27017",
+            mongoReplicaSet: "rs0", elasticsearchAPIKeyEnabled: false, sshEnabled: true,
+            sshHost: "bastion.internal", sshPort: 22, sshUsername: "tunnel", sshKeyPath: "/keys/id_ed25519"
+        )
+    }
+
+    private func sealedLiveEndpointProfile() throws -> (BerryStore, ConnectionProfile, MCPProject) {
+        let store = try BerryStore(path: ":memory:")
+        let profile = Self.endpointProfile()
+        try store.save(profile)
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: profile.id, liveRead: true),
+        ])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        let before = try #require(try store.verifiedMCPProject(id: project.id, key: key))
+        try #require(before.liveReadProfileIDs == [profile.id])
+        return (store, profile, project)
+    }
+
+    @Test(arguments: [
+        "driverID = 'mysql'",
+        "host = 'attacker.example'",
+        "port = 15432",
+        "username = 'admin'",
+        "database = 'other'",
+        "tlsMode = 'disable'",
+        "tlsCACertPath = '/tmp/ca.pem'",
+        "tlsClientCertPath = '/tmp/client.pem'",
+        "tlsClientKeyPath = '/tmp/client.key'",
+        "filePath = '/tmp/other.sqlite'",
+        "mongoAdditionalHosts = 'attacker.example:27017'",
+        "mongoReplicaSet = 'rs1'",
+        "elasticsearchAPIKeyEnabled = 1",
+        "sshEnabled = 0",
+        "sshHost = 'attacker.example'",
+        "sshPort = 2222",
+        "sshUsername = 'root'",
+        "sshKeyPath = NULL",
+    ])
+    func editingTheStoredEndpointRevokesLiveRead(assignment: String) throws {
+        let (store, profile, project) = try sealedLiveEndpointProfile()
+
+        try store.executeForTesting("UPDATE connection_profile SET \(assignment) WHERE id = ?", arguments: [profile.id])
+
+        let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
+        #expect(verified.liveReadProfileIDs.isEmpty)
+        #expect(verified.rejectedLiveReadProfileIDs == [profile.id])
+        let editing = try #require(try store.mcpProjectForEditing(id: project.id, key: key))
+        #expect(editing.profiles.first?.liveRead == false)
+    }
+
+    @Test(arguments: [
+        "name = 'Renamed'",
+        "groupName = 'other team'",
+        "sortOrder = 9",
+        "historyEnabled = 0",
+    ])
+    func editingAFieldOutsideTheEndpointKeepsLiveRead(assignment: String) throws {
+        let (store, profile, project) = try sealedLiveEndpointProfile()
+
+        try store.executeForTesting("UPDATE connection_profile SET \(assignment) WHERE id = ?", arguments: [profile.id])
+
+        let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
+        #expect(verified.liveReadProfileIDs == [profile.id])
+    }
+
+    @Test func accessRowWhoseProfileNoLongerExistsIsNotLive() throws {
+        let (store, profile, project) = try sealedLiveEndpointProfile()
+
+        // Drop the foreign key so the access row can outlive its profile,
+        // simulating a foreign process rewriting the store file directly.
+        try store.executeForTesting(
+            """
+            CREATE TABLE mcp_project_profile_tmp (
+                projectID BLOB NOT NULL,
+                profileID BLOB NOT NULL,
+                liveRead BOOLEAN NOT NULL DEFAULT 0,
+                redactedColumnsJSON TEXT NOT NULL DEFAULT '[]',
+                integrityTag BLOB
+            )
+            """
+        )
+        try store.executeForTesting("INSERT INTO mcp_project_profile_tmp SELECT * FROM mcp_project_profile")
+        try store.executeForTesting("DROP TABLE mcp_project_profile")
+        try store.executeForTesting("ALTER TABLE mcp_project_profile_tmp RENAME TO mcp_project_profile")
+        try store.deleteProfile(id: profile.id)
+
+        let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
+        #expect(verified.liveReadProfileIDs.isEmpty)
+        #expect(verified.rejectedLiveReadProfileIDs == [profile.id])
+    }
+
+    @Test func endpointChangeIsNotCarriedForwardByAnotherProjectsSave() throws {
+        let (store, profile, project) = try sealedLiveEndpointProfile()
+        let other = ConnectionProfile(driverID: "sqlite", name: "Other", filePath: "/data/other.sqlite")
+        try store.save(other)
+        let otherProject = MCPProject(name: "Q", isEnabled: true, profiles: [MCPProfileAccess(profileID: other.id, liveRead: true)])
+        let key2 = SymmetricKey(size: .bits256)
+
+        try store.executeForTesting("UPDATE connection_profile SET host = 'attacker.example' WHERE id = ?", arguments: [profile.id])
+        try store.saveMCPProject(otherProject, sealingKey: key2, previousKey: key)
+        try store.executeForTesting("UPDATE connection_profile SET host = 'db.internal' WHERE id = ?", arguments: [profile.id])
+
+        let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key2))
+        #expect(verified.liveReadProfileIDs.isEmpty)
+    }
+
     private static func placeholders(_ row: Row) -> String {
         Array(repeating: "?", count: row.count).joined(separator: ", ")
     }

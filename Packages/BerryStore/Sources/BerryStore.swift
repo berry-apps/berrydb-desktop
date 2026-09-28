@@ -635,6 +635,17 @@ public final class BerryStore: Sendable {
                     liveRead: access.liveRead,
                     redactedColumns: access.redactedColumns
                 )
+                // The tag binds the row to the profile's endpoint as stored
+                // right now; a missing profile yields no tag and the insert
+                // below fails on the foreign key.
+                let integrityTag = try ConnectionProfile.fetchOne(db, key: access.profileID).map { profile in
+                    MCPAccessIntegrity.tag(
+                        try MCPAccessIntegrity.profilePayload(
+                            projectID: project.id, access: normalizedAccess, profile: profile
+                        ),
+                        key: sealingKey
+                    )
+                }
                 try MCPProjectProfileRecord(
                     projectID: project.id,
                     profileID: access.profileID,
@@ -643,10 +654,7 @@ public final class BerryStore: Sendable {
                         decoding: try encoder.encode(normalizedAccess.redactedColumns),
                         as: UTF8.self
                     ),
-                    integrityTag: MCPAccessIntegrity.tag(
-                        try MCPAccessIntegrity.profilePayload(projectID: project.id, access: normalizedAccess),
-                        key: sealingKey
-                    )
+                    integrityTag: integrityTag
                 ).insert(db)
             }
             try Self.reseal(
@@ -684,7 +692,7 @@ public final class BerryStore: Sendable {
             for var row in rows {
                 row.integrityTag = Self.resealedProfileTag(
                     row, projectID: other.id, isDuplicated: occurrences[row.profileID] != 1,
-                    sealingKey: sealingKey, previousKey: previousKey, decoder: decoder
+                    sealingKey: sealingKey, previousKey: previousKey, decoder: decoder, db: db
                 )
                 try row.save(db)
             }
@@ -713,19 +721,24 @@ public final class BerryStore: Sendable {
 
     /// The re-sealed tag for another project's profile row, or nil when it
     /// cannot be carried forward — no `previousKey`, a duplicated profile
-    /// ID, a tag that does not verify, or a `redactedColumnsJSON` that
-    /// cannot even be decoded. Never throws, for the same reason as
+    /// ID, a tag that does not verify (including because the profile's
+    /// endpoint changed since the row was sealed), a profile row that is
+    /// missing or cannot be decoded, or a `redactedColumnsJSON` that cannot
+    /// even be decoded. Never throws, for the same reason as
     /// `resealedProjectTag`.
     private static func resealedProfileTag(
         _ row: MCPProjectProfileRecord, projectID: UUID, isDuplicated: Bool,
-        sealingKey: SymmetricKey, previousKey: SymmetricKey?, decoder: JSONDecoder
+        sealingKey: SymmetricKey, previousKey: SymmetricKey?, decoder: JSONDecoder, db: Database
     ) -> Data? {
         guard !isDuplicated, let previousKey else { return nil }
         guard let redactedColumns = try? decoder.decode(
             [String].self, from: Data(row.redactedColumnsJSON.utf8)
         ) else { return nil }
+        guard let profile = try? ConnectionProfile.fetchOne(db, key: row.profileID) else { return nil }
         let access = MCPProfileAccess(profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns)
-        guard let payload = try? MCPAccessIntegrity.profilePayload(projectID: projectID, access: access) else {
+        guard let payload = try? MCPAccessIntegrity.profilePayload(
+            projectID: projectID, access: access, profile: profile
+        ) else {
             return nil
         }
         guard MCPAccessIntegrity.isValid(row.integrityTag, payload: payload, key: previousKey) else { return nil }
@@ -779,7 +792,7 @@ public final class BerryStore: Sendable {
             }
 
             let rows = try MCPProjectProfileRecord.filter(Column("projectID") == id).fetchAll(db)
-            let (verifiedLive, rejected) = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key)
+            let (verifiedLive, rejected) = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, db: db)
             let live = project.isEnabled ? verifiedLive : []
             return MCPVerifiedProject(project: project, liveReadProfileIDs: live, rejectedLiveReadProfileIDs: rejected)
         }
@@ -820,7 +833,7 @@ public final class BerryStore: Sendable {
             }
 
             let rows = try MCPProjectProfileRecord.filter(Column("projectID") == id).fetchAll(db)
-            let (live, _) = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key)
+            let (live, _) = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, db: db)
             for index in project.profiles.indices where !live.contains(project.profiles[index].profileID) {
                 project.profiles[index].liveRead = false
             }
@@ -835,9 +848,12 @@ public final class BerryStore: Sendable {
     /// `isEnabled` gate — `verifiedMCPProject` applies it afterward for its
     /// public `liveReadProfileIDs`, while `mcpProjectForEditing` needs the
     /// ungated result so editing a currently-disabled project does not
-    /// discard a row's tag-verified `liveRead`.
+    /// discard a row's tag-verified `liveRead`. The payload is rebuilt with
+    /// the endpoint of the profile row as it is now, so a row whose profile
+    /// is missing, cannot be decoded, or was pointed at another endpoint
+    /// since sealing is rejected.
     private static func verifiedProfileRows(
-        projectID: UUID, rows: [MCPProjectProfileRecord], key: SymmetricKey
+        projectID: UUID, rows: [MCPProjectProfileRecord], key: SymmetricKey, db: Database
     ) throws -> (live: Set<UUID>, rejected: Set<UUID>) {
         var occurrences: [UUID: Int] = [:]
         for row in rows { occurrences[row.profileID, default: 0] += 1 }
@@ -851,8 +867,12 @@ public final class BerryStore: Sendable {
                 continue
             }
             let redactedColumns = try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8))
+            guard let profile = try? ConnectionProfile.fetchOne(db, key: row.profileID) else {
+                rejected.insert(row.profileID)
+                continue
+            }
             let access = MCPProfileAccess(profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns)
-            let payload = try MCPAccessIntegrity.profilePayload(projectID: projectID, access: access)
+            let payload = try MCPAccessIntegrity.profilePayload(projectID: projectID, access: access, profile: profile)
             guard MCPAccessIntegrity.isValid(row.integrityTag, payload: payload, key: key) else {
                 rejected.insert(row.profileID)
                 continue

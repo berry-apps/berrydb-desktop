@@ -123,6 +123,24 @@ are reported through `berrydb.status`. Schema and graph access continue
 regardless, since they expose nothing the same-user adversary cannot already
 read from the store file directly.
 
+Each profile-access tag also covers a fingerprint of the connection endpoint
+taken from the stored connection profile (payload domain
+`berrydb.mcp.profile-access.v2`): driver, SQLite file path, host, port, user,
+database (for DynamoDB these fields carry the endpoint override, access key
+ID and region), TLS mode and certificate/key paths, MongoDB additional hosts
+and replica set, the Elasticsearch API-key switch, and SSH enabled/host/
+port/user/key path. Without it, a process that can write the store file could
+point a live-read profile at a server it controls and receive the credentials
+the helper reads from Keychain. The app computes the fingerprint from the
+stored profile when it seals the row; the helper recomputes it from the
+profile row as it is at verification time. Any change to those fields — or
+a profile row that no longer exists — leaves the access row unverifiable,
+failing closed, until the app re-seals it; because the editing copy of a
+project turns an unverifiable `liveRead` off, re-sealing after an endpoint
+change means turning live reads on again for the new endpoint. Display
+fields (name, group, environment label, sort order, history switch) are not
+part of the fingerprint.
+
 Tags carry no freshness of their own: a copy of an older row with its older
 tag would otherwise re-verify after settings change. The key is therefore
 rotated on every settings save, in this order: read the current key
