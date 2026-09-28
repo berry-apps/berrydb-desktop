@@ -48,7 +48,7 @@ struct MCPResultLimiterTests {
         #expect(result.metadata.redactedColumns == [])
     }
 
-    @Test func uTF8CellCeilingMeasuresJSONEncodedBytes() throws {
+    @Test func utf8CellCeilingMeasuresJSONEncodedBytes() throws {
         let limits = MCPResultLimits(maximumRows: 1, maximumCellBytes: 12, maximumSerializedBytes: 2_000)
         let result = try MCPResultLimiter(limits: limits).limit(rows: [["emoji": "😀😀😀😀", "escape": "\\\"\\\"\\\""]])
         let encoder = JSONEncoder()
@@ -63,7 +63,7 @@ struct MCPResultLimiterTests {
         #expect(result.metadata.truncatedCells == 2)
     }
 
-    @Test func uTF8TruncationPreservesValidOriginalPrefixWithoutReplacementCharacters() throws {
+    @Test func utf8TruncationPreservesValidOriginalPrefixWithoutReplacementCharacters() throws {
         let inputs = [
             "😀😀😀tail",
             "e\u{301}e\u{301}e\u{301}tail",

@@ -26,7 +26,7 @@ struct MCPReadPolicyTests {
         }
     }
 
-    @Test func cTEColumnListsAreRecognizedOnlyAtDeclarationSites() {
+    @Test func cteColumnListsAreRecognizedOnlyAtDeclarationSites() {
         let accepted = [
             "WITH c(id, name) AS (SELECT id, name FROM users) SELECT * FROM c",
             "WITH a(id) AS (SELECT id FROM users), b(value) AS (SELECT lower(name) FROM users) SELECT * FROM a, b",
@@ -95,7 +95,7 @@ struct MCPReadPolicyTests {
         #expect(throws: (any Error).self) { try policy.validate("SELECT [load_file('/etc/passwd')]", dialect: .mysql) }
     }
 
-    @Test func sQLiteBracketIdentifiersStillWork() {
+    @Test func sqliteBracketIdentifiersStillWork() {
         #expect(throws: Never.self) { try policy.validate("SELECT [id] FROM [orders]", dialect: .sqlite) }
     }
 
@@ -208,9 +208,11 @@ struct MCPReadPolicyTests {
         #expect(throws: Never.self) { try policy.validate("SELECT tên FROM t", dialect: .sqlite) }
     }
 
-    /// Discriminating fixtures the re-reviewer confirmed 4f59e05 accepted;
-    /// each must be rejected by the current implementation.
-    @Test func reReviewerDiscriminatingFixturesAreRejected() {
+    /// Fixtures that hide a second statement behind a literal or comment
+    /// the tokenizer could misread (a combining mark after a closing quote,
+    /// a MySQL `#` comment, a backslash-escaped double quote); each must be
+    /// rejected.
+    @Test func statementsHiddenBehindMisreadLiteralsOrCommentsAreRejected() {
         for dialect in MCPSQLDialect.allCases {
             #expect(throws: (any Error).self, "\(dialect)") {
                 try policy.validate("SELECT 'a'\u{301}; DELETE FROM t -- '", dialect: dialect)
@@ -220,7 +222,7 @@ struct MCPReadPolicyTests {
         #expect(throws: (any Error).self) { try policy.validate(#"SELECT "a\" , "; DELETE FROM t; -- ""#, dialect: .mysql) }
     }
 
-    @Test func cTEColumnListExemptionIsStructuralNotHeuristic() {
+    @Test func cteColumnListExemptionIsStructuralNotHeuristic() {
         // `coalesce(NULL::record) AS (a int)` is real PostgreSQL syntax — a
         // FROM-item function call with an explicit column-definition list —
         // immediately followed by `, evil(1) AS e`, a second FROM-item that
@@ -239,17 +241,15 @@ struct MCPReadPolicyTests {
     /// confirmed — otherwise a `name(...)` that turns out not to be a real
     /// CTE declaration (missing `AS (...)`) still ends up exempted from the
     /// function-call check.
-    @Test func cTEExemptionIsNotRecordedBeforeASIsConfirmed() {
+    @Test func cteExemptionIsNotRecordedBeforeASIsConfirmed() {
         #expect(throws: (any Error).self) { try policy.validate("WITH evil(1) SELECT 1", dialect: .postgresql) }
         #expect(throws: (any Error).self) { try policy.validate("WITH a AS (SELECT 1), evil(1) SELECT 1", dialect: .postgresql) }
     }
 
     /// `EXPLAIN WITH ...` must build the same CTE-declaration exemptions as
-    /// a bare `WITH ...` statement — this worked under 4f59e05's heuristic
-    /// (which did not care about statement type) and must keep working
-    /// under the structural replacement, which has to look for `WITH`
-    /// inside an `EXPLAIN` target rather than only at token 0.
-    @Test func eXPLAINWithBuildsCTEExemptionsToo() {
+    /// a bare `WITH ...` statement: the structural CTE check has to look
+    /// for `WITH` inside an `EXPLAIN` target, not only at token 0.
+    @Test func explainWithBuildsCTEExemptionsToo() {
         #expect(throws: Never.self) { try policy.validate("EXPLAIN WITH c(x) AS (SELECT 1) SELECT x FROM c", dialect: .postgresql) }
     }
 
@@ -273,10 +273,10 @@ struct MCPReadPolicyTests {
 
     /// The depth cap's boundary must be exact: the maximum accepted level
     /// of WITH-body nesting passes, and precisely one level deeper is
-    /// rejected — not "somewhere well past the cap," which the round-2
-    /// 20-level fixture alone cannot distinguish from an off-by-several
+    /// rejected — not "somewhere well past the cap," which a 20-level
+    /// fixture alone cannot distinguish from an off-by-several
     /// implementation.
-    @Test func wITHNestingDepthCapBoundaryIsExact() {
+    @Test func withNestingDepthCapBoundaryIsExact() {
         #expect(throws: Never.self) { try policy.validate(nestedWITH(levels: 17), dialect: .postgresql) }
         #expect(throws: (any Error).self) { try policy.validate(nestedWITH(levels: 18), dialect: .postgresql) }
     }
@@ -340,7 +340,7 @@ struct MCPReadPolicyTests {
     /// tokenizer would otherwise absorb as ordinary token text (`$abs(`
     /// reads as the allowlisted `ABS(` call) instead of recognizing as one
     /// opaque parameter the way SQLite does.
-    @Test func sQLiteRejectsNamedParameterAndTCLVariableSyntax() {
+    @Test func sqliteRejectsNamedParameterAndTCLVariableSyntax() {
         #expect(throws: (any Error).self) { try policy.validate("SELECT $abs(') ; DELETE FROM t -- ')", dialect: .sqlite) }
         #expect(throws: (any Error).self) { try policy.validate("SELECT @abs(') ; DELETE FROM t -- ')", dialect: .sqlite) }
         #expect(throws: (any Error).self) { try policy.validate("SELECT :name", dialect: .sqlite) }
@@ -350,8 +350,8 @@ struct MCPReadPolicyTests {
 
     /// Whitespace between tokens is ASCII only, in every dialect — every
     /// other scalar (including Unicode whitespace like U+00A0) is
-    /// identifier material, consistent with round 2's "every non-ASCII
-    /// scalar is identifier start/continuation." Treating U+00A0 as a
+    /// identifier material, consistent with the rule that every non-ASCII
+    /// scalar is identifier start/continuation. Treating U+00A0 as a
     /// separator let `\u{A0}abs(1)` tokenize as a clean, allowlisted
     /// `abs(1)` call; as identifier material, the name becomes `\u{A0}ABS`,
     /// which is not allowlisted.
@@ -367,38 +367,37 @@ struct MCPReadPolicyTests {
     /// fixture's `evil(1) AS (b int)` sits in a position that coincidence
     /// makes look like a second CTE declaration if `WITH ORDINALITY` is
     /// (wrongly) treated as opening one.
-    @Test func eXPLAINOnlyTreatsWITHAsCTEListWhenItIsTheTargetsFirstKeyword() {
+    @Test func explainOnlyTreatsWITHAsCTEListWhenItIsTheTargetsFirstKeyword() {
         #expect(throws: (any Error).self) {
             try policy.validate(
                 "EXPLAIN SELECT * FROM lower('x') WITH ORDINALITY AS (a int), evil(1) AS (b int) UNION SELECT 1",
                 dialect: .postgresql
             )
         }
-        // Round 2's EXPLAIN WITH fixture must keep working.
+        // A CTE list that does open the EXPLAIN target keeps working.
         #expect(throws: Never.self) { try policy.validate("EXPLAIN WITH c(x) AS (SELECT 1) SELECT x FROM c", dialect: .postgresql) }
     }
 
-    @Test func eXPLAINDeniesBritishSpellingAnalyse() {
+    @Test func explainDeniesBritishSpellingAnalyse() {
         #expect(throws: (any Error).self) { try policy.validate("EXPLAIN ANALYSE SELECT 1", dialect: .postgresql) }
     }
 
-    /// Regression guards for fixtures the controller called out explicitly;
-    /// each is annotated with whether it already failed closed before this
-    /// round's changes.
-    @Test func controllerCalledOutFixturesBehaveAsIntended() {
-        // Already rejected: ANALYZE anywhere in the word list is denied
-        // regardless of the parenthesized-options position.
+    /// Regression guards for write or side-effect spellings that sit in
+    /// unusual positions, each annotated with the rule that rejects it.
+    @Test func writeSpellingsInUnusualPositionsAreRejected() {
+        // ANALYZE anywhere in the word list is denied regardless of the
+        // parenthesized-options position.
         #expect(throws: (any Error).self) { try policy.validate("EXPLAIN (ANALYZE) SELECT 1", dialect: .postgresql) }
-        // Already rejected: INTO is an unconditionally denied word.
+        // INTO is an unconditionally denied word.
         #expect(throws: (any Error).self) { try policy.validate("SELECT 1 INTO @v", dialect: .mysql) }
-        // Already rejected: FOR UPDATE is matched as a subsequence; the
-        // trailing SKIP LOCKED does not hide it.
+        // FOR UPDATE is matched as a subsequence; the trailing SKIP LOCKED
+        // does not hide it.
         #expect(throws: (any Error).self) { try policy.validate("SELECT * FROM t FOR UPDATE SKIP LOCKED", dialect: .postgresql) }
         #expect(throws: (any Error).self) { try policy.validate("SELECT * FROM t FOR UPDATE SKIP LOCKED", dialect: .mysql) }
-        // Already rejected: "MAIN" is not an allowlisted PRAGMA name, and
-        // the assignment would also be rejected on its own.
+        // "MAIN" is not an allowlisted PRAGMA name, and the assignment
+        // would also be rejected on its own.
         #expect(throws: (any Error).self) { try policy.validate("PRAGMA main.user_version = 1", dialect: .sqlite) }
-        // Decision: rejected. `pragma_table_info` and its many siblings
+        // Rejected by design: `pragma_table_info` and its many siblings
         // (pragma_index_list, pragma_foreign_key_list, ...) are a large,
         // SQLite-specific family of table-valued functions; vetting each
         // one individually is out of scope here. The equivalent read-only
@@ -505,7 +504,7 @@ struct MCPReadPolicyTests {
         }
     }
 
-    @Test func sQLiteSessionReadOnlyEnforcementRejectsWrite() async throws {
+    @Test func sqliteSessionReadOnlyEnforcementRejectsWrite() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
         FileManager.default.createFile(atPath: path, contents: Data())
         defer { try? FileManager.default.removeItem(atPath: path) }

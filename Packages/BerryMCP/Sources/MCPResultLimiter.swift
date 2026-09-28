@@ -170,7 +170,7 @@ public struct MCPResultLimiter: Sendable {
         // below; using the full prepared count/columns here is a safe
         // upper bound for sizing that budget, corrected to the rows
         // actually kept once the budget has run (see the recomputation
-        // after `keep(...)`, item 8).
+        // after `keep(...)`).
         let allPrepared = [preparedRows, preparedObjects, preparedNodes, preparedEdges]
         metadata.truncatedCells = allPrepared
             .reduce(0) { $0 + $1.reduce(0) { $0 + $1.truncatedCellCount } }
@@ -251,7 +251,7 @@ public struct MCPResultLimiter: Sendable {
 
     /// One item after redaction and cell truncation, kept alongside what
     /// was done to it so the metadata counters can later be recomputed
-    /// over only the items the byte budget actually keeps (item 8).
+    /// over only the items the byte budget actually keeps.
     private struct PreparedItem {
         let values: [String: String?]
         let redactedColumns: [String]
