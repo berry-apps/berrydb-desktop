@@ -1,24 +1,27 @@
-import XCTest
+import Foundation
+import Testing
+
 @testable import BerryMCP
 
-final class MCPResultLimiterTests: XCTestCase {
-    func testAllCountCeilingsHaveExplicitOmissions() throws {
+@Suite("MCP result limiter")
+struct MCPResultLimiterTests {
+    @Test func allCountCeilingsHaveExplicitOmissions() throws {
         let limits = MCPResultLimits(maximumRows: 1, maximumObjects: 1, maximumGraphNodes: 1, maximumGraphEdges: 2, maximumCellBytes: 100, maximumSerializedBytes: 10_000)
         let limiter = MCPResultLimiter(limits: limits)
         let values = [["id": "1"], ["id": "2"], ["id": "3"]]
         let result = try limiter.limit(rows: values, objects: values, graphNodes: values, graphEdges: values)
-        XCTAssertEqual(result.rows.count, 1)
-        XCTAssertEqual(result.metadata.omittedRows, 2)
-        XCTAssertEqual(result.objects.count, 1)
-        XCTAssertEqual(result.metadata.omittedObjects, 2)
-        XCTAssertEqual(result.graphNodes.count, 1)
-        XCTAssertEqual(result.metadata.omittedGraphNodes, 2)
-        XCTAssertEqual(result.graphEdges.count, 2)
-        XCTAssertEqual(result.metadata.omittedGraphEdges, 1)
-        XCTAssertTrue(result.metadata.truncated)
+        #expect(result.rows.count == 1)
+        #expect(result.metadata.omittedRows == 2)
+        #expect(result.objects.count == 1)
+        #expect(result.metadata.omittedObjects == 2)
+        #expect(result.graphNodes.count == 1)
+        #expect(result.metadata.omittedGraphNodes == 2)
+        #expect(result.graphEdges.count == 2)
+        #expect(result.metadata.omittedGraphEdges == 1)
+        #expect(result.metadata.truncated)
     }
 
-    func testOmittedTailsAreNotRedactedOrCellTruncated() throws {
+    @Test func omittedTailsAreNotRedactedOrCellTruncated() throws {
         let limits = MCPResultLimits(
             maximumRows: 1,
             maximumObjects: 1,
@@ -37,23 +40,30 @@ final class MCPResultLimiterTests: XCTestCase {
             redaction: MCPRedactionPolicy(caseInsensitive: ["password"])
         )
 
-        XCTAssertEqual(result.metadata.omittedRows, 1)
-        XCTAssertEqual(result.metadata.omittedObjects, 1)
-        XCTAssertEqual(result.metadata.omittedGraphNodes, 1)
-        XCTAssertEqual(result.metadata.omittedGraphEdges, 1)
-        XCTAssertEqual(result.metadata.truncatedCells, 0)
-        XCTAssertEqual(result.metadata.redactedColumns, [])
+        #expect(result.metadata.omittedRows == 1)
+        #expect(result.metadata.omittedObjects == 1)
+        #expect(result.metadata.omittedGraphNodes == 1)
+        #expect(result.metadata.omittedGraphEdges == 1)
+        #expect(result.metadata.truncatedCells == 0)
+        #expect(result.metadata.redactedColumns == [])
     }
 
-    func testUTF8CellCeilingMeasuresJSONEncodedBytes() throws {
+    @Test func uTF8CellCeilingMeasuresJSONEncodedBytes() throws {
         let limits = MCPResultLimits(maximumRows: 1, maximumCellBytes: 12, maximumSerializedBytes: 2_000)
         let result = try MCPResultLimiter(limits: limits).limit(rows: [["emoji": "😀😀😀😀", "escape": "\\\"\\\"\\\""]])
         let encoder = JSONEncoder()
-        for value in result.rows[0].values.compactMap({ $0 }) { XCTAssertLessThanOrEqual(try encoder.encode(value).count, 12) }
-        XCTAssertEqual(result.metadata.truncatedCells, 2)
+        for value in result.rows[0].values.compactMap({ $0 }) {
+            do {
+                let encoded = try encoder.encode(value)
+                #expect(encoded.count <= 12)
+            } catch {
+                Issue.record(error)
+            }
+        }
+        #expect(result.metadata.truncatedCells == 2)
     }
 
-    func testUTF8TruncationPreservesValidOriginalPrefixWithoutReplacementCharacters() throws {
+    @Test func uTF8TruncationPreservesValidOriginalPrefixWithoutReplacementCharacters() throws {
         let inputs = [
             "😀😀😀tail",
             "e\u{301}e\u{301}e\u{301}tail",
@@ -63,74 +73,89 @@ final class MCPResultLimiterTests: XCTestCase {
             let byteCeiling = 10
             let limiter = MCPResultLimiter(limits: MCPResultLimits(maximumRows: 1, maximumCellBytes: byteCeiling, maximumSerializedBytes: 2_000))
             let result = try limiter.limit(rows: [["value": input]])
-            let output = try XCTUnwrap(result.rows[0]["value"]!)
-            XCTAssertTrue(output.hasSuffix("…"), input)
+            let output = try #require(result.rows[0]["value"]!, "\(input)")
+            #expect(output.hasSuffix("…"), "\(input)")
             let prefix = String(output.dropLast())
-            XCTAssertTrue(input.hasPrefix(prefix), "Output must be a valid original prefix: \(output)")
-            XCTAssertFalse(output.contains("\u{FFFD}"), "Truncation introduced a replacement character")
-            XCTAssertLessThanOrEqual(try JSONEncoder().encode(output).count, byteCeiling)
+            #expect(input.hasPrefix(prefix), "Output must be a valid original prefix: \(output)")
+            #expect(!output.contains("\u{FFFD}"), "Truncation introduced a replacement character")
+            do {
+                let encoded = try JSONEncoder().encode(output)
+                #expect(encoded.count <= byteCeiling, "\(input)")
+            } catch {
+                Issue.record(error, "\(input)")
+            }
         }
     }
 
-    func testExistingReplacementCharacterIsPreservedWhenItFits() throws {
+    @Test func existingReplacementCharacterIsPreservedWhenItFits() throws {
         let input = "ok\u{FFFD}" + String(repeating: "x", count: 30)
         let limiter = MCPResultLimiter(limits: MCPResultLimits(maximumRows: 1, maximumCellBytes: 14, maximumSerializedBytes: 2_000))
-        let output = try XCTUnwrap(try limiter.limit(rows: [["value": input]]).rows[0]["value"]!)
-        XCTAssertTrue(output.contains("\u{FFFD}"))
-        XCTAssertTrue(input.hasPrefix(String(output.dropLast())))
-        XCTAssertLessThanOrEqual(try JSONEncoder().encode(output).count, 14)
+        let output = try #require(try limiter.limit(rows: [["value": input]]).rows[0]["value"]!)
+        #expect(output.contains("\u{FFFD}"))
+        #expect(input.hasPrefix(String(output.dropLast())))
+        #expect(try JSONEncoder().encode(output).count <= 14)
     }
 
-    func testSerializedByteCeilingIsExact() throws {
+    @Test func serializedByteCeilingIsExact() throws {
         let baseline = MCPResultLimiter(limits: MCPResultLimits(maximumSerializedBytes: 10_000))
         let full = try baseline.limit(rows: (0..<20).map { ["value": String(repeating: "é", count: 20) + "\($0)"] })
         let metadataOnlySize = try baseline.serialized(MCPBoundedResult(rows: [], objects: [], graphNodes: [], graphEdges: [], metadata: full.metadata)).count
         let ceiling = metadataOnlySize + 80
         let limiter = MCPResultLimiter(limits: MCPResultLimits(maximumSerializedBytes: ceiling))
         let bounded = try limiter.limit(rows: (0..<20).map { ["value": String(repeating: "é", count: 20) + "\($0)"] })
-        XCTAssertLessThanOrEqual(try limiter.serialized(bounded).count, ceiling)
-        XCTAssertTrue(bounded.metadata.byteLimitReached)
-        XCTAssertGreaterThan(bounded.metadata.omittedRows, 0)
+        do {
+            let size = try limiter.serialized(bounded).count
+            #expect(size <= ceiling)
+        } catch {
+            Issue.record(error)
+        }
+        #expect(bounded.metadata.byteLimitReached)
+        #expect(bounded.metadata.omittedRows > 0)
     }
 
-    func testExactSerializedBoundaryDoesNotReportTruncation() throws {
+    @Test func exactSerializedBoundaryDoesNotReportTruncation() throws {
         let generous = MCPResultLimiter(limits: MCPResultLimits(maximumSerializedBytes: 10_000))
         let input = try generous.limit(rows: [["value": "é😀\\\""]])
         let exactSize = try generous.serialized(input).count
         let exact = MCPResultLimiter(limits: MCPResultLimits(maximumSerializedBytes: exactSize))
         let result = try exact.limit(rows: [["value": "é😀\\\""]])
-        XCTAssertEqual(try exact.serialized(result).count, exactSize)
-        XCTAssertFalse(result.metadata.byteLimitReached)
-        XCTAssertFalse(result.metadata.truncated)
+        do {
+            let size = try exact.serialized(result).count
+            #expect(size == exactSize)
+        } catch {
+            Issue.record(error)
+        }
+        #expect(!result.metadata.byteLimitReached)
+        #expect(!result.metadata.truncated)
     }
 
-    func testElapsedLimitIsReportedWithoutSilentDrop() throws {
+    @Test func elapsedLimitIsReportedWithoutSilentDrop() throws {
         let result = try MCPResultLimiter(limits: MCPResultLimits(maximumElapsed: .milliseconds(10))).limit(rows: [["id": "1"]], elapsed: .milliseconds(11))
-        XCTAssertTrue(result.metadata.elapsedLimitReached)
-        XCTAssertTrue(result.metadata.truncated)
+        #expect(result.metadata.elapsedLimitReached)
+        #expect(result.metadata.truncated)
     }
 
-    func testExactAndCaseInsensitiveRedaction() throws {
+    @Test func exactAndCaseInsensitiveRedaction() throws {
         let policy = MCPRedactionPolicy(exact: ["apiKey"], caseInsensitive: ["password"])
         let result = try MCPResultLimiter().limit(rows: [["apiKey": "one", "apikey": "two", "PASSWORD": "three", "public": "ok"]], redaction: policy)
-        XCTAssertEqual(result.rows[0]["apiKey"]!, "[REDACTED]")
-        XCTAssertEqual(result.rows[0]["apikey"]!, "two")
-        XCTAssertEqual(result.rows[0]["PASSWORD"]!, "[REDACTED]")
-        XCTAssertEqual(result.rows[0]["public"]!, "ok")
-        XCTAssertEqual(result.metadata.redactedColumns, ["PASSWORD", "apiKey"])
+        #expect(result.rows[0]["apiKey"]! == "[REDACTED]")
+        #expect(result.rows[0]["apikey"]! == "two")
+        #expect(result.rows[0]["PASSWORD"]! == "[REDACTED]")
+        #expect(result.rows[0]["public"]! == "ok")
+        #expect(result.metadata.redactedColumns == ["PASSWORD", "apiKey"])
     }
 
-    func testCaseInsensitiveRedactionDoesNotBecomeSubstringMatching() throws {
+    @Test func caseInsensitiveRedactionDoesNotBecomeSubstringMatching() throws {
         let policy = MCPRedactionPolicy(exact: ["token"], caseInsensitive: ["password"])
         let result = try MCPResultLimiter().limit(rows: [[
             "token": "secret", "Token": "public", "PASSWORD": "secret",
             "password_hint": "public", "my_password": "public",
         ]], redaction: policy)
-        XCTAssertEqual(result.rows[0]["token"]!, "[REDACTED]")
-        XCTAssertEqual(result.rows[0]["Token"]!, "public")
-        XCTAssertEqual(result.rows[0]["PASSWORD"]!, "[REDACTED]")
-        XCTAssertEqual(result.rows[0]["password_hint"]!, "public")
-        XCTAssertEqual(result.rows[0]["my_password"]!, "public")
+        #expect(result.rows[0]["token"]! == "[REDACTED]")
+        #expect(result.rows[0]["Token"]! == "public")
+        #expect(result.rows[0]["PASSWORD"]! == "[REDACTED]")
+        #expect(result.rows[0]["password_hint"]! == "public")
+        #expect(result.rows[0]["my_password"]! == "public")
     }
 
     /// `redactedColumns`/`truncatedCells` must reflect only rows actually
@@ -138,7 +163,7 @@ final class MCPResultLimiterTests: XCTestCase {
     /// prefix trim) is prepared — redacted and cell-truncated — before the
     /// budget decides it doesn't fit, so its contribution must be excluded
     /// from the final metadata once it's dropped.
-    func testByteBudgetDroppedRowRedactionIsNotReported() throws {
+    @Test func byteBudgetDroppedRowRedactionIsNotReported() throws {
         let redaction = MCPRedactionPolicy(caseInsensitive: ["password"])
         let visible = ["value": "ok"]
         let droppedByByteBudget = ["password": String(repeating: "x", count: 500)]
@@ -148,36 +173,38 @@ final class MCPResultLimiterTests: XCTestCase {
         let limiter = MCPResultLimiter(limits: MCPResultLimits(maximumRows: 10, maximumSerializedBytes: ceiling))
         let result = try limiter.limit(rows: [visible, droppedByByteBudget], redaction: redaction)
 
-        XCTAssertEqual(result.rows.count, 1)
-        XCTAssertEqual(result.metadata.omittedRows, 1)
-        XCTAssertTrue(result.metadata.byteLimitReached)
-        XCTAssertEqual(result.metadata.redactedColumns, [], "A byte-budget-dropped row's redacted column must not be reported")
+        #expect(result.rows.count == 1)
+        #expect(result.metadata.omittedRows == 1)
+        #expect(result.metadata.byteLimitReached)
+        #expect(result.metadata.redactedColumns == [], "A byte-budget-dropped row's redacted column must not be reported")
     }
 
-    func testTwoByteCellLimitProducesValidEmptyJSONStringAndMetadata() throws {
+    @Test func twoByteCellLimitProducesValidEmptyJSONStringAndMetadata() throws {
         let limiter = MCPResultLimiter(limits: MCPResultLimits(maximumCellBytes: 2, maximumSerializedBytes: 2_000))
         let result = try limiter.limit(rows: [["emoji": "😀"]])
-        XCTAssertEqual(result.rows[0]["emoji"]!, "")
-        XCTAssertEqual(result.metadata.truncatedCells, 1)
-        XCTAssertTrue(result.metadata.truncated)
-        XCTAssertEqual(try JSONEncoder().encode(result.rows[0]["emoji"]!).count, 2)
+        #expect(result.rows[0]["emoji"]! == "")
+        #expect(result.metadata.truncatedCells == 1)
+        #expect(result.metadata.truncated)
+        #expect(try JSONEncoder().encode(result.rows[0]["emoji"]!).count == 2)
     }
 
-    func testMetadataTooLargeFailsClosed() {
+    @Test func metadataTooLargeFailsClosed() {
         let limiter = MCPResultLimiter(limits: MCPResultLimits(maximumSerializedBytes: 1))
-        XCTAssertThrowsError(try limiter.limit(rows: [["id": "1"]])) { XCTAssertEqual($0 as? MCPResultLimiterError, .metadataExceedsByteLimit) }
-    }
-
-    func testSerializedCannotBeUsedToBypassLimiter() throws {
-        let metadata = MCPTruncationMetadata(truncated: false, omittedRows: 0, omittedObjects: 0, omittedGraphNodes: 0, omittedGraphEdges: 0, truncatedCells: 0, byteLimitReached: false, elapsedLimitReached: false, redactedColumns: [])
-        let forged = MCPBoundedResult(rows: [["value": String(repeating: "x", count: 500)]], objects: [], graphNodes: [], graphEdges: [], metadata: metadata)
-        let limiter = MCPResultLimiter(limits: MCPResultLimits(maximumSerializedBytes: 256))
-        XCTAssertThrowsError(try limiter.serialized(forged)) {
-            XCTAssertEqual($0 as? MCPResultLimiterError, .serializedByteLimitExceeded)
+        #expect(throws: MCPResultLimiterError.metadataExceedsByteLimit) {
+            try limiter.limit(rows: [["id": "1"]])
         }
     }
 
-    func testEncodingWorkIsLinearInKeptItems() throws {
+    @Test func serializedCannotBeUsedToBypassLimiter() throws {
+        let metadata = MCPTruncationMetadata(truncated: false, omittedRows: 0, omittedObjects: 0, omittedGraphNodes: 0, omittedGraphEdges: 0, truncatedCells: 0, byteLimitReached: false, elapsedLimitReached: false, redactedColumns: [])
+        let forged = MCPBoundedResult(rows: [["value": String(repeating: "x", count: 500)]], objects: [], graphNodes: [], graphEdges: [], metadata: metadata)
+        let limiter = MCPResultLimiter(limits: MCPResultLimits(maximumSerializedBytes: 256))
+        #expect(throws: MCPResultLimiterError.serializedByteLimitExceeded) {
+            try limiter.serialized(forged)
+        }
+    }
+
+    @Test func encodingWorkIsLinearInKeptItems() throws {
         final class Meter: @unchecked Sendable { var bytes = 0 }
         let meter = Meter()
         let encoder = JSONEncoder()
@@ -193,12 +220,17 @@ final class MCPResultLimiterTests: XCTestCase {
         })
         let edges = (0..<2_000).map { ["id": "\($0)", "payload": String(repeating: "x", count: 1_000)] }
         let result = try limiter.limit(graphEdges: edges)
-        XCTAssertLessThanOrEqual(try encoder.encode(result).count, 64 * 1024)
+        do {
+            let size = try encoder.encode(result).count
+            #expect(size <= 64 * 1024)
+        } catch {
+            Issue.record(error)
+        }
         // Quadratic re-encoding measures in the gigabytes; linear stays well under this.
-        XCTAssertLessThan(meter.bytes, 4 * 1024 * 1024)
+        #expect(meter.bytes < 4 * 1024 * 1024)
     }
 
-    func testOmittedCountDigitGrowthStaysUnderTheCeiling() throws {
+    @Test func omittedCountDigitGrowthStaysUnderTheCeiling() throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         var producedResults = 0
@@ -210,9 +242,14 @@ final class MCPResultLimiterTests: XCTestCase {
             let rows = (0..<10_000).map { ["v": "\($0)"] }
             guard let result = try? MCPResultLimiter(limits: limits).limit(rows: rows) else { continue }
             producedResults += 1
-            XCTAssertLessThanOrEqual(try encoder.encode(result).count, ceiling, "ceiling \(ceiling)")
+            do {
+                let size = try encoder.encode(result).count
+                #expect(size <= ceiling, "ceiling \(ceiling)")
+            } catch {
+                Issue.record(error, "ceiling \(ceiling)")
+            }
         }
-        XCTAssertGreaterThan(producedResults, 0, "At least one ceiling in the sweep must produce a result")
+        #expect(producedResults > 0, "At least one ceiling in the sweep must produce a result")
     }
 
     /// `pessimisticMetadata` must reserve using whichever boolean spelling
@@ -225,7 +262,7 @@ final class MCPResultLimiterTests: XCTestCase {
     /// cannot actually afford, forcing the correction loop to drop it back
     /// out and mark `byteLimitReached`/`truncated` even though the exact
     /// fit needed no truncation at all.
-    func testExactFitBoundariesNeverReportSpuriousTruncation() throws {
+    @Test func exactFitBoundariesNeverReportSpuriousTruncation() throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         for itemCount in 1...6 {
@@ -235,9 +272,14 @@ final class MCPResultLimiterTests: XCTestCase {
             let exactSize = try generous.serialized(full).count
             let exact = MCPResultLimiter(limits: MCPResultLimits(maximumSerializedBytes: exactSize))
             let result = try exact.limit(rows: rows)
-            XCTAssertEqual(try exact.serialized(result).count, exactSize, "item count \(itemCount)")
-            XCTAssertFalse(result.metadata.byteLimitReached, "item count \(itemCount)")
-            XCTAssertFalse(result.metadata.truncated, "item count \(itemCount)")
+            do {
+                let size = try exact.serialized(result).count
+                #expect(size == exactSize, "item count \(itemCount)")
+            } catch {
+                Issue.record(error, "item count \(itemCount)")
+            }
+            #expect(!result.metadata.byteLimitReached, "item count \(itemCount)")
+            #expect(!result.metadata.truncated, "item count \(itemCount)")
         }
     }
 
@@ -248,7 +290,7 @@ final class MCPResultLimiterTests: XCTestCase {
     /// should always pass, needing no correction (no second whole-result
     /// encode). A `true`-reservation would under-reserve here and need one
     /// more whole-result encode to notice and correct the overshoot.
-    func testExactFitMinusOneOrTwoNeedsNoExtraWholeResultEncode() throws {
+    @Test func exactFitMinusOneOrTwoNeedsNoExtraWholeResultEncode() throws {
         let plainEncoder = JSONEncoder()
         plainEncoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let rows = (0..<5).map { ["v": "\($0)"] }
@@ -268,15 +310,20 @@ final class MCPResultLimiterTests: XCTestCase {
                 }
             )
             let result = try limiter.limit(rows: rows)
-            XCTAssertLessThanOrEqual(try plainEncoder.encode(result).count, ceiling, "delta \(delta)")
+            do {
+                let size = try plainEncoder.encode(result).count
+                #expect(size <= ceiling, "delta \(delta)")
+            } catch {
+                Issue.record(error, "delta \(delta)")
+            }
             // One encode to size the reservation, one to check the final
             // result against the ceiling — no correction-loop iterations.
-            XCTAssertEqual(counter.wholeResultEncodes, 2, "delta \(delta)")
+            #expect(counter.wholeResultEncodes == 2, "delta \(delta)")
         }
     }
 
-    func testNegativeElapsedInputsFailClosed() {
-        XCTAssertThrowsError(try MCPResultLimiter(limits: MCPResultLimits(maximumElapsed: .seconds(-1))).limit())
-        XCTAssertThrowsError(try MCPResultLimiter().limit(elapsed: .milliseconds(-1)))
+    @Test func negativeElapsedInputsFailClosed() {
+        #expect(throws: (any Error).self) { try MCPResultLimiter(limits: MCPResultLimits(maximumElapsed: .seconds(-1))).limit() }
+        #expect(throws: (any Error).self) { try MCPResultLimiter().limit(elapsed: .milliseconds(-1)) }
     }
 }

@@ -1,11 +1,14 @@
-import XCTest
-@testable import BerryMCP
 import BerryDriverSQLite
+import Foundation
+import Testing
 
-final class MCPReadPolicyTests: XCTestCase {
+@testable import BerryMCP
+
+@Suite("MCP read policy")
+struct MCPReadPolicyTests {
     private let policy = MCPReadPolicy()
 
-    func testParameterizedSingleReadsAreAllowed() throws {
+    @Test func parameterizedSingleReadsAreAllowed() {
         let fixtures: [(MCPSQLDialect, String)] = [
             (.postgresql, "SELECT id, name FROM users WHERE id = $1"),
             (.mysql, "SELECT `semi;colon` FROM users WHERE id = ?"),
@@ -18,27 +21,33 @@ final class MCPReadPolicyTests: XCTestCase {
             (.mysql, "SELECT replace(name, ?, ?) FROM users WHERE id = ?"),
             (.mysql, "SELECT ':=' AS assignment_text"),
         ]
-        for (dialect, sql) in fixtures { XCTAssertNoThrow(try policy.validate(sql, dialect: dialect), sql) }
+        for (dialect, sql) in fixtures {
+            #expect(throws: Never.self, "\(sql)") { try policy.validate(sql, dialect: dialect) }
+        }
     }
 
-    func testCTEColumnListsAreRecognizedOnlyAtDeclarationSites() throws {
+    @Test func cTEColumnListsAreRecognizedOnlyAtDeclarationSites() {
         let accepted = [
             "WITH c(id, name) AS (SELECT id, name FROM users) SELECT * FROM c",
             "WITH a(id) AS (SELECT id FROM users), b(value) AS (SELECT lower(name) FROM users) SELECT * FROM a, b",
             "WITH outer_cte(id) AS (WITH inner_cte(value) AS (SELECT lower(name) FROM users) SELECT value FROM inner_cte) SELECT * FROM outer_cte",
             "WITH RECURSIVE path(id) AS (SELECT id FROM nodes) SELECT * FROM path",
         ]
-        for sql in accepted { XCTAssertNoThrow(try policy.validate(sql, dialect: .postgresql), sql) }
+        for sql in accepted {
+            #expect(throws: Never.self, "\(sql)") { try policy.validate(sql, dialect: .postgresql) }
+        }
 
         let rejected = [
             "WITH c AS (SELECT 1, evil(payload) AS value FROM events) SELECT * FROM c",
             "WITH c AS (SELECT lower(name), evil(payload) FROM events) SELECT * FROM c",
             "WITH c AS (WITH d AS (SELECT evil(payload) FROM events) SELECT * FROM d) SELECT * FROM c",
         ]
-        for sql in rejected { XCTAssertThrowsError(try policy.validate(sql, dialect: .postgresql), sql) }
+        for sql in rejected {
+            #expect(throws: (any Error).self, "\(sql)") { try policy.validate(sql, dialect: .postgresql) }
+        }
     }
 
-    func testQualifiedFunctionCallsFailClosedInEveryDialect() {
+    @Test func qualifiedFunctionCallsFailClosedInEveryDialect() {
         let fixtures: [(MCPSQLDialect, String)] = [
             (.postgresql, "SELECT evil.lower(name) FROM users"),
             (.postgresql, "SELECT \"evil\".lower(name) FROM users"),
@@ -50,35 +59,44 @@ final class MCPReadPolicyTests: XCTestCase {
             (.sqlite, "SELECT [evil].lower(name) FROM users"),
             (.sqlite, "SELECT evil.[lower](name) FROM users"),
         ]
-        for (dialect, sql) in fixtures { XCTAssertThrowsError(try policy.validate(sql, dialect: dialect), sql) }
+        for (dialect, sql) in fixtures {
+            #expect(throws: (any Error).self, "\(sql)") { try policy.validate(sql, dialect: dialect) }
+        }
     }
 
-    func testValidatedExecutableSQLPreservesDialectSyntaxExactly() throws {
+    @Test func validatedExecutableSQLPreservesDialectSyntaxExactly() {
         let fixtures: [(MCPSQLDialect, String, String)] = [
             (.postgresql, "  SELECT $1::text || 'x'  ; \n", "SELECT $1::text || 'x'"),
             (.sqlite, "\nSELECT ?1, json_extract(payload, '$.x')->>'name' FROM events\t", "SELECT ?1, json_extract(payload, '$.x')->>'name' FROM events"),
             (.mysql, " SELECT ? <=> value FROM records ", "SELECT ? <=> value FROM records"),
         ]
         for (dialect, sql, expected) in fixtures {
-            XCTAssertEqual(try policy.validate(sql, dialect: dialect).normalizedSQL, expected)
+            do {
+                let decision = try policy.validate(sql, dialect: dialect)
+                #expect(decision.normalizedSQL == expected, "\(sql)")
+            } catch {
+                Issue.record(error, "\(sql)")
+            }
         }
     }
 
-    func testPostgresArrayBracketsCannotHideFunctions() {
+    @Test func postgresArrayBracketsCannotHideFunctions() {
         let fixtures = [
             "SELECT ARRAY[pg_read_file('/etc/passwd')]",
             "SELECT (ARRAY[pg_sleep(10)])[1]",
             "SELECT ARRAY[lo_import('/etc/hosts')]",
         ]
-        for sql in fixtures { XCTAssertThrowsError(try policy.validate(sql, dialect: .postgresql), sql) }
+        for sql in fixtures {
+            #expect(throws: (any Error).self, "\(sql)") { try policy.validate(sql, dialect: .postgresql) }
+        }
     }
 
-    func testMySQLRejectsBrackets() {
-        XCTAssertThrowsError(try policy.validate("SELECT [load_file('/etc/passwd')]", dialect: .mysql))
+    @Test func mySQLRejectsBrackets() {
+        #expect(throws: (any Error).self) { try policy.validate("SELECT [load_file('/etc/passwd')]", dialect: .mysql) }
     }
 
-    func testSQLiteBracketIdentifiersStillWork() throws {
-        XCTAssertNoThrow(try policy.validate("SELECT [id] FROM [orders]", dialect: .sqlite))
+    @Test func sQLiteBracketIdentifiersStillWork() {
+        #expect(throws: Never.self) { try policy.validate("SELECT [id] FROM [orders]", dialect: .sqlite) }
     }
 
     /// A grapheme cluster merges a combining mark onto whatever base
@@ -87,7 +105,7 @@ final class MCPReadPolicyTests: XCTestCase {
     /// paren immediately followed by a combining mark, while the database
     /// (which lexes by code point, not by grapheme cluster) sees the plain
     /// delimiter underneath.
-    func testCombiningMarksCannotMergeWithDelimiters() {
+    @Test func combiningMarksCannotMergeWithDelimiters() {
         let fixtures: [(MCPSQLDialect, String)] = [
             (.postgresql, "SELECT 'a'\u{301}; DELETE FROM t"),
             (.mysql, "SELECT 'a'\u{301}; DELETE FROM t"),
@@ -97,12 +115,14 @@ final class MCPReadPolicyTests: XCTestCase {
             (.sqlite, "SELECT 1;\u{301} DELETE FROM t"),
             (.postgresql, "SELECT pg_sleep(\u{301}1)"),
         ]
-        for (dialect, sql) in fixtures { XCTAssertThrowsError(try policy.validate(sql, dialect: dialect), sql) }
+        for (dialect, sql) in fixtures {
+            #expect(throws: (any Error).self, "\(sql)") { try policy.validate(sql, dialect: dialect) }
+        }
     }
 
-    func testNormalizedSQLIsUnaffectedByScalarTokenization() throws {
+    @Test func normalizedSQLIsUnaffectedByScalarTokenization() throws {
         let sql = "SELECT id FROM users WHERE id = $1"
-        XCTAssertEqual(try policy.validate(sql, dialect: .postgresql).normalizedSQL, sql)
+        #expect(try policy.validate(sql, dialect: .postgresql).normalizedSQL == sql)
     }
 
     /// MySQL treats `#` as a line-comment starter (like `-- `) and `"..."`
@@ -113,24 +133,24 @@ final class MCPReadPolicyTests: XCTestCase {
     /// skipped the way MySQL skips it, and a `"..."` string's backslash
     /// escaping is exactly as session-dependent/ambiguous as `'...'`'s, so
     /// it must be rejected on the same fail-closed grounds.
-    func testMySQLHashCommentIsRecognizedAsALineComment() {
+    @Test func mySQLHashCommentIsRecognizedAsALineComment() {
         // Today (no `#` support), the comment's contents tokenize literally,
         // but the real trailing `;` still ends the statement — so this
         // must be rejected both before and after the fix, just for the
         // right structural reason (a genuine second statement) once fixed.
-        XCTAssertThrowsError(try policy.validate("SELECT 1 #comment\n; DELETE FROM t", dialect: .mysql))
+        #expect(throws: (any Error).self) { try policy.validate("SELECT 1 #comment\n; DELETE FROM t", dialect: .mysql) }
     }
 
-    func testMySQLDoubleQuotedStringRejectsBackslashLikeSingleQuoted() {
-        XCTAssertThrowsError(try policy.validate(#"SELECT "a\" b" FROM t"#, dialect: .mysql))
+    @Test func mySQLDoubleQuotedStringRejectsBackslashLikeSingleQuoted() {
+        #expect(throws: (any Error).self) { try policy.validate(#"SELECT "a\" b" FROM t"#, dialect: .mysql) }
     }
 
     /// MariaDB's `/*M! ... */` executable comment is the same class of
     /// escape hatch as MySQL's `/*! ... */`: content inside it is inert to
     /// a validator that only skips block comments, but MariaDB executes it.
-    func testMariaDBExecutableCommentIsRejected() {
-        XCTAssertThrowsError(try policy.validate("SELECT 1 /*M! ; DELETE FROM users */", dialect: .mysql))
-        XCTAssertThrowsError(try policy.validate("SELECT 1 /*m!50700 ; DELETE FROM users */", dialect: .mysql))
+    @Test func mariaDBExecutableCommentIsRejected() {
+        #expect(throws: (any Error).self) { try policy.validate("SELECT 1 /*M! ; DELETE FROM users */", dialect: .mysql) }
+        #expect(throws: (any Error).self) { try policy.validate("SELECT 1 /*m!50700 ; DELETE FROM users */", dialect: .mysql) }
     }
 
     /// Dollar-quoting is PostgreSQL-only syntax, and a real PostgreSQL tag
@@ -138,11 +158,11 @@ final class MCPReadPolicyTests: XCTestCase {
     /// stray `$`, not a quote delimiter). A tokenizer that accepts either
     /// on any dialect, or a digit-leading tag, can be tricked into treating
     /// a real statement boundary as inert quoted content.
-    func testDollarQuotingIsPostgreSQLOnlyAndTagsCannotStartWithADigit() {
-        XCTAssertThrowsError(try policy.validate("SELECT $1$; DELETE FROM users$1$", dialect: .postgresql))
-        XCTAssertThrowsError(try policy.validate("SELECT $$; DELETE FROM users$$", dialect: .mysql))
-        XCTAssertThrowsError(try policy.validate("SELECT $$; DELETE FROM users$$", dialect: .sqlite))
-        XCTAssertNoThrow(try policy.validate("SELECT $$ embedded ; UPDATE users $$", dialect: .postgresql))
+    @Test func dollarQuotingIsPostgreSQLOnlyAndTagsCannotStartWithADigit() {
+        #expect(throws: (any Error).self) { try policy.validate("SELECT $1$; DELETE FROM users$1$", dialect: .postgresql) }
+        #expect(throws: (any Error).self) { try policy.validate("SELECT $$; DELETE FROM users$$", dialect: .mysql) }
+        #expect(throws: (any Error).self) { try policy.validate("SELECT $$; DELETE FROM users$$", dialect: .sqlite) }
+        #expect(throws: Never.self) { try policy.validate("SELECT $$ embedded ; UPDATE users $$", dialect: .postgresql) }
     }
 
     /// Dollar-quote tag scanning must not accept `$` as a tag-continuation
@@ -151,12 +171,12 @@ final class MCPReadPolicyTests: XCTestCase {
     /// and (as happened in the prior fix) can end up finding a *later*,
     /// unrelated `$tag$` as the close, swallowing a real statement boundary
     /// as inert content in between.
-    func testDollarQuoteTagScanningExcludesDollarItself() {
-        XCTAssertThrowsError(
+    @Test func dollarQuoteTagScanningExcludesDollarItself() {
+        #expect(throws: (any Error).self) {
             try policy.validate("SELECT $t$'$t$; DELETE FROM users; SELECT $t$'$t$", dialect: .postgresql)
-        )
-        XCTAssertNoThrow(try policy.validate("SELECT $t$ a ; b $t$", dialect: .postgresql))
-        XCTAssertNoThrow(try policy.validate("SELECT $t$ it's $t$", dialect: .postgresql))
+        }
+        #expect(throws: Never.self) { try policy.validate("SELECT $t$ a ; b $t$", dialect: .postgresql) }
+        #expect(throws: Never.self) { try policy.validate("SELECT $t$ it's $t$", dialect: .postgresql) }
     }
 
     /// MySQL's `--` comment rule requires the following scalar to be <=
@@ -166,14 +186,14 @@ final class MCPReadPolicyTests: XCTestCase {
     /// relative to what MySQL itself does, in both directions letting a
     /// real statement boundary hide inside what the validator (wrongly)
     /// treats as an ordinary string literal or an inert comment.
-    func testMySQLDoubleDashCommentRequiresASCIIControlOrSpace() {
-        XCTAssertThrowsError(
+    @Test func mySQLDoubleDashCommentRequiresASCIIControlOrSpace() {
+        #expect(throws: (any Error).self) {
             try policy.validate("SELECT 1 --\u{1} '\n; DELETE FROM t -- '", dialect: .mysql)
-        )
-        XCTAssertThrowsError(
+        }
+        #expect(throws: (any Error).self) {
             try policy.validate("SELECT 1 --\u{A0}; DELETE FROM t", dialect: .mysql)
-        )
-        XCTAssertNoThrow(try policy.validate("SELECT 1 -- ok\nFROM t", dialect: .mysql))
+        }
+        #expect(throws: Never.self) { try policy.validate("SELECT 1 -- ok\nFROM t", dialect: .mysql) }
     }
 
     /// Every non-ASCII scalar — combining marks, ZWJ, variation selectors,
@@ -181,45 +201,47 @@ final class MCPReadPolicyTests: XCTestCase {
     /// dialect, so a decorated function name is one token that fails the
     /// allowlist, rather than splitting into a plain name plus a stray
     /// token that never reads as `name(` at all and so never gets checked.
-    func testDecoratedIdentifiersStayOneTokenAndFailTheAllowlist() {
-        XCTAssertThrowsError(try policy.validate("SELECT pg_sleep\u{301}(1)", dialect: .postgresql))
-        XCTAssertThrowsError(try policy.validate("SELECT evil\u{FE0F}(1)", dialect: .postgresql))
-        XCTAssertNoThrow(try policy.validate(#"SELECT "tên" FROM t"#, dialect: .postgresql))
-        XCTAssertNoThrow(try policy.validate("SELECT tên FROM t", dialect: .sqlite))
+    @Test func decoratedIdentifiersStayOneTokenAndFailTheAllowlist() {
+        #expect(throws: (any Error).self) { try policy.validate("SELECT pg_sleep\u{301}(1)", dialect: .postgresql) }
+        #expect(throws: (any Error).self) { try policy.validate("SELECT evil\u{FE0F}(1)", dialect: .postgresql) }
+        #expect(throws: Never.self) { try policy.validate(#"SELECT "tên" FROM t"#, dialect: .postgresql) }
+        #expect(throws: Never.self) { try policy.validate("SELECT tên FROM t", dialect: .sqlite) }
     }
 
     /// Discriminating fixtures the re-reviewer confirmed 4f59e05 accepted;
     /// each must be rejected by the current implementation.
-    func testReReviewerDiscriminatingFixturesAreRejected() {
+    @Test func reReviewerDiscriminatingFixturesAreRejected() {
         for dialect in MCPSQLDialect.allCases {
-            XCTAssertThrowsError(try policy.validate("SELECT 'a'\u{301}; DELETE FROM t -- '", dialect: dialect), "\(dialect)")
+            #expect(throws: (any Error).self, "\(dialect)") {
+                try policy.validate("SELECT 'a'\u{301}; DELETE FROM t -- '", dialect: dialect)
+            }
         }
-        XCTAssertThrowsError(try policy.validate("SELECT 1 # '\n; DELETE FROM t -- '", dialect: .mysql))
-        XCTAssertThrowsError(try policy.validate(#"SELECT "a\" , "; DELETE FROM t; -- ""#, dialect: .mysql))
+        #expect(throws: (any Error).self) { try policy.validate("SELECT 1 # '\n; DELETE FROM t -- '", dialect: .mysql) }
+        #expect(throws: (any Error).self) { try policy.validate(#"SELECT "a\" , "; DELETE FROM t; -- ""#, dialect: .mysql) }
     }
 
-    func testCTEColumnListExemptionIsStructuralNotHeuristic() {
+    @Test func cTEColumnListExemptionIsStructuralNotHeuristic() {
         // `coalesce(NULL::record) AS (a int)` is real PostgreSQL syntax — a
         // FROM-item function call with an explicit column-definition list —
         // immediately followed by `, evil(1) AS e`, a second FROM-item that
         // is a genuine, non-allowlisted function call. Both sit after the
         // main statement keyword, never inside the WITH-clause's own CTE
         // list, so neither may be exempted.
-        XCTAssertThrowsError(
+        #expect(throws: (any Error).self) {
             try policy.validate(
                 "WITH c AS (SELECT 1) SELECT * FROM coalesce(NULL::record) AS (a int), evil(1) AS e",
                 dialect: .postgresql
             )
-        )
+        }
     }
 
     /// `exemptions.insert(nameIndex)` must not happen until `AS (` is
     /// confirmed — otherwise a `name(...)` that turns out not to be a real
     /// CTE declaration (missing `AS (...)`) still ends up exempted from the
     /// function-call check.
-    func testCTEExemptionIsNotRecordedBeforeASIsConfirmed() {
-        XCTAssertThrowsError(try policy.validate("WITH evil(1) SELECT 1", dialect: .postgresql))
-        XCTAssertThrowsError(try policy.validate("WITH a AS (SELECT 1), evil(1) SELECT 1", dialect: .postgresql))
+    @Test func cTEExemptionIsNotRecordedBeforeASIsConfirmed() {
+        #expect(throws: (any Error).self) { try policy.validate("WITH evil(1) SELECT 1", dialect: .postgresql) }
+        #expect(throws: (any Error).self) { try policy.validate("WITH a AS (SELECT 1), evil(1) SELECT 1", dialect: .postgresql) }
     }
 
     /// `EXPLAIN WITH ...` must build the same CTE-declaration exemptions as
@@ -227,19 +249,19 @@ final class MCPReadPolicyTests: XCTestCase {
     /// (which did not care about statement type) and must keep working
     /// under the structural replacement, which has to look for `WITH`
     /// inside an `EXPLAIN` target rather than only at token 0.
-    func testEXPLAINWithBuildsCTEExemptionsToo() {
-        XCTAssertNoThrow(try policy.validate("EXPLAIN WITH c(x) AS (SELECT 1) SELECT x FROM c", dialect: .postgresql))
+    @Test func eXPLAINWithBuildsCTEExemptionsToo() {
+        #expect(throws: Never.self) { try policy.validate("EXPLAIN WITH c(x) AS (SELECT 1) SELECT x FROM c", dialect: .postgresql) }
     }
 
     /// WITH-body nesting recurses one Swift call per level; an attacker
     /// supplying deeply nested `WITH (WITH (WITH (...)))` bodies must be
     /// rejected as malformed rather than risking runaway recursion.
-    func testDeeplyNestedWITHBodiesAreRejectedAsMalformed() {
+    @Test func deeplyNestedWITHBodiesAreRejectedAsMalformed() {
         let depth = 20
         var sql = (0..<depth).map { "WITH w\($0) AS (" }.joined()
         sql += "SELECT 1"
         sql += stride(from: depth - 1, through: 0, by: -1).map { ") SELECT * FROM w\($0)" }.joined()
-        XCTAssertThrowsError(try policy.validate(sql, dialect: .postgresql))
+        #expect(throws: (any Error).self) { try policy.validate(sql, dialect: .postgresql) }
     }
 
     private func nestedWITH(levels: Int) -> String {
@@ -254,21 +276,21 @@ final class MCPReadPolicyTests: XCTestCase {
     /// rejected — not "somewhere well past the cap," which the round-2
     /// 20-level fixture alone cannot distinguish from an off-by-several
     /// implementation.
-    func testWITHNestingDepthCapBoundaryIsExact() throws {
-        XCTAssertNoThrow(try policy.validate(nestedWITH(levels: 17), dialect: .postgresql))
-        XCTAssertThrowsError(try policy.validate(nestedWITH(levels: 18), dialect: .postgresql))
+    @Test func wITHNestingDepthCapBoundaryIsExact() {
+        #expect(throws: Never.self) { try policy.validate(nestedWITH(levels: 17), dialect: .postgresql) }
+        #expect(throws: (any Error).self) { try policy.validate(nestedWITH(levels: 18), dialect: .postgresql) }
     }
 
     /// MySQL's `--` comment rule is `isspace || iscntrl` on the following
     /// byte: value <= U+0020, *or* U+007F (DEL, a control character that
     /// is not <= U+0020). The earlier `<= 0x20`-only predicate missed DEL.
-    func testMySQLDoubleDashCommentRecognizesDELAsAControlCharacter() {
-        XCTAssertThrowsError(
+    @Test func mySQLDoubleDashCommentRecognizesDELAsAControlCharacter() {
+        #expect(throws: (any Error).self) {
             try policy.validate("SELECT 1 --\u{7F} '\n; DELETE FROM t -- '", dialect: .mysql)
-        )
+        }
         // `~` (U+007E) is neither <= U+0020 nor U+007F: `--~1` must stay
         // two minus operators, not a comment.
-        XCTAssertNoThrow(try policy.validate("SELECT 1 --~1", dialect: .mysql))
+        #expect(throws: Never.self) { try policy.validate("SELECT 1 --~1", dialect: .mysql) }
     }
 
     /// Line comments end exactly where each engine ends them: PostgreSQL
@@ -277,21 +299,23 @@ final class MCPReadPolicyTests: XCTestCase {
     /// early is equally fail-open, because text the engine still treats
     /// as comment (here a `'`) is lexed by the validator as the start of a
     /// string that swallows the real statement boundary after it.
-    func testPostgreSQLLineCommentEndsAtCarriageReturn() {
-        XCTAssertThrowsError(try policy.validate("SELECT 1 -- x\r; DELETE FROM t", dialect: .postgresql))
+    @Test func postgreSQLLineCommentEndsAtCarriageReturn() {
+        #expect(throws: (any Error).self) { try policy.validate("SELECT 1 -- x\r; DELETE FROM t", dialect: .postgresql) }
     }
 
-    func testMySQLAndSQLiteLineCommentsDoNotEndAtCarriageReturn() {
+    @Test func mySQLAndSQLiteLineCommentsDoNotEndAtCarriageReturn() {
         let fixtures: [(MCPSQLDialect, String)] = [
             (.mysql, "SELECT 1 -- x\r'\n; DELETE FROM t -- '"),
             (.mysql, "SELECT 1 # x\r'\n; DELETE FROM t -- '"),
             (.mysql, "SELECT 1 --\r'\n; DELETE FROM t -- '"),
             (.sqlite, "SELECT 1 -- x\r'\n; DELETE FROM t -- '"),
         ]
-        for (dialect, sql) in fixtures { XCTAssertThrowsError(try policy.validate(sql, dialect: dialect), "\(dialect) \(sql)") }
-        XCTAssertNoThrow(try policy.validate("SELECT 1 -- x\r\n", dialect: .mysql))
-        XCTAssertNoThrow(try policy.validate("SELECT 1 # x\r\n", dialect: .mysql))
-        XCTAssertNoThrow(try policy.validate("SELECT 1 -- x\r\n", dialect: .sqlite))
+        for (dialect, sql) in fixtures {
+            #expect(throws: (any Error).self, "\(dialect) \(sql)") { try policy.validate(sql, dialect: dialect) }
+        }
+        #expect(throws: Never.self) { try policy.validate("SELECT 1 -- x\r\n", dialect: .mysql) }
+        #expect(throws: Never.self) { try policy.validate("SELECT 1 # x\r\n", dialect: .mysql) }
+        #expect(throws: Never.self) { try policy.validate("SELECT 1 -- x\r\n", dialect: .sqlite) }
     }
 
     /// PostgreSQL ends the comment at `\r`, so the following `'` opens a
@@ -300,11 +324,11 @@ final class MCPReadPolicyTests: XCTestCase {
     /// error), with no statement separator outside the literal. The
     /// validator must see the same single statement with the same
     /// boundaries — the `;` and `DELETE` stay inside one string token.
-    func testPostgreSQLCarriageReturnThenQuoteOpensStringLiteral() throws {
+    @Test func postgreSQLCarriageReturnThenQuoteOpensStringLiteral() throws {
         let sql = "SELECT 1 -- x\r'\n; DELETE FROM t -- '"
         let decision = try policy.validate(sql, dialect: .postgresql)
-        XCTAssertEqual(decision.statement, "SELECT")
-        XCTAssertEqual(decision.normalizedSQL, sql)
+        #expect(decision.statement == "SELECT")
+        #expect(decision.normalizedSQL == sql)
     }
 
     /// SQLite's `$name`, `$name(...)`, `@name`, `:name` and `#name` are
@@ -316,12 +340,12 @@ final class MCPReadPolicyTests: XCTestCase {
     /// tokenizer would otherwise absorb as ordinary token text (`$abs(`
     /// reads as the allowlisted `ABS(` call) instead of recognizing as one
     /// opaque parameter the way SQLite does.
-    func testSQLiteRejectsNamedParameterAndTCLVariableSyntax() {
-        XCTAssertThrowsError(try policy.validate("SELECT $abs(') ; DELETE FROM t -- ')", dialect: .sqlite))
-        XCTAssertThrowsError(try policy.validate("SELECT @abs(') ; DELETE FROM t -- ')", dialect: .sqlite))
-        XCTAssertThrowsError(try policy.validate("SELECT :name", dialect: .sqlite))
-        XCTAssertThrowsError(try policy.validate("SELECT #name", dialect: .sqlite))
-        XCTAssertNoThrow(try policy.validate("SELECT ? , ?1", dialect: .sqlite))
+    @Test func sQLiteRejectsNamedParameterAndTCLVariableSyntax() {
+        #expect(throws: (any Error).self) { try policy.validate("SELECT $abs(') ; DELETE FROM t -- ')", dialect: .sqlite) }
+        #expect(throws: (any Error).self) { try policy.validate("SELECT @abs(') ; DELETE FROM t -- ')", dialect: .sqlite) }
+        #expect(throws: (any Error).self) { try policy.validate("SELECT :name", dialect: .sqlite) }
+        #expect(throws: (any Error).self) { try policy.validate("SELECT #name", dialect: .sqlite) }
+        #expect(throws: Never.self) { try policy.validate("SELECT ? , ?1", dialect: .sqlite) }
     }
 
     /// Whitespace between tokens is ASCII only, in every dialect — every
@@ -331,8 +355,8 @@ final class MCPReadPolicyTests: XCTestCase {
     /// separator let `\u{A0}abs(1)` tokenize as a clean, allowlisted
     /// `abs(1)` call; as identifier material, the name becomes `\u{A0}ABS`,
     /// which is not allowlisted.
-    func testInterTokenWhitespaceIsASCIIOnly() {
-        XCTAssertThrowsError(try policy.validate("SELECT \u{A0}abs(1)", dialect: .postgresql))
+    @Test func interTokenWhitespaceIsASCIIOnly() {
+        #expect(throws: (any Error).self) { try policy.validate("SELECT \u{A0}abs(1)", dialect: .postgresql) }
     }
 
     /// A `WITH` appearing deeper inside an EXPLAIN target — for example
@@ -343,37 +367,37 @@ final class MCPReadPolicyTests: XCTestCase {
     /// fixture's `evil(1) AS (b int)` sits in a position that coincidence
     /// makes look like a second CTE declaration if `WITH ORDINALITY` is
     /// (wrongly) treated as opening one.
-    func testEXPLAINOnlyTreatsWITHAsCTEListWhenItIsTheTargetsFirstKeyword() {
-        XCTAssertThrowsError(
+    @Test func eXPLAINOnlyTreatsWITHAsCTEListWhenItIsTheTargetsFirstKeyword() {
+        #expect(throws: (any Error).self) {
             try policy.validate(
                 "EXPLAIN SELECT * FROM lower('x') WITH ORDINALITY AS (a int), evil(1) AS (b int) UNION SELECT 1",
                 dialect: .postgresql
             )
-        )
+        }
         // Round 2's EXPLAIN WITH fixture must keep working.
-        XCTAssertNoThrow(try policy.validate("EXPLAIN WITH c(x) AS (SELECT 1) SELECT x FROM c", dialect: .postgresql))
+        #expect(throws: Never.self) { try policy.validate("EXPLAIN WITH c(x) AS (SELECT 1) SELECT x FROM c", dialect: .postgresql) }
     }
 
-    func testEXPLAINDeniesBritishSpellingAnalyse() {
-        XCTAssertThrowsError(try policy.validate("EXPLAIN ANALYSE SELECT 1", dialect: .postgresql))
+    @Test func eXPLAINDeniesBritishSpellingAnalyse() {
+        #expect(throws: (any Error).self) { try policy.validate("EXPLAIN ANALYSE SELECT 1", dialect: .postgresql) }
     }
 
     /// Regression guards for fixtures the controller called out explicitly;
     /// each is annotated with whether it already failed closed before this
     /// round's changes.
-    func testControllerCalledOutFixturesBehaveAsIntended() {
+    @Test func controllerCalledOutFixturesBehaveAsIntended() {
         // Already rejected: ANALYZE anywhere in the word list is denied
         // regardless of the parenthesized-options position.
-        XCTAssertThrowsError(try policy.validate("EXPLAIN (ANALYZE) SELECT 1", dialect: .postgresql))
+        #expect(throws: (any Error).self) { try policy.validate("EXPLAIN (ANALYZE) SELECT 1", dialect: .postgresql) }
         // Already rejected: INTO is an unconditionally denied word.
-        XCTAssertThrowsError(try policy.validate("SELECT 1 INTO @v", dialect: .mysql))
+        #expect(throws: (any Error).self) { try policy.validate("SELECT 1 INTO @v", dialect: .mysql) }
         // Already rejected: FOR UPDATE is matched as a subsequence; the
         // trailing SKIP LOCKED does not hide it.
-        XCTAssertThrowsError(try policy.validate("SELECT * FROM t FOR UPDATE SKIP LOCKED", dialect: .postgresql))
-        XCTAssertThrowsError(try policy.validate("SELECT * FROM t FOR UPDATE SKIP LOCKED", dialect: .mysql))
+        #expect(throws: (any Error).self) { try policy.validate("SELECT * FROM t FOR UPDATE SKIP LOCKED", dialect: .postgresql) }
+        #expect(throws: (any Error).self) { try policy.validate("SELECT * FROM t FOR UPDATE SKIP LOCKED", dialect: .mysql) }
         // Already rejected: "MAIN" is not an allowlisted PRAGMA name, and
         // the assignment would also be rejected on its own.
-        XCTAssertThrowsError(try policy.validate("PRAGMA main.user_version = 1", dialect: .sqlite))
+        #expect(throws: (any Error).self) { try policy.validate("PRAGMA main.user_version = 1", dialect: .sqlite) }
         // Decision: rejected. `pragma_table_info` and its many siblings
         // (pragma_index_list, pragma_foreign_key_list, ...) are a large,
         // SQLite-specific family of table-valued functions; vetting each
@@ -381,10 +405,10 @@ final class MCPReadPolicyTests: XCTestCase {
         // introspection is already available through the curated `PRAGMA
         // <name>` statement allowlist, so the function-call spelling stays
         // rejected as an unapproved function rather than being allowlisted.
-        XCTAssertThrowsError(try policy.validate("SELECT * FROM pragma_table_info('t')", dialect: .sqlite))
+        #expect(throws: (any Error).self) { try policy.validate("SELECT * FROM pragma_table_info('t')", dialect: .sqlite) }
     }
 
-    func testAdversarialCorpusIsDenied() {
+    @Test func adversarialCorpusIsDenied() {
         let fixtures: [(MCPSQLDialect, String)] = [
             (.postgresql, "WITH changed AS (UPDATE users SET admin = true RETURNING *) SELECT * FROM changed"),
             (.postgresql, "SELECT 1; DELETE FROM users"),
@@ -447,10 +471,12 @@ final class MCPReadPolicyTests: XCTestCase {
             (.mysql, "VALUES"),
             (.sqlite, "WHATEVER SELECT 1"),
         ]
-        for (dialect, sql) in fixtures { XCTAssertThrowsError(try policy.validate(sql, dialect: dialect), sql) }
+        for (dialect, sql) in fixtures {
+            #expect(throws: (any Error).self, "\(sql)") { try policy.validate(sql, dialect: dialect) }
+        }
     }
 
-    func testNaivePrefixAuthorizationWouldFailTheAdversarialGate() {
+    @Test func naivePrefixAuthorizationWouldFailTheAdversarialGate() {
         let bypasses = [
             "SELECT 1; DELETE FROM users",
             "SELECT * INTO OUTFILE '/tmp/leak' FROM users",
@@ -458,24 +484,28 @@ final class MCPReadPolicyTests: XCTestCase {
             "SELECT unreviewed_extension_function(1)",
         ]
         for sql in bypasses {
-            XCTAssertTrue(sql.uppercased().hasPrefix("SELECT"), "Fixture must demonstrate the naive-prefix weakness")
-            XCTAssertThrowsError(try policy.validate(sql, dialect: .postgresql))
+            #expect(sql.uppercased().hasPrefix("SELECT"), "Fixture must demonstrate the naive-prefix weakness")
+            #expect(throws: (any Error).self) { try policy.validate(sql, dialect: .postgresql) }
         }
     }
 
-    func testCommentsAndQuotedSemicolonsCannotConfuseStatementBoundary() throws {
-        XCTAssertNoThrow(try policy.validate("/* ; DELETE */ SELECT ';not a statement' AS value -- ; DROP\n", dialect: .postgresql))
-        XCTAssertThrowsError(try policy.validate("SELECT 'safe;'; /* comment */ UPDATE users SET x=1", dialect: .postgresql))
-        XCTAssertNoThrow(try policy.validate("SELECT $$ embedded ; UPDATE users $$", dialect: .postgresql))
+    @Test func commentsAndQuotedSemicolonsCannotConfuseStatementBoundary() {
+        #expect(throws: Never.self) {
+            try policy.validate("/* ; DELETE */ SELECT ';not a statement' AS value -- ; DROP\n", dialect: .postgresql)
+        }
+        #expect(throws: (any Error).self) {
+            try policy.validate("SELECT 'safe;'; /* comment */ UPDATE users SET x=1", dialect: .postgresql)
+        }
+        #expect(throws: Never.self) { try policy.validate("SELECT $$ embedded ; UPDATE users $$", dialect: .postgresql) }
     }
 
-    func testMalformedInputFailsClosed() {
+    @Test func malformedInputFailsClosed() {
         for sql in ["", "-- only a comment", "SELECT 'unterminated", "SELECT (1", "/* open"] {
-            XCTAssertThrowsError(try policy.validate(sql, dialect: .sqlite), sql)
+            #expect(throws: (any Error).self, "\(sql)") { try policy.validate(sql, dialect: .sqlite) }
         }
     }
 
-    func testSQLiteSessionReadOnlyEnforcementRejectsWrite() async throws {
+    @Test func sQLiteSessionReadOnlyEnforcementRejectsWrite() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
         FileManager.default.createFile(atPath: path, contents: Data())
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -486,12 +516,12 @@ final class MCPReadPolicyTests: XCTestCase {
         for try await event in connection.execute("SELECT 42 AS answer") {
             if case .rows(let rows) = event, !rows.isEmpty { observedRead = true }
         }
-        XCTAssertTrue(observedRead, "SQLite query_only must continue to permit reads")
+        #expect(observedRead, "SQLite query_only must continue to permit reads")
         do {
             for try await _ in connection.execute("INSERT INTO users VALUES (1)") {}
-            XCTFail("SQLite query_only session unexpectedly permitted a write")
+            Issue.record("SQLite query_only session unexpectedly permitted a write")
         } catch {
-            XCTAssertTrue(String(describing: error).lowercased().contains("readonly"))
+            #expect(String(describing: error).lowercased().contains("readonly"))
         }
         await connection.close()
     }
