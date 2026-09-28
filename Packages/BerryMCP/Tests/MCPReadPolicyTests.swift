@@ -9,7 +9,7 @@ final class MCPReadPolicyTests: XCTestCase {
         let fixtures: [(MCPSQLDialect, String)] = [
             (.postgresql, "SELECT id, name FROM users WHERE id = $1"),
             (.mysql, "SELECT `semi;colon` FROM users WHERE id = ?"),
-            (.sqlite, "WITH chosen AS (SELECT id FROM users WHERE name = :name) SELECT * FROM chosen"),
+            (.sqlite, "WITH chosen AS (SELECT id FROM users WHERE name = ?) SELECT * FROM chosen"),
             (.postgresql, "VALUES ($1), ($2)"),
             (.sqlite, "PRAGMA table_info('users')"),
             (.mysql, "EXPLAIN SELECT * FROM users WHERE id = ?"),
@@ -240,6 +240,90 @@ final class MCPReadPolicyTests: XCTestCase {
         sql += "SELECT 1"
         sql += stride(from: depth - 1, through: 0, by: -1).map { ") SELECT * FROM w\($0)" }.joined()
         XCTAssertThrowsError(try policy.validate(sql, dialect: .postgresql))
+    }
+
+    private func nestedWITH(levels: Int) -> String {
+        var sql = (0..<levels).map { "WITH w\($0) AS (" }.joined()
+        sql += "SELECT 1"
+        sql += stride(from: levels - 1, through: 0, by: -1).map { ") SELECT * FROM w\($0)" }.joined()
+        return sql
+    }
+
+    /// The depth cap's boundary must be exact: the maximum accepted level
+    /// of WITH-body nesting passes, and precisely one level deeper is
+    /// rejected — not "somewhere well past the cap," which the round-2
+    /// 20-level fixture alone cannot distinguish from an off-by-several
+    /// implementation.
+    func testWITHNestingDepthCapBoundaryIsExact() throws {
+        XCTAssertNoThrow(try policy.validate(nestedWITH(levels: 17), dialect: .postgresql))
+        XCTAssertThrowsError(try policy.validate(nestedWITH(levels: 18), dialect: .postgresql))
+    }
+
+    /// MySQL's `--` comment rule is `isspace || iscntrl` on the following
+    /// byte: value <= U+0020, *or* U+007F (DEL, a control character that
+    /// is not <= U+0020). The earlier `<= 0x20`-only predicate missed DEL.
+    func testMySQLDoubleDashCommentRecognizesDELAsAControlCharacter() {
+        XCTAssertThrowsError(
+            try policy.validate("SELECT 1 --\u{7F} '\n; DELETE FROM t -- '", dialect: .mysql)
+        )
+        // `~` (U+007E) is neither <= U+0020 nor U+007F: `--~1` must stay
+        // two minus operators, not a comment.
+        XCTAssertNoThrow(try policy.validate("SELECT 1 --~1", dialect: .mysql))
+    }
+
+    /// PostgreSQL (and, failing closed absent a confirmed per-dialect
+    /// source, every other dialect too) ends a `--`/`#` line comment at
+    /// `\r` as well as `\n` — ending the comment too late lets real SQL
+    /// hide inside what the validator treats as inert comment content.
+    func testLineCommentsEndAtCarriageReturnToo() {
+        XCTAssertThrowsError(try policy.validate("SELECT 1 -- x\r; DELETE FROM t", dialect: .postgresql))
+    }
+
+    /// SQLite's `$name`, `$name(...)`, `@name`, `:name` and `#name` are
+    /// named-parameter/TCL-variable-reference syntax; MCP only ever binds
+    /// parameters positionally with `?`/`?NNN`. SQLite's own grammar for
+    /// the `(...)` suffix on these forms accepts "any text at all" without
+    /// respecting quoting or nesting, so an attacker-chosen suffix can
+    /// close early and expose a real statement boundary that this
+    /// tokenizer would otherwise absorb as ordinary token text (`$abs(`
+    /// reads as the allowlisted `ABS(` call) instead of recognizing as one
+    /// opaque parameter the way SQLite does.
+    func testSQLiteRejectsNamedParameterAndTCLVariableSyntax() {
+        XCTAssertThrowsError(try policy.validate("SELECT $abs(') ; DELETE FROM t -- ')", dialect: .sqlite))
+        XCTAssertThrowsError(try policy.validate("SELECT @abs(') ; DELETE FROM t -- ')", dialect: .sqlite))
+        XCTAssertThrowsError(try policy.validate("SELECT :name", dialect: .sqlite))
+        XCTAssertThrowsError(try policy.validate("SELECT #name", dialect: .sqlite))
+        XCTAssertNoThrow(try policy.validate("SELECT ? , ?1", dialect: .sqlite))
+    }
+
+    /// Whitespace between tokens is ASCII only, in every dialect — every
+    /// other scalar (including Unicode whitespace like U+00A0) is
+    /// identifier material, consistent with round 2's "every non-ASCII
+    /// scalar is identifier start/continuation." Treating U+00A0 as a
+    /// separator let `\u{A0}abs(1)` tokenize as a clean, allowlisted
+    /// `abs(1)` call; as identifier material, the name becomes `\u{A0}ABS`,
+    /// which is not allowlisted.
+    func testInterTokenWhitespaceIsASCIIOnly() {
+        XCTAssertThrowsError(try policy.validate("SELECT \u{A0}abs(1)", dialect: .postgresql))
+    }
+
+    /// A `WITH` appearing deeper inside an EXPLAIN target — for example
+    /// PostgreSQL's `... WITH ORDINALITY ...` table-function modifier —
+    /// must not be mistaken for the target's own CTE clause. Only a `WITH`
+    /// that is the very first keyword of the target (immediately after
+    /// `EXPLAIN` and its own option words) introduces a CTE list; the
+    /// fixture's `evil(1) AS (b int)` sits in a position that coincidence
+    /// makes look like a second CTE declaration if `WITH ORDINALITY` is
+    /// (wrongly) treated as opening one.
+    func testEXPLAINOnlyTreatsWITHAsCTEListWhenItIsTheTargetsFirstKeyword() {
+        XCTAssertThrowsError(
+            try policy.validate(
+                "EXPLAIN SELECT * FROM lower('x') WITH ORDINALITY AS (a int), evil(1) AS (b int) UNION SELECT 1",
+                dialect: .postgresql
+            )
+        )
+        // Round 2's EXPLAIN WITH fixture must keep working.
+        XCTAssertNoThrow(try policy.validate("EXPLAIN WITH c(x) AS (SELECT 1) SELECT x FROM c", dialect: .postgresql))
     }
 
     func testEXPLAINDeniesBritishSpellingAnalyse() {

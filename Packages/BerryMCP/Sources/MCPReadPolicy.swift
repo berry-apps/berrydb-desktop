@@ -83,17 +83,24 @@ public struct MCPReadPolicy: Sendable {
             withMainIndex = main
             cteExemptions = try cteDeclarationExemptions(statementTokens, withIndex: 0, mainIndex: main)
         } else if first == "EXPLAIN",
-                  let withIndex = topLevelWithIndex(statementTokens, from: 1),
-                  let main = topLevelMainStatementIndex(statementTokens, from: withIndex + 1, to: statementTokens.count),
+                  let targetIndex = topLevelExplainTargetIndex(statementTokens, from: 1),
+                  statementTokens[targetIndex].text.uppercased() == "WITH",
+                  let main = topLevelMainStatementIndex(statementTokens, from: targetIndex + 1, to: statementTokens.count),
                   statementTokens[main].text.uppercased() == "SELECT" {
             // `EXPLAIN WITH ... SELECT ...` has its own WITH-clause CTE
-            // list to exempt, same as a bare `WITH ...` statement. Any
-            // uncertainty here (no WITH found, or it isn't followed by a
-            // proper final SELECT) is left to EXPLAIN's own validation
-            // below rather than raising a new error — an empty exemption
-            // set only makes the function-call check stricter, never
-            // looser.
-            cteExemptions = try cteDeclarationExemptions(statementTokens, withIndex: withIndex, mainIndex: main)
+            // list to exempt, same as a bare `WITH ...` statement — but
+            // only when `WITH` is the target's *own first* keyword.
+            // `topLevelExplainTargetIndex` finds the first top-level
+            // statement-introducing keyword after EXPLAIN; a `WITH`
+            // appearing deeper in the target (for example PostgreSQL's
+            // `... WITH ORDINALITY ...` table-function modifier) is never
+            // the target's own CTE clause, since the target already
+            // started with something else. Any uncertainty here (no
+            // target keyword found, or it isn't followed by a proper
+            // final SELECT) is left to EXPLAIN's own validation below
+            // rather than raising a new error — an empty exemption set
+            // only makes the function-call check stricter, never looser.
+            cteExemptions = try cteDeclarationExemptions(statementTokens, withIndex: targetIndex, mainIndex: main)
         }
         if first != "PRAGMA" { try validateFunctionCalls(statementTokens, dialect: dialect, cteExemptions: cteExemptions) }
 
@@ -166,10 +173,15 @@ public struct MCPReadPolicy: Sendable {
     }
 
     /// Finds the first top-level (paren depth 0, searching `[start, ...)`)
-    /// `WITH` keyword — used to locate an `EXPLAIN WITH ...` target's own
-    /// WITH-clause, which does not start at token 0 the way a bare `WITH`
-    /// statement's does.
-    private func topLevelWithIndex(_ tokens: [SQLToken], from start: Int) -> Int? {
+    /// occurrence of a statement-introducing keyword — `topLevelMainStatementIndex`'s
+    /// set plus `WITH`. Used to locate where an `EXPLAIN` target actually
+    /// begins: only when *this* search's first hit is `WITH` does the
+    /// target open with a CTE clause. A `WITH` appearing later in the
+    /// target text (for example PostgreSQL's `... WITH ORDINALITY ...`
+    /// table-function modifier) is never mistaken for the target's own
+    /// WITH-clause, because by construction it cannot be the first keyword
+    /// found once the target has already started with something else.
+    private func topLevelExplainTargetIndex(_ tokens: [SQLToken], from start: Int) -> Int? {
         var depth = 0
         var cursor = start
         while cursor < tokens.count {
@@ -178,7 +190,8 @@ public struct MCPReadPolicy: Sendable {
                 depth += 1
             } else if token.text == ")" {
                 depth -= 1
-            } else if depth == 0, token.isWord, token.text.uppercased() == "WITH" {
+            } else if depth == 0, token.isWord,
+                      ["WITH", "SELECT", "INSERT", "UPDATE", "DELETE", "MERGE"].contains(token.text.uppercased()) {
                 return cursor
             }
             cursor += 1
@@ -487,6 +500,20 @@ private struct SQLTokenizer {
                 output.append(SQLToken(text: quoted, isWord: false))
                 continue
             }
+            if dialect == .sqlite, scalar == "$" || scalar == "@" || scalar == ":" || scalar == "#" {
+                // SQLite's named-parameter/TCL-variable-reference syntax
+                // ($name, $name(...), @name, :name, #name) is rejected
+                // outright: MCP only ever binds parameters positionally
+                // with `?`/`?NNN`, and SQLite's own grammar for the
+                // `(...)` suffix on these forms accepts "any text at all"
+                // without respecting quoting or nesting, so an
+                // attacker-chosen suffix can close early and expose a real
+                // statement boundary this tokenizer would otherwise absorb
+                // as ordinary token text (`$abs(` reads as the allowlisted
+                // `ABS(` call) instead of recognizing as one opaque
+                // parameter the way SQLite does.
+                throw MCPReadPolicyError.prohibitedOperation("SQLite named parameter syntax")
+            }
             if isIdentifierStart(scalar) {
                 let start = index
                 index += 1
@@ -502,22 +529,39 @@ private struct SQLTokenizer {
 
     private func peek(_ offset: Int) -> Unicode.Scalar? { index + offset < scalars.count ? scalars[index + offset] : nil }
 
-    private func isWhitespace(_ scalar: Unicode.Scalar?) -> Bool { scalar.map { $0.properties.isWhitespace } ?? false }
+    /// Inter-token whitespace is ASCII only (space, `\t`, `\n`, `\r`,
+    /// `\f`, `\v`) in every dialect — not the broader Unicode `isWhitespace`
+    /// property. Every other scalar, including Unicode whitespace like
+    /// U+00A0 no-break space, is identifier material (consistent with
+    /// `isIdentifierStart`/`isIdentifierContinuation` treating every
+    /// non-ASCII scalar as identifier-worthy): treating U+00A0 as a
+    /// separator would let `\u{A0}abs(1)` tokenize as a clean, allowlisted
+    /// `abs(1)` call, silently dropping the leading scalar instead of
+    /// making it part of a name that then correctly fails the allowlist.
+    private func isWhitespace(_ scalar: Unicode.Scalar?) -> Bool {
+        guard let scalar else { return false }
+        switch scalar.value {
+        case 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20: return true
+        default: return false
+        }
+    }
 
     /// MySQL's actual rule for `--` (unlike PostgreSQL/SQLite, where `--`
-    /// is a comment regardless of what follows): the comment starts only
-    /// when the next scalar is <= U+0020 — an ASCII space or a control
-    /// character. Unicode whitespace above that (for example U+00A0
-    /// no-break space) does not count, so this is deliberately narrower
-    /// than `isWhitespace`, which a MySQL-following-scalar check must not
-    /// use: using it either recognizes a comment MySQL would not (hiding
-    /// real SQL from validation that MySQL still executes) or fails to
-    /// recognize one MySQL would (leaving content this validator scans as
-    /// literal SQL that MySQL actually treats as an inert comment) —
-    /// either mismatch is a validator/database parsing disagreement.
+    /// is a comment regardless of what follows) is `isspace(c) ||
+    /// iscntrl(c)` on the following byte: true for any value <= U+0020
+    /// (an ASCII space or a C0 control character), and also true for
+    /// U+007F (DEL), which is `iscntrl` but is *not* <= U+0020. Unicode
+    /// whitespace above U+0020 (for example U+00A0 no-break space) does
+    /// not count, so this is deliberately narrower than `isWhitespace`,
+    /// which a MySQL-following-scalar check must not use: using it either
+    /// recognizes a comment MySQL would not (hiding real SQL from
+    /// validation that MySQL still executes) or fails to recognize one
+    /// MySQL would (leaving content this validator scans as literal SQL
+    /// that MySQL actually treats as an inert comment) — either mismatch
+    /// is a validator/database parsing disagreement.
     private func isMySQLCommentFollower(_ scalar: Unicode.Scalar?) -> Bool {
         guard let scalar else { return false }
-        return scalar.value <= 0x20
+        return scalar.value <= 0x20 || scalar.value == 0x7F
     }
 
     /// ASCII characters are identifier start/continuation only by the
@@ -572,9 +616,16 @@ private struct SQLTokenizer {
         return peek(3) == "!"
     }
 
+    /// PostgreSQL ends a `--` line comment at `\r` as well as `\n` (a bare
+    /// `\r` still ends the line, independent of `\r\n` pairing). Applied
+    /// to every dialect's line comments (`--` and MySQL `#`) absent a
+    /// confirmed per-dialect source otherwise: ending a comment too late
+    /// lets real SQL hide inside content the validator treats as inert,
+    /// while ending it too early only exposes more content to ordinary
+    /// scrutiny — the fail-closed direction either way.
     private mutating func skipLineComment(markerLength: Int) {
         index += markerLength
-        while index < scalars.count, scalars[index] != "\n" { index += 1 }
+        while index < scalars.count, scalars[index] != "\n", scalars[index] != "\r" { index += 1 }
     }
 
     private mutating func skipBlockComment() throws {
