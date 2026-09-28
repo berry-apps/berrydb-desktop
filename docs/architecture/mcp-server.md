@@ -180,6 +180,17 @@ graph, or row data on the Mac.
 
 ## Limits
 
+The production label on a profile only selects which row in the limits table
+below applies; it never decides whether the profile can be read. That
+decision is the per-profile `liveRead` switch alone, so an untagged
+production database is never readable without `liveRead` either. A
+production-labeled profile may be read live only after an explicit
+per-profile opt-in: before `liveRead` can be turned on for such a profile,
+the settings UI (PR 2) requires reviewing the redacted-column list and
+acknowledging that reads use database resources and take shared locks, which
+can delay DDL or migrations. Once enabled, the profile is subject to the
+stricter production-labeled limits below.
+
 | Limit | Default | Production-labeled profile |
 |---|---|---|
 | Request timeout | 30 s | 5 s |
