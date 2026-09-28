@@ -616,16 +616,22 @@ private struct SQLTokenizer {
         return peek(3) == "!"
     }
 
-    /// PostgreSQL ends a `--` line comment at `\r` as well as `\n` (a bare
-    /// `\r` still ends the line, independent of `\r\n` pairing). Applied
-    /// to every dialect's line comments (`--` and MySQL `#`) absent a
-    /// confirmed per-dialect source otherwise: ending a comment too late
-    /// lets real SQL hide inside content the validator treats as inert,
-    /// while ending it too early only exposes more content to ordinary
-    /// scrutiny — the fail-closed direction either way.
+    /// Ends a line comment exactly where the engine does:
+    /// - PostgreSQL `--`: at `\n` or `\r` (scan.l `non_newline [^\n\r]`);
+    /// - MySQL `--` and `#`: at `\n` only (sql_lex.cc comment loop);
+    /// - SQLite `--`: at `\n` only (tokenize.c `c!='\n'`).
+    /// Neither direction of disagreement is safe. Ending a comment later
+    /// than the engine hides SQL the engine executes. Ending it earlier
+    /// exposes text the engine still skips as comment, and that text can
+    /// open a string or quoted identifier in the validator's view that
+    /// swallows a real statement boundary after it (MySQL
+    /// `-- x\r'\n; DELETE ... -- '`).
     private mutating func skipLineComment(markerLength: Int) {
         index += markerLength
-        while index < scalars.count, scalars[index] != "\n", scalars[index] != "\r" { index += 1 }
+        let endsAtCarriageReturn = dialect == .postgresql
+        while index < scalars.count, scalars[index] != "\n", !(endsAtCarriageReturn && scalars[index] == "\r") {
+            index += 1
+        }
     }
 
     private mutating func skipBlockComment() throws {

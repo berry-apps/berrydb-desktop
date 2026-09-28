@@ -271,12 +271,40 @@ final class MCPReadPolicyTests: XCTestCase {
         XCTAssertNoThrow(try policy.validate("SELECT 1 --~1", dialect: .mysql))
     }
 
-    /// PostgreSQL (and, failing closed absent a confirmed per-dialect
-    /// source, every other dialect too) ends a `--`/`#` line comment at
-    /// `\r` as well as `\n` — ending the comment too late lets real SQL
-    /// hide inside what the validator treats as inert comment content.
-    func testLineCommentsEndAtCarriageReturnToo() {
+    /// Line comments end exactly where each engine ends them: PostgreSQL
+    /// `--` at `\n` or `\r`; MySQL `--`/`#` and SQLite `--` at `\n` only.
+    /// Ending a comment late hides SQL the engine executes; ending it
+    /// early is equally fail-open, because text the engine still treats
+    /// as comment (here a `'`) is lexed by the validator as the start of a
+    /// string that swallows the real statement boundary after it.
+    func testPostgreSQLLineCommentEndsAtCarriageReturn() {
         XCTAssertThrowsError(try policy.validate("SELECT 1 -- x\r; DELETE FROM t", dialect: .postgresql))
+    }
+
+    func testMySQLAndSQLiteLineCommentsDoNotEndAtCarriageReturn() {
+        let fixtures: [(MCPSQLDialect, String)] = [
+            (.mysql, "SELECT 1 -- x\r'\n; DELETE FROM t -- '"),
+            (.mysql, "SELECT 1 # x\r'\n; DELETE FROM t -- '"),
+            (.mysql, "SELECT 1 --\r'\n; DELETE FROM t -- '"),
+            (.sqlite, "SELECT 1 -- x\r'\n; DELETE FROM t -- '"),
+        ]
+        for (dialect, sql) in fixtures { XCTAssertThrowsError(try policy.validate(sql, dialect: dialect), "\(dialect) \(sql)") }
+        XCTAssertNoThrow(try policy.validate("SELECT 1 -- x\r\n", dialect: .mysql))
+        XCTAssertNoThrow(try policy.validate("SELECT 1 # x\r\n", dialect: .mysql))
+        XCTAssertNoThrow(try policy.validate("SELECT 1 -- x\r\n", dialect: .sqlite))
+    }
+
+    /// PostgreSQL ends the comment at `\r`, so the following `'` opens a
+    /// string literal that runs to the final `'`: the engine sees one
+    /// statement, `SELECT 1` followed by a string constant (a syntax
+    /// error), with no statement separator outside the literal. The
+    /// validator must see the same single statement with the same
+    /// boundaries — the `;` and `DELETE` stay inside one string token.
+    func testPostgreSQLCarriageReturnThenQuoteOpensStringLiteral() throws {
+        let sql = "SELECT 1 -- x\r'\n; DELETE FROM t -- '"
+        let decision = try policy.validate(sql, dialect: .postgresql)
+        XCTAssertEqual(decision.statement, "SELECT")
+        XCTAssertEqual(decision.normalizedSQL, sql)
     }
 
     /// SQLite's `$name`, `$name(...)`, `@name`, `:name` and `#name` are
