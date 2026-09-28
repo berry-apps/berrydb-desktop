@@ -18,6 +18,14 @@ public enum KeychainService {
         "dev.berrydb.\(kind.rawValue).\(profileID.uuidString.lowercased())"
     }
 
+    /// A Keychain read that neither found the item nor completed normally.
+    /// Kept distinct from "not found" so a caller like `MCPAccessKeyStore`
+    /// never treats a real failure (permission denied, locked item, …) as
+    /// license to silently create a replacement.
+    enum ReadFailure: Error, Equatable {
+        case unexpectedStatus(OSStatus)
+    }
+
     @discardableResult
     public static func savePassword(
         _ password: String,
@@ -31,17 +39,20 @@ public enum KeychainService {
         kind: SecretKind = .database,
         profileID: UUID
     ) -> String? {
-        guard let data = readData(service: service(kind, profileID)) else { return nil }
+        guard let data = try? readData(service: service(kind, profileID)) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
-    /// Stores raw bytes under `service` with the attributes every BerryDB secret uses.
+    /// Stores raw bytes under `service` (and `account`, when given) with the
+    /// attributes every BerryDB secret uses. `account` is nil for every
+    /// existing password item; only the MCP access key sets it.
     @discardableResult
-    public static func saveData(_ data: Data, service: String) -> Bool {
-        let query: [String: Any] = [
+    static func saveData(_ data: Data, service: String, account: String? = nil) -> Bool {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
         ]
+        if let account { query[kSecAttrAccount as String] = account }
         let attributes: [String: Any] = [kSecValueData as String: data]
 
         let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
@@ -56,19 +67,29 @@ public enum KeychainService {
         return updateStatus == errSecSuccess
     }
 
-    /// Reads raw bytes stored under `service`, or nil when absent or inaccessible.
-    public static func readData(service: String) -> Data? {
-        let query: [String: Any] = [
+    /// Reads raw bytes stored under `service` (and `account`, when given).
+    /// Returns nil only when no item is stored; any other outcome throws
+    /// `ReadFailure`, so a caller can tell "nothing stored yet" apart from
+    /// "the Keychain refused to answer".
+    static func readData(service: String, account: String? = nil) throws -> Data? {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
+        if let account { query[kSecAttrAccount as String] = account }
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data
-        else { return nil }
-        return data
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        switch status {
+        case errSecSuccess:
+            guard let data = item as? Data else { throw ReadFailure.unexpectedStatus(status) }
+            return data
+        case errSecItemNotFound:
+            return nil
+        default:
+            throw ReadFailure.unexpectedStatus(status)
+        }
     }
 
     /// Deleting a profile must also delete its secrets — no orphaned entries.

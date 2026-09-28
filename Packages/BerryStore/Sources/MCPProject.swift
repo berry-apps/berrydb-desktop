@@ -58,6 +58,32 @@ public struct MCPProject: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+/// The helper's view of a project: settings as stored, plus which profiles'
+/// live-read switch is proven — by a verified per-row HMAC tag — to have
+/// been written by BerryDB. `berrydb.status` reports live access from this,
+/// never from `MCPProject.profiles` directly.
+public struct MCPVerifiedProject: Equatable, Sendable {
+    public let project: MCPProject
+    /// Profiles whose tag-verified row has liveRead on, in an enabled, verified project.
+    public let liveReadProfileIDs: Set<UUID>
+    /// False when the key is missing or the project row's tag does not verify.
+    public let projectTagValid: Bool
+    /// Profiles whose row claims liveRead but whose tag failed or whose ID is duplicated.
+    public let rejectedLiveReadProfileIDs: Set<UUID>
+
+    public init(
+        project: MCPProject,
+        liveReadProfileIDs: Set<UUID>,
+        projectTagValid: Bool = true,
+        rejectedLiveReadProfileIDs: Set<UUID> = []
+    ) {
+        self.project = project
+        self.liveReadProfileIDs = liveReadProfileIDs
+        self.projectTagValid = projectTagValid
+        self.rejectedLiveReadProfileIDs = rejectedLiveReadProfileIDs
+    }
+}
+
 struct MCPProjectRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "mcp_project"
     var id: UUID

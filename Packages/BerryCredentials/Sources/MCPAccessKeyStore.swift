@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Security
 
 /// The HMAC key that seals MCP access settings (spec §8.4).
 ///
@@ -7,30 +8,52 @@ import Foundation
 /// binaries can read it. Only the app creates it; the helper calls `load()`
 /// and treats a missing key as "no live reads".
 public struct MCPAccessKeyStore: Sendable {
+    /// Failure modes for loading or storing the access key.
     public enum KeyError: Error, Equatable {
+        /// The stored item exists but is not a 32-byte key.
         case invalidStoredKey
+        /// The Keychain refused the write; any previously stored key is untouched.
         case keychainWriteFailed
+        /// The Keychain refused to answer the read. `loadOrCreate` must not
+        /// treat this as "no key" and mint a replacement.
+        case keychainReadFailed(OSStatus)
     }
 
     static let service = "dev.berrydb.mcp.access-key"
+    /// Scopes this item by account as well as service, so it cannot collide
+    /// with a connection secret sharing the `dev.berrydb.*` service namespace.
+    static let account = "berrydb.mcp"
     private static let keyByteCount = 32
 
-    private let read: @Sendable () -> Data?
+    private let read: @Sendable () throws -> Data?
     private let write: @Sendable (Data) -> Bool
 
-    init(read: @escaping @Sendable () -> Data?, write: @escaping @Sendable (Data) -> Bool) {
+    init(
+        read: @escaping @Sendable () throws -> Data?,
+        write: @escaping @Sendable (Data) -> Bool
+    ) {
         self.read = read
         self.write = write
     }
 
+    /// Wired to the real Keychain, scoped by both `service` and `account` so
+    /// this key cannot be confused with a connection secret.
     public static let keychain = MCPAccessKeyStore(
-        read: { KeychainService.readData(service: service) },
-        write: { KeychainService.saveData($0, service: service) }
+        read: {
+            do {
+                return try KeychainService.readData(service: service, account: account)
+            } catch KeychainService.ReadFailure.unexpectedStatus(let status) {
+                throw KeyError.keychainReadFailed(status)
+            }
+        },
+        write: { KeychainService.saveData($0, service: service, account: account) }
     )
 
     /// App-side: returns the existing key or creates and stores a new one.
+    /// Only creates a key when the item is genuinely absent; any other read
+    /// failure propagates instead of silently minting a replacement key.
     public func loadOrCreate() throws -> SymmetricKey {
-        if let data = read() {
+        if let data = try read() {
             guard data.count == Self.keyByteCount else { throw KeyError.invalidStoredKey }
             return SymmetricKey(data: data)
         }
@@ -39,9 +62,23 @@ public struct MCPAccessKeyStore: Sendable {
         return key
     }
 
-    /// Helper-side: returns the key if present and well-formed, never creates one.
+    /// Helper-side: returns the key if present and well-formed, never creates
+    /// one. Any read failure — not found, malformed, or Keychain refusal —
+    /// is treated the same way here: no key means no live reads.
     public func load() -> SymmetricKey? {
-        guard let data = read(), data.count == Self.keyByteCount else { return nil }
+        guard let data = try? read(), data.count == Self.keyByteCount else { return nil }
         return SymmetricKey(data: data)
+    }
+
+    /// Overwrites the stored key. `BerryStore.saveMCPProject` re-seals every
+    /// row under a freshly generated key before this is called, so the
+    /// stored key and the rows it verifies are updated in that order — a
+    /// crash between the two leaves rows sealed under a key that is not yet
+    /// stored, so verification fails closed (no live reads) until the next
+    /// successful save, never an incorrect grant. Throws
+    /// `keychainWriteFailed` and leaves the previously stored key untouched
+    /// if the write fails.
+    public func replace(with key: SymmetricKey) throws {
+        guard write(key.withUnsafeBytes { Data($0) }) else { throw KeyError.keychainWriteFailed }
     }
 }
