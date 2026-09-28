@@ -10,6 +10,7 @@ let package = Package(
     products: [
         .executable(name: "BerryApp", targets: ["BerryApp"]),
         .executable(name: "MCPCompatibilitySpike", targets: ["MCPCompatibilitySpike"]),
+        .executable(name: "berrydb-mcp", targets: ["BerryDBMCP"]),
         .library(name: "BerryDriverKit", targets: ["BerryDriverKit"]),
         .library(name: "BerryDataSourceKit", targets: ["BerryDataSourceKit"]),
         .library(name: "BerryCore", targets: ["BerryCore"]),
