@@ -53,4 +53,27 @@ struct MCPProjectSelectorTests {
         #expect(selector.select(workspace: real.path + "/", projects: [project]) == .selected(project.id))
         #expect(selector.select(workspace: real.path.replacingOccurrences(of: "/Repo", with: "/repo"), projects: [project]) == .selected(project.id))
     }
+
+    @Test func rootRootIsIgnoredButOtherRootsOnTheSameProjectStillMatch() {
+        let rootOnlySlash = MCPProject(name: "Everything", workspaceRoots: ["/"])
+        #expect(plain.select(workspace: "/work/a", projects: [rootOnlySlash]) == .noMatch)
+
+        let slashPlusReal = MCPProject(name: "Mixed", workspaceRoots: ["/", "/work/a"])
+        #expect(plain.select(workspace: "/work/a/x", projects: [slashPlusReal]) == .selected(slashPlusReal.id))
+    }
+
+    @Test func rootThatDoesNotExistOnDiskStillMatchesLexically() {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("sel-missing-\(UUID())")
+        let root = base.appendingPathComponent("repo")
+        let workspace = root.appendingPathComponent("src")
+
+        let selector = MCPProjectSelector()
+        let project = MCPProject(name: "Missing", workspaceRoots: [root.path])
+        #expect(selector.select(workspace: workspace.path, projects: [project]) == .selected(project.id))
+    }
+
+    @Test func duplicateRootInOneProjectStillSelects() {
+        let duplicated = MCPProject(name: "Dup", workspaceRoots: ["/work/a", "/work/a"])
+        #expect(plain.select(workspace: "/work/a", projects: [duplicated]) == .selected(duplicated.id))
+    }
 }
