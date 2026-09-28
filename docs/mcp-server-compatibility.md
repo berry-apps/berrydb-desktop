@@ -286,3 +286,44 @@ selection order in the design (roots, then working directory, then an
 explicit project) is viable. The two hosts spell the same directory
 differently (`/tmp/…` versus `/private/tmp/…`), so selection must compare
 symlink-resolved paths.
+
+## G1 Keychain sharing
+
+Question: can a separate helper executable read database secrets that the
+BerryDB app stored in Keychain, without weakening their access control?
+Tested on 2026-09-28 on macOS 26.6.2 with the installed release BerryDB
+1.0.8 (`dev.berrydb.app`, Developer ID team `WZ2Z528AM6`). A throwaway probe
+linked `BerryCredentials`, called `KeychainService.readPassword`, and printed
+only whether the value matched a canary (never the value).
+
+Items are legacy file-keychain items (`KeychainService` sets neither
+`kSecUseDataProtectionKeychain` nor an access group). An item saved by the
+release app for a new PostgreSQL profile had:
+
+- an application ACL for decrypt trusting only `dev.berrydb.app` by
+  designated requirement (identifier plus team);
+- a partition list of `teamid:WZ2Z528AM6`.
+
+| Probe | Signature | First read | Later reads |
+|---|---|---|---|
+| `berrydb-mcp` | Developer ID, identifier `dev.berrydb.mcp`, same team | Keychain confirmation dialog; readable after approval | no dialog after "Always Allow", including after re-signing (the ACL entry is the designated requirement, not a code hash) |
+| control | ad-hoc, no team | Keychain confirmation dialog | ACL entry pinned to the code hash |
+
+"Always Allow" appended each probe to the item's ACL; nothing is readable by
+an unlisted binary without a dialog, so the Keychain ACL is an effective
+boundary against other same-user processes.
+
+A second item created with `security add-generic-password -T` trusting both
+the app and the helper did not isolate the ACL question: items created by
+the `security` tool carry partition `apple-tool:` rather than the app's
+team, which itself triggers a dialog for other signers. Pre-authorizing the
+helper must therefore be verified with items written by the app.
+
+Conclusion: **pass, no broker needed.** A helper signed by the same team
+reads app-created secrets. Without further work it prompts once per item
+(one secret per profile credential kind). Removing that prompt requires the
+app to include the helper's designated requirement in each item's ACL when
+writing it, and to rewrite existing items once, which the app can do because
+it is already trusted. That change and its verification with a packaged,
+app-written item belong to the packaging work. Data-protection keychain
+access groups were not evaluated.
