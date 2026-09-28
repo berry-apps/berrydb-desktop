@@ -80,8 +80,10 @@ public enum MCPResultLimiterError: Error, Equatable {
 /// Bounds a query result to `MCPResultLimits`: caps item counts, truncates
 /// individual cell values, redacts sensitive columns, and enforces an exact
 /// ceiling on the JSON-encoded byte size. `limit(...)`'s cost is linear in
-/// the number of items it keeps — each kept item is encoded exactly once —
-/// never in the number of items considered.
+/// min(the input's item count, the matching `MCPResultLimits` maximum) for
+/// preparation, plus the number of bytes in the items the byte budget
+/// actually keeps — each kept item is encoded exactly once — never
+/// quadratic, and never proportional to the size of an omitted item.
 public struct MCPResultLimiter: Sendable {
     public let limits: MCPResultLimits
     private let encode: @Sendable (any Encodable) throws -> Data
@@ -107,9 +109,13 @@ public struct MCPResultLimiter: Sendable {
     /// Bounds `rows`, `objects`, `graphNodes` and `graphEdges` to `limits`
     /// and returns the result together with metadata describing every
     /// omission, truncation and redaction. The JSON encoding of the
-    /// returned value never exceeds `limits.maximumSerializedBytes`; the
-    /// work done to guarantee that is linear in the number of items kept,
-    /// not in the number of items considered.
+    /// returned value never exceeds `limits.maximumSerializedBytes`. The
+    /// work done to guarantee that is linear in min(input count, the
+    /// matching `MCPResultLimits` maximum) for preparing each of the four
+    /// arrays (count-based trim, redaction, cell truncation), plus the
+    /// number of bytes in the items the byte budget actually keeps — never
+    /// quadratic in either dimension, and never proportional to the bytes
+    /// of items that end up omitted.
     public func limit(
         rows: [[String: String?]] = [],
         objects: [[String: String?]] = [],
@@ -140,21 +146,11 @@ public struct MCPResultLimiter: Sendable {
             elapsedLimitReached: elapsed > limits.maximumElapsed,
             redactedColumns: []
         )
-        var redacted = Set<String>()
-        func prepare(_ values: [[String: String?]]) -> [[String: String?]] {
-            values.map { row in
-                let applied = redaction.redact(row)
-                redacted.formUnion(applied.columns)
-                return applied.row.mapValues { value in
-                    guard let value else { return nil }
-                    let truncated = truncateCell(value, maximumEncodedBytes: limits.maximumCellBytes)
-                    if truncated != value {
-                        metadata.truncatedCells += 1
-                    }
-                    return truncated
-                }
-            }
-        }
+        // Shared across the whole call so cell-size measurement matches
+        // exactly how the result itself gets encoded (see `truncateCell`).
+        let cellEncoder = JSONEncoder()
+        cellEncoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+
         let boundedRows = Array(rows.prefix(limits.maximumRows))
         let boundedObjects = Array(objects.prefix(limits.maximumObjects))
         let boundedNodes = Array(graphNodes.prefix(limits.maximumGraphNodes))
@@ -163,14 +159,29 @@ public struct MCPResultLimiter: Sendable {
         metadata.omittedObjects = objects.count - boundedObjects.count
         metadata.omittedGraphNodes = graphNodes.count - boundedNodes.count
         metadata.omittedGraphEdges = graphEdges.count - boundedEdges.count
+
+        let preparedRows = prepare(boundedRows, redaction: redaction, cellEncoder: cellEncoder)
+        let preparedObjects = prepare(boundedObjects, redaction: redaction, cellEncoder: cellEncoder)
+        let preparedNodes = prepare(boundedNodes, redaction: redaction, cellEncoder: cellEncoder)
+        let preparedEdges = prepare(boundedEdges, redaction: redaction, cellEncoder: cellEncoder)
+        // Every prepared item could still be dropped by the byte budget
+        // below; using the full prepared count/columns here is a safe
+        // upper bound for sizing that budget, corrected to the rows
+        // actually kept once the budget has run (see the recomputation
+        // after `keep(...)`, item 8).
+        let allPrepared = [preparedRows, preparedObjects, preparedNodes, preparedEdges]
+        metadata.truncatedCells = allPrepared
+            .reduce(0) { $0 + $1.reduce(0) { $0 + $1.truncatedCellCount } }
+        metadata.redactedColumns = Set(allPrepared.flatMap { $0.flatMap(\.redactedColumns) })
+            .sorted()
+
         var result = MCPBoundedResult(
-            rows: prepare(boundedRows),
-            objects: prepare(boundedObjects),
-            graphNodes: prepare(boundedNodes),
-            graphEdges: prepare(boundedEdges),
+            rows: preparedRows.map(\.values),
+            objects: preparedObjects.map(\.values),
+            graphNodes: preparedNodes.map(\.values),
+            graphEdges: preparedEdges.map(\.values),
             metadata: metadata
         )
-        result.metadata.redactedColumns = redacted.sorted()
         result.metadata.truncated = isTruncated(result.metadata)
 
         // Every kept item is encoded once and its size accumulated, so cost is
@@ -190,10 +201,43 @@ public struct MCPResultLimiter: Sendable {
         guard budget >= 0 else {
             throw MCPResultLimiterError.metadataExceedsByteLimit
         }
-        result.rows = try keep(result.rows, budget: &budget, omitted: &result.metadata.omittedRows, reached: &result.metadata.byteLimitReached)
-        result.objects = try keep(result.objects, budget: &budget, omitted: &result.metadata.omittedObjects, reached: &result.metadata.byteLimitReached)
-        result.graphNodes = try keep(result.graphNodes, budget: &budget, omitted: &result.metadata.omittedGraphNodes, reached: &result.metadata.byteLimitReached)
-        result.graphEdges = try keep(result.graphEdges, budget: &budget, omitted: &result.metadata.omittedGraphEdges, reached: &result.metadata.byteLimitReached)
+        result.rows = try keep(
+            result.rows,
+            budget: &budget,
+            omitted: &result.metadata.omittedRows,
+            reached: &result.metadata.byteLimitReached
+        )
+        result.objects = try keep(
+            result.objects,
+            budget: &budget,
+            omitted: &result.metadata.omittedObjects,
+            reached: &result.metadata.byteLimitReached
+        )
+        result.graphNodes = try keep(
+            result.graphNodes,
+            budget: &budget,
+            omitted: &result.metadata.omittedGraphNodes,
+            reached: &result.metadata.byteLimitReached
+        )
+        result.graphEdges = try keep(
+            result.graphEdges,
+            budget: &budget,
+            omitted: &result.metadata.omittedGraphEdges,
+            reached: &result.metadata.byteLimitReached
+        )
+        // `keep(...)` only ever keeps a prefix of what it is given, so the
+        // final counts here are exactly how many of each prepared array
+        // survived; recompute the counters that depend on which specific
+        // items those were, rather than leaving them at the pre-budget
+        // (superset) values used only to size the reservation above.
+        result.metadata.truncatedCells = [
+            (preparedRows, result.rows.count), (preparedObjects, result.objects.count),
+            (preparedNodes, result.graphNodes.count), (preparedEdges, result.graphEdges.count),
+        ].reduce(0) { $0 + $1.0.prefix($1.1).reduce(0) { $0 + $1.truncatedCellCount } }
+        result.metadata.redactedColumns = Set([
+            preparedRows.prefix(result.rows.count), preparedObjects.prefix(result.objects.count),
+            preparedNodes.prefix(result.graphNodes.count), preparedEdges.prefix(result.graphEdges.count),
+        ].flatMap { $0.flatMap(\.redactedColumns) }).sorted()
         result.metadata.truncated = isTruncated(result.metadata)
         while try encode(result).count > limits.maximumSerializedBytes {
             guard dropLast(from: &result) else {
@@ -201,6 +245,33 @@ public struct MCPResultLimiter: Sendable {
             }
         }
         return result
+    }
+
+    /// One item after redaction and cell truncation, kept alongside what
+    /// was done to it so the metadata counters can later be recomputed
+    /// over only the items the byte budget actually keeps (item 8).
+    private struct PreparedItem {
+        let values: [String: String?]
+        let redactedColumns: [String]
+        let truncatedCellCount: Int
+    }
+
+    private func prepare(
+        _ values: [[String: String?]], redaction: MCPRedactionPolicy, cellEncoder: JSONEncoder
+    ) -> [PreparedItem] {
+        values.map { row in
+            let applied = redaction.redact(row)
+            var truncatedCellCount = 0
+            let mapped = applied.row.mapValues { value -> String? in
+                guard let value else { return nil }
+                let truncated = truncateCell(value, maximumEncodedBytes: limits.maximumCellBytes, encoder: cellEncoder)
+                if truncated != value {
+                    truncatedCellCount += 1
+                }
+                return truncated
+            }
+            return PreparedItem(values: mapped, redactedColumns: applied.columns, truncatedCellCount: truncatedCellCount)
+        }
     }
 
     /// Encodes `result` and enforces `limits.maximumSerializedBytes` on the
@@ -240,20 +311,28 @@ public struct MCPResultLimiter: Sendable {
     /// the widest value `keep(...)` could still produce — the count already
     /// omitted by the count-based prefix trim, plus every item currently
     /// being considered for that array, in case none of them fit — and both
-    /// limit flags set. Sizing the byte budget against this worst case,
-    /// rather than the metadata as it stands before any items are dropped,
-    /// keeps the later digit growth of the omitted counts from pushing the
-    /// encoded result over the ceiling. Bounding by the items actually being
-    /// considered, rather than by `MCPResultLimits`' configured maxima,
-    /// keeps this tight when far fewer items are present than the
-    /// configured ceiling — otherwise the reservation can overshoot the
-    /// metadata's real size enough to drop content that would have fit.
+    /// limit flags set to whichever spelling encodes wider. `false` (5
+    /// bytes) is wider than `true` (4 bytes), so the reservation uses
+    /// `false` for both, even though a value of `true` is what "as large as
+    /// truncation can make it" would suggest at a glance — encoded size,
+    /// not semantic pessimism about whether truncation happened, is what
+    /// this reservation has to bound. Sizing the byte budget against this
+    /// genuine worst case, rather than the metadata as it stands before any
+    /// items are dropped, keeps the later digit growth of the omitted
+    /// counts — and any swing in the boolean fields' encoded width — from
+    /// pushing the encoded result over the ceiling, so the final correction
+    /// loop below normally runs zero times. Bounding by the items actually
+    /// being considered, rather than by `MCPResultLimits`' configured
+    /// maxima, keeps the digit-growth part of this tight when far fewer
+    /// items are present than the configured ceiling — otherwise the
+    /// reservation can overshoot the metadata's real size enough to drop
+    /// content that would have fit.
     private func pessimisticMetadata(
         _ metadata: MCPTruncationMetadata, rows: Int, objects: Int, graphNodes: Int, graphEdges: Int
     ) -> MCPTruncationMetadata {
         var worst = metadata
-        worst.truncated = true
-        worst.byteLimitReached = true
+        worst.truncated = false
+        worst.byteLimitReached = false
         worst.omittedRows = metadata.omittedRows + rows
         worst.omittedObjects = metadata.omittedObjects + objects
         worst.omittedGraphNodes = metadata.omittedGraphNodes + graphNodes
@@ -292,8 +371,14 @@ public struct MCPResultLimiter: Sendable {
         return false
     }
 
-    private func truncateCell(_ value: String, maximumEncodedBytes: Int) -> String {
-        func size(_ string: String) -> Int { (try? JSONEncoder().encode(string).count) ?? Int.max }
+    /// Measures candidate substrings with `encoder` — the same encoder
+    /// configuration (`.withoutEscapingSlashes` in particular) used for the
+    /// result itself, created once per `limit(...)` call — so a cell
+    /// containing `/` is not measured as larger here than it actually ends
+    /// up being in the final output, which would truncate more than
+    /// necessary.
+    private func truncateCell(_ value: String, maximumEncodedBytes: Int, encoder: JSONEncoder) -> String {
+        func size(_ string: String) -> Int { (try? encoder.encode(string).count) ?? Int.max }
         guard size(value) > maximumEncodedBytes else { return value }
         let marker = "…"
         if size(marker) > maximumEncodedBytes { return "" }
@@ -317,7 +402,9 @@ public struct MCPResultLimiter: Sendable {
     }
 
     private func isTruncated(_ metadata: MCPTruncationMetadata) -> Bool {
-        metadata.omittedRows + metadata.omittedObjects + metadata.omittedGraphNodes + metadata.omittedGraphEdges + metadata.truncatedCells > 0
+        let omittedOrTruncatedCount = metadata.omittedRows + metadata.omittedObjects
+            + metadata.omittedGraphNodes + metadata.omittedGraphEdges + metadata.truncatedCells
+        return omittedOrTruncatedCount > 0
             || metadata.byteLimitReached
             || metadata.elapsedLimitReached
     }

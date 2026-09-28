@@ -133,6 +133,27 @@ final class MCPResultLimiterTests: XCTestCase {
         XCTAssertEqual(result.rows[0]["my_password"]!, "public")
     }
 
+    /// `redactedColumns`/`truncatedCells` must reflect only rows actually
+    /// returned. A row dropped by the *byte budget* (not the count-based
+    /// prefix trim) is prepared — redacted and cell-truncated — before the
+    /// budget decides it doesn't fit, so its contribution must be excluded
+    /// from the final metadata once it's dropped.
+    func testByteBudgetDroppedRowRedactionIsNotReported() throws {
+        let redaction = MCPRedactionPolicy(caseInsensitive: ["password"])
+        let visible = ["value": "ok"]
+        let droppedByByteBudget = ["password": String(repeating: "x", count: 500)]
+        let baseline = MCPResultLimiter(limits: MCPResultLimits(maximumSerializedBytes: 100_000))
+        let visibleOnly = try baseline.limit(rows: [visible], redaction: redaction)
+        let ceiling = try baseline.serialized(visibleOnly).count + 10
+        let limiter = MCPResultLimiter(limits: MCPResultLimits(maximumRows: 10, maximumSerializedBytes: ceiling))
+        let result = try limiter.limit(rows: [visible, droppedByByteBudget], redaction: redaction)
+
+        XCTAssertEqual(result.rows.count, 1)
+        XCTAssertEqual(result.metadata.omittedRows, 1)
+        XCTAssertTrue(result.metadata.byteLimitReached)
+        XCTAssertEqual(result.metadata.redactedColumns, [], "A byte-budget-dropped row's redacted column must not be reported")
+    }
+
     func testTwoByteCellLimitProducesValidEmptyJSONStringAndMetadata() throws {
         let limiter = MCPResultLimiter(limits: MCPResultLimits(maximumCellBytes: 2, maximumSerializedBytes: 2_000))
         let result = try limiter.limit(rows: [["emoji": "😀"]])
@@ -180,6 +201,7 @@ final class MCPResultLimiterTests: XCTestCase {
     func testOmittedCountDigitGrowthStaysUnderTheCeiling() throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        var producedResults = 0
         for ceiling in stride(from: 300, through: 1_400, by: 7) {
             let limits = MCPResultLimits(
                 maximumRows: 10_000, maximumObjects: 0, maximumGraphNodes: 0, maximumGraphEdges: 0,
@@ -187,7 +209,35 @@ final class MCPResultLimiterTests: XCTestCase {
             )
             let rows = (0..<10_000).map { ["v": "\($0)"] }
             guard let result = try? MCPResultLimiter(limits: limits).limit(rows: rows) else { continue }
+            producedResults += 1
             XCTAssertLessThanOrEqual(try encoder.encode(result).count, ceiling, "ceiling \(ceiling)")
+        }
+        XCTAssertGreaterThan(producedResults, 0, "At least one ceiling in the sweep must produce a result")
+    }
+
+    /// `pessimisticMetadata` must reserve using whichever boolean spelling
+    /// encodes wider (`false`, 5 bytes, not `true`, 4 bytes) so the
+    /// reservation is a genuine upper bound and the final correction loop
+    /// is not needed to compensate for an under-reservation. This sweeps a
+    /// range of small item counts/ceilings around several exact-fit
+    /// boundaries, where an under-reservation would otherwise cause the
+    /// keep phase to admit content the true (unreserved-for) metadata size
+    /// cannot actually afford, forcing the correction loop to drop it back
+    /// out and mark `byteLimitReached`/`truncated` even though the exact
+    /// fit needed no truncation at all.
+    func testExactFitBoundariesNeverReportSpuriousTruncation() throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        for itemCount in 1...6 {
+            let rows = (0..<itemCount).map { ["v": "\($0)"] }
+            let generous = MCPResultLimiter(limits: MCPResultLimits(maximumSerializedBytes: 10_000))
+            let full = try generous.limit(rows: rows)
+            let exactSize = try generous.serialized(full).count
+            let exact = MCPResultLimiter(limits: MCPResultLimits(maximumSerializedBytes: exactSize))
+            let result = try exact.limit(rows: rows)
+            XCTAssertEqual(try exact.serialized(result).count, exactSize, "item count \(itemCount)")
+            XCTAssertFalse(result.metadata.byteLimitReached, "item count \(itemCount)")
+            XCTAssertFalse(result.metadata.truncated, "item count \(itemCount)")
         }
     }
 

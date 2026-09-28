@@ -81,6 +81,114 @@ final class MCPReadPolicyTests: XCTestCase {
         XCTAssertNoThrow(try policy.validate("SELECT [id] FROM [orders]", dialect: .sqlite))
     }
 
+    /// A grapheme cluster merges a combining mark onto whatever base
+    /// character precedes it, including punctuation — so a tokenizer that
+    /// compares `Character`s can fail to recognize a quote, semicolon, or
+    /// paren immediately followed by a combining mark, while the database
+    /// (which lexes by code point, not by grapheme cluster) sees the plain
+    /// delimiter underneath.
+    func testCombiningMarksCannotMergeWithDelimiters() {
+        let fixtures: [(MCPSQLDialect, String)] = [
+            (.postgresql, "SELECT 'a'\u{301}; DELETE FROM t"),
+            (.mysql, "SELECT 'a'\u{301}; DELETE FROM t"),
+            (.sqlite, "SELECT 'a'\u{301}; DELETE FROM t"),
+            (.postgresql, "SELECT 1;\u{301} DELETE FROM t"),
+            (.mysql, "SELECT 1;\u{301} DELETE FROM t"),
+            (.sqlite, "SELECT 1;\u{301} DELETE FROM t"),
+            (.postgresql, "SELECT pg_sleep(\u{301}1)"),
+        ]
+        for (dialect, sql) in fixtures { XCTAssertThrowsError(try policy.validate(sql, dialect: dialect), sql) }
+    }
+
+    func testNormalizedSQLIsUnaffectedByScalarTokenization() throws {
+        let sql = "SELECT id FROM users WHERE id = $1"
+        XCTAssertEqual(try policy.validate(sql, dialect: .postgresql).normalizedSQL, sql)
+    }
+
+    /// MySQL treats `#` as a line-comment starter (like `-- `) and `"..."`
+    /// as a string literal, not a quoted identifier — unlike PostgreSQL and
+    /// SQLite, where `"..."` always quotes an identifier. Both differences
+    /// matter for the authorization boundary: an unrecognized `#` comment
+    /// leaves its contents exposed to literal tokenization instead of being
+    /// skipped the way MySQL skips it, and a `"..."` string's backslash
+    /// escaping is exactly as session-dependent/ambiguous as `'...'`'s, so
+    /// it must be rejected on the same fail-closed grounds.
+    func testMySQLHashCommentIsRecognizedAsALineComment() {
+        // Today (no `#` support), the comment's contents tokenize literally,
+        // but the real trailing `;` still ends the statement — so this
+        // must be rejected both before and after the fix, just for the
+        // right structural reason (a genuine second statement) once fixed.
+        XCTAssertThrowsError(try policy.validate("SELECT 1 #comment\n; DELETE FROM t", dialect: .mysql))
+    }
+
+    func testMySQLDoubleQuotedStringRejectsBackslashLikeSingleQuoted() {
+        XCTAssertThrowsError(try policy.validate(#"SELECT "a\" b" FROM t"#, dialect: .mysql))
+    }
+
+    /// MariaDB's `/*M! ... */` executable comment is the same class of
+    /// escape hatch as MySQL's `/*! ... */`: content inside it is inert to
+    /// a validator that only skips block comments, but MariaDB executes it.
+    func testMariaDBExecutableCommentIsRejected() {
+        XCTAssertThrowsError(try policy.validate("SELECT 1 /*M! ; DELETE FROM users */", dialect: .mysql))
+        XCTAssertThrowsError(try policy.validate("SELECT 1 /*m!50700 ; DELETE FROM users */", dialect: .mysql))
+    }
+
+    /// Dollar-quoting is PostgreSQL-only syntax, and a real PostgreSQL tag
+    /// cannot start with a digit (`$1$` is a parameter reference plus a
+    /// stray `$`, not a quote delimiter). A tokenizer that accepts either
+    /// on any dialect, or a digit-leading tag, can be tricked into treating
+    /// a real statement boundary as inert quoted content.
+    func testDollarQuotingIsPostgreSQLOnlyAndTagsCannotStartWithADigit() {
+        XCTAssertThrowsError(try policy.validate("SELECT $1$; DELETE FROM users$1$", dialect: .postgresql))
+        XCTAssertThrowsError(try policy.validate("SELECT $$; DELETE FROM users$$", dialect: .mysql))
+        XCTAssertThrowsError(try policy.validate("SELECT $$; DELETE FROM users$$", dialect: .sqlite))
+        XCTAssertNoThrow(try policy.validate("SELECT $$ embedded ; UPDATE users $$", dialect: .postgresql))
+    }
+
+    func testCTEColumnListExemptionIsStructuralNotHeuristic() {
+        // A function-shaped token that merely looks like a CTE column-list
+        // declaration (comma, then `)`, then `AS (`, then an earlier `WITH`
+        // somewhere at the same depth) but sits after the main statement
+        // keyword — not in the WITH-clause's own CTE list — must still be
+        // treated as an ordinary, non-exempt function call.
+        XCTAssertThrowsError(
+            try policy.validate(
+                "WITH c AS (SELECT 1) SELECT * FROM c, evil(x) AS (SELECT 1)",
+                dialect: .postgresql
+            )
+        )
+    }
+
+    func testEXPLAINDeniesBritishSpellingAnalyse() {
+        XCTAssertThrowsError(try policy.validate("EXPLAIN ANALYSE SELECT 1", dialect: .postgresql))
+    }
+
+    /// Regression guards for fixtures the controller called out explicitly;
+    /// each is annotated with whether it already failed closed before this
+    /// round's changes.
+    func testControllerCalledOutFixturesBehaveAsIntended() {
+        // Already rejected: ANALYZE anywhere in the word list is denied
+        // regardless of the parenthesized-options position.
+        XCTAssertThrowsError(try policy.validate("EXPLAIN (ANALYZE) SELECT 1", dialect: .postgresql))
+        // Already rejected: INTO is an unconditionally denied word.
+        XCTAssertThrowsError(try policy.validate("SELECT 1 INTO @v", dialect: .mysql))
+        // Already rejected: FOR UPDATE is matched as a subsequence; the
+        // trailing SKIP LOCKED does not hide it.
+        XCTAssertThrowsError(try policy.validate("SELECT * FROM t FOR UPDATE SKIP LOCKED", dialect: .postgresql))
+        XCTAssertThrowsError(try policy.validate("SELECT * FROM t FOR UPDATE SKIP LOCKED", dialect: .mysql))
+        // Already rejected: "MAIN" is not an allowlisted PRAGMA name, and
+        // the assignment would also be rejected on its own.
+        XCTAssertThrowsError(try policy.validate("PRAGMA main.user_version = 1", dialect: .sqlite))
+        // Decision: rejected. `pragma_table_info` and its many siblings
+        // (pragma_index_list, pragma_foreign_key_list, ...) are a large,
+        // SQLite-specific family of table-valued functions; vetting each
+        // one individually is out of scope here. The equivalent read-only
+        // introspection is already available through the curated `PRAGMA
+        // <name>` statement allowlist, so the function-call spelling stays
+        // rejected as an unapproved function rather than being allowlisted.
+        XCTAssertThrowsError(try policy.validate("SELECT * FROM pragma_table_info('t')", dialect: .sqlite))
+    }
+
     func testAdversarialCorpusIsDenied() {
         let fixtures: [(MCPSQLDialect, String)] = [
             (.postgresql, "WITH changed AS (UPDATE users SET admin = true RETURNING *) SELECT * FROM changed"),

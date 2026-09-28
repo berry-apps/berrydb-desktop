@@ -52,7 +52,8 @@ public struct MCPReadPolicy: Sendable {
     /// functions. Everything else — multiple statements, writes, locks,
     /// session/transaction control, unapproved functions — is rejected.
     /// This is defense in depth behind a database-enforced read-only
-    /// session, not a substitute for one.
+    /// session, not a substitute for one. See `validateFunctionCalls` for
+    /// exactly what the function-call check does and does not see.
     public func validate(_ sql: String, dialect: MCPSQLDialect) throws -> MCPReadDecision {
         var tokenizer = SQLTokenizer(sql, dialect: dialect)
         let tokens = try tokenizer.tokenize()
@@ -70,16 +71,25 @@ public struct MCPReadPolicy: Sendable {
         guard let first = words.first else { throw MCPReadPolicyError.malformed("missing statement keyword") }
         try rejectProhibitedTokenPatterns(statementTokens, dialect: dialect)
         try rejectProhibited(words, dialect: dialect)
-        if first != "PRAGMA" { try validateFunctionCalls(statementTokens, dialect: dialect) }
+
+        var withMainIndex: Int?
+        var cteExemptions = Set<Int>()
+        if first == "WITH" {
+            guard let main = topLevelMainStatementIndex(statementTokens, from: 1, to: statementTokens.count),
+                  statementTokens[main].text.uppercased() == "SELECT"
+            else {
+                throw MCPReadPolicyError.unsupportedStatement("WITH without a final SELECT")
+            }
+            withMainIndex = main
+            cteExemptions = cteDeclarationExemptions(statementTokens, withIndex: 0, mainIndex: main)
+        }
+        if first != "PRAGMA" { try validateFunctionCalls(statementTokens, dialect: dialect, cteExemptions: cteExemptions) }
 
         switch first {
         case "SELECT": try validateProjection(after: 0, in: statementTokens)
         case "VALUES": try validateValues(after: 0, in: statementTokens)
         case "WITH":
-            guard let main = topLevelMainStatementIndex(statementTokens), statementTokens[main].text.uppercased() == "SELECT" else {
-                throw MCPReadPolicyError.unsupportedStatement("WITH without a final SELECT")
-            }
-            try validateProjection(after: main, in: statementTokens)
+            try validateProjection(after: withMainIndex!, in: statementTokens)
         case "EXPLAIN":
             try validateExplain(words)
             if let select = statementTokens.lastIndex(where: { $0.isWord && $0.text.uppercased() == "SELECT" }) {
@@ -120,22 +130,25 @@ public struct MCPReadPolicy: Sendable {
         if depth != 0 { throw MCPReadPolicyError.malformed("unbalanced parentheses") }
     }
 
-    private func topLevelMainStatementIndex(_ tokens: [SQLToken]) -> Int? {
+    /// Finds the first `SELECT`/`INSERT`/`UPDATE`/`DELETE`/`MERGE` keyword
+    /// at paren depth 0 *relative to `start`*, searching `[start, end)`.
+    /// Depth resets at `start` regardless of absolute nesting elsewhere in
+    /// `tokens`, so this doubles as the bounded search used to locate a
+    /// nested `WITH`-clause's own main statement inside its parent CTE's
+    /// body.
+    private func topLevelMainStatementIndex(_ tokens: [SQLToken], from start: Int, to end: Int) -> Int? {
         var depth = 0
-        for index in tokens.indices.dropFirst() {
-            let token = tokens[index]
+        var cursor = start
+        while cursor < end {
+            let token = tokens[cursor]
             if token.text == "(" {
                 depth += 1
-                continue
-            }
-            if token.text == ")" {
+            } else if token.text == ")" {
                 depth -= 1
-                continue
+            } else if depth == 0, token.isWord, ["SELECT", "INSERT", "UPDATE", "DELETE", "MERGE"].contains(token.text.uppercased()) {
+                return cursor
             }
-            if depth == 0, token.isWord {
-                let word = token.text.uppercased()
-                if ["SELECT", "INSERT", "UPDATE", "DELETE", "MERGE"].contains(word) { return index }
-            }
+            cursor += 1
         }
         return nil
     }
@@ -152,10 +165,33 @@ public struct MCPReadPolicy: Sendable {
         guard tokens.indices.contains(index + 1) else { throw MCPReadPolicyError.malformed("VALUES requires at least one row") }
     }
 
-    /// Calls are a side-effect escape hatch in all three SQL dialects. Unknown
-    /// calls therefore fail closed; this is intentionally a small read-only
-    /// allowlist rather than a blacklist of known-dangerous extensions/UDFs.
-    private func validateFunctionCalls(_ tokens: [SQLToken], dialect: MCPSQLDialect) throws {
+    /// Rejects any `name(` call-syntax token pair whose name is not on the
+    /// per-dialect allowlist below, a CTE name declared in this statement's
+    /// own `WITH`-clause column list (`cteExemptions`), or one of the small
+    /// set of keywords that share call syntax without being a function
+    /// (`IN (...)`, `EXISTS (...)`, and similar).
+    ///
+    /// This check is purely lexical and purely about `name(` call syntax.
+    /// It does **not** see, and cannot reject on its own:
+    /// - attribute/operator notation that invokes a function without `(`
+    ///   immediately following a name (for example PostgreSQL's `@>`, `->`
+    ///   operators, or a cast written as `value::type` rather than
+    ///   `CAST(value AS type)`);
+    /// - a function reachable only indirectly — inside a view definition, a
+    ///   column default, a domain check constraint, or a trigger — that the
+    ///   validated statement merely references by name;
+    /// - a name resolved differently than expected because of
+    ///   `search_path`/schema shadowing (an allowlisted name like `lower`
+    ///   resolving to a same-named function in a schema earlier in the
+    ///   session's `search_path`, rather than the built-in).
+    ///
+    /// Closing these gaps is not this function's job: the database
+    /// connection must also be read-only at the session/transaction level,
+    /// and the role it authenticates as must not hold `CREATE` on any
+    /// schema in its `search_path` (so it cannot install a same-named
+    /// shadowing function in the first place). This lexical check is
+    /// defense in depth on top of both, not a replacement for either.
+    private func validateFunctionCalls(_ tokens: [SQLToken], dialect: MCPSQLDialect, cteExemptions: Set<Int>) throws {
         var safe = Set([
             "ABS", "AVG", "CAST", "CHAR_LENGTH", "COALESCE", "COUNT", "DATE", "DATETIME",
             "HEX", "LENGTH", "LOWER", "LTRIM", "MAX", "MIN", "NULLIF", "PRINTF", "REPLACE",
@@ -175,59 +211,59 @@ public struct MCPReadPolicy: Sendable {
                 throw MCPReadPolicyError.prohibitedOperation("unapproved qualified function")
             }
             let name = tokens[index].text.uppercased()
-            if syntax.contains(name) || safe.contains(name) || isCTEColumnList(at: index, tokens: tokens) { continue }
+            if syntax.contains(name) || safe.contains(name) || cteExemptions.contains(index) { continue }
             throw MCPReadPolicyError.prohibitedOperation("unapproved function \(name)")
         }
     }
 
-    private func isCTEColumnList(at index: Int, tokens: [SQLToken]) -> Bool {
-        guard let close = matchingCloseParen(after: index, tokens: tokens), tokens.indices.contains(close + 1) else { return false }
-        let next = tokens[close + 1]
-        guard next.isWord, next.text.uppercased() == "AS" else { return false }
-        let candidateDepth = nestingDepth(before: index, tokens: tokens)
-        guard index > tokens.startIndex else { return false }
-        let previous = tokens[index - 1]
-        if previous.isWord, previous.text.uppercased() == "WITH" {
-            return nestingDepth(before: index - 1, tokens: tokens) == candidateDepth
+    /// Structurally collects the token index of every CTE name in the
+    /// `WITH`-clause starting at `withIndex` that declares an explicit
+    /// column list (`name(col, ...) AS (...)`) — the only shape that reads
+    /// as a `name(` call to `validateFunctionCalls`. Only names declared
+    /// here, before `mainIndex` (the already-located main-statement
+    /// keyword for this same `WITH`), are exempt; a token elsewhere that
+    /// merely resembles this shape (for example a real function call
+    /// following a `), ` sequence deeper in the query) is never exempted,
+    /// because its index cannot appear in this set — the set is built by
+    /// forward-parsing the WITH-clause grammar itself, not by
+    /// pattern-matching around any one occurrence.
+    ///
+    /// A CTE body that is itself `WITH ... SELECT ...` opens its own,
+    /// independently scoped CTE list, so its own declarations are
+    /// collected by recursing into it.
+    private func cteDeclarationExemptions(_ tokens: [SQLToken], withIndex: Int, mainIndex: Int) -> Set<Int> {
+        var exemptions = Set<Int>()
+        var cursor = withIndex + 1
+        if tokens.indices.contains(cursor), tokens[cursor].isWord, tokens[cursor].text.uppercased() == "RECURSIVE" {
+            cursor += 1
         }
-        if previous.isWord, previous.text.uppercased() == "RECURSIVE", index >= 2,
-           tokens[index - 2].isWord, tokens[index - 2].text.uppercased() == "WITH" {
-            return nestingDepth(before: index - 2, tokens: tokens) == candidateDepth
-        }
-        guard previous.text == ",", index >= 2, tokens[index - 2].text == ")",
-              nestingDepth(before: index - 1, tokens: tokens) == candidateDepth else { return false }
-
-        // A comma introduces another CTE only after a complete `AS (...)`
-        // body at this depth. A comma inside a CTE SELECT must not turn the
-        // next function-shaped expression into a column declaration.
-        guard let bodyOpen = matchingOpenParen(before: index - 2, tokens: tokens), bodyOpen > 0,
-              tokens[bodyOpen - 1].isWord, tokens[bodyOpen - 1].text.uppercased() == "AS",
-              nestingDepth(before: bodyOpen, tokens: tokens) == candidateDepth else { return false }
-        return tokens[..<bodyOpen].indices.contains { cursor in
-            tokens[cursor].isWord && tokens[cursor].text.uppercased() == "WITH"
-                && nestingDepth(before: cursor, tokens: tokens) == candidateDepth
-        }
-    }
-
-    private func nestingDepth(before end: Int, tokens: [SQLToken]) -> Int {
-        var depth = 0
-        for token in tokens[..<end] {
-            if token.text == "(" { depth += 1 }
-            if token.text == ")" { depth -= 1 }
-        }
-        return depth
-    }
-
-    private func matchingOpenParen(before close: Int, tokens: [SQLToken]) -> Int? {
-        var depth = 0
-        for cursor in stride(from: close, through: 0, by: -1) {
-            if tokens[cursor].text == ")" { depth += 1 }
-            if tokens[cursor].text == "(" {
-                depth -= 1
-                if depth == 0 { return cursor }
+        while cursor < mainIndex {
+            guard tokens.indices.contains(cursor), tokens[cursor].isWord else { return exemptions }
+            let nameIndex = cursor
+            var next = cursor + 1
+            if tokens.indices.contains(next), tokens[next].text == "(" {
+                exemptions.insert(nameIndex)
+                // `matchingCloseParen(after:)` takes the index of the token
+                // immediately before the paren it matches, not the paren's
+                // own index.
+                guard let close = matchingCloseParen(after: nameIndex, tokens: tokens) else { return exemptions }
+                next = close + 1
             }
+            guard tokens.indices.contains(next), tokens[next].isWord, tokens[next].text.uppercased() == "AS" else { return exemptions }
+            let asIndex = next
+            next += 1
+            guard tokens.indices.contains(next), tokens[next].text == "(" else { return exemptions }
+            let bodyOpen = next
+            guard let bodyClose = matchingCloseParen(after: asIndex, tokens: tokens) else { return exemptions }
+            if tokens.indices.contains(bodyOpen + 1), tokens[bodyOpen + 1].isWord, tokens[bodyOpen + 1].text.uppercased() == "WITH",
+               let nestedMain = topLevelMainStatementIndex(tokens, from: bodyOpen + 2, to: bodyClose) {
+                exemptions.formUnion(cteDeclarationExemptions(tokens, withIndex: bodyOpen + 1, mainIndex: nestedMain))
+            }
+            cursor = bodyClose + 1
+            guard cursor < mainIndex, tokens[cursor].text == "," else { return exemptions }
+            cursor += 1
         }
-        return nil
+        return exemptions
     }
 
     private func matchingCloseParen(after index: Int, tokens: [SQLToken]) -> Int? {
@@ -243,7 +279,11 @@ public struct MCPReadPolicy: Sendable {
     }
 
     private func validateExplain(_ words: [String]) throws {
-        if words.contains("ANALYZE") { throw MCPReadPolicyError.prohibitedOperation("EXPLAIN ANALYZE") }
+        // ANALYSE is PostgreSQL's accepted British spelling of ANALYZE —
+        // an alternate spelling of the same keyword, not a different one.
+        if words.contains("ANALYZE") || words.contains("ANALYSE") {
+            throw MCPReadPolicyError.prohibitedOperation("EXPLAIN ANALYZE")
+        }
         guard words.dropFirst().contains(where: { $0 == "SELECT" || $0 == "VALUES" }) else {
             throw MCPReadPolicyError.unsupportedStatement("EXPLAIN target")
         }
@@ -306,49 +346,70 @@ private struct SQLToken: Sendable {
     var isQuotedIdentifier: Bool = false
 }
 
+/// Tokenizes over Unicode scalars (code points), never `Character`
+/// (extended grapheme cluster). A grapheme cluster merges a trailing
+/// combining mark onto whatever precedes it — including a quote,
+/// semicolon, or paren — so comparing whole `Character`s can fail to
+/// recognize a delimiter immediately followed by a combining mark. The
+/// database lexes by code point, not by grapheme cluster, so it sees the
+/// plain delimiter underneath regardless; scalar-level comparison here
+/// keeps this tokenizer seeing the same boundaries the database does.
 private struct SQLTokenizer {
-    let characters: [Character]
+    let scalars: [Unicode.Scalar]
     let dialect: MCPSQLDialect
     var index = 0
     init(_ sql: String, dialect: MCPSQLDialect) {
-        characters = Array(sql)
+        scalars = Array(sql.unicodeScalars)
         self.dialect = dialect
     }
 
     mutating func tokenize() throws -> [SQLToken] {
         var output: [SQLToken] = []
-        while index < characters.count {
-            let character = characters[index]
-            if character.isWhitespace {
+        while index < scalars.count {
+            let scalar = scalars[index]
+            if isWhitespace(scalar) {
                 index += 1
                 continue
             }
-            if character == "-", peek(1) == "-" {
-                if dialect != .mysql || peek(2)?.isWhitespace == true {
-                    skipLineComment()
+            if scalar == "-", peek(1) == "-" {
+                if dialect != .mysql || isWhitespace(peek(2)) {
+                    skipLineComment(markerLength: 2)
                     continue
                 }
             }
-            if character == "/", peek(1) == "*" {
-                if dialect == .mysql, peek(2) == "!" {
+            if scalar == "#", dialect == .mysql {
+                skipLineComment(markerLength: 1)
+                continue
+            }
+            if scalar == "/", peek(1) == "*" {
+                if dialect == .mysql, isMySQLExecutableCommentMarker() {
                     throw MCPReadPolicyError.prohibitedOperation("MySQL executable comment")
                 }
                 try skipBlockComment()
                 continue
             }
-            if character == "'" {
-                output.append(SQLToken(text: try consumeQuoted("'", doubledEscape: true), isWord: false))
+            if scalar == "'" {
+                output.append(SQLToken(text: try consumeQuoted("'", doubledEscape: true, rejectBackslash: true), isWord: false))
                 continue
             }
-            if character == "\"" {
-                output.append(SQLToken(text: try consumeQuoted("\"", doubledEscape: true), isWord: false, isQuotedIdentifier: true))
+            if scalar == "\"" {
+                // PostgreSQL and SQLite always quote an identifier with
+                // `"..."`. MySQL (outside ANSI_QUOTES mode, which this
+                // policy does not attempt to detect) treats it as a string
+                // literal instead, with exactly the same session-dependent
+                // backslash-escape ambiguity as `'...'`.
+                if dialect == .mysql {
+                    output.append(SQLToken(text: try consumeQuoted("\"", doubledEscape: true, rejectBackslash: true), isWord: false))
+                } else {
+                    output.append(SQLToken(text: try consumeQuoted("\"", doubledEscape: true, rejectBackslash: false), isWord: false, isQuotedIdentifier: true))
+                }
                 continue
             }
-            if character == "`" {
-                output.append(SQLToken(text: try consumeQuoted("`", doubledEscape: true), isWord: false, isQuotedIdentifier: true))
+            if scalar == "`" {
+                output.append(SQLToken(text: try consumeQuoted("`", doubledEscape: true, rejectBackslash: false), isWord: false, isQuotedIdentifier: true))
                 continue
             }
-            if character == "[" {
+            if scalar == "[" {
                 // Only SQLite spells identifiers as [name]. In PostgreSQL `[` starts an
                 // array subscript or constructor whose contents must be validated like
                 // any other expression, and MySQL has no bracket syntax at all.
@@ -363,42 +424,68 @@ private struct SQLTokenizer {
                 }
                 continue
             }
-            if character == "]", dialect == .postgresql {
+            if scalar == "]", dialect == .postgresql {
                 output.append(SQLToken(text: "]", isWord: false))
                 index += 1
                 continue
             }
-            if character == "$", let quoted = try consumeDollarQuoteIfPresent() {
+            if scalar == "$", dialect == .postgresql, let quoted = try consumeDollarQuoteIfPresent() {
                 output.append(SQLToken(text: quoted, isWord: false))
                 continue
             }
-            if character.isLetter || character == "_" {
+            if isIdentifierStart(scalar) {
                 let start = index
                 index += 1
-                while index < characters.count, characters[index].isLetter || characters[index].isNumber || characters[index] == "_" || characters[index] == "$" {
-                    index += 1
-                }
-                output.append(SQLToken(text: String(characters[start..<index]), isWord: true))
+                while index < scalars.count, isIdentifierContinuation(scalars[index]) { index += 1 }
+                output.append(SQLToken(text: string(scalars[start..<index]), isWord: true))
                 continue
             }
-            output.append(SQLToken(text: String(character), isWord: false))
+            output.append(SQLToken(text: String(scalar), isWord: false))
             index += 1
         }
         return output
     }
 
-    private func peek(_ offset: Int) -> Character? { index + offset < characters.count ? characters[index + offset] : nil }
+    private func peek(_ offset: Int) -> Unicode.Scalar? { index + offset < scalars.count ? scalars[index + offset] : nil }
 
-    private mutating func skipLineComment() {
-        index += 2
-        while index < characters.count, characters[index] != "\n" { index += 1 }
+    private func isWhitespace(_ scalar: Unicode.Scalar?) -> Bool { scalar.map { $0.properties.isWhitespace } ?? false }
+
+    private func isIdentifierStart(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.properties.isAlphabetic || scalar == "_"
+    }
+
+    private func isIdentifierContinuation(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.properties.isAlphabetic || isASCIIDigit(scalar) || scalar == "_" || scalar == "$"
+    }
+
+    private func isASCIIDigit(_ scalar: Unicode.Scalar) -> Bool { scalar.value >= 0x30 && scalar.value <= 0x39 }
+
+    private func string(_ slice: ArraySlice<Unicode.Scalar>) -> String {
+        var view = String.UnicodeScalarView()
+        view.append(contentsOf: slice)
+        return String(view)
+    }
+
+    /// `/*M!...*/` (any case of `M`) is MariaDB's executable comment, the
+    /// same escape hatch as MySQL's `/*!...*/`: content inside it is inert
+    /// to a validator that only skips block comments, but MariaDB executes
+    /// it as real SQL.
+    private func isMySQLExecutableCommentMarker() -> Bool {
+        if peek(2) == "!" { return true }
+        guard let afterSlashStar = peek(2), afterSlashStar == "M" || afterSlashStar == "m" else { return false }
+        return peek(3) == "!"
+    }
+
+    private mutating func skipLineComment(markerLength: Int) {
+        index += markerLength
+        while index < scalars.count, scalars[index] != "\n" { index += 1 }
     }
 
     private mutating func skipBlockComment() throws {
         index += 2
         var depth = 1
-        while index < characters.count {
-            if characters[index] == "/", peek(1) == "*" {
+        while index < scalars.count {
+            if scalars[index] == "/", peek(1) == "*" {
                 guard dialect == .postgresql else {
                     throw MCPReadPolicyError.malformed("nested block comments are not accepted for this dialect")
                 }
@@ -406,7 +493,7 @@ private struct SQLTokenizer {
                 index += 2
                 continue
             }
-            if characters[index] == "*", peek(1) == "/" {
+            if scalars[index] == "*", peek(1) == "/" {
                 depth -= 1
                 index += 2
                 if depth == 0 { return }
@@ -417,22 +504,24 @@ private struct SQLTokenizer {
         throw MCPReadPolicyError.malformed("unterminated block comment")
     }
 
-    private mutating func consumeQuoted(_ quote: Character, doubledEscape: Bool) throws -> String {
+    /// Backslash-escape semantics inside a string literal depend on
+    /// PostgreSQL/MySQL session settings. Guessing here could hide a
+    /// statement boundary, so the authorization grammar rejects the
+    /// ambiguous form outright whenever `rejectBackslash` applies — for
+    /// every string-literal quote style, not just `'...'`.
+    private mutating func consumeQuoted(_ quote: Unicode.Scalar, doubledEscape: Bool, rejectBackslash: Bool) throws -> String {
         let start = index
         index += 1
-        while index < characters.count {
-            if characters[index] == quote {
+        while index < scalars.count {
+            if scalars[index] == quote {
                 if doubledEscape, peek(1) == quote {
                     index += 2
                     continue
                 }
                 index += 1
-                return String(characters[start..<index])
+                return string(scalars[start..<index])
             }
-            // Backslash-string semantics depend on PostgreSQL/MySQL session
-            // settings. Guessing here could hide a statement boundary, so the
-            // authorization grammar rejects the ambiguous form.
-            if characters[index] == "\\", quote == "'" {
+            if scalars[index] == "\\", rejectBackslash {
                 throw MCPReadPolicyError.malformed("backslash escapes are not accepted in string literals")
             }
             index += 1
@@ -445,27 +534,43 @@ private struct SQLTokenizer {
     private mutating func consumeBracket() throws -> String {
         let start = index
         index += 1
-        while index < characters.count {
-            if characters[index] == "]" {
+        while index < scalars.count {
+            if scalars[index] == "]" {
                 index += 1
-                return String(characters[start..<index])
+                return string(scalars[start..<index])
             }
             index += 1
         }
         throw MCPReadPolicyError.malformed("unterminated bracket identifier")
     }
 
+    /// PostgreSQL-only syntax. The opening tag must not start with a digit
+    /// — `$1` is a positional parameter, not the start of a dollar-quote —
+    /// so a digit-leading `$...$` is left for ordinary tokenization rather
+    /// than treated as quoting. Treating it as quoting anyway would let a
+    /// tag like `$1$` (`$1` plus a stray `$`) swallow everything up to a
+    /// later matching `$1$` as inert content, hiding a real statement
+    /// boundary that PostgreSQL itself would not treat as quoted.
     private mutating func consumeDollarQuoteIfPresent() throws -> String? {
         let start = index
         var cursor = index + 1
-        while cursor < characters.count, characters[cursor].isLetter || characters[cursor].isNumber || characters[cursor] == "_" { cursor += 1 }
-        guard cursor < characters.count, characters[cursor] == "$" else { return nil }
-        let delimiter = Array(characters[start...cursor])
-        index = cursor + 1
-        while index + delimiter.count <= characters.count {
-            if Array(characters[index..<(index + delimiter.count)]) == delimiter {
+        if cursor < scalars.count, scalars[cursor] != "$" {
+            // A non-empty tag (`$$` alone is the valid empty tag) must not
+            // start with a digit.
+            guard !isASCIIDigit(scalars[cursor]) else { return nil }
+            while cursor < scalars.count, isIdentifierContinuation(scalars[cursor]) { cursor += 1 }
+        }
+        guard cursor < scalars.count, scalars[cursor] == "$" else { return nil }
+        return try consumeDollarQuoteBody(start: start, tagEnd: cursor)
+    }
+
+    private mutating func consumeDollarQuoteBody(start: Int, tagEnd: Int) throws -> String {
+        let delimiter = Array(scalars[start...tagEnd])
+        index = tagEnd + 1
+        while index + delimiter.count <= scalars.count {
+            if Array(scalars[index..<(index + delimiter.count)]) == delimiter {
                 index += delimiter.count
-                return String(characters[start..<index])
+                return string(scalars[start..<index])
             }
             index += 1
         }
