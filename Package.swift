@@ -342,8 +342,7 @@ let package = Package(
         .target(
             name: "BerryMCP",
             dependencies: [
-                "BerryCredentials", "BerryCore", "BerryDriverKit",
-                "BerryDataSourceKit", "BerryKeyValueKit", "BerryStore", "BerryTunnel",
+                "BerryCredentials", "BerryCore", "BerryDriverKit", "BerryStore", "BerryTunnel",
             ],
             path: "Packages/BerryMCP/Sources"
         ),
@@ -536,8 +535,7 @@ let package = Package(
         .testTarget(
             name: "BerryMCPTests",
             dependencies: [
-                "BerryMCP", "BerryCredentials", "BerryDriverKit", "BerryDataSourceKit",
-                "BerryKeyValueKit", "BerryStore", "BerryDriverSQLite",
+                "BerryMCP", "BerryCredentials", "BerryDriverKit", "BerryStore", "BerryDriverSQLite",
             ],
             path: "Packages/BerryMCP/Tests"
         ),
