@@ -1,17 +1,6 @@
 import AppKit
 import BerryCore
-import BerryDataSourceKit
-import BerryDriverDynamoDB
-import BerryDriverElasticsearch
-import BerryDriverKit
-import BerryDriverMongo
-import BerryDriverMySQL
-import BerryDriverPostgres
-import BerryDriverQdrant
-import BerryDriverRedis
-import BerryDriverSQLite
-import BerryDriverSQLServer
-import BerryKeyValueKit
+import BerryDriverBootstrap
 import BerryUI
 import SwiftUI
 
@@ -20,19 +9,7 @@ struct BerryDBApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
- // The ONLY place where concrete drivers are wired.
-        DriverRegistry.register(SQLiteDriver.self)
-        DriverRegistry.register(PostgresDriver.self)
-        DriverRegistry.register(MySQLDriver.self)
- DriverRegistry.register(DynamoDBDriver.self) // PartiQL
- DriverRegistry.register(SQLServerDriver.self) // FreeTDS C interop (V2⚠️)
- // DataSourceDriver family — independent registry.
-        DataSourceRegistry.register(QdrantDriver.self)
-        DataSourceRegistry.register(MongoDriver.self)
-        DataSourceRegistry.register(ElasticsearchDriver.self)
- // KeyValueDriver family — independent registry.
-        // RedisDriver and BerryDB share the same macOS 15 deployment target.
-        KeyValueRegistry.register(RedisDriver.self)
+        BerryDBAppComposition.registerDrivers()
     }
 
     var body: some Scene {
@@ -108,6 +85,15 @@ struct BerryDBApp: App {
             options[.applicationIcon] = icon
         }
         NSApp.orderFrontStandardAboutPanel(options)
+    }
+}
+
+enum BerryDBAppComposition {
+    @discardableResult
+    static func registerDrivers(
+        using registrar: BerryDriverRegistrar = .live
+    ) -> BerryDriverRegistration {
+        BerryDriverBootstrap.registerAll(using: registrar)
     }
 }
 

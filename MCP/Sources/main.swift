@@ -1,0 +1,3 @@
+import BerryDriverBootstrap
+
+BerryDBMCPComposition.registerDrivers()
