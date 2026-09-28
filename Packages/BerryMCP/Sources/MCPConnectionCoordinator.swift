@@ -9,10 +9,12 @@ import Foundation
 public struct MCPDriverRegistries: Sendable {
     public let sql: @Sendable (DriverID) -> (any DatabaseDriver.Type)?
 
+    /// Uses `sql` as the only lookup; returning nil rejects the profile.
     public init(sql: @escaping @Sendable (DriverID) -> (any DatabaseDriver.Type)?) {
         self.sql = sql
     }
 
+    /// The SQL drivers registered with `DriverRegistry` in this process.
     public static let registered = MCPDriverRegistries(sql: DriverRegistry.driverType)
 }
 
@@ -22,6 +24,8 @@ public struct MCPTunnelEndpoint: Sendable {
     public let config: ConnectionConfig
     public let close: @Sendable () async -> Void
 
+    /// An endpoint whose `close` must run once the connection using it is
+    /// closed; the default does nothing, for endpoints without a tunnel.
     public init(config: ConnectionConfig, close: @escaping @Sendable () async -> Void = {}) {
         self.config = config
         self.close = close
@@ -37,8 +41,12 @@ public struct MCPConnectionFactories: Sendable {
     public typealias SQLReadOnlyEnforcer = @Sendable (MCPConnectionProfile, any DriverConnection) async throws -> Void
     public let sql: MCPConnectionCoordinator.SQLFactory
 
-    // Defaults are nil rather than function references: a public default-argument closure is
-    // re-emitted in each client module, and differing -Onone copies corrupt the task allocator.
+    /// Builds the SQL factory. `enforceSQLReadOnly` defaults to
+    /// `enforceSQLReadOnly(profile:connection:)`, which only admits SQLite;
+    /// `openTunnel` defaults to `openTunnel(_:)`. Either override must keep
+    /// the guarantee that no session escapes without read-only enforcement.
+    // A public default-argument closure is re-emitted in every client module; the linker can pair one copy's
+    // body with another copy's async context size. Parameterless `{}` defaults emit identical copies, so they stay.
     public init(
         registries: MCPDriverRegistries = .registered,
         enforceSQLReadOnly: SQLReadOnlyEnforcer? = nil,
@@ -125,6 +133,8 @@ public actor MCPConnectionLifecycle {
     private var didCancel = false
     private var closeTask: Task<Void, Error>?
 
+    /// `cancel` interrupts the connection's running query; `closeConnection`
+    /// and `closeTunnel` release the connection and then its tunnel.
     public init(
         cancel: @escaping @Sendable () async -> Void,
         closeConnection: @escaping @Sendable () async throws -> Void,
@@ -135,12 +145,16 @@ public actor MCPConnectionLifecycle {
         closeTunnelAction = closeTunnel
     }
 
+    /// Runs the cancel action at most once, and never once `close()` has
+    /// started, so a driver cancel cannot reach a closed handle.
     public func cancel() async {
-        guard !didCancel else { return }
+        guard !didCancel, closeTask == nil else { return }
         didCancel = true
         await cancelAction()
     }
 
+    /// Closes the connection, then the tunnel, exactly once. The close is
+    /// recorded before the first suspension, so a later `cancel()` is a no-op.
     public func close() async throws {
         if let closeTask {
             return try await closeTask.value
@@ -168,6 +182,8 @@ public struct MCPSQLSession: Sendable {
     public let recordsHistory: Bool
     public let lifecycle: MCPConnectionLifecycle
 
+    /// `lifecycle` must close `connection`; `recordsHistory` is false for
+    /// helper sessions, which never write query history.
     public init(connection: any DriverConnection, recordsHistory: Bool = false, lifecycle: MCPConnectionLifecycle) {
         self.connection = connection
         self.recordsHistory = recordsHistory
@@ -175,10 +191,16 @@ public struct MCPSQLSession: Sendable {
     }
 }
 
+/// Why the coordinator refused a request before running its operation.
 public enum MCPConnectionCoordinatorError: Error, Equatable, Sendable {
+    /// Another request with this ID is still in flight; IDs are never shared.
     case duplicateRequestID(String)
+    /// The profile's driver is not a SQL driver the helper can open.
     case wrongDriverFamily(DriverID)
+    /// No database-enforced read-only mode exists for this driver, so no
+    /// session is handed out.
     case sqlReadOnlyEnforcementUnavailable(DriverID)
+    /// `closeAll()` has begun; no new request starts.
     case shuttingDown
 }
 
@@ -186,6 +208,7 @@ public enum MCPConnectionCoordinatorError: Error, Equatable, Sendable {
 public struct MCPShutdownReport: Equatable, Sendable {
     public let abandonedRequestIDs: [String]
 
+    /// `abandonedRequestIDs` is sorted so reports compare deterministically.
     public init(abandonedRequestIDs: [String]) {
         self.abandonedRequestIDs = abandonedRequestIDs
     }
@@ -200,6 +223,7 @@ public actor MCPConnectionCoordinator {
     public typealias SQLFactory = @Sendable (MCPConnectionProfile) async throws -> MCPSQLSession
 
     private struct ActiveRequest {
+        let token: UUID
         var cancelTask: @Sendable () -> Void
         var awaitCompletion: @Sendable () async -> Void
         var lifecycle: MCPConnectionLifecycle?
@@ -236,6 +260,9 @@ public actor MCPConnectionCoordinator {
         func insert(_ id: String) { ids.insert(id) }
     }
 
+    /// Uses `sqlFactory` as given, bypassing `MCPConnectionFactories` and its
+    /// read-only enforcer; for tests and injection only. The factory must
+    /// itself hand out read-only sessions.
     public init(
         resolver: MCPProjectResolver,
         sqlFactory: @escaping SQLFactory,
@@ -246,6 +273,9 @@ public actor MCPConnectionCoordinator {
         self.shutdownDeadline = shutdownDeadline
     }
 
+    /// Opens sessions through `factories`, whose default enforces read-only
+    /// state before a session escapes. `closeAll()` returns within
+    /// `shutdownDeadline`.
     public init(
         resolver: MCPProjectResolver,
         factories: MCPConnectionFactories = MCPConnectionFactories(),
@@ -269,12 +299,20 @@ public actor MCPConnectionCoordinator {
     }
 
     /// Cancels one in-flight request; its connection is closed as it unwinds.
+    /// Cancelling the task that called `withSQLSession` has the same effect.
     public func cancel(requestID: String) async {
-        guard var request = active[requestID] else { return }
+        await cancel(requestID: requestID, token: nil)
+    }
+
+    /// `token` limits the cancel to the request that registered it, so a late
+    /// caller-cancellation cannot reach a later request reusing the ID.
+    private func cancel(requestID: String, token: UUID?) async {
+        guard var request = active[requestID], token == nil || request.token == token else { return }
         request.cancelled = true
         active[requestID] = request
-        request.cancelTask()
+        // Driver cancel first: once the task unwinds, close starts and cancel becomes a no-op.
         await request.lifecycle?.cancel()
+        request.cancelTask()
     }
 
     /// Cancels every request, closes what it can, and returns within
@@ -287,25 +325,27 @@ public actor MCPConnectionCoordinator {
         }
         let requests = active
         for request in requests.values { request.cancelTask() }
-        for request in requests.values { await request.lifecycle?.cancel() }
 
-        // Each request's own completion covers activate/finish closing a
-        // resource that appeared after shutdown began.
         let finished = FinishedSet()
         let deadline = CompletionSignal()
+        let timeout = shutdownDeadline
+        let timer = Task {
+            try? await Task.sleep(for: timeout)
+            await deadline.complete()
+        }
+        // Driver cancels run inside the deadline race: a cancel that never
+        // returns leaves its request abandoned instead of blocking shutdown.
+        // Each request's own completion covers activate/finish closing a
+        // resource that appeared after shutdown began.
         for (id, request) in requests {
             Task {
+                await request.lifecycle?.cancel()
                 await request.awaitCompletion()
                 await finished.insert(id)
                 if await finished.count == requests.count { await deadline.complete() }
             }
         }
         if requests.isEmpty { await deadline.complete() }
-        let timeout = shutdownDeadline
-        let timer = Task {
-            try? await Task.sleep(for: timeout)
-            await deadline.complete()
-        }
         await deadline.wait()
         timer.cancel()
         let done = await finished.ids
@@ -326,7 +366,9 @@ public actor MCPConnectionCoordinator {
         // Reserve before resolution/opening. ConnectionManager cannot provide
         // this process-scoped pending-request lifecycle or late-open cleanup.
         let completion = CompletionSignal()
+        let token = UUID()
         active[requestID] = ActiveRequest(
+            token: token,
             cancelTask: {},
             awaitCompletion: { await completion.wait() },
             lifecycle: nil,
@@ -341,21 +383,28 @@ public actor MCPConnectionCoordinator {
             return try await prepared.operation()
         }
         active[requestID]?.cancelTask = { task.cancel() }
+        let result: Result<T, Error>
         do {
-            let value = try await task.value
-            do {
-                try await finish(requestID: requestID)
-                await completion.complete()
-                return value
-            } catch {
-                await completion.complete()
-                throw error
+            let value = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                Task { await self.cancel(requestID: requestID, token: token) }
             }
+            result = .success(value)
         } catch {
-            try? await finish(requestID: requestID)
-            await completion.complete()
-            throw error
+            result = .failure(error)
         }
+        // Exactly one finish per request: a second one could remove and close
+        // a later request that reused this ID while the first close awaited.
+        var closeError: Error?
+        do {
+            try await finish(requestID: requestID)
+        } catch {
+            closeError = error
+        }
+        await completion.complete()
+        if case .success = result, let closeError { throw closeError }
+        return try result.get()
     }
 
     private func activate(requestID: String, lifecycle: MCPConnectionLifecycle) async -> Bool {

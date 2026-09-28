@@ -301,7 +301,6 @@ struct MCPConnectionCoordinatorTests {
         for task in tasks {
             await #expect(throws: CancellationError.self) { try await task.value }
         }
-        #expect(await fixture.tracker.cancels == 3)
         #expect(await fixture.tracker.closes == 3)
         #expect(await fixture.tracker.tunnelCloses == 3)
     }
@@ -397,6 +396,123 @@ struct MCPConnectionCoordinatorTests {
         )
         _ = try await coordinator.withSQLSession(requestID: "quick", profileID: profileID) { _ in 1 }
         #expect(await coordinator.closeAll() == MCPShutdownReport(abandonedRequestIDs: []))
+    }
+
+    @Test func cancelAfterCloseStartedDoesNotRunTheCancelAction() async throws {
+        let tracker = Tracker()
+        let closed = MCPConnectionLifecycle(
+            cancel: { await tracker.cancelled() },
+            closeConnection: { try await tracker.closed(number: 1) }
+        )
+        try await closed.close()
+        await closed.cancel()
+        #expect(await tracker.cancels == 0)
+
+        let gate = AsyncGate()
+        let closing = MCPConnectionLifecycle(
+            cancel: { await tracker.cancelled() },
+            closeConnection: { await gate.wait() }
+        )
+        let close = Task { try await closing.close() }
+        await gate.waitUntilBlocked()
+        await closing.cancel()
+        #expect(await tracker.cancels == 0)
+        await gate.open()
+        try await close.value
+    }
+
+    @Test func closeAllReturnsAtTheDeadlineWhenADriverCancelNeverReturns() async throws {
+        let profileID = UUID()
+        let started = AsyncStream<Void>.makeStream()
+        let coordinator = MCPConnectionCoordinator(
+            resolver: liveResolver(for: [profileID]),
+            sqlFactory: { _ in
+                MCPSQLSession(
+                    connection: FakeSQLConnection(),
+                    lifecycle: MCPConnectionLifecycle(
+                        cancel: { await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in } },
+                        closeConnection: {}
+                    )
+                )
+            },
+            shutdownDeadline: .milliseconds(100)
+        )
+        let request = Task {
+            try await coordinator.withSQLSession(requestID: "stuck-cancel", profileID: profileID) { _ in
+                started.continuation.yield()
+                await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in }
+                return 0
+            }
+        }
+        for await _ in started.stream { break }
+        let clock = ContinuousClock()
+        let begin = clock.now
+        let report = await coordinator.closeAll()
+        #expect(clock.now - begin < .seconds(1))
+        #expect(report.abandonedRequestIDs == ["stuck-cancel"])
+        request.cancel()
+    }
+
+    @Test func closeFailureCleanupDoesNotTouchALaterRequestWithTheSameID() async throws {
+        let profileID = UUID()
+        let tracker = Tracker()
+        let firstCloseGate = AsyncGate()
+        let secondOperationGate = AsyncGate()
+        let coordinator = MCPConnectionCoordinator(
+            resolver: liveResolver(for: [profileID]),
+            sqlFactory: { _ in
+                let number = await tracker.opened()
+                return MCPSQLSession(
+                    connection: FakeSQLConnection(),
+                    lifecycle: MCPConnectionLifecycle(
+                        cancel: { await tracker.cancelled() },
+                        closeConnection: {
+                            try await tracker.closed(number: number)
+                            if number == 1 {
+                                await firstCloseGate.wait()
+                                throw FixtureError.close
+                            }
+                        }
+                    )
+                )
+            }
+        )
+        let first = Task {
+            try await coordinator.withSQLSession(requestID: "reused", profileID: profileID) { _ in 1 }
+        }
+        await firstCloseGate.waitUntilBlocked()
+        let second = Task {
+            try await coordinator.withSQLSession(requestID: "reused", profileID: profileID) { _ in
+                await secondOperationGate.wait()
+                return 2
+            }
+        }
+        await secondOperationGate.waitUntilBlocked()
+        await firstCloseGate.open()
+        await #expect(throws: FixtureError.close) { try await first.value }
+        #expect(await tracker.closes == 1)
+        #expect(await tracker.cancels == 0)
+        await secondOperationGate.open()
+        #expect(try await second.value == 2)
+        #expect(await tracker.closes == 2)
+        #expect(await tracker.cancels == 0)
+    }
+
+    @Test func cancellingTheCallerCancelsTheDriverAndTheOperation() async throws {
+        let fixture = Fixture()
+        let started = AsyncStream<Void>.makeStream()
+        let request = Task {
+            try await fixture.coordinator.withSQLSession(requestID: "caller", profileID: fixture.profile.id) { _ in
+                started.continuation.yield()
+                try await Task.sleep(for: .seconds(30))
+            }
+        }
+        for await _ in started.stream { break }
+        request.cancel()
+        await #expect(throws: CancellationError.self) { try await request.value }
+        #expect(await fixture.tracker.cancels == 1)
+        #expect(await fixture.tracker.closes == 1)
+        #expect(await fixture.tracker.tunnelCloses == 1)
     }
 }
 
