@@ -32,6 +32,12 @@ enum NativeWrite: Equatable, Sendable {
         case .delete: return .delete
         }
     }
+
+    var table: String {
+        switch self {
+        case .insert(let table, _), .update(let table, _, _, _), .delete(let table, _): return table
+        }
+    }
 }
 
 /// Recognizes the exact statement shapes BerryDB itself generates —
@@ -245,7 +251,7 @@ enum NativeWriteOperation: String, Sendable {
 /// A native write request. `@unchecked Sendable` for the same reason as
 /// `DynamoDBHTTPClient.DynamoDBPage`: an immutable JSON dictionary.
 ///
-/// Every attribute name goes through an `ExpressionAttributeNames`
+/// Every attribute name used in an expression goes through an `ExpressionAttributeNames`
 /// placeholder, so reserved words (`Name`, `Status`, …) and any character
 /// work. Only placeholders an expression actually uses are sent, because
 /// DynamoDB rejects unused ones.

@@ -21,13 +21,20 @@ public actor DynamoDBConnection: DriverConnection {
     private nonisolated let cancelBox = DynamoDBCancelBox()
     private var isClosed = false
 
-    /// PartiQL actions AWS denied on this connection. Least-privilege IAM
+    private struct DeniedPartiQL: Hashable {
+        let action: PartiQLAction
+        let table: String
+    }
+
+    /// PartiQL denials remembered per action and table. Least-privilege IAM
     /// policies often grant Scan/PutItem/UpdateItem/DeleteItem but not
-    /// `dynamodb:PartiQL*`. PartiQL stays the first attempt, so everything
-    /// that works today is untouched. After one denial, the statements of that
-    /// kind which BerryDB generated go straight to the native item API for the
-    /// rest of the connection.
-    private var deniedPartiQLActions: Set<PartiQLAction> = []
+    /// `dynamodb:PartiQL*`, and are frequently scoped per table, so a denial
+    /// on one table says nothing about another. PartiQL stays the first
+    /// attempt, so everything that works today is untouched. After a denial
+    /// whose native replacement succeeded, the statements of that kind on that
+    /// table which BerryDB generated go straight to the native item API for the
+    /// rest of the connection. A failed replacement is not remembered.
+    private var deniedPartiQL: Set<DeniedPartiQL> = []
 
     /// Partition-key name per table, for native INSERT (one DescribeTable per table).
     private var partitionKeys: [String: String] = [:]
@@ -87,7 +94,7 @@ public actor DynamoDBConnection: DriverConnection {
         }
     }
 
-    /// Streams every page of a SELECT as batches of ≤1000 rows (N3) —
+    /// Streams every page of a SELECT as batches of ≤1000 rows —
     /// sequential paging, no seek (`serverSideCursor`).
     ///
     /// PartiQL (`ExecuteStatement`, following every `NextToken`) is always
@@ -104,15 +111,15 @@ public actor DynamoDBConnection: DriverConnection {
         let scanTable = PartiQLNativeTranslation.scanTable(sql)
         var yielded = false
         do {
-            if let scanTable, deniedPartiQLActions.contains(.select) {
+            if let scanTable, deniedPartiQL.contains(DeniedPartiQL(action: .select, table: scanTable)) {
                 try await streamScan(table: scanTable, continuation: continuation, yielded: &yielded)
             } else {
                 do {
                     try await streamPartiQL(sql: sql, continuation: continuation, yielded: &yielded)
                 } catch {
                     guard let scanTable, !yielded, Self.isPartiQLAccessDenied(error) else { throw error }
-                    deniedPartiQLActions.insert(.select)
                     try await streamScan(table: scanTable, continuation: continuation, yielded: &yielded)
+                    deniedPartiQL.insert(DeniedPartiQL(action: .select, table: scanTable))
                 }
             }
             // rowsAffected is a DML concept (matches SQLite/Postgres: nil for SELECT).
@@ -198,7 +205,7 @@ public actor DynamoDBConnection: DriverConnection {
         let started = clock.now
         let native = PartiQLNativeTranslation.write(sql)
         do {
-            if let native, deniedPartiQLActions.contains(native.partiQLAction) {
+            if let native, deniedPartiQL.contains(DeniedPartiQL(action: native.partiQLAction, table: native.table)) {
                 try await performNative(native)
             } else {
                 do {
@@ -206,8 +213,8 @@ public actor DynamoDBConnection: DriverConnection {
                     _ = try await client.executeStatement(rewritten, nextToken: nil, limit: nil)
                 } catch {
                     guard let native, Self.isPartiQLAccessDenied(error) else { throw error }
-                    deniedPartiQLActions.insert(native.partiQLAction)
                     try await performNative(native)
+                    deniedPartiQL.insert(DeniedPartiQL(action: native.partiQLAction, table: native.table))
                 }
             }
             // No rowsAffected: neither ExecuteStatement nor the item API

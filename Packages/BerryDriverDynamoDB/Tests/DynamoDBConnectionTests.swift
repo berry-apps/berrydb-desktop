@@ -367,6 +367,23 @@ extension DynamoDBConnectionTests {
         #expect(Self.targets(calls) == ["ExecuteStatement"])
     }
 
+    @Test func denialAfterRowsWereDeliveredSurfacesWithoutScanFallback() async throws {
+        let (connection, calls) = try await makeRecordingConnection { target, body in
+            guard target == "ExecuteStatement" else { return (500, [:]) }
+            if body["NextToken"] == nil {
+                return (200, ["Items": [["Artist": ["S": "Band1"]]], "NextToken": "t1"])
+            }
+            return Self.accessDenied("PartiQLSelect")
+        }
+        do {
+            _ = try await drain(connection.execute(Self.gridSelect))
+            Issue.record("expected the PartiQL AccessDeniedException")
+        } catch DriverError.queryFailed(let message, _) {
+            #expect(message.contains("dynamodb:PartiQLSelect"))
+        }
+        #expect(Self.targets(calls) == ["ExecuteStatement", "ExecuteStatement"])
+    }
+
     @Test func scanDeniedTooSurfacesTheScanError() async throws {
         let (connection, _) = try await makeRecordingConnection { target, _ in
             Self.accessDenied(target == "Scan" ? "Scan" : "PartiQLSelect")
@@ -472,5 +489,34 @@ extension DynamoDBConnectionTests {
         _ = try await drain(connection.execute(Self.insert))
         _ = try await drain(connection.execute(Self.gridSelect))
         #expect(Self.targets(calls) == ["ExecuteStatement", "UpdateItem", "ExecuteStatement", "ExecuteStatement"])
+    }
+
+    @Test func denialIsRememberedPerTable() async throws {
+        let (connection, calls) = try await makeRecordingConnection { target, body in
+            let statement = body["Statement"] as? String ?? ""
+            if target == "ExecuteStatement", statement.contains("\"Music\"") {
+                return Self.accessDenied("PartiQLUpdate")
+            }
+            return (200, ["Items": []])
+        }
+        let other = Self.update.replacingOccurrences(of: "\"Music\"", with: "\"Other\"")
+        _ = try await drain(connection.execute(Self.update))
+        _ = try await drain(connection.execute(other))
+        #expect(Self.targets(calls) == ["ExecuteStatement", "UpdateItem", "ExecuteStatement"])
+    }
+
+    @Test func failedNativeFallbackIsNotRemembered() async throws {
+        let (connection, calls) = try await makeRecordingConnection { target, _ in
+            Self.accessDenied(target == "UpdateItem" ? "UpdateItem" : "PartiQLUpdate")
+        }
+        for _ in 0..<2 {
+            do {
+                _ = try await drain(connection.execute(Self.update))
+                Issue.record("expected the UpdateItem AccessDeniedException")
+            } catch DriverError.queryFailed(let message, _) {
+                #expect(message.contains("dynamodb:UpdateItem"))
+            }
+        }
+        #expect(Self.targets(calls) == ["ExecuteStatement", "UpdateItem", "ExecuteStatement", "UpdateItem"])
     }
 }
