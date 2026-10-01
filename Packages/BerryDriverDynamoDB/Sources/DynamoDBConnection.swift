@@ -140,7 +140,7 @@ public actor DynamoDBConnection: DriverConnection {
             let page = try await self.client.executeStatement(sql, nextToken: nextToken, limit: Self.batchSize)
             nextToken = page.nextToken
             finished = page.nextToken == nil
-            return page.items
+            return ItemBatch(items: page.items)
         }
     }
 
@@ -154,8 +154,17 @@ public actor DynamoDBConnection: DriverConnection {
             let page = try await self.client.scan(table: table, limit: Self.batchSize, after: previous)
             previous = page
             finished = page.lastEvaluatedKey == nil
-            return page.items
+            return ItemBatch(items: page.items)
         }
+    }
+
+    /// One page of raw items handed from `streamPartiQL`/`streamScan` to
+    /// `streamPages`. `@unchecked Sendable` for the same reason as
+    /// `DynamoDBHTTPClient.DynamoDBPage`: an immutable JSON array. Swift 6.1
+    /// treats the `nextPage` closure's result as crossing an isolation
+    /// boundary and rejects a bare `[[String: Any]]`.
+    private struct ItemBatch: @unchecked Sendable {
+        let items: [[String: Any]]
     }
 
     /// The page loop shared by PartiQL and Scan. Columns come from the union of
@@ -170,10 +179,11 @@ public actor DynamoDBConnection: DriverConnection {
     private func streamPages(
         continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation,
         yielded: inout Bool,
-        nextPage: () async throws -> [[String: Any]]?
+        nextPage: () async throws -> ItemBatch?
     ) async throws {
         var columnOrder: [String]?
-        while let items = try await nextPage() {
+        while let batch = try await nextPage() {
+            let items = batch.items
             guard !items.isEmpty else { continue }
             if columnOrder == nil {
                 let order = Set(items.flatMap(\.keys)).sorted()
