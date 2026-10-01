@@ -21,6 +21,14 @@ public actor DynamoDBConnection: DriverConnection {
     private nonisolated let cancelBox = DynamoDBCancelBox()
     private var isClosed = false
 
+    /// PartiQL actions AWS denied on this connection. Least-privilege IAM
+    /// policies often grant Scan/PutItem/UpdateItem/DeleteItem but not
+    /// `dynamodb:PartiQL*`. PartiQL stays the first attempt, so everything
+    /// that works today is untouched. After one denial, the statements of that
+    /// kind which BerryDB generated go straight to the native item API for the
+    /// rest of the connection.
+    private var deniedPartiQLActions: Set<PartiQLAction> = []
+
     /// Page-size hint for `ExecuteStatement`'s request-level `Limit` field —
     /// also bounds each `.rows` batch to N3's 500–1000 range. Verified
     /// against dynamodb-local: a page's `Items` count can never exceed this,
@@ -76,41 +84,97 @@ public actor DynamoDBConnection: DriverConnection {
         }
     }
 
- /// Follows every `NextToken` page
-    /// `serverSideCursor` — sequential paging, no seek) and streams batches
-    /// of ≤1000 rows (N3). Columns are established from the union of
-    /// attribute names in the FIRST non-empty page; a later page introducing
-    /// an attribute the first page never had is a known limitation — items
-    /// are inherently schema-flexible in DynamoDB, and `ResultEvent` commits
-    /// to one `.columns` event up front. Such extra attributes are dropped
-    /// from the row rather than corrupting column alignment.
+    /// Streams every page of a SELECT as batches of ≤1000 rows (N3) —
+    /// sequential paging, no seek (`serverSideCursor`).
+    ///
+    /// PartiQL (`ExecuteStatement`, following every `NextToken`) is always
+    /// tried first. When IAM denies `dynamodb:PartiQLSelect` and the statement
+    /// is the grid's unfiltered `SELECT * FROM "T"`, the same rows come from
+    /// `Scan` instead; an unfiltered PartiQL SELECT * is itself a scan, so the
+    /// result does not change. Filtered, sorted or projected SELECTs keep the
+    /// PartiQL error (see `PartiQLNativeTranslation` for why).
     private func runSelect(
         sql: String, continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
     ) async {
         let clock = ContinuousClock()
         let started = clock.now
-        var columnOrder: [String]?
-        var nextToken: String?
+        let scanTable = PartiQLNativeTranslation.scanTable(sql)
+        var yielded = false
         do {
-            repeat {
-                let page = try await client.executeStatement(sql, nextToken: nextToken, limit: Self.batchSize)
-                nextToken = page.nextToken
-                guard !page.items.isEmpty else { continue }
-                if columnOrder == nil {
-                    let order = Set(page.items.flatMap(\.keys)).sorted()
-                    columnOrder = order
-                    continuation.yield(.columns(order.map {
-                        ColumnMeta(name: $0, declaredType: DynamoDBWire.declaredType(of: $0, firstBatch: page.items))
-                    }))
+            if let scanTable, deniedPartiQLActions.contains(.select) {
+                try await streamScan(table: scanTable, continuation: continuation, yielded: &yielded)
+            } else {
+                do {
+                    try await streamPartiQL(sql: sql, continuation: continuation, yielded: &yielded)
+                } catch {
+                    guard let scanTable, !yielded, Self.isPartiQLAccessDenied(error) else { throw error }
+                    deniedPartiQLActions.insert(.select)
+                    try await streamScan(table: scanTable, continuation: continuation, yielded: &yielded)
                 }
-                let order = columnOrder!
-                continuation.yield(.rows(page.items.map { DynamoDBWire.row(from: $0, columnOrder: order) }))
-            } while nextToken != nil
+            }
             // rowsAffected is a DML concept (matches SQLite/Postgres: nil for SELECT).
             continuation.yield(.complete(QueryStats(rowsAffected: nil, duration: clock.now - started)))
             continuation.finish()
         } catch {
             continuation.finish(throwing: Self.mapError(error))
+        }
+    }
+
+    private func streamPartiQL(
+        sql: String, continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation, yielded: inout Bool
+    ) async throws {
+        var nextToken: String?
+        var finished = false
+        try await streamPages(continuation: continuation, yielded: &yielded) {
+            guard !finished else { return nil }
+            let page = try await self.client.executeStatement(sql, nextToken: nextToken, limit: Self.batchSize)
+            nextToken = page.nextToken
+            finished = page.nextToken == nil
+            return page.items
+        }
+    }
+
+    private func streamScan(
+        table: String, continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation, yielded: inout Bool
+    ) async throws {
+        var previous: DynamoDBHTTPClient.ScanPage?
+        var finished = false
+        try await streamPages(continuation: continuation, yielded: &yielded) {
+            guard !finished else { return nil }
+            let page = try await self.client.scan(table: table, limit: Self.batchSize, after: previous)
+            previous = page
+            finished = page.lastEvaluatedKey == nil
+            return page.items
+        }
+    }
+
+    /// The page loop shared by PartiQL and Scan. Columns come from the union of
+    /// attribute names in the FIRST non-empty page. A later page that
+    /// introduces an attribute the first page never had is a known
+    /// limitation: items are inherently schema-flexible in DynamoDB, and
+    /// `ResultEvent` commits to one `.columns` event up front, so such extra
+    /// attributes are dropped from the row rather than corrupting column
+    /// alignment. `nextPage` returns nil once exhausted; an empty page is
+    /// skipped. `yielded` turns true on the first event sent, after which a
+    /// fallback would duplicate rows.
+    private func streamPages(
+        continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation,
+        yielded: inout Bool,
+        nextPage: () async throws -> [[String: Any]]?
+    ) async throws {
+        var columnOrder: [String]?
+        while let items = try await nextPage() {
+            guard !items.isEmpty else { continue }
+            if columnOrder == nil {
+                let order = Set(items.flatMap(\.keys)).sorted()
+                columnOrder = order
+                continuation.yield(.columns(order.map {
+                    ColumnMeta(name: $0, declaredType: DynamoDBWire.declaredType(of: $0, firstBatch: items))
+                }))
+                yielded = true
+            }
+            let order = columnOrder!
+            continuation.yield(.rows(items.map { DynamoDBWire.row(from: $0, columnOrder: order) }))
         }
     }
 
@@ -149,6 +213,17 @@ public actor DynamoDBConnection: DriverConnection {
         case "BEGIN", "COMMIT", "ROLLBACK", "START", "SAVEPOINT", "RELEASE": return .transactionControl
         default: return .other
         }
+    }
+
+    /// `DynamoDBHTTPClient.mapError` renders `"<ExceptionType>: <Message>"`.
+    /// AWS names the denied action in the message for identity-policy,
+    /// explicit-deny and SCP denials alike ("…not authorized to perform:
+    /// dynamodb:PartiQLSelect on resource…").
+    static func isPartiQLAccessDenied(_ error: Error) -> Bool {
+        guard let driverError = error as? DriverError,
+              case .queryFailed(let message, _) = driverError
+        else { return false }
+        return message.hasPrefix("AccessDeniedException:") && message.contains("dynamodb:PartiQL")
     }
 
     private static func mapError(_ error: Error) -> DriverError {
