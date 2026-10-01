@@ -378,4 +378,99 @@ extension DynamoDBConnectionTests {
             #expect(message.contains("dynamodb:Scan"))
         }
     }
+
+    // MARK: Writes — exactly the shapes ChangeSet.statements generates
+
+    static let update = #"UPDATE "Music" SET "Status" = 'live' WHERE "Artist" = 'Acme' AND "SongTitle" = 'Hit'"#
+    static let insert = #"INSERT INTO "Music" ("Artist", "SongTitle") VALUES ('Acme', 'Hit')"#
+    static let insert2 = #"INSERT INTO "Music" ("Artist", "SongTitle") VALUES ('Acme', 'Hit 2')"#
+    static let delete = #"DELETE FROM "Music" WHERE "Artist" = 'Acme' AND "SongTitle" = 'Hit'"#
+
+    static func describedMusic() -> [String: Any] {
+        ["Table": ["TableName": "Music", "KeySchema": [
+            ["AttributeName": "Artist", "KeyType": "HASH"],
+            ["AttributeName": "SongTitle", "KeyType": "RANGE"],
+        ]]]
+    }
+
+    @Test func permittedPartiQLWritesNeverTouchTheItemAPI() async throws {
+        let (connection, calls) = try await makeRecordingConnection { _, _ in (200, ["Items": []]) }
+        for sql in [Self.insert, Self.update, Self.delete] {
+            _ = try await drain(connection.execute(sql))
+        }
+        #expect(Self.targets(calls) == ["ExecuteStatement", "ExecuteStatement", "ExecuteStatement"])
+    }
+
+    @Test func deniedUpdateFallsBackToConditionalUpdateItemAndRemembers() async throws {
+        let (connection, calls) = try await makeRecordingConnection { target, _ in
+            target == "ExecuteStatement" ? Self.accessDenied("PartiQLUpdate") : (200, [:])
+        }
+        let result = try await drain(connection.execute(Self.update))
+        _ = try await drain(connection.execute(Self.update))
+
+        #expect(Self.targets(calls) == ["ExecuteStatement", "UpdateItem", "UpdateItem"])
+        let expected = try NativeWriteRequest.make(
+            for: try #require(PartiQLNativeTranslation.write(Self.update)), partitionKey: nil
+        )
+        #expect(NSDictionary(dictionary: calls.wrappedValue[1].body).isEqual(to: expected.body))
+        #expect(result.stats != nil)
+        #expect(result.stats?.rowsAffected == nil)
+    }
+
+    @Test func deniedInsertDescribesTheTableOnceAndPutsConditionally() async throws {
+        let (connection, calls) = try await makeRecordingConnection { target, _ in
+            switch target {
+            case "ExecuteStatement": return Self.accessDenied("PartiQLInsert")
+            case "DescribeTable": return (200, Self.describedMusic())
+            default: return (200, [:])
+            }
+        }
+        _ = try await drain(connection.execute(Self.insert))
+        _ = try await drain(connection.execute(Self.insert2))
+
+        #expect(Self.targets(calls) == ["ExecuteStatement", "DescribeTable", "PutItem", "PutItem"])
+        let put = calls.wrappedValue[2].body
+        #expect(put["ConditionExpression"] as? String == "attribute_not_exists(#pk)")
+        #expect(put["ExpressionAttributeNames"] as? [String: String] == ["#pk": "Artist"])
+        let item = put["Item"] as? [String: Any]
+        #expect((item?["SongTitle"] as? [String: Any])?["S"] as? String == "Hit")
+    }
+
+    @Test func deniedDeleteFallsBackToDeleteItem() async throws {
+        let (connection, calls) = try await makeRecordingConnection { target, _ in
+            target == "ExecuteStatement" ? Self.accessDenied("PartiQLDelete") : (200, [:])
+        }
+        _ = try await drain(connection.execute(Self.delete))
+        #expect(Self.targets(calls) == ["ExecuteStatement", "DeleteItem"])
+        #expect(NSDictionary(dictionary: calls.wrappedValue[1].body).isEqual(to: [
+            "TableName": "Music",
+            "Key": ["Artist": ["S": "Acme"], "SongTitle": ["S": "Hit"]],
+        ]))
+    }
+
+    @Test func deniedWriteBerryDBCannotTranslateKeepsThePartiQLError() async throws {
+        let (connection, calls) = try await makeRecordingConnection { _, _ in Self.accessDenied("PartiQLUpdate") }
+        let binaryEdit = #"UPDATE "Music" SET "Blob" = X'dead' WHERE "Artist" = 'Acme' AND "SongTitle" = 'Hit'"#
+        do {
+            _ = try await drain(connection.execute(binaryEdit))
+            Issue.record("expected the PartiQL AccessDeniedException")
+        } catch DriverError.queryFailed(let message, _) {
+            #expect(message.contains("dynamodb:PartiQLUpdate"))
+        }
+        #expect(Self.targets(calls) == ["ExecuteStatement"])
+    }
+
+    @Test func denialIsRememberedPerAction() async throws {
+        let (connection, calls) = try await makeRecordingConnection { target, body in
+            let statement = body["Statement"] as? String ?? ""
+            if target == "ExecuteStatement", statement.hasPrefix("UPDATE") {
+                return Self.accessDenied("PartiQLUpdate")
+            }
+            return (200, ["Items": []])
+        }
+        _ = try await drain(connection.execute(Self.update))
+        _ = try await drain(connection.execute(Self.insert))
+        _ = try await drain(connection.execute(Self.gridSelect))
+        #expect(Self.targets(calls) == ["ExecuteStatement", "UpdateItem", "ExecuteStatement", "ExecuteStatement"])
+    }
 }

@@ -29,6 +29,9 @@ public actor DynamoDBConnection: DriverConnection {
     /// rest of the connection.
     private var deniedPartiQLActions: Set<PartiQLAction> = []
 
+    /// Partition-key name per table, for native INSERT (one DescribeTable per table).
+    private var partitionKeys: [String: String] = [:]
+
     /// Page-size hint for `ExecuteStatement`'s request-level `Limit` field —
     /// also bounds each `.rows` batch to N3's 500–1000 range. Verified
     /// against dynamodb-local: a page's `Items` count can never exceed this,
@@ -178,26 +181,63 @@ public actor DynamoDBConnection: DriverConnection {
         }
     }
 
-    /// Singleton INSERT/UPDATE/DELETE — DynamoDB PartiQL can only ever touch
- /// one item per statement, so there is never a
-    /// second page to follow.
+    /// Singleton INSERT/UPDATE/DELETE. DynamoDB PartiQL can only ever touch
+    /// one item per statement, so there is never a second page to follow.
+    ///
+    /// The fallback rule is the same as `runSelect`'s: PartiQL first. When IAM
+    /// denies the statement's `dynamodb:PartiQL*` action and the text is one
+    /// that ChangeSet generated, it is replayed through
+    /// PutItem/UpdateItem/DeleteItem, with conditions that keep PartiQL's
+    /// semantics (`NativeWriteRequest.make`). History, DangerGuard and the SQL
+    /// preview still see the PartiQL text; the native call is an execution
+    /// detail of this driver.
     private func runWrite(
         sql: String, continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
     ) async {
         let clock = ContinuousClock()
         let started = clock.now
+        let native = PartiQLNativeTranslation.write(sql)
         do {
-            let rewritten = PartiQLInsertRewriter.rewrite(sql)
-            _ = try await client.executeStatement(rewritten, nextToken: nil, limit: nil)
-            // No rowsAffected: ExecuteStatement reports no count for writes
-            // (Items is only populated by RETURNING, which ChangeSet never
- // requests) — same "not exposed" precedent as Postgres;
-            // the UI shows "OK" + duration.
+            if let native, deniedPartiQLActions.contains(native.partiQLAction) {
+                try await performNative(native)
+            } else {
+                do {
+                    let rewritten = PartiQLInsertRewriter.rewrite(sql)
+                    _ = try await client.executeStatement(rewritten, nextToken: nil, limit: nil)
+                } catch {
+                    guard let native, Self.isPartiQLAccessDenied(error) else { throw error }
+                    deniedPartiQLActions.insert(native.partiQLAction)
+                    try await performNative(native)
+                }
+            }
+            // No rowsAffected: neither ExecuteStatement nor the item API
+            // reports a count for writes — same "not exposed" precedent as
+            // Postgres; the UI shows "OK" + duration.
             continuation.yield(.complete(QueryStats(rowsAffected: nil, duration: clock.now - started)))
             continuation.finish()
         } catch {
             continuation.finish(throwing: Self.mapError(error))
         }
+    }
+
+    /// Internal (not private) so `DynamoDBConformanceTests` can check
+    /// native/PartiQL parity against dynamodb-local. dynamodb-local enforces
+    /// no IAM, so it can never produce the denial that reaches this in production.
+    func performNative(_ write: NativeWrite) async throws {
+        var partitionKey: String?
+        if case .insert(let table, _) = write {
+            partitionKey = try await cachedPartitionKey(of: table)
+        }
+        try await client.nativeWrite(NativeWriteRequest.make(for: write, partitionKey: partitionKey))
+    }
+
+    private func cachedPartitionKey(of table: String) async throws -> String {
+        if let known = partitionKeys[table] { return known }
+        guard let name = try await client.partitionKeyName(of: table) else {
+            throw DriverError.queryFailed(message: "DescribeTable returned no HASH key for \(table)", code: nil)
+        }
+        partitionKeys[table] = name
+        return name
     }
 
     private enum StatementKind {

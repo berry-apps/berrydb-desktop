@@ -151,6 +151,13 @@ struct DynamoDBHTTPClient: Sendable {
         _ = try await send(target: request.operation.target, body: request.body)
     }
 
+    /// The partition-key name targeted by a native INSERT's
+    /// `attribute_not_exists` condition. Returns `String` (Sendable) rather
+    /// than the raw DescribeTable JSON, so it can cross into the connection actor.
+    func partitionKeyName(of table: String) async throws -> String? {
+        NativeWriteRequest.partitionKey(ofDescribedTable: try await describeTable(name: table))
+    }
+
  // MARK: - Introspection
 
     func listTables() async throws -> [String] {
