@@ -123,6 +123,34 @@ struct DynamoDBHTTPClient: Sendable {
         )
     }
 
+ // MARK: - Native item API
+
+    // Fallback for when IAM denies `dynamodb:PartiQL*` — see `DynamoDBConnection.runSelect`/`runWrite`.
+
+    /// One Scan page. `@unchecked Sendable` for the same reason as `DynamoDBPage`.
+    struct ScanPage: @unchecked Sendable {
+        let items: [[String: Any]]
+        let lastEvaluatedKey: [String: Any]?
+    }
+
+    /// One page. `limit` caps the items evaluated per request, like
+    /// `executeStatement`'s; `after` continues from the previous page's
+    /// `LastEvaluatedKey`.
+    func scan(table: String, limit: Int?, after previous: ScanPage?) async throws -> ScanPage {
+        var body: [String: Any] = ["TableName": table]
+        if let limit { body["Limit"] = limit }
+        if let key = previous?.lastEvaluatedKey { body["ExclusiveStartKey"] = key }
+        let json = try await send(target: "DynamoDB_20120810.Scan", body: body)
+        return ScanPage(
+            items: (json["Items"] as? [[String: Any]]) ?? [],
+            lastEvaluatedKey: json["LastEvaluatedKey"] as? [String: Any]
+        )
+    }
+
+    func nativeWrite(_ request: NativeWriteRequest) async throws {
+        _ = try await send(target: request.operation.target, body: request.body)
+    }
+
  // MARK: - Introspection
 
     func listTables() async throws -> [String] {

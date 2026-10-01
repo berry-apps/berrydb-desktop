@@ -222,3 +222,83 @@ private struct PartiQLTokens {
     }
 }
 
+extension DynamoDBScalar {
+    var attributeValue: [String: Any] {
+        switch self {
+        case .string(let s): return ["S": s]
+        case .number(let n): return ["N": n]
+        case .bool(let b): return ["BOOL": b]
+        case .null: return ["NULL": true]
+        }
+    }
+}
+
+/// The native item-API operations a ChangeSet write can become.
+enum NativeWriteOperation: String, Sendable {
+    case putItem = "PutItem"
+    case updateItem = "UpdateItem"
+    case deleteItem = "DeleteItem"
+
+    var target: String { "DynamoDB_20120810.\(rawValue)" }
+}
+
+/// A native write request. `@unchecked Sendable` for the same reason as
+/// `DynamoDBHTTPClient.DynamoDBPage`: an immutable JSON dictionary.
+///
+/// Every attribute name goes through an `ExpressionAttributeNames`
+/// placeholder, so reserved words (`Name`, `Status`, …) and any character
+/// work. Only placeholders an expression actually uses are sent, because
+/// DynamoDB rejects unused ones.
+struct NativeWriteRequest: @unchecked Sendable {
+    let operation: NativeWriteOperation
+    let body: [String: Any]
+
+    /// `partitionKey` is required for `.insert` (its `attribute_not_exists`
+    /// condition) and ignored otherwise. Throws rather than dropping the
+    /// condition, which would turn INSERT into a silent overwrite.
+    static func make(for write: NativeWrite, partitionKey: String?) throws -> NativeWriteRequest {
+        switch write {
+        case .insert(let table, let item):
+            guard let partitionKey else {
+                throw DriverError.queryFailed(
+                    message: "Native INSERT into \(table) needs the table's partition key", code: nil
+                )
+            }
+            // PartiQL INSERT fails on an existing key; a bare PutItem would
+            // silently replace the item.
+            return NativeWriteRequest(operation: .putItem, body: [
+                "TableName": table,
+                "Item": item.mapValues(\.attributeValue),
+                "ConditionExpression": "attribute_not_exists(#pk)",
+                "ExpressionAttributeNames": ["#pk": partitionKey],
+            ])
+        case .update(let table, let key, let column, let value):
+            // PartiQL UPDATE fails on a missing item; a bare UpdateItem would
+            // create it. Any key attribute works for attribute_exists — every
+            // stored item carries all of them.
+            return NativeWriteRequest(operation: .updateItem, body: [
+                "TableName": table,
+                "Key": key.mapValues(\.attributeValue),
+                "UpdateExpression": "SET #c = :v",
+                "ConditionExpression": "attribute_exists(#k)",
+                "ExpressionAttributeNames": ["#c": column, "#k": key.keys.min() ?? ""],
+                "ExpressionAttributeValues": [":v": value.attributeValue],
+            ])
+        case .delete(let table, let key):
+            // Unconditional: PartiQL DELETE of a missing item succeeds with
+            // zero items deleted, and so does DeleteItem. Pinned by
+            // DynamoDBConformanceTests.nativeDeleteOfAMissingItemMatchesPartiQL.
+            return NativeWriteRequest(operation: .deleteItem, body: [
+                "TableName": table,
+                "Key": key.mapValues(\.attributeValue),
+            ])
+        }
+    }
+
+    /// The `KeySchema` entry with `KeyType == HASH` in a DescribeTable `Table` object.
+    static func partitionKey(ofDescribedTable table: [String: Any]) -> String? {
+        ((table["KeySchema"] as? [[String: Any]]) ?? [])
+            .first { ($0["KeyType"] as? String) == "HASH" }?["AttributeName"] as? String
+    }
+}
+

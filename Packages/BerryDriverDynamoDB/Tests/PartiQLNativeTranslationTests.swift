@@ -118,3 +118,84 @@ struct PartiQLNativeTranslationTests {
         #expect(NativeWrite.delete(table: "t", key: [:]).partiQLAction == .delete)
     }
 }
+
+@Suite("NativeWriteRequest — native bodies keep PartiQL semantics")
+struct NativeWriteRequestTests {
+    private func body(_ request: NativeWriteRequest, equals expected: [String: Any]) -> Bool {
+        NSDictionary(dictionary: request.body).isEqual(to: expected)
+    }
+
+    @Test func insertBecomesPutItemThatRefusesAnExistingKey() throws {
+        let request = try NativeWriteRequest.make(
+            for: .insert(table: "Music", item: [
+                "Artist": .string("Acme"), "Awards": .number("10"), "Note": .null, "Live": .bool(true),
+            ]),
+            partitionKey: "Artist"
+        )
+        #expect(request.operation == .putItem)
+        #expect(body(request, equals: [
+            "TableName": "Music",
+            "Item": [
+                "Artist": ["S": "Acme"], "Awards": ["N": "10"], "Note": ["NULL": true], "Live": ["BOOL": true],
+            ],
+            "ConditionExpression": "attribute_not_exists(#pk)",
+            "ExpressionAttributeNames": ["#pk": "Artist"],
+        ]))
+    }
+
+    @Test func insertWithoutPartitionKeyThrowsInsteadOfDroppingTheCondition() {
+        #expect(throws: DriverError.self) {
+            try NativeWriteRequest.make(
+                for: .insert(table: "Music", item: ["Artist": .string("a")]), partitionKey: nil
+            )
+        }
+    }
+
+    @Test func updateBecomesConditionalUpdateItemWithPlaceholders() throws {
+        // "Status" is a DynamoDB reserved word, so it may only appear through #c.
+        let request = try NativeWriteRequest.make(
+            for: .update(
+                table: "Music",
+                key: ["SongTitle": .string("Hit"), "Artist": .string("Acme")],
+                column: "Status", value: .string("live")
+            ),
+            partitionKey: nil
+        )
+        #expect(request.operation == .updateItem)
+        #expect(body(request, equals: [
+            "TableName": "Music",
+            "Key": ["Artist": ["S": "Acme"], "SongTitle": ["S": "Hit"]],
+            "UpdateExpression": "SET #c = :v",
+            "ConditionExpression": "attribute_exists(#k)",
+            "ExpressionAttributeNames": ["#c": "Status", "#k": "Artist"],
+            "ExpressionAttributeValues": [":v": ["S": "live"]],
+        ]))
+    }
+
+    @Test func deleteBecomesDeleteItemByFullKey() throws {
+        let request = try NativeWriteRequest.make(
+            for: .delete(table: "Music", key: ["Artist": .string("Acme"), "SongTitle": .string("Hit")]),
+            partitionKey: nil
+        )
+        #expect(request.operation == .deleteItem)
+        #expect(body(request, equals: [
+            "TableName": "Music",
+            "Key": ["Artist": ["S": "Acme"], "SongTitle": ["S": "Hit"]],
+        ]))
+    }
+
+    @Test func partitionKeyIsTheHashEntryOfKeySchema() {
+        let table: [String: Any] = ["KeySchema": [
+            ["AttributeName": "SongTitle", "KeyType": "RANGE"],
+            ["AttributeName": "Artist", "KeyType": "HASH"],
+        ]]
+        #expect(NativeWriteRequest.partitionKey(ofDescribedTable: table) == "Artist")
+        #expect(NativeWriteRequest.partitionKey(ofDescribedTable: [:]) == nil)
+    }
+
+    @Test func operationsTargetTheDynamoDBJSONProtocol() {
+        #expect(NativeWriteOperation.putItem.target == "DynamoDB_20120810.PutItem")
+        #expect(NativeWriteOperation.updateItem.target == "DynamoDB_20120810.UpdateItem")
+        #expect(NativeWriteOperation.deleteItem.target == "DynamoDB_20120810.DeleteItem")
+    }
+}
