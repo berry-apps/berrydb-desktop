@@ -100,8 +100,9 @@ public actor DynamoDBConnection: DriverConnection {
     /// PartiQL (`ExecuteStatement`, following every `NextToken`) is always
     /// tried first. When IAM denies `dynamodb:PartiQLSelect` and the statement
     /// is the grid's unfiltered `SELECT * FROM "T"`, the same rows come from
-    /// `Scan` instead; an unfiltered PartiQL SELECT * is itself a scan, so the
-    /// result does not change. Filtered, sorted or projected SELECTs keep the
+    /// `Scan` instead. A PartiQL SELECT without a WHERE clause is itself a
+    /// full-table scan, so the result does not change
+    /// (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ql-reference.select.html). Filtered, sorted or projected SELECTs keep the
     /// PartiQL error (see `PartiQLNativeTranslation` for why).
     private func runSelect(
         sql: String, continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
@@ -275,7 +276,8 @@ public actor DynamoDBConnection: DriverConnection {
     /// `DynamoDBHTTPClient.mapError` renders `"<ExceptionType>: <Message>"`.
     /// AWS names the denied action in the message for identity-policy,
     /// explicit-deny and SCP denials alike ("…not authorized to perform:
-    /// dynamodb:PartiQLSelect on resource…").
+    /// dynamodb:PartiQLSelect on resource…"); see
+    /// https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html.
     static func isPartiQLAccessDenied(_ error: Error) -> Bool {
         guard let driverError = error as? DriverError,
               case .queryFailed(let message, _) = driverError

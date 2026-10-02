@@ -123,7 +123,7 @@ struct DynamoDBHTTPClient: Sendable {
         )
     }
 
- // MARK: - Native item API
+    // MARK: - Native item API
 
     // Fallback for when IAM denies `dynamodb:PartiQL*` — see `DynamoDBConnection.runSelect`/`runWrite`.
 

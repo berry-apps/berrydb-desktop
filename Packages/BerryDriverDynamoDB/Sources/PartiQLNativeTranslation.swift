@@ -253,8 +253,9 @@ enum NativeWriteOperation: String, Sendable {
 ///
 /// Every attribute name used in an expression goes through an `ExpressionAttributeNames`
 /// placeholder, so reserved words (`Name`, `Status`, …) and any character
-/// work. Only placeholders an expression actually uses are sent, because
-/// DynamoDB rejects unused ones.
+/// work. Only placeholders an expression actually uses are sent: DynamoDB
+/// rejects unused ones with a ValidationException (verified against
+/// dynamodb-local 3.3.0).
 struct NativeWriteRequest: @unchecked Sendable {
     let operation: NativeWriteOperation
     let body: [String: Any]
@@ -271,7 +272,8 @@ struct NativeWriteRequest: @unchecked Sendable {
                 )
             }
             // PartiQL INSERT fails on an existing key; a bare PutItem would
-            // silently replace the item.
+            // silently replace the item. Pinned by DynamoDBConformanceTests
+            // .nativeInsertOfAnExistingKeyFailsLikePartiQLInsert.
             return NativeWriteRequest(operation: .putItem, body: [
                 "TableName": table,
                 "Item": item.mapValues(\.attributeValue),
@@ -280,7 +282,8 @@ struct NativeWriteRequest: @unchecked Sendable {
             ])
         case .update(let table, let key, let column, let value):
             // PartiQL UPDATE fails on a missing item; a bare UpdateItem would
-            // create it. Any key attribute works for attribute_exists — every
+            // create it. Pinned by DynamoDBConformanceTests
+            // .nativeUpdateOfAMissingItemFailsLikePartiQLUpdate. Any key attribute works for attribute_exists — every
             // stored item carries all of them.
             return NativeWriteRequest(operation: .updateItem, body: [
                 "TableName": table,
