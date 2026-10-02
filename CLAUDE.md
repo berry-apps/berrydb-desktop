@@ -40,6 +40,64 @@ that is a reason to stop and say so, not to make an exception quietly.
    `text`/`nvarchar` column — are the one standing exception; that is data
    under test, not a comment.)
 
+## Code and comment quality
+
+Condition 3 says what a comment must not contain. This section says what it
+must be. Every rule comes from something that actually landed here.
+
+- **A comment states why the code is the way it is**, not what the next line
+  does. Name the constraint, the observed fact, or the alternative that was
+  rejected and why. If removing the comment loses no information, remove it.
+- **No planning vocabulary.** These mean nothing to someone reading the public
+  repo:
+  - feature, principle or decision IDs (`AI-36`, `NS-05`, `N3`, `Q17`);
+  - plan structure (`Phase C`, `Task 11`, `PR A`);
+  - paths into private docs (`docs/architecture/…`, `docs/superpowers/…`).
+
+  Write the rule itself instead, e.g. "batches of at most 1000 rows, so the
+  grid never holds a whole table", not "(N3)". IDs belong in the planning
+  docs and commits outside this repo.
+- **Claims about an external system carry their evidence.** A comment that
+  says how AWS, Postgres or a protocol behaves either names how it was
+  verified ("verified against dynamodb-local 3.3.0") or links the public
+  vendor documentation. An unverified claim is a guess, and guesses rot.
+- **Complete sentences at the code's own indentation.** A comment line at a
+  one-space indent, or a sentence that stops mid-way (` // See`), is residue
+  from references cut out of a comment. Rewrite the whole comment; do not
+  leave the fragment.
+- **No dead code, no speculative abstraction, no `TODO` without an issue
+  link.** Code that might be needed later is written later.
+- **`scripts/check-comment-hygiene.sh` enforces the mechanical part.** It
+  covers planning IDs, private paths, process narration, Vietnamese outside
+  `Tests/`, and the one-space indent. It checks only the lines a change adds,
+  and CI runs it on every pull request. Run it locally before pushing:
+  `scripts/check-comment-hygiene.sh origin/main`.
+- **Existing debt.** About 1,200 older lines still violate these rules. Fix
+  them in their own `chore:` change, never mixed into a feature. Do not
+  copy their style; "it matches the surrounding code" does not apply to
+  residue.
+
+## Toolchain — CI is not your machine
+
+CI builds with the Swift toolchain of the `macos-15` runner (Swift 6.1 as of
+this writing). A newer local Xcode accepts strict-concurrency code that 6.1
+rejects, e.g. a closure returning a non-`Sendable` value across an isolation
+boundary. A green local `make test` is not proof that CI compiles. When a
+non-`Sendable` payload must cross a closure or actor boundary, wrap it in an
+immutable `@unchecked Sendable` struct, the pattern `DynamoDBPage` and
+`ResultBox` already use. Treat the pull request's CI run as the
+authoritative build.
+
+## Pull requests
+
+- English only. Title is a conventional commit (`feat(dynamodb): …`). Link
+  the issue with `Closes #N`, or `Refs #N` when the PR delivers only part
+  of it.
+- The body states what was verified and how: tests, real servers, the
+  running app. It says plainly what was not verified. No internal IDs or
+  private paths, and no account data such as ARNs, account IDs or hostnames
+  from someone's environment.
+
 ## Attribution — placement matters as much as presence
 
 `Co-Authored-By` and `🤖 Generated with Claude Code` belong ONLY in the git
