@@ -249,4 +249,159 @@ struct DynamoDBConformanceTests {
         await connection.close()
         #expect(await connection.ping() == false)
     }
+
+    // MARK: Native fallback parity
+    //
+    // dynamodb-local enforces no IAM, so the denial that triggers the fallback
+    // can't be produced here. These tests run DynamoDBConnection.performNative
+    // directly and compare each outcome with the PartiQL statement it replaces.
+
+    private func makeClient() throws -> DynamoDBHTTPClient {
+        try DynamoDBHTTPClient(config: makeConfig(), session: URLSession(configuration: .ephemeral))
+    }
+
+    /// nil on success; otherwise the DynamoDB exception type (the text before ":").
+    private func outcome(_ body: () async throws -> Void) async -> String? {
+        do {
+            try await body()
+            return nil
+        } catch DriverError.queryFailed(let message, _) {
+            return String(message.prefix { $0 != ":" })
+        } catch {
+            return "\(error)"
+        }
+    }
+
+    private func withMusicTable(
+        _ body: (_ name: String, _ table: String, _ connection: DynamoDBConnection) async throws -> Void
+    ) async throws {
+        let table = "berry_conf_\(UUID().uuidString.prefix(8))"
+        try await createTable(name: table, partitionKey: "Artist", sortKey: "SongTitle")
+        defer { Task { await deleteTable(name: table) } }
+        let connection = try await makeConnection()
+        defer { Task { await connection.close() } }
+        try await body(table, PartiQLDialect().quoteIdentifier(table), connection)
+    }
+
+    @Test func nativeInsertOfAnExistingKeyFailsLikePartiQLInsert() async throws {
+        try await withMusicTable { name, table, connection in
+            let insert = "INSERT INTO \(table) (\"Artist\", \"SongTitle\") VALUES ('Acme', 'Hit')"
+            _ = try await drain(connection.execute(insert))
+            let write = try #require(PartiQLNativeTranslation.write(insert))
+
+            let partiQL = await outcome { _ = try await drain(connection.execute(insert)) }
+            let native = await outcome { try await connection.performNative(write) }
+            #expect(partiQL != nil)
+            #expect(native == "ConditionalCheckFailedException")
+        }
+    }
+
+    @Test func nativeUpdateOfAMissingItemFailsLikePartiQLUpdate() async throws {
+        try await withMusicTable { name, table, connection in
+            let update = "UPDATE \(table) SET \"Status\" = 'live' WHERE \"Artist\" = 'Ghost' AND \"SongTitle\" = 'None'"
+            let write = try #require(PartiQLNativeTranslation.write(update))
+
+            let partiQL = await outcome { _ = try await drain(connection.execute(update)) }
+            let native = await outcome { try await connection.performNative(write) }
+            #expect(partiQL != nil)
+            #expect(native == "ConditionalCheckFailedException")
+            // Neither path may have created the item (an UpdateItem upsert would).
+            #expect(try await drain(connection.execute("SELECT * FROM \(table)")).rows.isEmpty)
+        }
+    }
+
+    @Test func nativeDeleteOfAMissingItemMatchesPartiQL() async throws {
+        try await withMusicTable { name, table, connection in
+            let delete = "DELETE FROM \(table) WHERE \"Artist\" = 'Ghost' AND \"SongTitle\" = 'None'"
+            let write = try #require(PartiQLNativeTranslation.write(delete))
+
+            let partiQL = await outcome { _ = try await drain(connection.execute(delete)) }
+            let native = await outcome { try await connection.performNative(write) }
+            #expect(
+                (partiQL == nil) == (native == nil),
+                "PartiQL: \(partiQL ?? "ok"), native: \(native ?? "ok") — see NativeWriteRequest.make(.delete)"
+            )
+        }
+    }
+
+    @Test func nativeWritesStoreTheSameAttributeValuesAsPartiQL() async throws {
+        try await withMusicTable { name, table, connection in
+            let dialect = PartiQLDialect()
+            // "Status" is a DynamoDB reserved word.
+            let values: [(column: String, value: BerryValue)] = [
+                ("Text", .text("O'Brien, (live) = \"x\"")), ("Int", .int(42)), ("Negative", .int(-7)),
+                ("Double", .double(1.5)), ("Decimal", .decimal("12345678901234567890.123456789")),
+                ("Flag", .bool(true)), ("Nothing", .null), ("Status", .text("live")),
+            ]
+            func insert(_ artist: String) -> String {
+                let names = (["Artist", "SongTitle"] + values.map { $0.column }).map(dialect.quoteIdentifier)
+                let literals = ([BerryValue.text(artist), .text("Hit")] + values.map { $0.value }).map(dialect.literal)
+                return "INSERT INTO \(table) (\(names.joined(separator: ", "))) VALUES (\(literals.joined(separator: ", ")))"
+            }
+            func update(_ artist: String, _ column: String, _ value: BerryValue) -> String {
+                "UPDATE \(table) SET \(dialect.quoteIdentifier(column)) = \(dialect.literal(value))"
+                    + " WHERE \"Artist\" = '\(artist)' AND \"SongTitle\" = 'Hit'"
+            }
+
+            _ = try await drain(connection.execute(insert("ViaPartiQL")))
+            try await connection.performNative(try #require(PartiQLNativeTranslation.write(insert("ViaNative"))))
+            for (column, value) in values {
+                _ = try await drain(connection.execute(update("ViaPartiQL", column, value)))
+                try await connection.performNative(
+                    try #require(PartiQLNativeTranslation.write(update("ViaNative", column, value)))
+                )
+            }
+
+            let items = try await makeClient().scan(table: name, limit: nil, after: nil).items
+            var byArtist: [String: [String: Any]] = [:]
+            for item in items {
+                guard let artist = (item["Artist"] as? [String: Any])?["S"] as? String else { continue }
+                var attributes = item
+                attributes["Artist"] = nil
+                byArtist[artist] = attributes
+            }
+            let viaPartiQL = try #require(byArtist["ViaPartiQL"])
+            let viaNative = try #require(byArtist["ViaNative"])
+            #expect(
+                NSDictionary(dictionary: viaPartiQL).isEqual(to: viaNative),
+                "PartiQL stored \(viaPartiQL)\nnative stored \(viaNative)"
+            )
+        }
+    }
+
+    @Test func exponentNumberLiteralBehavesTheSameOnBothPaths() async throws {
+        try await withMusicTable { name, table, connection in
+            let big = PartiQLDialect().literal(.double(1e20))   // "1e+20"
+            func insert(_ artist: String) -> String {
+                "INSERT INTO \(table) (\"Artist\", \"SongTitle\", \"Big\") VALUES ('\(artist)', 'Hit', \(big))"
+            }
+            let partiQL = await outcome { _ = try await drain(connection.execute(insert("ViaPartiQL"))) }
+            let write = try #require(PartiQLNativeTranslation.write(insert("ViaNative")))
+            let native = await outcome { try await connection.performNative(write) }
+            #expect((partiQL == nil) == (native == nil), "PartiQL: \(partiQL ?? "ok"), native: \(native ?? "ok")")
+        }
+    }
+
+    @Test func scanPaginatesThroughEveryItemLikePartiQLSelectStar() async throws {
+        try await withMusicTable { name, table, connection in
+            for artist in ["A", "B", "C"] {
+                _ = try await drain(connection.execute(
+                    "INSERT INTO \(table) (\"Artist\", \"SongTitle\") VALUES ('\(artist)', 'Hit')"
+                ))
+            }
+            let client = try makeClient()
+            var artists: [String] = []
+            var page: DynamoDBHTTPClient.ScanPage?
+            var pages = 0
+            repeat {
+                page = try await client.scan(table: name, limit: 1, after: page)
+                pages += 1
+                artists += (page?.items ?? []).compactMap { ($0["Artist"] as? [String: Any])?["S"] as? String }
+            } while page?.lastEvaluatedKey != nil && pages < 10
+
+            #expect(artists.sorted() == ["A", "B", "C"])
+            #expect(pages >= 3)
+            #expect(try await drain(connection.execute("SELECT * FROM \(table)")).rows.count == 3)
+        }
+    }
 }
