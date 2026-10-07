@@ -184,4 +184,71 @@ struct DynamoDBHTTPClientTests {
         }
         #expect(await clientBad.ping() == false)
     }
+
+    // MARK: Native item API
+
+    @Test func scanSendsTableAndLimitThenContinuesFromLastEvaluatedKey() async throws {
+        let host = "dynamo-\(UUID().uuidString)".lowercased()
+        let bodies = Box<[[String: Any]]>([])
+        let client = try makeClient(host: host) { request, body in
+            #expect(request.value(forHTTPHeaderField: "X-Amz-Target") == "DynamoDB_20120810.Scan")
+            let json = dynamoStubBody(body)
+            bodies.mutate { $0.append(json) }
+            let response: [String: Any] = json["ExclusiveStartKey"] == nil
+                ? ["Items": [["Artist": ["S": "Band1"]]], "LastEvaluatedKey": ["Artist": ["S": "Band1"]]]
+                : ["Items": [["Artist": ["S": "Band2"]]]]
+            return (dynamoStubResponse(request.url!, status: 200), dynamoStubJSON(response))
+        }
+        let first = try await client.scan(table: "Music", limit: 1000, after: nil)
+        let second = try await client.scan(table: "Music", limit: 1000, after: first)
+
+        #expect(first.items.count == 1)
+        #expect(first.lastEvaluatedKey != nil)
+        #expect(second.lastEvaluatedKey == nil)
+        #expect((second.items.first?["Artist"] as? [String: Any])?["S"] as? String == "Band2")
+        let sent = bodies.wrappedValue
+        #expect(sent.count == 2)
+        #expect(NSDictionary(dictionary: sent[0]).isEqual(to: ["TableName": "Music", "Limit": 1000]))
+        #expect(NSDictionary(dictionary: sent[1]).isEqual(to: [
+            "TableName": "Music", "Limit": 1000, "ExclusiveStartKey": ["Artist": ["S": "Band1"]],
+        ]))
+    }
+
+    @Test func nativeWriteSendsTheOperationTargetAndBody() async throws {
+        let host = "dynamo-\(UUID().uuidString)".lowercased()
+        let target = Box<String?>(nil)
+        let sentBody = Box<[String: Any]>([:])
+        let client = try makeClient(host: host) { request, body in
+            target.mutate { $0 = request.value(forHTTPHeaderField: "X-Amz-Target") }
+            sentBody.mutate { $0 = dynamoStubBody(body) }
+            return (dynamoStubResponse(request.url!, status: 200), dynamoStubJSON([:]))
+        }
+        let request = try NativeWriteRequest.make(
+            for: .delete(table: "Music", key: ["Artist": .string("Acme")]), partitionKey: nil
+        )
+        try await client.nativeWrite(request)
+        #expect(target.wrappedValue == "DynamoDB_20120810.DeleteItem")
+        #expect(NSDictionary(dictionary: sentBody.wrappedValue).isEqual(to: request.body))
+    }
+
+    @Test func nativeWriteConditionFailureMapsToQueryFailed() async throws {
+        let host = "dynamo-\(UUID().uuidString)".lowercased()
+        let client = try makeClient(host: host) { request, _ in
+            let error: [String: Any] = [
+                "__type": "com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException",
+                "Message": "The conditional request failed",
+            ]
+            return (dynamoStubResponse(request.url!, status: 400), dynamoStubJSON(error))
+        }
+        let request = try NativeWriteRequest.make(
+            for: .update(table: "Music", key: ["Artist": .string("Ghost")], column: "a", value: .number("1")),
+            partitionKey: nil
+        )
+        do {
+            try await client.nativeWrite(request)
+            Issue.record("expected ConditionalCheckFailedException")
+        } catch DriverError.queryFailed(let message, _) {
+            #expect(message.hasPrefix("ConditionalCheckFailedException:"))
+        }
+    }
 }
