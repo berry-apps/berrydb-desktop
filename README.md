@@ -103,15 +103,30 @@ Connect to SQL, NoSQL, Key-Value, and Vector databases all in a unified native w
 
 ## 🚀 Installation & Quick Start
 
-### Option 1: Download Pre-built DMG (Recommended)
+### Option 1: Via Homebrew (Recommended)
 
-1. Download the latest release `.dmg` from [download-db.berryhub.app/BerryDB-latest.dmg](https://download-db.berryhub.app/BerryDB-latest.dmg).
+Install BerryDB in a single command using the official Homebrew tap:
+
+```sh
+brew install --cask berry-apps/tap/berrydb
+```
+
+Or add the tap first and install:
+
+```sh
+brew tap berry-apps/tap
+brew install --cask berrydb
+```
+
+### Option 2: Download Pre-built DMG
+
+1. Download the latest release `.dmg` from [download-db.berryhub.app/BerryDB-latest.dmg](https://download-db.berryhub.app/BerryDB-latest.dmg) (or from [GitHub Releases](https://github.com/berry-apps/berrydb-desktop/releases/latest)).
 2. Open the `.dmg` file and drag **BerryDB.app** into your **Applications** folder.
 3. Launch BerryDB from Spotlight (⌘Space) or Launchpad.
 
 > **System Requirements**: macOS 15.0 (Sequoia) or later. Apple Silicon only (M1/M2/M3/M4).
 
-### Option 2: Build from Source
+### Option 3: Build from Source
 
 BerryDB uses the standard Swift Package Manager (SPM) and `make`.
 
