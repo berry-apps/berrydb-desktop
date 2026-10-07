@@ -21,6 +21,8 @@ on:
       - "Package.swift"
       - ".github/workflows/ci.yml"
       - ".github/workflows/release.yml"
+      - "scripts/check-comment-hygiene.sh"
+      - "scripts/test-check-comment-hygiene.sh"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -35,6 +37,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # The comment-hygiene check diffs against the merge base with the
+          # target branch, which a depth-1 checkout does not contain.
+          fetch-depth: 0
+
+      - name: Comment hygiene (lines added by this pull request)
+        if: github.event_name == 'pull_request'
+        run: |
+          scripts/test-check-comment-hygiene.sh
+          scripts/check-comment-hygiene.sh "origin/${{ github.base_ref }}"
 
       - name: Install FreeTDS dependency
         run: |
