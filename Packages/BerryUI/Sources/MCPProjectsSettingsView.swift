@@ -73,6 +73,15 @@ private struct MCPProjectsPane: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            // The helper declares no `listChanged` tools capability, so it
+            // sends no list-changed notification
+            // (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#capabilities),
+            // and a host that keeps the tool list it fetched at session start
+            // never learns that a project became available.
+            Text(L("An agent can keep the tool list it loaded when its session started. If it does not see BerryDB’s tools after a change here, start a new agent session."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             List(model.projects) { project in
                 row(project)
             }

@@ -733,6 +733,7 @@
 "AI Agents" = "AI Agent";
 "The BerryDB store could not be opened: %@" = "Không thể mở kho dữ liệu BerryDB: %@";
 "Coding agents read schema and graph metadata of the connections assigned to a project through the berrydb-mcp helper. The folder an agent works in selects the project." = "Các coding agent đọc metadata schema và graph của những kết nối được gán cho một dự án thông qua helper berrydb-mcp. Thư mục mà agent đang làm việc quyết định dự án được chọn.";
+"An agent can keep the tool list it loaded when its session started. If it does not see BerryDB’s tools after a change here, start a new agent session." = "Agent có thể giữ danh sách công cụ đã tải khi phiên làm việc bắt đầu. Nếu agent không thấy các công cụ của BerryDB sau khi bạn thay đổi ở đây, hãy bắt đầu một phiên agent mới.";
 "No MCP projects yet" = "Chưa có dự án MCP nào";
 "New Project…" = "Dự án mới…";
 "Connections: %lld" = "Kết nối: %lld";

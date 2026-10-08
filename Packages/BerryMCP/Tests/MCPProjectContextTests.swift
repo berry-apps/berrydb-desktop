@@ -70,6 +70,16 @@ struct MCPProjectContextTests {
         #expect(context == .unconfigured(.projectDisabled, workspace: "/work/d"))
     }
 
+    /// Selection does not depend on verification, so a session that keeps the
+    /// selection serves the project once the app enables it.
+    @Test func disabledProjectIsStillTheSelection() throws {
+        let disabled = MCPProject(name: "D", isEnabled: false, workspaceRoots: ["/work/d"])
+        let resolver = resolver(projects: [disabled])
+        let selection = try resolver.select(explicit: nil, roots: nil, workingDirectory: "/work/d")
+        #expect(selection == .project(disabled.id, source: .workingDirectory, workspace: "/work/d"))
+        #expect(try resolver.context(of: selection) == .unconfigured(.projectDisabled, workspace: "/work/d"))
+    }
+
     @Test func unknownExplicitProject() throws {
         #expect(try resolver(projects: [a]).resolve(explicit: UUID(), roots: nil, workingDirectory: "/work/a")
             == .unconfigured(.explicitProjectNotFound, workspace: nil))

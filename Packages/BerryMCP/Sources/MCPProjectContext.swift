@@ -31,6 +31,19 @@ public enum MCPProjectContext: Equatable, Sendable {
     case unconfigured(MCPUnconfiguredReason, workspace: String?, linkedProject: String? = nil)
 }
 
+/// The outcome of selection before verification: the project chosen and by
+/// which input, or why none was chosen. A session keeps it for its lifetime
+/// and verifies the project on every request, so a project that is disabled
+/// or missing when chosen stays the selection and is served as soon as it
+/// verifies, the same as one disabled after it was chosen.
+public enum MCPSelectionOutcome: Equatable, Sendable {
+    /// `workspace` is the value reported if verification finds the project
+    /// disabled or missing.
+    case project(UUID, source: MCPSelectionSource, workspace: String?)
+    /// Carries the same values as `MCPProjectContext.unconfigured`.
+    case unconfigured(MCPUnconfiguredReason, workspace: String?, linkedProject: String? = nil)
+}
+
 /// Decides which project a host session serves, independent of any wire
 /// protocol: an explicit project id wins, then the host's workspace roots,
 /// then the process working directory. Each of those workspaces is decided
@@ -75,34 +88,52 @@ public struct MCPProjectContextResolver: Sendable {
         self.findLink = findLink
     }
 
-    /// Resolves the project for one session. `roots` are file-URI strings
-    /// from `roots/list`, nil when the host has no roots capability.
-    /// For `.invalidLinkFile`, `.unconfigured` carries the directory holding
-    /// the bad file as `workspace`. Otherwise it carries the working
-    /// directory only when the working directory was the input that failed;
-    /// explicit and roots failures report nil.
+    /// Selects and verifies the project for one session in a single step;
+    /// see `select` for the inputs and `context(of:)` for verification.
+    public func resolve(explicit: UUID?, roots: [String]?, workingDirectory: String) throws -> MCPProjectContext {
+        try context(of: select(explicit: explicit, roots: roots, workingDirectory: workingDirectory))
+    }
+
+    /// Selects the project for one session without verifying it. `roots`
+    /// are file-URI strings from `roots/list`, nil when the host has no
+    /// roots capability. For `.invalidLinkFile`, `.unconfigured` carries the
+    /// directory holding the bad file as `workspace`. Otherwise it carries
+    /// the working directory only when the working directory was the input
+    /// that failed; explicit and roots failures report nil. Throws when the
+    /// store cannot be read.
     ///
     /// A workspace with a link file is decided by that file alone: the link
     /// is never skipped in favour of the workspace's registered roots, so
     /// what it says is what is served.
-    public func resolve(explicit: UUID?, roots: [String]?, workingDirectory: String) throws -> MCPProjectContext {
+    public func select(explicit: UUID?, roots: [String]?, workingDirectory: String) throws -> MCPSelectionOutcome {
         let projects = try loadProjects()
 
         if let explicit {
             switch selector.select(explicit: explicit, projects: projects) {
             case .selected(let id):
-                return try verified(id: id, source: .explicit, workspace: nil)
+                return .project(id, source: .explicit, workspace: nil)
             case .noMatch, .ambiguous:
                 return .unconfigured(.explicitProjectNotFound, workspace: nil)
             }
         }
 
-        if let roots,
-           let decided = try decide(roots.compactMap(Self.filePath), projects: projects, workingDirectory: nil) {
+        if let roots, let decided = decide(roots.compactMap(Self.filePath), projects: projects, workingDirectory: nil) {
             return decided
         }
-        return try decide([workingDirectory], projects: projects, workingDirectory: workingDirectory)
+        return decide([workingDirectory], projects: projects, workingDirectory: workingDirectory)
             ?? .unconfigured(.noMatchingProject, workspace: workingDirectory)
+    }
+
+    /// The current state of a selection: its project verified afresh, or
+    /// the reason no project was selected. Throws when the store cannot be
+    /// read.
+    public func context(of selection: MCPSelectionOutcome) throws -> MCPProjectContext {
+        switch selection {
+        case let .project(id, source, workspace):
+            return try verified(id: id, source: source, workspace: workspace)
+        case let .unconfigured(reason, workspace, linkedProject):
+            return .unconfigured(reason, workspace: workspace, linkedProject: linkedProject)
+        }
     }
 
     /// The current state of a project chosen earlier, without repeating the
@@ -135,13 +166,10 @@ public struct MCPProjectContextResolver: Sendable {
     /// - Parameter workingDirectory: Set when the input is the working
     ///   directory, nil for the roots. It is the workspace reported for the
     ///   input's failures and kept with a project its registered roots
-    ///   select. A project a link chose is verified with no workspace: the
-    ///   session re-verifies later requests with the workspace it keeps for a
-    ///   link selection, which is nil, and a disabled or deleted project must
-    ///   read the same on every request.
+    ///   select; a project a link chose keeps no workspace.
     private func decide(
         _ workspaces: [String], projects: [MCPProject], workingDirectory: String?
-    ) throws -> MCPProjectContext? {
+    ) -> MCPSelectionOutcome? {
         var invalidLinkDirectory: String?
         var unknownLinkedName: String?
         var registeredTie = false
@@ -183,10 +211,10 @@ public struct MCPProjectContextResolver: Sendable {
         }
         guard let id = ids.first else { return nil }
         if usedLink {
-            return try verified(id: id, source: .linkedRepository, workspace: nil)
+            return .project(id, source: .linkedRepository, workspace: nil)
         }
         let source: MCPSelectionSource = workingDirectory == nil ? .roots : .workingDirectory
-        return try verified(id: id, source: source, workspace: workingDirectory)
+        return .project(id, source: source, workspace: workingDirectory)
     }
 
     /// The decoded path of a `file:` URI; nil for any other scheme or an

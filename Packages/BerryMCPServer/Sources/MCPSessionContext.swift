@@ -16,11 +16,14 @@ import Synchronization
 /// or disabled in the app therefore stops being served on the next request,
 /// and a store restored from an older copy cannot keep verifying under a key
 /// that has since been rotated; caching the verified project would defeat both.
+/// For the same reason a project that is disabled when it is selected stays
+/// the selection, and enabling it in the app serves it from the next request.
 ///
 /// A store that cannot be read yields `.integrityUnavailable` for that request
 /// only, with one line on the diagnostics channel that carries neither a path
 /// nor error text, and the next request tries again. Selection that failed
-/// this way is not cached.
+/// this way is not cached; a selection already made is kept and verified
+/// again.
 ///
 /// The roots request is bounded by `rootsTimeout`. The SDK waits for the
 /// answer on a continuation with no timeout and no cancellation
@@ -44,11 +47,6 @@ public actor MCPSessionContext {
         try? FileHandle.standardError.write(contentsOf: Data((line + "\n").utf8))
     }
 
-    private enum Selection {
-        case project(UUID, source: MCPSelectionSource, workspace: String?)
-        case unconfigured(MCPUnconfiguredReason, workspace: String?, linkedProject: String?)
-    }
-
     private let resolver: MCPProjectContextResolver
     private let explicitProject: UUID?
     private let workingDirectory: String
@@ -56,7 +54,7 @@ public actor MCPSessionContext {
     private let diagnostics: @Sendable (String) -> Void
     private let rootsTimeout: Duration
     private var roots: Task<[String]?, Never>?
-    private var selection: Selection?
+    private var selection: MCPSelectionOutcome?
 
     /// - Parameters:
     ///   - resolver: Selects and verifies projects against the store.
@@ -93,14 +91,14 @@ public actor MCPSessionContext {
     /// afresh, or the reason none is served.
     public func context() async -> MCPProjectContext {
         do {
-            if let selection { return try current(selection) }
+            if let selection { return try resolver.context(of: selection) }
             let roots = explicitProject == nil ? await workspaceRoots() : nil
             // A concurrent request may have completed selection while this
             // one waited for the roots.
-            if let selection { return try current(selection) }
-            let resolved = try resolver.resolve(explicit: explicitProject, roots: roots, workingDirectory: workingDirectory)
-            selection = selectionOutcome(of: resolved)
-            return resolved
+            if let selection { return try resolver.context(of: selection) }
+            let made = try resolver.select(explicit: explicitProject, roots: roots, workingDirectory: workingDirectory)
+            selection = made
+            return try resolver.context(of: made)
         } catch {
             diagnostics(Self.storeUnavailableLine)
             return .unconfigured(.integrityUnavailable, workspace: nil)
@@ -139,29 +137,6 @@ public actor MCPSessionContext {
                 answer.resume(try? await listRoots())
                 timer.cancel()
             }
-        }
-    }
-
-    private func current(_ selection: Selection) throws -> MCPProjectContext {
-        switch selection {
-        case let .project(id, source, workspace):
-            return try resolver.verified(id: id, source: source, workspace: workspace)
-        case let .unconfigured(reason, workspace, linkedProject):
-            return .unconfigured(reason, workspace: workspace, linkedProject: linkedProject)
-        }
-    }
-
-    /// The workspace kept with a selected project is the one the resolver
-    /// reports if that project later turns out disabled or deleted: the
-    /// working directory when its registered roots decided the selection,
-    /// nil otherwise, including a selection made by a link file.
-    private func selectionOutcome(of context: MCPProjectContext) -> Selection {
-        switch context {
-        case let .selected(verified, source):
-            let workspace = source == .workingDirectory ? workingDirectory : nil
-            return .project(verified.project.id, source: source, workspace: workspace)
-        case let .unconfigured(reason, workspace, linkedProject):
-            return .unconfigured(reason, workspace: workspace, linkedProject: linkedProject)
         }
     }
 }

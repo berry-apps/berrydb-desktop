@@ -222,10 +222,19 @@ created or re-mapped in the app is picked up by the host's next session.
 Verification is not kept: every request re-reads the selected project's row
 and the integrity key, so a project disabled or deleted in the app stops
 being served on the next request (`project_disabled` or
-`no_matching_project`), and a key rotated by the app applies from the next
-request. If the store cannot be read, that request reports
-`integrity_unavailable` and writes one line to standard error, and the next
-request tries again.
+`no_matching_project`), a project enabled in the app is served from the
+next request, including one that was disabled when the session selected
+it, and a key rotated by the app applies from the next request. If the
+store cannot be read, that request reports `integrity_unavailable` and
+writes one line to standard error, and the next request tries again.
+
+The server declares no `listChanged` tools capability, so it never tells a
+host that its tool list changed
+([Tools: Capabilities](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#capabilities)).
+A host that keeps the `tools/list` answer it fetched when the session
+started goes on showing only `berrydb_status` after its project is enabled,
+or all six tools after it is disabled, until a new agent session starts;
+the settings pane says so.
 
 ### Status
 

@@ -733,6 +733,7 @@
 "AI Agents" = "AI Agents";
 "The BerryDB store could not be opened: %@" = "The BerryDB store could not be opened: %@";
 "Coding agents read schema and graph metadata of the connections assigned to a project through the berrydb-mcp helper. The folder an agent works in selects the project." = "Coding agents read schema and graph metadata of the connections assigned to a project through the berrydb-mcp helper. The folder an agent works in selects the project.";
+"An agent can keep the tool list it loaded when its session started. If it does not see BerryDB’s tools after a change here, start a new agent session." = "An agent can keep the tool list it loaded when its session started. If it does not see BerryDB’s tools after a change here, start a new agent session.";
 "No MCP projects yet" = "No MCP projects yet";
 "New Project…" = "New Project…";
 "Connections: %lld" = "Connections: %lld";

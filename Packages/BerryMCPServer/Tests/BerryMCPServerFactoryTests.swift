@@ -357,6 +357,36 @@ struct BerryMCPServerFactoryTests {
         }
     }
 
+    /// A project that is disabled when it is first selected is kept as the
+    /// selection like any other, so enabling it in the app serves it from the
+    /// next request without asking the host for its roots again.
+    @Test func projectDisabledAtSelectionIsServedOnceEnabled() async throws {
+        var disabledB = projectB
+        disabledB.isEnabled = false
+        let store = Locked(Store(projects: [projectA, disabledB]))
+        let requests = Locked(0)
+        let enabled = projectB.id
+        try await withSession(store: store, roots: .declared(["file:///work/b"]), rootsRequests: requests) { client in
+            let first = try await Self.status(client)
+            #expect(first["reason"] == "project_disabled")
+            #expect(try await client.listTools().tools.map(\.name) == ["berrydb_status"])
+
+            store.update { state in
+                state.projects = state.projects.map { project in
+                    var copy = project
+                    if copy.id == enabled { copy.isEnabled = true }
+                    return copy
+                }
+            }
+            let second = try await Self.status(client)
+            #expect(second["state"] == "selected")
+            #expect(second["selected_by"] == "roots")
+            #expect(Self.projectID(second) == enabled.uuidString)
+            #expect(try await client.listTools().tools.count == 6)
+        }
+        #expect(requests.value == 1)
+    }
+
     // MARK: Store failures
 
     @Test func unreadableStoreIsReportedOnStderrAndSelectionIsRetried() async throws {
