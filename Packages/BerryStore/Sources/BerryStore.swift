@@ -67,9 +67,12 @@ public final class BerryStore: Sendable {
     /// `init(path:)` failure modes of its own. Any other failure to open the
     /// file is thrown as the underlying error.
     public enum OpenError: Error, Equatable, LocalizedError {
-        /// The migration `identifier` threw; `reason` is that error's text,
-        /// which may quote SQL. The step was rolled back, so it changed no
-        /// data; steps applied before it in the same open stay committed.
+        /// The migration `identifier` did not complete; `reason` is the
+        /// underlying error's text, which may quote SQL. The step either threw
+        /// and was rolled back or, in the rare cases listed on
+        /// `openError(afterFailedMigration:migrator:in:)`, never started;
+        /// either way it changed no data. Steps applied before it in the same
+        /// open stay committed.
         case migrationFailed(identifier: String, reason: String)
 
         public var errorDescription: String? {
@@ -79,7 +82,7 @@ public final class BerryStore: Sendable {
         public var failureReason: String? {
             switch self {
             case let .migrationFailed(identifier, _):
-                "Upgrade step \"\(identifier)\" failed and was rolled back, so it changed no data."
+                "Upgrade step \"\(identifier)\" did not complete and changed no data."
             }
         }
     }
@@ -148,11 +151,21 @@ public final class BerryStore: Sendable {
     /// transaction that inserts its identifier into `grdb_migrations` before
     /// committing (`Migration.updateAppliedIdentifier`), and a thrown error
     /// rolls that transaction back before it is rethrown
-    /// (`Database.inTransaction`). The first registered identifier missing
-    /// from `grdb_migrations` is therefore the one that threw. When none is
-    /// missing, or the table cannot be read (GRDB creates it before running
-    /// any migration, so its absence means that step failed), the failure
-    /// happened outside any migration and keeps its own error. Internal so a
+    /// (`Database.inTransaction`). When a migration threw, the first
+    /// registered identifier missing from `grdb_migrations` is that migration.
+    ///
+    /// `migrate` can also throw outside any migration while one is pending:
+    /// from its own reads of `grdb_migrations` before the first migration
+    /// starts (`DatabaseMigrator.runMigrations`; e.g. SQLITE_BUSY once the
+    /// busy timeout expires, or an I/O error), or from re-enabling foreign
+    /// keys after a migration committed
+    /// (`Migration.runWithDeferredForeignKeysChecks`). The error does not
+    /// say which case it came from, so such a failure is reported against
+    /// the first pending migration although that migration never ran. The
+    /// reported reason is still the real error, and the named step still
+    /// changed no data. When nothing is missing, or the table cannot be read
+    /// (GRDB creates it before running any migration, so its absence means
+    /// that step failed), the error is returned unchanged. Internal so a
     /// test can reach that case, which no store file produces on demand.
     static func openError(
         afterFailedMigration error: any Error,

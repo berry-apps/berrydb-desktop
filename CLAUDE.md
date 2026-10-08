@@ -97,9 +97,11 @@ identifier of an applied migration, so when `v30-mcp-project-grant` was
 rewritten in place as `v30-mcp-project`, every store that had run the earlier
 build failed to open with `table "mcp_project" already exists` and the app
 started without its connection profiles. If a migration must be withdrawn
-anyway, add its identifier and the tables it created to
-`BerryStore.supersededMigrations`, so stores that applied it recover on the
-next open.
+anyway, add an entry to `BerryStore.supersededMigrations` so stores that
+applied it recover on the next open: its identifier, the registered
+migration that replaces it, and the tables it created, listed children
+before the parents they reference. The `SupersededMigration` doc comment
+says why each field is needed.
 
 ## Pull requests
 

@@ -188,6 +188,32 @@ struct BerryStoreMigrationRecoveryTests {
         #expect(try queue.read { try UUID.fetchAll($0, sql: "SELECT id FROM connection_profile") } == [profileID])
     }
 
+    /// v28, v29 and v30 are pending and v29 fails: the step named must be the
+    /// one that threw, not the first pending when the open began (v28, which
+    /// commits) nor the last registered one (v30, which never runs).
+    @Test func failureAmongSeveralPendingMigrationsNamesTheOneThatThrew() throws {
+        let path = tempPath()
+        defer { removeStore(at: path) }
+        do {
+            let queue = try DatabaseQueue(path: path, configuration: Self.configuration)
+            try BerryStore.migrator.migrate(queue, upTo: "v27-elasticsearch-auth-mode")
+            // `v29-ai-message-tree` adds this column, so it fails as a duplicate.
+            try queue.write { try $0.execute(sql: "ALTER TABLE ai_message ADD COLUMN parentID BLOB") }
+        }
+
+        let error = try #require(openError(at: path) as? BerryStore.OpenError)
+
+        switch error {
+        case let .migrationFailed(identifier, reason):
+            #expect(identifier == "v29-ai-message-tree")
+            #expect(reason.contains("duplicate column name"))
+        }
+        let applied = try appliedIdentifiers(at: path)
+        #expect(applied.contains("v28-ai-thread-connection-key"))
+        #expect(!applied.contains("v29-ai-message-tree"))
+        #expect(!applied.contains("v30-mcp-project"))
+    }
+
     @Test func openFailureOutsideAMigrationKeepsItsOwnError() throws {
         let path = tempPath()
         defer { removeStore(at: path) }
