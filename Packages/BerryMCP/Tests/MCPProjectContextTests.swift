@@ -32,19 +32,19 @@ struct MCPProjectContextTests {
 
     @Test func explicitWinsOverRootsAndWorkingDirectory() throws {
         let context = try resolver(projects: [a, b]).resolve(explicit: b.id, roots: ["file:///work/a"], workingDirectory: "/work/a")
-        guard case .selected(let verified, .explicit) = context else { Issue.record("\(context)"); return }
+        guard case .selected(let verified, .explicit, _) = context else { Issue.record("\(context)"); return }
         #expect(verified.project.id == b.id)
     }
 
     @Test func rootsSelectBeforeWorkingDirectory() throws {
         let context = try resolver(projects: [a, b]).resolve(explicit: nil, roots: ["file:///work/b/src"], workingDirectory: "/work/a")
-        guard case .selected(let verified, .roots) = context else { Issue.record("\(context)"); return }
+        guard case .selected(let verified, .roots, _) = context else { Issue.record("\(context)"); return }
         #expect(verified.project.id == b.id)
     }
 
     @Test func unmatchedRootsFallBackToWorkingDirectory() throws {
         let context = try resolver(projects: [a]).resolve(explicit: nil, roots: ["file:///elsewhere"], workingDirectory: "/work/a/sub")
-        guard case .selected(_, .workingDirectory) = context else { Issue.record("\(context)"); return }
+        guard case .selected(_, .workingDirectory, _) = context else { Issue.record("\(context)"); return }
     }
 
     @Test func rootsSpanningTwoProjectsAreAmbiguous() throws {
@@ -54,12 +54,12 @@ struct MCPProjectContextTests {
 
     @Test func nonFileRootsAreIgnored() throws {
         let context = try resolver(projects: [a]).resolve(explicit: nil, roots: ["https://work/a"], workingDirectory: "/work/a")
-        guard case .selected(_, .workingDirectory) = context else { Issue.record("\(context)"); return }
+        guard case .selected(_, .workingDirectory, _) = context else { Issue.record("\(context)"); return }
     }
 
     @Test func invalidProjectTagStillSelects() throws {
         let context = try resolver(projects: [a], tagValid: false).resolve(explicit: nil, roots: nil, workingDirectory: "/work/a")
-        guard case .selected(let verified, .workingDirectory) = context else { Issue.record("\(context)"); return }
+        guard case .selected(let verified, .workingDirectory, _) = context else { Issue.record("\(context)"); return }
         #expect(verified.project.id == a.id)
         #expect(verified.projectTagValid == false)
     }
@@ -105,7 +105,7 @@ struct MCPProjectContextTests {
         let disabled = MCPProject(name: "D", isEnabled: false, workspaceRoots: ["/work/d"])
         let resolver = resolver(projects: [a, disabled])
 
-        guard case .selected(let verified, .roots) = try resolver.verified(id: a.id, source: .roots, workspace: nil) else {
+        guard case .selected(let verified, .roots, _) = try resolver.verified(id: a.id, source: .roots, workspace: nil) else {
             Issue.record("expected the enabled project to stay selected")
             return
         }
@@ -133,14 +133,14 @@ struct MCPProjectContextTests {
     @Test func linkBeatsARegisteredRootThatAlsoMatches() throws {
         let context = try resolver(projects: [a, b], links: link("B", at: "/work/a"))
             .resolve(explicit: nil, roots: ["file:///work/a"], workingDirectory: "/")
-        guard case .selected(let verified, .linkedRepository) = context else { Issue.record("\(context)"); return }
+        guard case .selected(let verified, .linkedRepository, _) = context else { Issue.record("\(context)"); return }
         #expect(verified.project.id == b.id)
     }
 
     @Test func workingDirectoryLinkBeatsItsRegisteredRoot() throws {
         let context = try resolver(projects: [a, b], links: link("B", at: "/work/a"))
             .resolve(explicit: nil, roots: nil, workingDirectory: "/work/a")
-        guard case .selected(let verified, .linkedRepository) = context else { Issue.record("\(context)"); return }
+        guard case .selected(let verified, .linkedRepository, _) = context else { Issue.record("\(context)"); return }
         #expect(verified.project.id == b.id)
     }
 
@@ -148,17 +148,20 @@ struct MCPProjectContextTests {
         let spaced = MCPProject(name: "  Shop Ops ", isEnabled: true, workspaceRoots: [])
         let context = try resolver(projects: [a, spaced], links: link(" sHOP oPS\n", at: "/repo"))
             .resolve(explicit: nil, roots: nil, workingDirectory: "/repo")
-        guard case .selected(let verified, .linkedRepository) = context else { Issue.record("\(context)"); return }
+        guard case .selected(let verified, .linkedRepository, _) = context else { Issue.record("\(context)"); return }
         #expect(verified.project.id == spaced.id)
     }
 
-    @Test func linkNamingAnUnknownProjectReportsTheName() throws {
-        let fromRoots = try resolver(projects: [a, b], links: link("Ledger", at: "/work/a"))
-            .resolve(explicit: nil, roots: ["file:///work/a"], workingDirectory: "/work/b")
-        #expect(fromRoots == .unconfigured(.linkedProjectNotFound, workspace: nil, linkedProject: "Ledger"))
+    /// The status names the directory holding the link file, which sits
+    /// above the workspace here, so the user knows which file to change.
+    @Test func linkNamingAnUnknownProjectReportsTheNameAndItsDirectory() throws {
+        let links: [String: MCPRepositoryLink.Lookup] = ["/work/a/src": .found(directory: "/work/a", projectName: "Ledger")]
+        let fromRoots = try resolver(projects: [a, b], links: links)
+            .resolve(explicit: nil, roots: ["file:///work/a/src"], workingDirectory: "/work/b")
+        #expect(fromRoots == .unconfigured(.linkedProjectNotFound, workspace: "/work/a", linkedProject: "Ledger"))
 
-        let fromWorkingDirectory = try resolver(projects: [a, b], links: link("Ledger", at: "/work/a"))
-            .resolve(explicit: nil, roots: nil, workingDirectory: "/work/a")
+        let fromWorkingDirectory = try resolver(projects: [a, b], links: links)
+            .resolve(explicit: nil, roots: nil, workingDirectory: "/work/a/src")
         #expect(fromWorkingDirectory == .unconfigured(.linkedProjectNotFound, workspace: "/work/a", linkedProject: "Ledger"))
     }
 
@@ -180,29 +183,29 @@ struct MCPProjectContextTests {
         let links = link("A", at: "/one").merging(link(" a", at: "/two")) { $1 }
         let context = try resolver(projects: [a, b], links: links)
             .resolve(explicit: nil, roots: ["file:///one", "file:///two"], workingDirectory: "/work/b")
-        guard case .selected(let verified, .linkedRepository) = context else { Issue.record("\(context)"); return }
+        guard case .selected(let verified, .linkedRepository, _) = context else { Issue.record("\(context)"); return }
         #expect(verified.project.id == a.id)
     }
 
     @Test func rootsWithoutALinkFallThroughToTheWorkingDirectoryLink() throws {
         let context = try resolver(projects: [a, b], links: link("B", at: "/repo"))
             .resolve(explicit: nil, roots: ["file:///elsewhere"], workingDirectory: "/repo")
-        guard case .selected(let verified, .linkedRepository) = context else { Issue.record("\(context)"); return }
+        guard case .selected(let verified, .linkedRepository, _) = context else { Issue.record("\(context)"); return }
         #expect(verified.project.id == b.id)
     }
 
     @Test func rootsMatchingARegisteredRootWinOverAWorkingDirectoryLink() throws {
         let context = try resolver(projects: [a, b], links: link("B", at: "/repo"))
             .resolve(explicit: nil, roots: ["file:///work/a"], workingDirectory: "/repo")
-        guard case .selected(let verified, .roots) = context else { Issue.record("\(context)"); return }
+        guard case .selected(let verified, .roots, _) = context else { Issue.record("\(context)"); return }
         #expect(verified.project.id == a.id)
     }
 
-    @Test func disabledLinkedProjectIsReported() throws {
+    @Test func disabledLinkedProjectIsReportedWithItsLinkDirectory() throws {
         let disabled = MCPProject(name: "D", isEnabled: false, workspaceRoots: [])
         let context = try resolver(projects: [a, disabled], links: link("D", at: "/repo"))
             .resolve(explicit: nil, roots: nil, workingDirectory: "/repo")
-        #expect(context == .unconfigured(.projectDisabled, workspace: nil))
+        #expect(context == .unconfigured(.projectDisabled, workspace: "/repo"))
     }
 
     /// The bad file sits in an ancestor of the workspace, and the status
@@ -226,6 +229,41 @@ struct MCPProjectContextTests {
         #expect(inWorkingDirectory == .unconfigured(.invalidLinkFile, workspace: "/work"))
     }
 
+    // MARK: Where the selection was decided
+
+    /// The workspace of a selection is the location that decided it: the
+    /// host root or working directory that matched a registered folder, the
+    /// directory holding the link file, or none for an explicit project.
+    @Test func selectionsReportTheLocationThatDecidedThem() throws {
+        func workspace(_ context: MCPProjectContext) -> String?? {
+            guard case let .selected(_, _, workspace) = context else { return .none }
+            return .some(workspace)
+        }
+        let links: [String: MCPRepositoryLink.Lookup] = ["/repo/app": .found(directory: "/repo", projectName: "B")]
+        let resolver = resolver(projects: [a, b], links: links)
+
+        let explicit = try resolver.resolve(explicit: b.id, roots: ["file:///work/a"], workingDirectory: "/work/a")
+        #expect(workspace(explicit) == .some(nil))
+        let root = try resolver.resolve(explicit: nil, roots: ["file:///elsewhere", "file:///work/b/src"], workingDirectory: "/work/a")
+        #expect(workspace(root) == "/work/b/src")
+        let workingDirectory = try resolver.resolve(explicit: nil, roots: nil, workingDirectory: "/work/a/sub")
+        #expect(workspace(workingDirectory) == "/work/a/sub")
+        let linkedRoot = try resolver.resolve(explicit: nil, roots: ["file:///repo/app"], workingDirectory: "/work/a")
+        #expect(workspace(linkedRoot) == "/repo")
+        let linkedWorkingDirectory = try resolver.resolve(explicit: nil, roots: nil, workingDirectory: "/repo/app")
+        #expect(workspace(linkedWorkingDirectory) == "/repo")
+    }
+
+    /// A link and a registered folder naming one project attribute it to the
+    /// link, so the link's directory is reported.
+    @Test func linkedAndRegisteredRootsReportTheLinkDirectory() throws {
+        let links: [String: MCPRepositoryLink.Lookup] = ["/repo/app": .found(directory: "/repo", projectName: "A")]
+        let context = try resolver(projects: [a, b], links: links)
+            .resolve(explicit: nil, roots: ["file:///work/a", "file:///repo/app"], workingDirectory: "/work/b")
+        guard case .selected(_, .linkedRepository, let workspace) = context else { Issue.record("\(context)"); return }
+        #expect(workspace == "/repo")
+    }
+
     // MARK: Roots decided one by one
 
     @Test func linkedRootAndRegisteredRootNamingDifferentProjectsAreAmbiguous() throws {
@@ -237,7 +275,7 @@ struct MCPProjectContextTests {
     @Test func linkedRootAndRegisteredRootNamingOneProjectSelectItByLink() throws {
         let context = try resolver(projects: [a, b], links: link("A", at: "/repo"))
             .resolve(explicit: nil, roots: ["file:///work/a", "file:///repo"], workingDirectory: "/work/b")
-        guard case .selected(let verified, .linkedRepository) = context else { Issue.record("\(context)"); return }
+        guard case .selected(let verified, .linkedRepository, _) = context else { Issue.record("\(context)"); return }
         #expect(verified.project.id == a.id)
     }
 
@@ -251,7 +289,7 @@ struct MCPProjectContextTests {
     @Test func unknownLinkedNameIsReportedBeforeAmbiguity() throws {
         let context = try resolver(projects: [a, b], links: link("Ledger", at: "/repo"))
             .resolve(explicit: nil, roots: ["file:///work/a", "file:///work/b", "file:///repo"], workingDirectory: "/")
-        #expect(context == .unconfigured(.linkedProjectNotFound, workspace: nil, linkedProject: "Ledger"))
+        #expect(context == .unconfigured(.linkedProjectNotFound, workspace: "/repo", linkedProject: "Ledger"))
     }
 
     @Test func linkFileOnDiskSelectsThroughTheDefaultLookup() throws {
@@ -266,14 +304,14 @@ struct MCPProjectContextTests {
             verify: { _ in MCPVerifiedProject(project: project, liveReadProfileIDs: []) }
         )
         let context = try real.resolve(explicit: nil, roots: ["file://" + directory.path], workingDirectory: "/")
-        guard case .selected(let verified, .linkedRepository) = context else { Issue.record("\(context)"); return }
+        guard case .selected(let verified, .linkedRepository, _) = context else { Issue.record("\(context)"); return }
         #expect(verified.project.id == project.id)
     }
 
     @Test func explicitProjectWinsOverALink() throws {
         let context = try resolver(projects: [a, b], links: link("B", at: "/work/a"))
             .resolve(explicit: a.id, roots: ["file:///work/a"], workingDirectory: "/work/a")
-        guard case .selected(let verified, .explicit) = context else { Issue.record("\(context)"); return }
+        guard case .selected(let verified, .explicit, _) = context else { Issue.record("\(context)"); return }
         #expect(verified.project.id == a.id)
     }
 }

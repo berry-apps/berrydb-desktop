@@ -246,7 +246,7 @@ the settings pane says so.
 | `reason` | null when selected; otherwise `no_matching_project`, `ambiguous_projects`, `explicit_project_not_found`, `project_disabled`, `integrity_unavailable`, `linked_project_not_found` or `invalid_link_file` |
 | `project` | `{"id", "name"}` of the selected project, else null |
 | `selected_by` | `explicit`, `roots`, `working_directory` or `linked_repository`, else null |
-| `workspace` | when unconfigured: the folder holding an invalid link file, or the working directory when it was the input that failed; null otherwise |
+| `workspace` | the location that decided the selection: the folder holding the link file for `linked_repository`, the host root or working directory that a workspace folder matched for `roots` or `working_directory`, null for `explicit`; the same location when that project is now `project_disabled` or `no_matching_project`. Otherwise, when unconfigured: the folder holding the link file for `invalid_link_file` and `linked_project_not_found`, the working directory when it was the input that failed, null for the rest |
 | `linked_project` | the name a link file gave when no project has it, else null |
 | `live_reads` | always `not_available` in this version |
 | `integrity` | when selected: `verified` if the project row's tag verifies under the stored key, `unavailable` if it does not or no key could be read; when unconfigured: `unavailable` for `integrity_unavailable` (the store could not be read), null for every other reason |

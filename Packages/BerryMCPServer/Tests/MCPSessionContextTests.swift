@@ -45,7 +45,7 @@ struct MCPSessionContextTests {
     }
 
     func selectedID(_ context: MCPProjectContext, by expected: MCPSelectionSource) -> UUID? {
-        guard case let .selected(verified, source) = context, source == expected else { return nil }
+        guard case let .selected(verified, source, _) = context, source == expected else { return nil }
         return verified.project.id
     }
 

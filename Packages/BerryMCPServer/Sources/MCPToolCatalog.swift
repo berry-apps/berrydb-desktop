@@ -212,7 +212,7 @@ public struct MCPToolRouter: Sendable {
             _ = try MCPToolArguments(arguments, allowing: MCPToolArguments.allowedKeys(for: tool))
             return status(context)
         }
-        guard case let .selected(project, _) = context else { return Self.failure(Self.noProjectText) }
+        guard case let .selected(project, _, _) = context else { return Self.failure(Self.noProjectText) }
         let arguments = try MCPToolArguments(arguments, allowing: MCPToolArguments.allowedKeys(for: tool))
         do {
             return try run(tool, arguments, in: project, context: context)
@@ -262,11 +262,12 @@ public struct MCPToolRouter: Sendable {
     private func status(_ context: MCPProjectContext) -> CallTool.Result {
         var fields: [String: Value]
         switch context {
-        case let .selected(verified, source):
+        case let .selected(verified, source, workspace):
             fields = [
                 "state": "selected", "reason": .null,
                 "project": ["id": .string(verified.project.id.uuidString), "name": .string(verified.project.name)],
-                "selected_by": .string(source.rawValue), "workspace": .null, "linked_project": .null,
+                "selected_by": .string(source.rawValue), "workspace": workspace.map { .string($0) } ?? .null,
+                "linked_project": .null,
                 "integrity": verified.projectTagValid ? "verified" : "unavailable",
             ]
         case let .unconfigured(reason, workspace, linkedProject):

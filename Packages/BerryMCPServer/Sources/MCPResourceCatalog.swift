@@ -20,7 +20,7 @@ public enum MCPResourceCatalog {
     /// The resources of a context; none when no project is selected. A
     /// connection's graph is listed only once it has been harvested.
     public static func resources(for context: MCPProjectContext, metadata: MCPMetadataService) throws -> [Resource] {
-        guard case let .selected(project, _) = context else { return [] }
+        guard case let .selected(project, _, _) = context else { return [] }
         let connections = try mapping { try metadata.listConnections(in: project) }
         let projectResource = Resource(
             name: "project", uri: projectURI, title: "BerryDB project",
@@ -38,7 +38,7 @@ public enum MCPResourceCatalog {
 
     /// The JSON content of one resource.
     public static func read(uri: String, context: MCPProjectContext, metadata: MCPMetadataService) throws -> [Resource.Content] {
-        guard case let .selected(project, _) = context else { throw unknownResource() }
+        guard case let .selected(project, _, _) = context else { throw unknownResource() }
         if uri == projectURI {
             let connections = try mapping { try metadata.listConnections(in: project) }
             let payload = ProjectPayload(

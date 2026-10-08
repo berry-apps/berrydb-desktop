@@ -178,6 +178,7 @@ struct BerryMCPServerFactoryTests {
             let status = try await Self.status(client)
             #expect(status["selected_by"] == "roots")
             #expect(Self.projectID(status) == expectedB)
+            #expect(status["workspace"] == "/work/b")
         }
     }
 
@@ -189,6 +190,7 @@ struct BerryMCPServerFactoryTests {
             let status = try await Self.status(client)
             #expect(status["selected_by"] == "working_directory")
             #expect(Self.projectID(status) == expectedA)
+            #expect(status["workspace"] == "/work/a")
         }
         #expect(requests.value == 0)
     }
@@ -219,20 +221,24 @@ struct BerryMCPServerFactoryTests {
             let status = try await Self.status(client)
             #expect(status["selected_by"] == "explicit")
             #expect(Self.projectID(status) == expectedB)
+            #expect(status["workspace"] == .null)
         }
         #expect(requests.value == 0)
     }
 
+    /// The link sits above the host's root, and its directory is reported
+    /// on every request, including once the project is gone.
     @Test func linkedProjectIsKeptForTheConnectionAndVerifiedOnEveryRequest() async throws {
         let store = Locked(Store(
-            projects: [projectA, projectB], links: ["/work/a": .found(directory: "/work/a", projectName: "b")]
+            projects: [projectA, projectB], links: ["/work/a/src": .found(directory: "/work/a", projectName: "b")]
         ))
         let requests = Locked(0)
         let linked = projectB.id
-        try await withSession(store: store, roots: .declared(["file:///work/a"]), rootsRequests: requests) { client in
+        try await withSession(store: store, roots: .declared(["file:///work/a/src"]), rootsRequests: requests) { client in
             let first = try await Self.status(client)
             #expect(first["selected_by"] == "linked_repository")
             #expect(Self.projectID(first) == linked.uuidString)
+            #expect(first["workspace"] == "/work/a")
             #expect(try await client.listTools().tools.count == 6)
 
             store.update { state in
@@ -245,11 +251,12 @@ struct BerryMCPServerFactoryTests {
             let renamed = try await Self.status(client)
             #expect(renamed["selected_by"] == "linked_repository")
             #expect(Self.projectID(renamed) == linked.uuidString)
+            #expect(renamed["workspace"] == "/work/a")
 
             store.update { $0.projects.removeAll { $0.id == linked } }
             let deleted = try await Self.status(client)
             #expect(deleted["reason"] == "no_matching_project")
-            #expect(deleted["workspace"] == .null)
+            #expect(deleted["workspace"] == "/work/a")
         }
         #expect(requests.value == 1)
     }

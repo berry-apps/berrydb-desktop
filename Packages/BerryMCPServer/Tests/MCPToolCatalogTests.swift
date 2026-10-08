@@ -36,8 +36,9 @@ struct MCPToolCatalogTests {
         )
     }
 
+    /// Selected by the working directory `/work/shop`.
     func selected(integrity: Bool = true, roots: [String] = []) -> MCPProjectContext {
-        .selected(project(integrity: integrity, roots: roots), source: .workingDirectory)
+        .selected(project(integrity: integrity, roots: roots), source: .workingDirectory, workspace: "/work/shop")
     }
 
     /// `orders` references `customers`; `orders` has an `id` and a `createdAt`
@@ -399,7 +400,7 @@ struct MCPToolCatalogTests {
         #expect(status["state"]?.stringValue == "selected")
         #expect(status["reason"]?.isNull == true)
         #expect(status["selected_by"]?.stringValue == "working_directory")
-        #expect(status["workspace"]?.isNull == true)
+        #expect(status["workspace"]?.stringValue == "/work/shop")
         #expect(status["linked_project"]?.isNull == true)
         #expect(status["live_reads"]?.stringValue == "not_available")
         #expect(status["integrity"]?.stringValue == "verified")
@@ -422,11 +423,19 @@ struct MCPToolCatalogTests {
     }
 
     @Test func statusReportsALinkedRepositorySelection() throws {
-        let status = object(try call(.status, nil, context: .selected(project(), source: .linkedRepository)))
+        let context = MCPProjectContext.selected(project(), source: .linkedRepository, workspace: "/work/repo")
+        let status = object(try call(.status, nil, context: context))
         #expect(status["state"]?.stringValue == "selected")
         #expect(status["selected_by"]?.stringValue == "linked_repository")
+        #expect(status["workspace"]?.stringValue == "/work/repo")
         #expect(status["project"]?.objectValue?["name"]?.stringValue == "Shop project")
         #expect(status["linked_project"]?.isNull == true)
+    }
+
+    @Test func statusReportsNoWorkspaceForAnExplicitProject() throws {
+        let status = object(try call(.status, nil, context: .selected(project(), source: .explicit, workspace: nil)))
+        #expect(status["selected_by"]?.stringValue == "explicit")
+        #expect(status["workspace"]?.isNull == true)
     }
 
     @Test func statusShowsTheNameALinkFileGaveWhenNoProjectHasIt() throws {
@@ -651,7 +660,8 @@ struct MCPToolCatalogTests {
         }
         let contexts: [MCPProjectContext] = [
             selected(), selected(integrity: false),
-            .selected(project(), source: .linkedRepository),
+            .selected(project(), source: .linkedRepository, workspace: "/work/repo"),
+            .selected(project(), source: .explicit, workspace: nil),
             .unconfigured(.integrityUnavailable, workspace: nil),
             .unconfigured(.noMatchingProject, workspace: "/work"),
             .unconfigured(.linkedProjectNotFound, workspace: nil, linkedProject: "Ledger"),
