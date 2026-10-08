@@ -78,6 +78,12 @@ public struct BerryGraphQueryService: Sendable {
         public let node: String
         public let dependsOn: [String]
         public let dependedOnBy: [String]
+
+        public init(node: String, dependsOn: [String], dependedOnBy: [String]) {
+            self.node = node
+            self.dependsOn = dependsOn
+            self.dependedOnBy = dependedOnBy
+        }
     }
 
     /// The shortest dependency chain from one node to another; `path` is
@@ -94,6 +100,12 @@ public struct BerryGraphQueryService: Sendable {
         public let node: String
         public let impacted: [String]
         public let count: Int
+
+        public init(node: String, impacted: [String], count: Int) {
+            self.node = node
+            self.impacted = impacted
+            self.count = count
+        }
     }
 
     /// Dependency cycles as components of node names, in a deterministic
@@ -101,6 +113,10 @@ public struct BerryGraphQueryService: Sendable {
     public struct CircularDependencies: Equatable, Sendable {
         public let components: [[String]]
         public var hasCycles: Bool { !components.isEmpty }
+
+        public init(components: [[String]]) {
+            self.components = components
+        }
     }
 
     /// One node and how many dependency edges point at it.
