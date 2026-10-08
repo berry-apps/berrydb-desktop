@@ -2,6 +2,18 @@ import AppKit
 import BerryStore
 import SwiftUI
 
+/// Sizes of the Settings pane and of the editor sheet presented over it. The
+/// sheet must stay inside the Settings window, whose size follows the pane;
+/// at 620 points the sheet ran past the window's bottom edge. At the sizes
+/// below the sheet fits in the running app and the footer buttons stay in
+/// view while the form scrolls.
+private enum MCPSettingsLayout {
+    static let paneWidth: CGFloat = 560
+    static let paneHeight: CGFloat = 560
+    static let sheetWidth: CGFloat = 540
+    static let sheetHeight: CGFloat = 500
+}
+
 /// The "AI Agents" settings tab: the MCP projects that coding agents reach
 /// through the bundled `berrydb-mcp` helper. Opens its own store connection
 /// the first time the tab appears; the store file allows several
@@ -24,7 +36,7 @@ public struct MCPProjectsSettingsView: View {
                 ProgressView()
             }
         }
-        .frame(width: 560, height: 560)
+        .frame(width: MCPSettingsLayout.paneWidth, height: MCPSettingsLayout.paneHeight)
         .onAppear(perform: openOrReload)
     }
 
@@ -136,8 +148,9 @@ private struct MCPProjectEditorSheet: View {
     @State private var confirmReplace = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(isNew ? L("New MCP Project") : L("Edit MCP Project")).font(.headline)
+        VStack(spacing: 0) {
+            header
+            Divider()
             Form {
                 TextField(L("Name"), text: $draft.name)
                 Toggle(L("Enabled"), isOn: $draft.isEnabled)
@@ -153,6 +166,32 @@ private struct MCPProjectEditorSheet: View {
             } message: {
                 Text(replaceMessage)
             }
+            Divider()
+            footer
+        }
+        .frame(width: MCPSettingsLayout.sheetWidth, height: MCPSettingsLayout.sheetHeight)
+        .confirmationDialog(L("Delete this MCP project?"), isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button(L("Delete"), role: .destructive) {
+                if model.delete(id: draft.id) { dismiss() }
+            }
+            Button(L("Cancel"), role: .cancel) {}
+        } message: {
+            Text(L("Coding agents working in its folders will no longer find a project."))
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            Text(isNew ? L("New MCP Project") : L("Edit MCP Project")).font(.headline)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+    }
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 8) {
             if let error = model.errorMessage {
                 Text(error).font(.caption).foregroundStyle(.red)
             }
@@ -177,20 +216,7 @@ private struct MCPProjectEditorSheet: View {
                 .disabled(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .padding(16)
-        // The sheet must fit inside the 560-point Settings pane it is
-        // presented over: at 620 points it ran past the window's bottom edge
-        // in the running app. At 500 the form scrolls and the buttons below
-        // it stay in view.
-        .frame(width: 540, height: 500)
-        .confirmationDialog(L("Delete this MCP project?"), isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button(L("Delete"), role: .destructive) {
-                if model.delete(id: draft.id) { dismiss() }
-            }
-            Button(L("Cancel"), role: .cancel) {}
-        } message: {
-            Text(L("Coding agents working in its folders will no longer find a project."))
-        }
+        .padding(12)
     }
 
     private var rootsSection: some View {
@@ -198,6 +224,7 @@ private struct MCPProjectEditorSheet: View {
             Text(L("Add every folder whose code uses these connections. Subfolders and worktrees inside a folder are included."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             ForEach(draft.workspaceRoots, id: \.self) { root in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
