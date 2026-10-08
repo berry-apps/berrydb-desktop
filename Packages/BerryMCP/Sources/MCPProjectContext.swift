@@ -69,7 +69,7 @@ public struct MCPProjectContextResolver: Sendable {
         if let explicit {
             switch selector.select(explicit: explicit, projects: projects) {
             case .selected(let id):
-                return try verified(id, source: .explicit, workspace: nil)
+                return try verified(id: id, source: .explicit, workspace: nil)
             case .noMatch, .ambiguous:
                 return .unconfigured(.explicitProjectNotFound, workspace: nil)
             }
@@ -91,13 +91,13 @@ public struct MCPProjectContextResolver: Sendable {
                 return .unconfigured(.ambiguousProjects, workspace: nil)
             }
             if let id = ids.first {
-                return try verified(id, source: .roots, workspace: nil)
+                return try verified(id: id, source: .roots, workspace: nil)
             }
         }
 
         switch selector.select(workspace: workingDirectory, projects: projects) {
         case .selected(let id):
-            return try verified(id, source: .workingDirectory, workspace: workingDirectory)
+            return try verified(id: id, source: .workingDirectory, workspace: workingDirectory)
         case .ambiguous:
             return .unconfigured(.ambiguousProjects, workspace: workingDirectory)
         case .noMatch:
@@ -105,7 +105,11 @@ public struct MCPProjectContextResolver: Sendable {
         }
     }
 
-    private func verified(_ id: UUID, source: MCPSelectionSource, workspace: String?) throws -> MCPProjectContext {
+    /// The current state of a project chosen earlier, without repeating the
+    /// selection: verified and selected by `source`, or unconfigured because
+    /// it no longer exists or is disabled. `workspace` is reported only in
+    /// the unconfigured case. Throws when the store cannot be read.
+    public func verified(id: UUID, source: MCPSelectionSource, workspace: String?) throws -> MCPProjectContext {
         guard let verified = try verify(id) else {
             return .unconfigured(.noMatchingProject, workspace: workspace)
         }

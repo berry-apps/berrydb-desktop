@@ -81,4 +81,31 @@ struct MCPProjectContextTests {
             return
         }
     }
+
+    @Test func verifiedReturnsTheCurrentStateOfAKnownProject() throws {
+        let disabled = MCPProject(name: "D", isEnabled: false, workspaceRoots: ["/work/d"])
+        let resolver = resolver(projects: [a, disabled])
+
+        guard case .selected(let verified, .roots) = try resolver.verified(id: a.id, source: .roots, workspace: nil) else {
+            Issue.record("expected the enabled project to stay selected")
+            return
+        }
+        #expect(verified.project.id == a.id)
+        #expect(try resolver.verified(id: disabled.id, source: .workingDirectory, workspace: "/work/d")
+            == .unconfigured(.projectDisabled, workspace: "/work/d"))
+        #expect(try resolver.verified(id: UUID(), source: .explicit, workspace: nil)
+            == .unconfigured(.noMatchingProject, workspace: nil))
+    }
+
+    @Test func verifiedPropagatesStoreFailures() {
+        struct Unreadable: Error {}
+        let failing = MCPProjectContextResolver(
+            loadProjects: { [] },
+            verify: { _ in throw Unreadable() },
+            selector: MCPProjectSelector(canonicalize: { $0 })
+        )
+        #expect(throws: Unreadable.self) {
+            try failing.verified(id: a.id, source: .roots, workspace: nil)
+        }
+    }
 }
