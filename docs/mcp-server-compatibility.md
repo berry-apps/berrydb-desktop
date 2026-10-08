@@ -4,6 +4,13 @@ Date: 2026-09-26
 Branch: `feat/ai-36-local-mcp-server`
 Base: `8581f388376965b2759a27e913ceb7888ebd66b1`
 
+The protocol gate below ran on 2026-09-26 against a fixture executable,
+`MCPCompatibilitySpike`, that has since been removed. Its sections are a
+record of what was tested then; the fixture's commands no longer run in
+this repository. The current server, `berrydb-mcp`, was checked against
+newer versions of the same three coding hosts on 2026-10-09: see
+[Metadata tools host check](#metadata-tools-host-check).
+
 ## Decision
 
 BerryDB's initial local stdio server will implement MCP `2025-11-25` using the official Swift SDK pinned exactly to `0.12.1` (`a0ae212ebf6eab5f754c3129608bc5557637e605`). Do not claim MCP `2026-07-28` support.
@@ -14,7 +21,7 @@ The selected package exports product `MCP`, requires Swift 6.1, and supports mac
 
 ## Fixture
 
-`MCPCompatibilitySpike` is a production-shaped, strict stdio server using SDK APIs verified at tag 0.12.1:
+`MCPCompatibilitySpike` was a production-shaped, strict stdio server using SDK APIs verified at tag 0.12.1:
 
 - `Server(configuration: .strict)` and the initialize/initialized lifecycle;
 - `StdioTransport`, with stdout reserved for newline-delimited JSON-RPC;
@@ -24,7 +31,7 @@ The selected package exports product `MCP`, requires Swift 6.1, and supports mac
 - JSON-RPC `-32602` rejection for any unexpected argument;
 - SDK cancellation handling and `waitUntilCompleted()` shutdown on EOF.
 
-`BERRYDB_MCP_SPIKE_ECHO_DELAY_MS` is a spike-only cancellation seam. With `BERRYDB_MCP_SPIKE_EMIT_STARTED_MARKER=1`, the handler emits a single stderr marker immediately before entering that delay, allowing the integration test to prove the call is in flight before cancellation. Neither setting adds a tool argument, stdout content, or protocol capability.
+`BERRYDB_MCP_SPIKE_ECHO_DELAY_MS` was a spike-only cancellation seam. With `BERRYDB_MCP_SPIKE_EMIT_STARTED_MARKER=1`, the handler emitted a single stderr marker immediately before entering that delay, allowing the integration test to prove the call was in flight before cancellation. Neither setting added a tool argument, stdout content, or protocol capability, and neither exists in `berrydb-mcp`.
 
 `HostCompatibleStdioTransport` is a narrow wrapper around the SDK's `StdioTransport` with two independently tested compatibility rules.
 
@@ -32,25 +39,28 @@ First, on inbound `initialize` messages only, it retains string-valued `params.c
 
 Second, it intercepts only request-shaped `server/discover` messages and replies with JSON-RPC `-32601 Method not found`, preserving the request identifier. The official 2026-07-28 [discovery specification](https://modelcontextprotocol.io/specification/2026-07-28/server/discover) defines discovery as the stdio backward-compatibility probe: dual-era clients should fall back to legacy `initialize` when discovery is unsupported. The pinned Swift SDK instead applies its pre-initialize state guard and returns `-32600 Server is not initialized`, which prevents Antigravity 1.2.11 from falling back. This adapter does not advertise or implement stateless MCP 2026-07-28; it truthfully declines that method so a dual-era client can negotiate the server's actual 2025-era protocol. Notifications and every method other than `server/discover` remain untouched. Remove this rule when the pinned SDK itself returns the correct method-not-found response before initialization or when BerryDB adopts a fully conformant 2026-07-28 implementation.
 
-The fixture target was removed after the shims moved into `BerryMCPServer`; the evidence above describes the fixture as it was tested.
+The fixture target was removed after the shims moved into `BerryMCPServer`; the evidence above describes the fixture as it was tested. The two transport rules are now tested by `HostCompatibleStdioTransportTests`, and the built helper's stdio contract, including the captured Codex initialize shape and the Antigravity discovery fallback, by `BerryMCPStdioTests`:
+
+```sh
+swift build --product berrydb-mcp
+swift test --filter 'HostCompatibleStdioTransportTests|BerryMCPStdioTests'
+```
+
+On 2026-10-09 this ran 13 tests in 2 suites, all passing. The fixture's protocol-cancellation test was not carried over to the helper.
 
 ## Evidence
 
 ### Automated tests
 
-Command:
+The fixture's suite, `MCPCompatibilitySpikeTests`, was removed with the fixture; the results below are as recorded on 2026-09-26.
 
-```sh
-swift test --filter MCPCompatibilitySpikeTests
-```
-
-Result: PASS, 9 tests in 1 serialized Swift Testing suite, 0 failures. Five tests exercise pure contracts, including byte preservation for supported string-only experimental maps, semantic preservation for mixed maps, and the narrow discovery-response scope with valid string/number request-ID preservation. Wrong or missing JSON-RPC versions and missing, null, Boolean, object, or array IDs remain untouched for the SDK. Four committed Foundation `Process` integration tests launch the built executable and drive the real stdio transport. The Codex regression uses the captured 0.154.0 initialize shape, negotiates `2025-06-18`, completes initialized/list/call, and retains the elicitation capabilities while filtering only unsupported experimental values. The server-side discovery regression uses the captured Antigravity 1.2.11 `server/discover` request shape, verifies `-32601`, then independently drives legacy initialize/list/call. It does not claim to observe the client's internal fallback sequence. The initial red test timed out waiting for response ID 1 because the SDK swallowed discovery behind its pre-initialize state gate; the host transport makes that server contract green. The existing package emits FreeTDS linker warnings because the local library was built for macOS 26 while the package target is macOS 15; this was not introduced by the MCP target.
+Result: PASS, 9 tests in 1 serialized Swift Testing suite, 0 failures. Five tests exercised pure contracts, including byte preservation for supported string-only experimental maps, semantic preservation for mixed maps, and the narrow discovery-response scope with valid string/number request-ID preservation. Wrong or missing JSON-RPC versions and missing, null, Boolean, object, or array IDs remained untouched for the SDK. Four Foundation `Process` integration tests launched the built fixture and drove the real stdio transport. The Codex regression used the captured 0.154.0 initialize shape, negotiated `2025-06-18`, completed initialized/list/call, and retained the elicitation capabilities while filtering only unsupported experimental values. The server-side discovery regression used the captured Antigravity 1.2.11 `server/discover` request shape, verified `-32601`, then independently drove legacy initialize/list/call. It did not claim to observe the client's internal fallback sequence. The initial red test timed out waiting for response ID 1 because the SDK swallowed discovery behind its pre-initialize state gate; the host transport made that server contract green. The existing package emits FreeTDS linker warnings because the local library was built for macOS 26 while the package target is macOS 15; this was not introduced by the MCP target.
 
 The initial fixture red phase was observed before implementation: SwiftPM rejected the declared target because `MCP/CompatibilitySpike/Sources` did not exist. After source was added, compilation also caught an argument-order mismatch with the exact SDK API (`instructions` must precede `capabilities`); the implementation was corrected from the checked-out 0.12.1 signature. The integration-harness red phase first caught Swift 6's rejection of untyped dictionary equality inside `#expect`; assertions were changed to require and compare every schema, annotation, and content field explicitly. The strengthened cancellation test then failed deterministically with `Timed out waiting for stderr marker berrydb-mcp-spike:echo-started` until the guarded handler-start barrier was added. Before the compatibility wrapper, the exact Codex regression returned JSON-RPC `-32603` with `The data couldn’t be read because it isn’t in the correct format.` and failed because no initialize result existed. The sanitizer-narrowing regression then failed because the first shim removed a supported string-only map and removed the supported string from a mixed map; the implementation now filters values instead of dropping the whole map.
 
 ### Wire transcript
 
-A committed Swift/Foundation child-process harness sends initialize, initialized, list, valid call, invalid call, and cancellation messages to the built `MCPCompatibilitySpike` executable. It parses every stdout line as JSON and waits for deterministic responses and process exit with bounded deadlines. Observed results:
+A Swift/Foundation child-process harness, removed with the fixture, sent initialize, initialized, list, valid call, invalid call, and cancellation messages to the built `MCPCompatibilitySpike` executable. It parsed every stdout line as JSON and waited for deterministic responses and process exit with bounded deadlines. Observed results:
 
 | Check | Result |
 | --- | --- |
@@ -58,7 +68,7 @@ A committed Swift/Foundation child-process harness sends initialize, initialized
 | List | PASS; exactly one tool and the strict empty-object schema |
 | Call | PASS; returned `berrydb-mcp-compatible` |
 | Invalid input | PASS; JSON-RPC error `-32602` |
-| Cancellation | PASS; the test observes the handler-start stderr barrier, cancels the in-flight call, keeps stdin open beyond the uncancelled delay, and receives no tool response |
+| Cancellation | PASS; the test observed the handler-start stderr barrier, cancelled the in-flight call, kept stdin open beyond the uncancelled delay, and received no tool response |
 | Stdout hygiene | PASS; captured stdout contained JSON-RPC messages only |
 | EOF shutdown | PASS; the process exited after stdin closed |
 
@@ -66,16 +76,16 @@ Sending all messages and EOF without allowing dispatch tasks to complete produce
 
 ### MCP Inspector
 
-PASS outside the restricted sandbox with the official `@modelcontextprotocol/inspector@2.8.0`, launched from this worktree against `.build/debug/MCPCompatibilitySpike`. The temporary npm cache used for the run was removed afterwards. The observed commands were:
+PASS outside the restricted sandbox with the official `@modelcontextprotocol/inspector@2.8.0`, launched from the gate's worktree against `.build/debug/MCPCompatibilitySpike`. The temporary npm cache used for the run was removed afterwards. The commands as run then, kept as a record (the fixture executable and its `berrydb_compatibility_echo` tool no longer exist):
 
-```sh
+```text
 npx --yes --cache <temporary-cache> @modelcontextprotocol/inspector@2.8.0 --cli .build/debug/MCPCompatibilitySpike --format json --protocol-era legacy --method initialize
 npx --yes --cache <temporary-cache> @modelcontextprotocol/inspector@2.8.0 --cli .build/debug/MCPCompatibilitySpike --format json --protocol-era legacy --method tools/list --strict
 npx --yes --cache <temporary-cache> @modelcontextprotocol/inspector@2.8.0 --cli .build/debug/MCPCompatibilitySpike --format json --protocol-era legacy --method tools/call --tool-name berrydb_compatibility_echo --tool-args-json '{}'
 npx --yes --cache <temporary-cache> @modelcontextprotocol/inspector@2.8.0 --cli .build/debug/MCPCompatibilitySpike --format json --protocol-era legacy --method tools/call --tool-name berrydb_compatibility_echo --tool-args-json '{"unexpected":true}'
 ```
 
-Initialize reported server version `0.1.0`, protocol `2025-11-25`, and tools capability. Strict list reported the one declared tool and its strict empty-object schema. The valid call returned `berrydb-mcp-compatible` with `isError: false`. The unexpected-argument call exited `1` with `Invalid params`, as required. This establishes Inspector coverage for initialize, list, valid call, and invalid input; cancellation and shutdown remain covered by the committed Foundation integration harness above.
+Initialize reported server version `0.1.0`, protocol `2025-11-25`, and tools capability. Strict list reported the one declared tool and its strict empty-object schema. The valid call returned `berrydb-mcp-compatible` with `isError: false`. The unexpected-argument call exited `1` with `Invalid params`, as required. This established Inspector coverage for initialize, list, valid call, and invalid input; cancellation and shutdown were covered by the fixture's Foundation integration harness above.
 
 The earlier sandbox result was an environmental DNS failure, not an Inspector or server failure: npm could not resolve `registry.npmjs.org` (`ENOTFOUND`). It must not be represented as an Inspector compatibility failure.
 
@@ -93,17 +103,17 @@ For the Phase 0 acceptance scope, the authenticated coding-host set is Codex, Cl
 
 ## Dependency size
 
-Measured from the debug build on arm64 macOS:
+Measured on 2026-09-26 from the fixture's debug build on arm64 macOS:
 
 - Swift SDK checkout: 1,684 KiB on disk.
 - `MCPCompatibilitySpike` debug executable: 7,024,640 bytes (6,860 KiB allocated).
-- Dynamic linkage consists of Apple system frameworks/libraries; no new non-system dylib appears in `otool -L` output.
+- Dynamic linkage consisted of Apple system frameworks/libraries; no new non-system dylib appeared in `otool -L` output.
 
-This is development evidence, not packaged-release size. The signed release helper must be measured again after release optimization, stripping, and app bundling.
+This is development evidence, not packaged-release size. The fixture linked only the SDK; `berrydb-mcp` also links every database driver the app registers, so the fixture's size says nothing about the helper's. The signed release helper must be measured again after release optimization, stripping, and app bundling.
 
 ## Gate status
 
-**PASS FOR PHASE 1.** The Phase 0 gate is complete for its host scope: official MCP Inspector plus authenticated Codex 0.154.0, Claude Code 2.1.283, and Antigravity 1.2.11 list-and-call all pass. The standard lifecycle suite, exact Codex initialize regression, and Antigravity discovery/legacy-fallback server regressions pass alongside cancellation, license, and development-size checks. The Antigravity adapter deliberately preserves the declared 2025-11-25 scope rather than pretending to implement stateless MCP 2026-07-28.
+**PASS.** The protocol gate was complete for its host scope: official MCP Inspector plus authenticated Codex 0.154.0, Claude Code 2.1.283, and Antigravity 1.2.11 list-and-call all passed. The fixture's lifecycle suite, exact Codex initialize regression, and Antigravity discovery/legacy-fallback server regressions passed alongside cancellation, license, and development-size checks. The Antigravity adapter deliberately preserves the declared 2025-11-25 scope rather than pretending to implement stateless MCP 2026-07-28.
 
 Cursor is outside the current authenticated acceptance scope because no Cursor account is available. Its partial evidence remains recorded above, but Phase 0 PASS does not claim Cursor desktop or authenticated Cursor Agent compatibility. Cursor support requires a separate authenticated list-and-call and desktop verification gate.
 
@@ -329,3 +339,106 @@ writing it, and to rewrite existing items once, which the app can do because
 it is already trusted. That change and its verification with a packaged,
 app-written item belong to the packaging work. Data-protection keychain
 access groups were not evaluated.
+
+## Metadata tools host check
+
+Question: do current coding hosts list and call the metadata tools of the
+real `berrydb-mcp` helper, report why no project is selected, and select a
+project through a repository's `.berrydb.json`? Tested on 2026-10-09 on
+macOS 26.6.2 with a debug build (`swift build --product berrydb-mcp`, which
+reports server version `dev`).
+
+### Fixtures
+
+Everything ran inside one fresh `mktemp -d` folder; no ancestor of it held
+a `.berrydb.json`. Two stores were created there by a throwaway program
+calling `BerryStore(path:)` and `saveMCPProject`, the calls the app makes:
+
+- **Empty store, empty folder.** A store with no projects; the host started
+  in an empty folder.
+- **Linked folder.** A store with one enabled project named `smoke`, no
+  workspace folders and no connections, sealed with a throwaway key that
+  was never stored anywhere; the host started in a folder holding
+  `.berrydb.json` with `{"project": "smoke"}`.
+
+For the linked folder the helper was launched as
+`/usr/bin/sandbox-exec -f <profile> <helper> --store-path <store>`, where
+the profile is `(allow default)` plus `deny mach-lookup` of
+`com.apple.SecurityServer`, `com.apple.securityd.xpc`, `com.apple.secd`
+and `com.apple.security.agent`. Once a project is selected the helper
+loads its integrity key from the login Keychain on every request; the
+sandbox kept that read from reaching the Keychain or raising an approval
+dialog, and the system log recorded the denials for every run
+(`Sandbox: berrydb-mcp(<pid>) deny(1) mach-lookup com.apple.SecurityServer`
+and `… com.apple.securityd.xpc`). With no key, or with a tag sealed by
+another key, the project still selects and reports `integrity:
+"unavailable"`, which is the expected result here. The empty-store runs
+launched the helper directly: with no project selected the helper never
+reads the Keychain.
+
+Each host was asked to note the tools of the server, call
+`berrydb_status` once with no arguments, and print the tool names and the
+returned JSON. Host configuration was per invocation, except for
+Antigravity, which has no per-invocation MCP configuration:
+
+| Host | Configuration |
+|---|---|
+| Codex CLI | `codex exec --ephemeral --ignore-user-config --skip-git-repo-check -s read-only -C <folder> --json -c 'mcp_servers.berrydb.command="<helper>"' -c 'mcp_servers.berrydb.args=["--store-path","<store>"]' "<prompt>"` |
+| Claude Code | `claude -p --no-session-persistence --setting-sources project --strict-mcp-config --mcp-config '{"mcpServers":{"berrydb":{"type":"stdio","command":"<helper>","args":["--store-path","<store>"]}}}' --allowedTools mcp__berrydb__berrydb_status --output-format stream-json --verbose "<prompt>"` |
+| Antigravity | `agy mcp add berrydb-smoke-<random> -- <helper> --store-path <store>`, then `agy -p "<prompt>" --output-format stream-json --print-timeout 150s`, then `agy mcp remove berrydb-smoke-<random>` from a shell trap. `agy mcp list` printed the same entries before and after. |
+
+### Results
+
+| Host | Version | Empty store: tools listed | Empty store: `berrydb_status` | Linked folder: tools listed | Linked folder: `berrydb_status` |
+|---|---|---|---|---|---|
+| Codex CLI | 0.157.1 | `berrydb_status` only | called; `state: "unconfigured"`, `reason: "no_matching_project"` | all six | called; `state: "selected"`, `selected_by: "linked_repository"`, `integrity: "unavailable"` |
+| Claude Code | 2.1.294 | `berrydb_status` only | called; `unconfigured`, `no_matching_project` | all six | called; `selected`, `linked_repository`, `unavailable` |
+| Antigravity | 1.3.1 | `berrydb_status` only | called; `unconfigured`, `no_matching_project` | all six | called; `selected`, `linked_repository`, `unavailable` |
+
+"Tools listed" is what each model reported from its own tool list; Claude
+Code's `init` event listed the same names. The empty-store result also
+reported `workspace` as the host's folder,
+spelled `/private/var/folders/…` although the hosts started in
+`/var/folders/…`. The linked result named the project
+(`{"id": "<UUID>", "name": "smoke"}`) with the ID in upper case;
+`--project` accepts either case. Every result reported
+`live_reads: "not_available"`.
+
+The same stores were also driven without a host by a stdio script that
+sends initialize, `tools/list` and `tools/call`: identical results, and,
+with the roots capability declared and `roots/list` answered with the
+linked folder while the process ran in the temporary root, selection was
+`linked_repository` through the root as well.
+
+### Host behavior observed
+
+- **Tool names.** Codex and Claude Code present the tools to the model as
+  `mcp__<server>__<tool>`, e.g. `mcp__berrydb__berrydb_status`.
+  Antigravity presents one generic `call_mcp_tool` taking `ServerName` and
+  `ToolName`, and was called with `ToolName: "berrydb_status"`.
+- **Result content.** The helper returns the same compact JSON as
+  `structuredContent` and as a text block. Codex's event stream carried
+  both, equal after parsing. Antigravity's tool output was the text block
+  verbatim, including the `\/` escapes the helper's encoder writes. Claude
+  Code passed the model JSON equal to `structuredContent` without those
+  escapes, so it does not forward the text block byte for byte. All three
+  models reproduced the same fields.
+- **Tool loading.** Claude Code listed the server's tools as deferred; the
+  model loaded `berrydb_status` through its tool search before calling it.
+- **Approval.** Claude Code ran with `--allowedTools` naming the tool; a
+  print-mode run without it was not tried. Codex `exec` and Antigravity (in
+  its configured `always-proceed` permission mode) called the tool without
+  an approval step.
+- **Setup commands.** The `--help` of the same versions matches the
+  commands the AI Agents settings pane shows:
+  `codex mcp add <NAME> -- <COMMAND>...`;
+  `claude mcp add [options] <name> <commandOrUrl> [args...]` with
+  `--scope` defaulting to `local` (the current project only), hence
+  `--scope user` for one entry serving every repository;
+  `agy mcp add [flags] <name> <commandOrUrl> [args...]`, flags before the
+  name and `--` before arguments that begin with `-`.
+
+Conclusion: **pass** for listing, calling, the unconfigured reason and
+selection by link file on all three hosts. Not covered: an integrity tag
+verified with the app's real key through a host, live reads (not
+implemented), a packaged and signed helper, and Cursor.
