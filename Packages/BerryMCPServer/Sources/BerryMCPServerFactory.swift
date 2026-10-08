@@ -27,7 +27,7 @@ public enum BerryMCPServerFactory {
             metadata: MCPMetadataService,
             explicitProject: UUID?,
             workingDirectory: String,
-            version: String = "unversioned",
+            version: String,
             diagnostics: @escaping @Sendable (String) -> Void = MCPSessionContext.standardError
         ) {
             self.resolver = resolver

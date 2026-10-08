@@ -27,8 +27,6 @@ private final class Locked<Value: Sendable>: Sendable {
 
 private struct StoreUnreadable: Error {}
 
-private struct TimedOut: Error {}
-
 /// How the test client answers `roots/list`.
 private enum RootsBehavior: Sendable {
     /// The client declares no roots capability but still registers a handler,
@@ -110,7 +108,7 @@ struct BerryMCPServerFactoryTests {
     ) async throws {
         let dependencies = BerryMCPServerFactory.Dependencies(
             resolver: resolver(store), metadata: metadata(),
-            explicitProject: explicitProject, workingDirectory: workingDirectory,
+            explicitProject: explicitProject, workingDirectory: workingDirectory, version: "test",
             diagnostics: { line in diagnostics.update { $0.append(line) } }
         )
         let (server, start) = await BerryMCPServerFactory.makeServer(dependencies)
@@ -140,7 +138,7 @@ struct BerryMCPServerFactoryTests {
 
         let (clientTransport, serverTransport) = await InMemoryTransport.createConnectedPair()
         do {
-            try await withTimeout {
+            try await withDeadline(.seconds(30)) {
                 try await start(serverTransport)
                 try await client.connect(transport: clientTransport)
                 try await body(client)
@@ -152,18 +150,6 @@ struct BerryMCPServerFactoryTests {
         }
         await client.disconnect()
         await server.stop()
-    }
-
-    func withTimeout(_ body: @escaping @Sendable () async throws -> Void) async throws {
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask { try await body() }
-            group.addTask {
-                try await Task.sleep(for: .seconds(30))
-                throw TimedOut()
-            }
-            try await group.next()
-            group.cancelAll()
-        }
     }
 
     static func call(_ client: Client, _ tool: MCPToolName) async throws -> CallTool.Result {
