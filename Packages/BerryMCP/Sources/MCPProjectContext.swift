@@ -33,9 +33,9 @@ public enum MCPProjectContext: Equatable, Sendable {
 
 /// Decides which project a host session serves, independent of any wire
 /// protocol: an explicit project id wins, then the host's workspace roots,
-/// then the process working directory. For the roots, and then for the
-/// working directory, a repository link file (`MCPRepositoryLink`) decides
-/// before the workspace roots registered in the app are matched.
+/// then the process working directory. Each of those workspaces is decided
+/// on its own by its repository link file (`MCPRepositoryLink`) when it has
+/// one, otherwise by the workspace roots registered in the app.
 ///
 /// Selection is a convenience, not authorization: verification of the
 /// selected project decides what is served. An unverifiable integrity tag
@@ -45,9 +45,11 @@ public enum MCPProjectContext: Equatable, Sendable {
 /// comes from an untrusted repository and can name any project, which is why
 /// it too only selects.
 ///
-/// Roots that name different projects are ambiguous and are never resolved
-/// by falling back to the working directory. Roots that match no project do
-/// fall back, since a host may open a folder BerryDB does not know about.
+/// Roots that name different projects, through link files, registered roots
+/// or a mix of both, are ambiguous and are never resolved by falling back to
+/// the working directory. Roots with neither a link file nor a registered
+/// match do fall back, since a host may open a folder BerryDB does not know
+/// about.
 public struct MCPProjectContextResolver: Sendable {
     private let loadProjects: @Sendable () throws -> [MCPProject]
     private let verify: @Sendable (UUID) throws -> MCPVerifiedProject?
@@ -75,13 +77,14 @@ public struct MCPProjectContextResolver: Sendable {
 
     /// Resolves the project for one session. `roots` are file-URI strings
     /// from `roots/list`, nil when the host has no roots capability.
-    /// `.unconfigured` carries the working directory as `workspace` only when
-    /// the working directory, or the link file found from it, was the input
-    /// that failed; explicit and roots failures report nil.
+    /// For `.invalidLinkFile`, `.unconfigured` carries the directory holding
+    /// the bad file as `workspace`. Otherwise it carries the working
+    /// directory only when the working directory was the input that failed;
+    /// explicit and roots failures report nil.
     ///
-    /// When any root has a link file, the links alone decide and registered
-    /// roots are not matched: a link is never skipped in favour of another
-    /// input, so what it says is what is served.
+    /// A workspace with a link file is decided by that file alone: the link
+    /// is never skipped in favour of the workspace's registered roots, so
+    /// what it says is what is served.
     public func resolve(explicit: UUID?, roots: [String]?, workingDirectory: String) throws -> MCPProjectContext {
         let projects = try loadProjects()
 
@@ -94,43 +97,12 @@ public struct MCPProjectContextResolver: Sendable {
             }
         }
 
-        if let roots {
-            let paths = roots.compactMap(Self.filePath)
-            let links = paths.map(findLink).filter { $0 != .none }
-            if !links.isEmpty {
-                return try linked(links, projects: projects, workspace: nil)
-            }
-            var ids: [UUID] = []
-            for path in paths {
-                switch selector.select(workspace: path, projects: projects) {
-                case .selected(let id):
-                    if !ids.contains(id) { ids.append(id) }
-                case .ambiguous:
-                    return .unconfigured(.ambiguousProjects, workspace: nil)
-                case .noMatch:
-                    break
-                }
-            }
-            if ids.count > 1 {
-                return .unconfigured(.ambiguousProjects, workspace: nil)
-            }
-            if let id = ids.first {
-                return try verified(id: id, source: .roots, workspace: nil)
-            }
+        if let roots,
+           let decided = try decide(roots.compactMap(Self.filePath), projects: projects, workingDirectory: nil) {
+            return decided
         }
-
-        let workingDirectoryLink = findLink(workingDirectory)
-        if workingDirectoryLink != .none {
-            return try linked([workingDirectoryLink], projects: projects, workspace: workingDirectory)
-        }
-        switch selector.select(workspace: workingDirectory, projects: projects) {
-        case .selected(let id):
-            return try verified(id: id, source: .workingDirectory, workspace: workingDirectory)
-        case .ambiguous:
-            return .unconfigured(.ambiguousProjects, workspace: workingDirectory)
-        case .noMatch:
-            return .unconfigured(.noMatchingProject, workspace: workingDirectory)
-        }
+        return try decide([workingDirectory], projects: projects, workingDirectory: workingDirectory)
+            ?? .unconfigured(.noMatchingProject, workspace: workingDirectory)
     }
 
     /// The current state of a project chosen earlier, without repeating the
@@ -147,39 +119,74 @@ public struct MCPProjectContextResolver: Sendable {
         return .selected(verified, source: source)
     }
 
-    /// The outcome decided by the link files found for one input, nearest
-    /// file per workspace. Problems in a single file are reported before
-    /// conflicts between files: any invalid file, then any name no project
-    /// has, then a name shared by several projects or links naming different
-    /// projects, both of which are ambiguous.
+    /// The outcome for the workspaces of one input, the host's roots or the
+    /// working directory, or nil when none of them has a link file or a
+    /// registered match, so the next input decides.
     ///
-    /// A project chosen this way is verified with no workspace, even when the
-    /// link was found from the working directory: the session re-verifies
-    /// later requests with the workspace it keeps for a link selection, which
-    /// is nil, and a disabled or deleted project must read the same on every
-    /// request.
-    private func linked(
-        _ links: [MCPRepositoryLink.Lookup], projects: [MCPProject], workspace: String?
-    ) throws -> MCPProjectContext {
-        var names: [String] = []
-        for link in links {
-            guard case let .found(_, name) = link else {
-                return .unconfigured(.invalidLinkFile, workspace: workspace)
-            }
-            names.append(name)
-        }
+    /// Each workspace contributes on its own: through its nearest link file
+    /// when it has one, otherwise through the registered roots that contain
+    /// it. Problems in a single workspace are reported before conflicts
+    /// between workspaces: an invalid link file, then a linked name no
+    /// project has, then a tie between registered roots, a name several
+    /// projects share, or workspaces naming different projects, all of which
+    /// are ambiguous. The selection is attributed to the link file when any
+    /// contributing workspace used one.
+    ///
+    /// - Parameter workingDirectory: Set when the input is the working
+    ///   directory, nil for the roots. It is the workspace reported for the
+    ///   input's failures and kept with a project its registered roots
+    ///   select. A project a link chose is verified with no workspace: the
+    ///   session re-verifies later requests with the workspace it keeps for a
+    ///   link selection, which is nil, and a disabled or deleted project must
+    ///   read the same on every request.
+    private func decide(
+        _ workspaces: [String], projects: [MCPProject], workingDirectory: String?
+    ) throws -> MCPProjectContext? {
+        var invalidLinkDirectory: String?
+        var unknownLinkedName: String?
+        var registeredTie = false
+        var usedLink = false
         var ids: [UUID] = []
-        for name in names {
-            let matching = projects.filter { MCPRepositoryLink.matches(projectName: $0.name, linkedName: name) }
-            guard !matching.isEmpty else {
-                return .unconfigured(.linkedProjectNotFound, workspace: workspace, linkedProject: name)
+        for workspace in workspaces {
+            var matched: [UUID] = []
+            switch findLink(workspace) {
+            case let .invalid(directory):
+                invalidLinkDirectory = invalidLinkDirectory ?? directory
+            case let .found(_, name):
+                usedLink = true
+                matched = projects
+                    .filter { MCPRepositoryLink.matches(projectName: $0.name, linkedName: name) }
+                    .map(\.id)
+                if matched.isEmpty { unknownLinkedName = unknownLinkedName ?? name }
+            case .none:
+                switch selector.select(workspace: workspace, projects: projects) {
+                case .selected(let id): matched = [id]
+                case .ambiguous: registeredTie = true
+                case .noMatch: break
+                }
             }
-            for project in matching where !ids.contains(project.id) {
-                ids.append(project.id)
+            for id in matched where !ids.contains(id) {
+                ids.append(id)
             }
         }
-        guard ids.count == 1 else { return .unconfigured(.ambiguousProjects, workspace: workspace) }
-        return try verified(id: ids[0], source: .linkedRepository, workspace: nil)
+        // The directory holding a bad file is reported in place of the
+        // workspace so the user knows which file to fix; it comes from the
+        // walk up from the user's own workspace and names no project.
+        if let invalidLinkDirectory {
+            return .unconfigured(.invalidLinkFile, workspace: invalidLinkDirectory)
+        }
+        if let unknownLinkedName {
+            return .unconfigured(.linkedProjectNotFound, workspace: workingDirectory, linkedProject: unknownLinkedName)
+        }
+        if registeredTie || ids.count > 1 {
+            return .unconfigured(.ambiguousProjects, workspace: workingDirectory)
+        }
+        guard let id = ids.first else { return nil }
+        if usedLink {
+            return try verified(id: id, source: .linkedRepository, workspace: nil)
+        }
+        let source: MCPSelectionSource = workingDirectory == nil ? .roots : .workingDirectory
+        return try verified(id: id, source: source, workspace: workingDirectory)
     }
 
     /// The decoded path of a `file:` URI; nil for any other scheme or an

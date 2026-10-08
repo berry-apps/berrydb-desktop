@@ -60,7 +60,9 @@ public enum MCPRepositoryLink {
     /// but is not a readable regular file, such as a directory, a file
     /// without read permission or a symbolic link to nothing, returns empty
     /// data, which no link parses from, so it is reported as invalid instead
-    /// of letting the walk continue past it.
+    /// of letting the walk continue past it. Any other failure to open, such
+    /// as EACCES or EPERM, fails closed the same way: whether a link exists
+    /// there cannot be known, and skipping it could select another project.
     ///
     /// The file is opened with `O_NONBLOCK` because opening a FIFO for
     /// reading otherwise waits for a writer (open(2)); observed on macOS with
@@ -87,9 +89,10 @@ public enum MCPRepositoryLink {
     public static func contents(projectName: String) -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        // `encode` throws only for a floating-point value JSON cannot
-        // represent (https://developer.apple.com/documentation/foundation/jsonencoder/encode(_:)),
-        // and this structure holds one string.
+        // `encode` throws when a value fails to encode, is not encodable as a
+        // JSON object or array, or holds a non-finite floating-point number
+        // (https://developer.apple.com/documentation/foundation/jsonencoder/encode(_:)).
+        // A keyed structure holding one string is none of these.
         guard var data = try? encoder.encode(Content(project: projectName)) else {
             preconditionFailure("A link file holding one string always encodes")
         }

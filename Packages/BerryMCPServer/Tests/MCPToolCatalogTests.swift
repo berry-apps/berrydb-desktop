@@ -442,8 +442,9 @@ struct MCPToolCatalogTests {
         #expect(status["selected_by"]?.isNull == true)
         #expect(status["workspace"]?.stringValue == "/work/app")
 
-        let invalid = object(try call(.status, nil, context: .unconfigured(.invalidLinkFile, workspace: nil)))
+        let invalid = object(try call(.status, nil, context: .unconfigured(.invalidLinkFile, workspace: "/work/repo")))
         #expect(invalid["reason"]?.stringValue == "invalid_link_file")
+        #expect(invalid["workspace"]?.stringValue == "/work/repo")
         #expect(invalid["linked_project"]?.isNull == true)
     }
 

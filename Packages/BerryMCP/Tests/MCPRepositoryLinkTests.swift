@@ -201,6 +201,11 @@ struct MCPRepositoryLinkTests {
         defer { try? FileManager.default.removeItem(at: root) }
         #expect(MCPRepositoryLink.readBounded(root.appendingPathComponent(MCPRepositoryLink.fileName).path) == nil)
         #expect(MCPRepositoryLink.readBounded(root.appendingPathComponent("missing/" + MCPRepositoryLink.fileName).path) == nil)
+
+        // A workspace root can be a file; the path under it fails with ENOTDIR.
+        let file = root.appendingPathComponent("notes.txt")
+        try Data("x".utf8).write(to: file)
+        #expect(MCPRepositoryLink.readBounded(file.appendingPathComponent(MCPRepositoryLink.fileName).path) == nil)
     }
 
     @Test func entryThatIsNotAReadableFileIsInvalid() throws {
