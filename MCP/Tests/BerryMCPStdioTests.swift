@@ -214,6 +214,10 @@ struct BerryMCPStdioTests {
 
         try helper.send(Self.initialize(id: 1, protocolVersion: "2025-11-25", client: "berrydb-tests"))
         _ = try await helper.response(id: 1)
+        // The handler is installed before serving starts, but its
+        // registration runs on a dispatch queue; until it has, the signal
+        // would still take its default action.
+        try await helper.ignoring(signal)
         helper.send(signal: signal)
 
         let termination = try await helper.termination()

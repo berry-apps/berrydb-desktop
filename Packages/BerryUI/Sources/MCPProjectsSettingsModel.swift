@@ -64,10 +64,11 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     private let store: BerryStore
     private let keyStore: MCPAccessKeyStore
     private let helperURL: URL?
-    /// Writes one link file; the atomic write `atomicLinkWrite` in the app.
-    /// Tests replace it to refuse every write their case must not make, so a
-    /// regression in the checks before it fails the test instead of writing
-    /// outside its temporary folders, at the disk root for one.
+    /// Writes one link file. The app uses `atomicLinkWrite`, which replaces
+    /// the file in one step. Tests replace it to refuse every write their
+    /// case must not make, so a regression in the checks before it fails the
+    /// test instead of writing outside its temporary folders, at the disk
+    /// root for one.
     var linkWriter: (Data, URL) throws -> Void = MCPProjectsSettingsModel.atomicLinkWrite
 
     /// `keyStore` defaults to the Keychain item the helper reads; the
@@ -255,7 +256,9 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     }
 
     /// What the connection checklist shows for a profile besides its name.
-    /// Two profiles with the same name stay distinguishable by it.
+    /// It tells apart two profiles with the same name when their driver,
+    /// group or production label differs; profiles alike in all of these
+    /// still look the same.
     public struct ConnectionRowDetail: Equatable {
         /// The driver ID, then the group name when the profile has one.
         public var text: String

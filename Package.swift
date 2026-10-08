@@ -348,7 +348,7 @@ let package = Package(
         .target(
             name: "BerryMCPServer",
             dependencies: [
-                "BerryMCP", "BerryStore", "BerryGraph", "BerryCredentials",
+                "BerryMCP", "BerryStore", "BerryGraph",
                 .product(name: "MCP", package: "swift-sdk"),
             ],
             path: "Packages/BerryMCPServer/Sources"
@@ -543,7 +543,7 @@ let package = Package(
         .testTarget(
             name: "BerryMCPServerTests",
             dependencies: [
-                "BerryMCPServer", "BerryMCP", "BerryStore", "BerryGraph", "BerryCredentials",
+                "BerryMCPServer", "BerryMCP", "BerryStore", "BerryGraph",
                 .product(name: "MCP", package: "swift-sdk"),
             ],
             path: "Packages/BerryMCPServer/Tests"

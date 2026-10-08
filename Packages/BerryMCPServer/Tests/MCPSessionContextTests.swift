@@ -88,8 +88,16 @@ struct MCPSessionContextTests {
             diagnostics: { recorder.write($0) }
         )
         let first = Task { await session.context() }
-        var startedEvents = started.makeAsyncIterator()
-        _ = await startedEvents.next()
+        do {
+            try await withDeadline(.seconds(10)) {
+                var startedEvents = started.makeAsyncIterator()
+                _ = await startedEvents.next()
+            }
+        } catch {
+            open.finish()
+            signalStarted.finish()
+            throw error
+        }
         let second = Task { await session.context() }
         // An allowance for the second request to reach the actor and wait on
         // the shared roots request. Should it arrive later instead, it finds

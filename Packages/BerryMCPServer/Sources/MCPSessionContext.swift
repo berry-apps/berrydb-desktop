@@ -30,7 +30,7 @@ import Synchronization
 /// (`sendAndAwait` in Server.swift of swift-sdk 0.12.1), so a host that
 /// declares roots but never answers would otherwise stall every request of the
 /// connection. The MCP lifecycle specification asks senders to set timeouts on
-/// their requests: https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle#timeouts
+/// their requests: https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#timeouts
 /// After a timeout, selection falls back to the working directory, and the
 /// abandoned request stays pending in the SDK until the server stops.
 public actor MCPSessionContext {
@@ -40,10 +40,13 @@ public actor MCPSessionContext {
     /// Writes one line to standard error. Standard output is reserved for
     /// JSON-RPC messages, so diagnostics never go there.
     public static let standardError: @Sendable (String) -> Void = { line in
-        // `write(contentsOf:)` reports a closed pipe as a Swift error; the
-        // older `write(_:)` raises an Objective-C exception there, which would
-        // terminate the process. Documented for both methods at
+        // `write(contentsOf:)` reports a failed write as a Swift error,
+        // dropped here; the older `write(_:)` raises an Objective-C exception
+        // instead. Documented for both methods at
         // https://developer.apple.com/documentation/foundation/filehandle
+        // A closed standard error is not survived either way: this process
+        // keeps the default action of SIGPIPE, which ends it before the
+        // write can fail with EPIPE (write(2), sigaction(2)).
         try? FileHandle.standardError.write(contentsOf: Data((line + "\n").utf8))
     }
 

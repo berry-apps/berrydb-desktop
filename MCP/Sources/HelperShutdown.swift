@@ -7,9 +7,9 @@ import Synchronization
 /// helper's life: a signal that arrives before the server is serving is
 /// remembered and applied as soon as it is.
 ///
-/// Invariant: once a signal has been received, `server.stop()` is called
-/// exactly when a server is being served, whichever comes first. Calling it
-/// more than once is harmless, since a stopped server has no task or
+/// Invariant: `server.stop()` is called once a signal has been received and
+/// a server is being served, at whichever of the two happens later. Calling
+/// it more than once is harmless, since a stopped server has no task or
 /// connection left to stop.
 final class HelperShutdown: Sendable {
     private struct State {
