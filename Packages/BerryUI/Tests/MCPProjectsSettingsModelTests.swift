@@ -425,4 +425,78 @@ struct MCPProjectsSettingsModelTests {
 
         #expect(first.text == #"claude mcp add --scope user berrydb -- "/Users/a\"b/\$HOME/\`x\`/back\\slash/berrydb-mcp""#)
     }
+
+    @Test func checklistRowShowsDriverAndGroupSoSameNamedProfilesDiffer() {
+        let local = ConnectionProfile(driverID: "postgres", name: "Berry DA Tool")
+        let remote = ConnectionProfile(
+            driverID: "postgres",
+            name: "Berry DA Tool",
+            groupName: "Production Remote Server",
+            envColor: "production"
+        )
+
+        let localDetail = MCPProjectsSettingsModel.connectionRowDetail(for: local)
+        let remoteDetail = MCPProjectsSettingsModel.connectionRowDetail(for: remote)
+
+        #expect(localDetail.text == "postgres")
+        #expect(remoteDetail.text == "postgres · Production Remote Server")
+        #expect(localDetail != remoteDetail)
+    }
+
+    @Test func checklistRowOmitsABlankGroupName() {
+        let blank = ConnectionProfile(driverID: "mysql", name: "Reporting", groupName: "  ")
+        let padded = ConnectionProfile(driverID: "mysql", name: "Reporting", groupName: " Staging ")
+
+        #expect(MCPProjectsSettingsModel.connectionRowDetail(for: blank).text == "mysql")
+        #expect(MCPProjectsSettingsModel.connectionRowDetail(for: padded).text == "mysql · Staging")
+    }
+
+    @Test func checklistRowFlagsOnlyTheProductionLabel() {
+        func isProduction(_ envColor: String?) -> Bool {
+            let profile = ConnectionProfile(driverID: "postgres", name: "Orders", envColor: envColor)
+            return MCPProjectsSettingsModel.connectionRowDetail(for: profile).isProduction
+        }
+
+        #expect(isProduction("production"))
+        #expect(!isProduction(nil))
+        #expect(!isProduction("staging"))
+        #expect(!isProduction(""))
+    }
+
+    @Test func severalChosenFoldersAreAllAdded() {
+        let result = MCPProjectsSettingsModel.addingRoots(
+            ["/work/billing", "/work/billing-api", "/work/ledger"],
+            to: ["/work/existing"]
+        )
+
+        #expect(result.roots == ["/work/existing", "/work/billing", "/work/billing-api", "/work/ledger"])
+        #expect(result.rejections.isEmpty)
+    }
+
+    @Test func aRejectedFolderIsReportedWithoutDroppingTheAcceptedOnes() {
+        let result = MCPProjectsSettingsModel.addingRoots(["/work/billing", "/", "/work/ledger"], to: [])
+
+        #expect(result.roots == ["/work/billing", "/work/ledger"])
+        #expect(result.rejections == ["/: " + L("A workspace root cannot be the whole disk.")])
+    }
+
+    @Test func everyRejectedFolderGetsItsOwnLine() {
+        let result = MCPProjectsSettingsModel.addingRoots(["/", "relative/path"], to: ["/work/existing"])
+
+        #expect(result.roots == ["/work/existing"])
+        #expect(result.rejections == [
+            "/: " + L("A workspace root cannot be the whole disk."),
+            "relative/path: " + L("A workspace root must be an absolute path."),
+        ])
+    }
+
+    @Test func foldersAlreadyInTheDraftOrRepeatedInTheSelectionAreAddedOnce() {
+        let result = MCPProjectsSettingsModel.addingRoots(
+            ["/work/billing", "/work/billing/", "/work/ledger", "/work/ledger"],
+            to: ["/work/billing"]
+        )
+
+        #expect(result.roots == ["/work/billing", "/work/ledger"])
+        #expect(result.rejections.isEmpty)
+    }
 }

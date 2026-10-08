@@ -184,6 +184,56 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         return nil
     }
 
+    /// What the connection checklist shows for a profile besides its name.
+    /// Two profiles with the same name stay distinguishable by it.
+    public struct ConnectionRowDetail: Equatable {
+        /// The driver ID, then the group name when the profile has one.
+        public var text: String
+        /// True for the profiles the sidebar marks with its production badge.
+        public var isProduction: Bool
+    }
+
+    /// The checklist detail for `profile`: its driver and group name joined
+    /// by " · ", and whether it carries the production label. A blank group
+    /// name counts as none, and only the exact `production` label is flagged,
+    /// the same test the sidebar applies.
+    nonisolated public static func connectionRowDetail(for profile: ConnectionProfile) -> ConnectionRowDetail {
+        let group = profile.groupName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return ConnectionRowDetail(
+            text: group.isEmpty ? profile.driverID : "\(profile.driverID) · \(group)",
+            isProduction: profile.envColor == "production"
+        )
+    }
+
+    /// The outcome of adding folders chosen in the open panel to a draft.
+    public struct RootAddition: Equatable {
+        /// The draft's roots after the addition.
+        public var roots: [String]
+        /// One ready-to-show line per rejected folder.
+        public var rejections: [String]
+    }
+
+    /// Adds every valid folder of `paths` to `existing`, in selection order,
+    /// in the canonical form `canonicalRoot` produces. A rejected folder never
+    /// blocks the others: it is reported on its own line, naming the folder
+    /// and the `validateRoot` reason. A folder already present, or repeated
+    /// in `paths`, is added once.
+    nonisolated public static func addingRoots(_ paths: [String], to existing: [String]) -> RootAddition {
+        var roots = existing
+        var rejections: [String] = []
+        for path in paths {
+            if let message = validateRoot(path) {
+                rejections.append("\(path): \(message)")
+                continue
+            }
+            let root = canonicalRoot(path)
+            if !roots.contains(root) {
+                roots.append(root)
+            }
+        }
+        return RootAddition(roots: roots, rejections: rejections)
+    }
+
     /// True when `path` is the user's home directory itself, a root the view
     /// accepts but warns about because every repository under it matches.
     nonisolated public static func isHomeDirectory(_ path: String) -> Bool {

@@ -745,6 +745,7 @@
 "Delete this MCP project?" = "Delete this MCP project?";
 "Coding agents working in its folders will no longer find a project." = "Coding agents working in its folders will no longer find a project.";
 "Workspace Folders" = "Workspace Folders";
+"Add every folder whose code uses these connections. Subfolders and worktrees inside a folder are included." = "Add every folder whose code uses these connections. Subfolders and worktrees inside a folder are included.";
 "This is your home folder: every repository inside it selects this project unless another project has a more specific folder." = "This is your home folder: every repository inside it selects this project unless another project has a more specific folder.";
 "Add Folder…" = "Add Folder…";
 "No saved connections yet." = "No saved connections yet.";

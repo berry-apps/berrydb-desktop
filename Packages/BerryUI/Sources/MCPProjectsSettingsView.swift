@@ -165,7 +165,11 @@ private struct MCPProjectEditorSheet: View {
             }
         }
         .padding(16)
-        .frame(width: 540, height: 620)
+        // The sheet must fit inside the 560-point Settings pane it is
+        // presented over: at 620 points it ran past the window's bottom edge
+        // in the running app. At 500 the form scrolls and the buttons below
+        // it stay in view.
+        .frame(width: 540, height: 500)
         .confirmationDialog(L("Delete this MCP project?"), isPresented: $confirmDelete, titleVisibility: .visible) {
             Button(L("Delete"), role: .destructive) {
                 if model.delete(id: draft.id) { dismiss() }
@@ -178,6 +182,9 @@ private struct MCPProjectEditorSheet: View {
 
     private var rootsSection: some View {
         Section(L("Workspace Folders")) {
+            Text(L("Add every folder whose code uses these connections. Subfolders and worktrees inside a folder are included."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
             ForEach(draft.workspaceRoots, id: \.self) { root in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
@@ -204,7 +211,10 @@ private struct MCPProjectEditorSheet: View {
             }
             Button(L("Add Folder…"), action: addFolder)
             if let rootError {
-                Text(rootError).font(.caption).foregroundStyle(.red)
+                Text(rootError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -215,10 +225,16 @@ private struct MCPProjectEditorSheet: View {
                 Text(L("No saved connections yet.")).foregroundStyle(.secondary)
             }
             ForEach(model.profiles) { profile in
+                let detail = MCPProjectsSettingsModel.connectionRowDetail(for: profile)
                 Toggle(isOn: membership(of: profile.id)) {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(profile.name)
-                        Text(profile.driverID).font(.caption).foregroundStyle(.secondary)
+                        HStack(spacing: 6) {
+                            Text(profile.name)
+                            if detail.isProduction {
+                                ProductionBadge()
+                            }
+                        }
+                        Text(detail.text).font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -278,17 +294,11 @@ private struct MCPProjectEditorSheet: View {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        if let message = MCPProjectsSettingsModel.validateRoot(url.path) {
-            rootError = message
-            return
-        }
-        rootError = nil
-        let root = MCPProjectsSettingsModel.canonicalRoot(url.path)
-        if !draft.workspaceRoots.contains(root) {
-            draft.workspaceRoots.append(root)
-        }
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        let addition = MCPProjectsSettingsModel.addingRoots(panel.urls.map(\.path), to: draft.workspaceRoots)
+        draft.workspaceRoots = addition.roots
+        rootError = addition.rejections.isEmpty ? nil : addition.rejections.joined(separator: "\n")
     }
 
     private func copy(_ text: String) {
