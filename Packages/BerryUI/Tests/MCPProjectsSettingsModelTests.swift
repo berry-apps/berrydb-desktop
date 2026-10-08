@@ -646,6 +646,36 @@ struct MCPProjectsSettingsModelTests {
         #expect(try Data(contentsOf: file) == existing)
     }
 
+    @Test func aFileThatAlreadySelectsTheProjectCountsAsLinked() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        let billing = try savedDraft(named: "Billing", in: model)
+        let formatted = try makeFolder()
+        let symlinked = try makeFolder()
+        let outside = try makeFolder()
+        defer {
+            for folder in [formatted, symlinked, outside] {
+                try? FileManager.default.removeItem(at: folder)
+            }
+        }
+        // Reformatted, re-cased and carrying another key: the helper still
+        // selects Billing from it.
+        let existing = Data(#"{ "project": " billing ", "comment": "x" }"#.utf8)
+        try existing.write(to: linkFile(in: formatted))
+        let target = outside.appendingPathComponent("shared.json")
+        try MCPRepositoryLink.contents(projectName: "BILLING").write(to: target)
+        try FileManager.default.createSymbolicLink(at: linkFile(in: symlinked), withDestinationURL: target)
+
+        for overwrite in [false, true] {
+            #expect(model.linkRepositories([formatted, symlinked], projectID: billing.id, overwrite: overwrite)
+                == [.unchanged(linkFile(in: formatted).path), .unchanged(linkFile(in: symlinked).path)])
+        }
+
+        #expect(try Data(contentsOf: linkFile(in: formatted)) == existing)
+        let type = try FileManager.default.attributesOfItem(atPath: linkFile(in: symlinked).path)[.type] as? FileAttributeType
+        #expect(type == .typeSymbolicLink)
+    }
+
     @Test func aSymbolicLinkIsReplacedWithoutWritingThroughIt() throws {
         let (store, _, _) = try makeStore()
         let model = makeModel(store, KeyBox())
@@ -714,6 +744,32 @@ struct MCPProjectsSettingsModelTests {
         ])
         #expect(try Data(contentsOf: notes) == notesBytes)
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["notes.txt"])
+    }
+
+    @Test func aSymbolicLinkToTheDiskRootIsRejectedAsTheWholeDisk() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        let billing = try savedDraft(named: "Billing", in: model)
+        let folder = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let disk = folder.appendingPathComponent("disk", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: disk, withDestinationURL: URL(fileURLWithPath: "/"))
+
+        #expect(model.linkRepositories([disk], projectID: billing.id, overwrite: true)
+            == [.rejected(linkFile(in: disk).path, reason: L("The whole disk cannot be linked to a project."))])
+    }
+
+    @Test func aLinkInTheHomeFolderCarriesAWarning() {
+        let warning = L("This links your home folder: every folder inside it without a nearer .berrydb.json selects this project, even another project’s workspace folder.")
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        let homeFile = linkFile(in: home).path
+        let nestedFile = linkFile(in: home.appendingPathComponent("Projects/billing", isDirectory: true)).path
+
+        #expect(MCPProjectsSettingsModel.homeFolderLinkWarning(for: .written(homeFile)) == warning)
+        #expect(MCPProjectsSettingsModel.homeFolderLinkWarning(for: .unchanged(homeFile)) == warning)
+        #expect(MCPProjectsSettingsModel.homeFolderLinkWarning(for: .needsOverwrite(homeFile, existingProject: "Ledger")) == nil)
+        #expect(MCPProjectsSettingsModel.homeFolderLinkWarning(for: .rejected(homeFile, reason: "x")) == nil)
+        #expect(MCPProjectsSettingsModel.homeFolderLinkWarning(for: .written(nestedFile)) == nil)
     }
 
     @Test func anUnsavedProjectLinksNothing() throws {

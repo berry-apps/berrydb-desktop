@@ -247,10 +247,18 @@ private struct MCPProjectEditorSheet: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(Array(linkResults.enumerated()), id: \.offset) { _, result in
-                Text(Self.outcome(of: result))
-                    .font(.caption)
-                    .foregroundStyle(Self.outcomeColor(of: result))
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(Self.outcome(of: result))
+                        .font(.caption)
+                        .foregroundStyle(Self.outcomeColor(of: result))
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let warning = MCPProjectsSettingsModel.homeFolderLinkWarning(for: result) {
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
         }
     }

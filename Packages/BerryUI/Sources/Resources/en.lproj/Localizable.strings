@@ -779,3 +779,4 @@
 "Only a folder can be linked to a project." = "Only a folder can be linked to a project.";
 "A folder named .berrydb.json is in the way." = "A folder named .berrydb.json is in the way.";
 "The link file could not be written: %@" = "The link file could not be written: %@";
+"This links your home folder: every folder inside it without a nearer .berrydb.json selects this project, even another project’s workspace folder." = "This links your home folder: every folder inside it without a nearer .berrydb.json selects this project, even another project’s workspace folder.";

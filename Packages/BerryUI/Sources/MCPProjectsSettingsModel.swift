@@ -10,7 +10,8 @@ import Foundation
 public enum MCPRepositoryLinkResult: Equatable, Sendable {
     /// The file now holds the link naming the project.
     case written(String)
-    /// The file already held exactly that link and was not rewritten.
+    /// The file already selects the project, by the name rule the helper
+    /// applies, and was not rewritten.
     case unchanged(String)
     /// Something else is there and was left as it is; linking again with
     /// `overwrite` replaces it. `existingProject` is the name it holds, or
@@ -222,16 +223,17 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     ///
     /// Nothing else is written: no other file, no git configuration and no
     /// `.gitignore`. A project not saved as of the last `reload()` links
-    /// nothing. A file already holding exactly that link is left untouched,
-    /// any other entry of that name is replaced only when `overwrite` is
-    /// true, and a folder of that name never is. The disk's root and
-    /// anything that is not a folder are rejected.
+    /// nothing. A file that already selects the project is left untouched,
+    /// whatever its formatting, extra keys or capitalization, and so is a
+    /// symbolic link to such a file. Any other entry of that name is
+    /// replaced only when `overwrite` is true, and a folder of that name
+    /// never is. The disk's root and anything that is not a folder are
+    /// rejected.
     public func linkRepositories(_ folders: [URL], projectID: UUID, overwrite: Bool) -> [MCPRepositoryLinkResult] {
         guard let project = projects.first(where: { $0.id == projectID }) else {
             return folders.map { .rejected(Self.linkFilePath(in: $0), reason: Self.saveBeforeLinking) }
         }
-        let contents = MCPRepositoryLink.contents(projectName: project.name)
-        return folders.map { Self.link($0, contents: contents, overwrite: overwrite) }
+        return folders.map { Self.link($0, projectName: project.name, overwrite: overwrite) }
     }
 
     /// A localized reason `path` cannot be a workspace root, or nil. A root
@@ -355,12 +357,37 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     )
     private static let saveBeforeLinking = L("Save the project before linking repositories.")
 
+    /// A warning to show under a result that left a link file in the home
+    /// directory itself, or nil. The helper takes the nearest link file at or
+    /// above a workspace before it looks at registered workspace folders, so
+    /// a link at home selects this project for every folder inside it that
+    /// has no nearer link, including other projects' workspace folders.
+    /// Linking there stays allowed, as a home workspace folder does.
+    nonisolated public static func homeFolderLinkWarning(for result: MCPRepositoryLinkResult) -> String? {
+        let path: String
+        switch result {
+        case let .written(file), let .unchanged(file):
+            path = file
+        case .needsOverwrite, .rejected:
+            return nil
+        }
+        guard isHomeDirectory((path as NSString).deletingLastPathComponent) else { return nil }
+        return L("This links your home folder: every folder inside it without a nearer .berrydb.json selects this project, even another project’s workspace folder.")
+    }
+
     nonisolated private static func linkFilePath(in folder: URL) -> String {
         folder.appendingPathComponent(MCPRepositoryLink.fileName).path
     }
 
-    /// Writes `contents` as the link file of `folder`, following the rules
-    /// `linkRepositories` states.
+    /// Links `folder` to the project called `projectName`, following the
+    /// rules `linkRepositories` states.
+    ///
+    /// An existing file counts as linked when it selects the project by the
+    /// helper's own name rule, not only when its bytes match. Repositories
+    /// that reformat JSON on commit would otherwise be offered a replacement
+    /// on every clone, and replacing would drop extra keys and turn a
+    /// symbolic link into a plain file, while the helper already selects
+    /// the project from it.
     ///
     /// The root is refused because the helper never reads a link file there.
     /// An existing entry is read with the helper's own bounded reader, which
@@ -371,7 +398,8 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// the new file and its target is left as it was, and a folder of that
     /// name makes the write fail. A folder is therefore reported as in the
     /// way rather than offered for replacement.
-    nonisolated private static func link(_ folder: URL, contents: Data, overwrite: Bool) -> MCPRepositoryLinkResult {
+    nonisolated private static func link(_ folder: URL, projectName: String, overwrite: Bool) -> MCPRepositoryLinkResult {
+        let contents = MCPRepositoryLink.contents(projectName: projectName)
         let file = folder.appendingPathComponent(MCPRepositoryLink.fileName)
         let path = file.path
         guard canonicalRoot(folder.path) != "/" else {
@@ -382,7 +410,11 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             return .rejected(path, reason: L("Only a folder can be linked to a project."))
         }
         if let existing = MCPRepositoryLink.readBounded(path) {
-            if existing == contents {
+            let existingProject = MCPRepositoryLink.projectName(in: existing)
+            let selectsProject = existingProject.map {
+                MCPRepositoryLink.matches(projectName: projectName, linkedName: $0)
+            } == true
+            if existing == contents || selectsProject {
                 return .unchanged(path)
             }
             var entry = stat()
@@ -390,7 +422,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
                 return .rejected(path, reason: L("A folder named .berrydb.json is in the way."))
             }
             if !overwrite {
-                return .needsOverwrite(path, existingProject: MCPRepositoryLink.projectName(in: existing))
+                return .needsOverwrite(path, existingProject: existingProject)
             }
         }
         do {

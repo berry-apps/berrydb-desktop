@@ -774,8 +774,9 @@
 "%@ (names no project)" = "%@ (không ghi tên dự án nào)";
 "Wrote %@" = "Đã ghi %@";
 "%@ already links this project" = "%@ đã liên kết với dự án này";
-"%@ was not replaced" = "%@ không được thay thế";
+"%@ was not replaced" = "%@ chưa được thay thế";
 "The whole disk cannot be linked to a project." = "Không thể liên kết toàn bộ ổ đĩa với một dự án.";
-"Only a folder can be linked to a project." = "Chỉ có thể liên kết một thư mục với dự án.";
+"Only a folder can be linked to a project." = "Chỉ có thể liên kết thư mục với dự án.";
 "A folder named .berrydb.json is in the way." = "Đã có một thư mục tên .berrydb.json ở vị trí này.";
 "The link file could not be written: %@" = "Không thể ghi tệp liên kết: %@";
+"This links your home folder: every folder inside it without a nearer .berrydb.json selects this project, even another project’s workspace folder." = "Thao tác này liên kết thư mục home của bạn: mọi thư mục bên trong không có tệp .berrydb.json gần hơn sẽ chọn dự án này, kể cả thư mục làm việc của dự án khác.";
