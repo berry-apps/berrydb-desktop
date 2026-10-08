@@ -1,6 +1,6 @@
 # Local MCP Server Architecture
 
-Status: **PR 1 (AI-36)**. `BerryCredentials` key storage, the `MCPProject`
+Status: **PR 1 (foundation)**. `BerryCredentials` key storage, the `MCPProject`
 persistence model, per-profile access settings, HMAC-SHA256 row integrity and
 key rotation, project selection by workspace path, a SQL-only connection
 coordinator with bounded shutdown, the SQL read policy parser, a byte-exact
@@ -11,20 +11,20 @@ only. There is no settings UI and no agent SQL execution. See
 Phase 0 protocol gate and gates G1–G4 evidence; it does not establish Cursor
 support.
 
-## Purpose and difference from the AI-16 client
+## Purpose and difference from the in-app MCP client
 
 BerryDB has two independent MCP roles:
 
-- AI-16 is an outbound MCP **client** inside BerryDB's AI agent. It launches
-  external servers from a BerryDB-curated allowlist.
-- AI-36 is an inbound local MCP **server**. A coding-agent host (Codex,
+- The in-app MCP **client** is outbound, inside BerryDB's AI agent. It
+  launches external servers from a BerryDB-curated allowlist.
+- `berrydb-mcp` is an inbound local MCP **server**. A coding-agent host (Codex,
   Claude Code, Antigravity, or another MCP-capable application) launches the
   signed `berrydb-mcp` helper as a subprocess and calls a bounded,
   BerryDB-owned capability surface: schema/graph inspection and, where a
   profile allows it, bounded read-only queries.
 
-AI-36 does not replace, relax, or share state with AI-16's allowlist,
-approval flow, or trust model. `berrydb-mcp` is a second, headless
+The server does not replace, relax, or share state with the client's
+allowlist, approval flow, or trust model. `berrydb-mcp` is a second, headless
 composition root: it registers its own drivers and constructs its own
 connection coordinator, and cannot inherit live registry state, an active
 profile, or user approval from the BerryDB app process. Stdout carries only
