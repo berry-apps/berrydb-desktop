@@ -81,7 +81,9 @@ private struct MCPProjectsPane: View {
             }
         }
         .padding(16)
-        .sheet(item: $editing) { request in
+        // Reloading on dismiss also clears an error left by a save that
+        // failed before the sheet was cancelled.
+        .sheet(item: $editing, onDismiss: { model.reload() }) { request in
             MCPProjectEditorSheet(model: model, draft: request.draft, isNew: request.isNew)
         }
     }
@@ -95,9 +97,17 @@ private struct MCPProjectsPane: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Text(project.isEnabled ? L("Enabled") : L("Disabled"))
-                .font(.caption)
-                .foregroundStyle(project.isEnabled ? Color.green : Color.secondary)
+            if model.unverifiedProjectIDs.contains(project.id) {
+                // The stored enabled flag is not trustworthy here: the helper
+                // refuses the project and its editing copy is disabled.
+                Text(L("Not verified — save to confirm"))
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else {
+                Text(project.isEnabled ? L("Enabled") : L("Disabled"))
+                    .font(.caption)
+                    .foregroundStyle(project.isEnabled ? Color.green : Color.secondary)
+            }
             Button(L("Edit…")) { edit(project) }
         }
         .contentShape(Rectangle())
@@ -219,7 +229,7 @@ private struct MCPProjectEditorSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text(L("Run one command once per agent. The same entry works in every repository and selects the project from the agent’s folder; the “this project only” variants always serve this project."))
+                Text(L("Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder; an entry marked “this project only” always serves this project."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ForEach(Array(snippets.enumerated()), id: \.offset) { _, snippet in

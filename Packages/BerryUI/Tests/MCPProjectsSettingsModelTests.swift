@@ -227,6 +227,88 @@ struct MCPProjectsSettingsModelTests {
         #expect(box.writeCount == writesBefore)
     }
 
+    @Test func keyWriteFailureAbortsDeleteWithoutDeleting() throws {
+        let (store, _, _) = try makeStore()
+        let box = KeyBox()
+        let model = makeModel(store, box)
+        var draft = model.draftForNewProject()
+        draft.name = "Billing"
+        #expect(model.save(draft))
+        let keyBefore = box.data
+        box.writeSucceeds = false
+
+        #expect(model.delete(id: draft.id) == false)
+
+        #expect(model.errorMessage != nil)
+        #expect(try store.mcpProject(id: draft.id) != nil)
+        #expect(box.data == keyBefore)
+    }
+
+    @Test func draftOfAnUnverifiedProjectIsDisabledAndStaysDisabledWhenSaved() throws {
+        let (store, orders, _) = try makeStore()
+        let box = KeyBox()
+        let model = makeModel(store, box)
+        var draft = model.draftForNewProject()
+        draft.name = "Billing"
+        draft.isEnabled = true
+        draft.workspaceRoots = ["/work/billing"]
+        draft.profileIDs = [orders.id]
+        #expect(model.save(draft))
+        // Another process points the enabled project at a different folder
+        // without the key; the row still claims to be enabled.
+        try store.executeForTesting(
+            #"UPDATE mcp_project SET workspaceRootsJSON = '["/work/elsewhere"]' WHERE id = ?"#,
+            arguments: [draft.id]
+        )
+        #expect(try store.mcpProject(id: draft.id)?.isEnabled == true)
+
+        var edited = try #require(model.draft(for: draft.id))
+        #expect(edited.isEnabled == false)
+        edited.name = "Billing API"
+        #expect(model.save(edited))
+
+        #expect(try store.mcpProject(id: draft.id)?.isEnabled == false)
+        let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
+        #expect(verified.projectTagValid)
+        #expect(verified.project.isEnabled == false)
+    }
+
+    @Test func projectsWhoseTagDoesNotVerifyAreMarkedUnverified() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        var billing = model.draftForNewProject()
+        billing.name = "Billing"
+        billing.workspaceRoots = ["/work/billing"]
+        var analytics = model.draftForNewProject()
+        analytics.name = "Analytics"
+        #expect(model.save(billing))
+        #expect(model.save(analytics))
+        #expect(model.unverifiedProjectIDs.isEmpty)
+
+        try store.executeForTesting(
+            #"UPDATE mcp_project SET workspaceRootsJSON = '["/work/elsewhere"]' WHERE id = ?"#,
+            arguments: [billing.id]
+        )
+        model.reload()
+
+        #expect(model.unverifiedProjectIDs == [billing.id])
+    }
+
+    @Test func reloadClearsAStaleError() throws {
+        let (store, _, _) = try makeStore()
+        let box = KeyBox()
+        box.readError = InjectedReadFailure()
+        let model = makeModel(store, box)
+        var draft = model.draftForNewProject()
+        draft.name = "Billing"
+        #expect(model.save(draft) == false)
+        #expect(model.errorMessage != nil)
+
+        model.reload()
+
+        #expect(model.errorMessage == nil)
+    }
+
     @Test func rootValidation() throws {
         let wholeDisk = L("A workspace root cannot be the whole disk.")
         #expect(MCPProjectsSettingsModel.validateRoot("/") == wholeDisk)
@@ -295,21 +377,41 @@ struct MCPProjectsSettingsModelTests {
         let (store, _, _) = try makeStore()
         let helper = URL(fileURLWithPath: "/Applications/Berry DB.app/Contents/Helpers/berrydb-mcp")
         let model = makeModel(store, KeyBox(), helperURL: helper)
-        let project = UUID(uuidString: "6F9619FF-8B86-D011-B42D-00C04FC964FF")!
+        var draft = model.draftForNewProject()
+        draft.id = UUID(uuidString: "6F9619FF-8B86-D011-B42D-00C04FC964FF")!
+        draft.name = "Billing"
+        #expect(model.save(draft))
 
-        let snippets = model.configurationSnippets(project: project)
+        let snippets = model.configurationSnippets(project: draft.id)
 
         let quoted = #""/Applications/Berry DB.app/Contents/Helpers/berrydb-mcp""#
         let explicit = " --project 6f9619ff-8b86-d011-b42d-00c04fc964ff"
         #expect(snippets.map(\.text) == [
-            "claude mcp add berrydb -- \(quoted)",
+            "claude mcp add --scope user berrydb -- \(quoted)",
             "codex mcp add berrydb -- \(quoted)",
-            "agy mcp add berrydb \(quoted)",
-            "claude mcp add berrydb -- \(quoted)\(explicit)",
+            "agy mcp add berrydb -- \(quoted)",
+            "claude mcp add --scope user berrydb -- \(quoted)\(explicit)",
             "codex mcp add berrydb -- \(quoted)\(explicit)",
-            "agy mcp add berrydb \(quoted)\(explicit)",
+            "agy mcp add berrydb -- \(quoted)\(explicit)",
         ])
         #expect(Array(snippets.map(\.host).prefix(3)) == ["Claude Code", "Codex", "Antigravity"])
+    }
+
+    @Test func pinnedSnippetsOnlyForASavedProject() throws {
+        let (store, _, _) = try makeStore()
+        let helper = URL(fileURLWithPath: "/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp")
+        let model = makeModel(store, KeyBox(), helperURL: helper)
+        var draft = model.draftForNewProject()
+        draft.name = "Billing"
+
+        let unsaved = model.configurationSnippets(project: draft.id)
+        #expect(unsaved.count == 3)
+        #expect(!unsaved.contains { $0.text.contains("--project") })
+
+        #expect(model.save(draft))
+        let saved = model.configurationSnippets(project: draft.id)
+        #expect(saved.count == 6)
+        #expect(saved.filter { $0.text.hasSuffix("--project \(draft.id.uuidString.lowercased())") }.count == 3)
     }
 
     @Test func snippetsEscapeShellCharactersInsideTheQuotes() throws {
@@ -319,6 +421,6 @@ struct MCPProjectsSettingsModelTests {
 
         let first = try #require(model.configurationSnippets(project: UUID()).first)
 
-        #expect(first.text == #"claude mcp add berrydb -- "/Users/a\"b/\$HOME/\`x\`/back\\slash/berrydb-mcp""#)
+        #expect(first.text == #"claude mcp add --scope user berrydb -- "/Users/a\"b/\$HOME/\`x\`/back\\slash/berrydb-mcp""#)
     }
 }

@@ -32,8 +32,13 @@ public final class MCPProjectsSettingsModel: ObservableObject {
 
     @Published public private(set) var projects: [MCPProject] = []
     @Published public private(set) var profiles: [ConnectionProfile] = []
+    /// Projects whose own integrity tag does not verify under the stored
+    /// key, or every project when no key can be read. The helper refuses to
+    /// serve them, and their editing copy comes back disabled, so the list
+    /// marks them rather than showing the stored enabled flag unqualified.
+    @Published public private(set) var unverifiedProjectIDs: Set<UUID> = []
     /// The last failure of a load, save or delete, ready to show; cleared
-    /// by the next successful save or delete.
+    /// by the next `reload()`, which every successful save or delete runs.
     @Published public var errorMessage: String?
 
     private let store: BerryStore
@@ -53,10 +58,18 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         reload()
     }
 
-    /// Re-reads projects and connection profiles from the store.
+    /// Re-reads projects, their verification state and connection profiles,
+    /// reading the key once for all projects.
     public func reload() {
+        errorMessage = nil
         do {
-            projects = try store.mcpProjects()
+            let stored = try store.mcpProjects()
+            let key = keyStore.load()
+            let unverified = try stored.filter {
+                try store.verifiedMCPProject(id: $0.id, key: key)?.projectTagValid == false
+            }
+            projects = stored
+            unverifiedProjectIDs = Set(unverified.map(\.id))
             profiles = try store.allProfiles()
         } catch {
             errorMessage = L("MCP projects could not be loaded: \(error.localizedDescription)")
@@ -119,7 +132,6 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         } catch {
             return fail(L("The MCP project could not be saved: \(error.localizedDescription)"))
         }
-        errorMessage = nil
         reload()
         return true
     }
@@ -145,7 +157,6 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         } catch {
             return fail(L("The MCP project could not be deleted: \(error.localizedDescription)"))
         }
-        errorMessage = nil
         reload()
         return true
     }
@@ -184,18 +195,31 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     }
 
     /// Host commands that register the bundled helper; empty when the helper
-    /// is not bundled. The first entry per host serves every repository,
-    /// selecting the project from the host's workspace; the second pins
-    /// `project` with `--project`. The helper path is double-quoted for a
-    /// POSIX shell so an install path with spaces stays one argument.
+    /// is not bundled. Each command writes one entry to the host's user-level
+    /// configuration, so the shared entry serves every repository and the
+    /// helper selects the project from the host's workspace. Claude Code
+    /// needs `--scope user` for that, since its default scope is the current
+    /// directory only. Checked against throwaway home directories with
+    /// Claude Code 2.1.294 (`~/.claude.json` user `mcpServers`), codex-cli
+    /// 0.157.1 (`config.toml`, "Added global MCP server") and agy 1.3.1
+    /// (`~/.gemini/config/mcp_config.json`).
+    ///
+    /// A saved `project` also gets one pinned entry per host, which passes
+    /// `--project` and serves that project from any folder. An unsaved
+    /// project gets none, since its ID means nothing to the helper yet. The
+    /// `--` before the helper keeps `--project` an argument of the helper:
+    /// `agy mcp add --help` (1.3.1) requires `--` before arguments that
+    /// begin with `-`. The helper path is double-quoted for a POSIX shell so
+    /// an install path with spaces stays one argument.
     public func configurationSnippets(project: UUID) -> [(host: String, text: String)] {
         guard let helperURL else { return [] }
         let helper = Self.shellQuoted(helperURL.path)
         let commands = [
-            (host: "Claude Code", text: "claude mcp add berrydb -- \(helper)"),
+            (host: "Claude Code", text: "claude mcp add --scope user berrydb -- \(helper)"),
             (host: "Codex", text: "codex mcp add berrydb -- \(helper)"),
-            (host: "Antigravity", text: "agy mcp add berrydb \(helper)"),
+            (host: "Antigravity", text: "agy mcp add berrydb -- \(helper)"),
         ]
+        guard projects.contains(where: { $0.id == project }) else { return commands }
         let pinned = " --project \(project.uuidString.lowercased())"
         return commands + commands.map { (host: L("\($0.host), this project only"), text: $0.text + pinned) }
     }
