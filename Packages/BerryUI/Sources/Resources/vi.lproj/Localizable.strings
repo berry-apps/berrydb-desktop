@@ -727,3 +727,35 @@
 "On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on above, or add a trial, license, or credit in License settings to use cloud AI instead." = "AI on-device đang tắt, và bạn chưa có bản dùng thử hay license cho AI đám mây. Bật lại on-device ở trên, hoặc vào phần License để thêm bản dùng thử, license hoặc nạp tiền.";
 "Use Free On-Device Instead" = "Dùng On-Device miễn phí thay thế";
 "This Mac supports Apple Intelligence — skip the trial and run AI on-device for free." = "Máy này hỗ trợ Apple Intelligence — bỏ qua bản dùng thử, chạy AI on-device miễn phí.";
+
+/* MCP project settings (AI Agents tab) */
+"Shortcuts" = "Phím tắt";
+"AI Agents" = "AI Agent";
+"The BerryDB store could not be opened: %@" = "Không thể mở kho dữ liệu BerryDB: %@";
+"Coding agents read schema and graph metadata of the connections assigned to a project through the berrydb-mcp helper. The folder an agent works in selects the project." = "Các coding agent đọc metadata schema và graph của những kết nối được gán cho một dự án thông qua helper berrydb-mcp. Thư mục mà agent đang làm việc quyết định dự án được chọn.";
+"No MCP projects yet" = "Chưa có dự án MCP nào";
+"New Project…" = "Dự án mới…";
+"Connections: %lld" = "Kết nối: %lld";
+"Enabled" = "Đang bật";
+"Disabled" = "Đang tắt";
+"New MCP Project" = "Dự án MCP mới";
+"Edit MCP Project" = "Sửa dự án MCP";
+"Delete…" = "Xóa…";
+"Delete this MCP project?" = "Xóa dự án MCP này?";
+"Coding agents working in its folders will no longer find a project." = "Các coding agent làm việc trong các thư mục của dự án này sẽ không còn tìm thấy dự án nào.";
+"Workspace Folders" = "Thư mục làm việc";
+"This is your home folder: every repository inside it selects this project unless another project has a more specific folder." = "Đây là thư mục home của bạn: mọi repository bên trong sẽ chọn dự án này, trừ khi một dự án khác có thư mục cụ thể hơn.";
+"Add Folder…" = "Thêm thư mục…";
+"No saved connections yet." = "Chưa có kết nối nào được lưu.";
+"Schema and graph metadata of these connections becomes visible to coding agents you configure, and to their model providers." = "Metadata schema và graph của các kết nối này sẽ hiển thị cho các coding agent bạn cấu hình, và cho nhà cung cấp mô hình của chúng.";
+"Agent Setup" = "Thiết lập agent";
+"Run one command once per agent. The same entry works in every repository and selects the project from the agent’s folder; the “this project only” variants always serve this project." = "Chạy một lệnh một lần cho mỗi agent. Cùng một mục dùng được cho mọi repository và chọn dự án theo thư mục của agent; các biến thể “chỉ dự án này” luôn phục vụ đúng dự án này.";
+"The berrydb-mcp helper is not bundled in this build." = "Bản build này không kèm helper berrydb-mcp.";
+"%@, this project only" = "%@, chỉ dự án này";
+"MCP projects could not be loaded: %@" = "Không thể tải các dự án MCP: %@";
+"The MCP project could not be saved: %@" = "Không thể lưu dự án MCP: %@";
+"The MCP project could not be deleted: %@" = "Không thể xóa dự án MCP: %@";
+"A workspace root must be an absolute path." = "Thư mục làm việc phải là đường dẫn tuyệt đối.";
+"A workspace root cannot be the whole disk." = "Thư mục làm việc không thể là toàn bộ ổ đĩa.";
+"BerryDB could not read its MCP access key from the Keychain. Nothing was changed." = "BerryDB không thể đọc khóa truy cập MCP từ Keychain. Chưa có thay đổi nào.";
+"BerryDB could not update its MCP access key in the Keychain. Nothing was changed." = "BerryDB không thể cập nhật khóa truy cập MCP trong Keychain. Chưa có thay đổi nào.";

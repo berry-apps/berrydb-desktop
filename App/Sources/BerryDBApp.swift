@@ -53,9 +53,15 @@ struct BerryDBApp: App {
             WorkspaceCommands()
         }
 
- // Settings (⌘): customizable keyboard shortcuts.
+        // Settings (⌘,): keyboard shortcuts, and the MCP projects coding
+        // agents reach through the berrydb-mcp helper.
         Settings {
-            ShortcutSettingsView()
+            TabView {
+                ShortcutSettingsView()
+                    .tabItem { Label(L("Shortcuts"), systemImage: "keyboard") }
+                MCPProjectsSettingsView()
+                    .tabItem { Label(L("AI Agents"), systemImage: "terminal") }
+            }
         }
 
  // A tab moved into its own window (D1) — same document and

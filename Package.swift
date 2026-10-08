@@ -314,9 +314,12 @@ let package = Package(
             // only). BerryTunnel: connectDataSource/connectKeyValue need
             // SSHTunnel directly (BerryCore's ConnectionManager.prepareEndpoint
             // has no DataSourceDriver/KeyValueDriver equivalent to reuse).
+            // BerryMCP: MCP project settings canonicalize workspace roots with
+            // the function the berrydb-mcp helper selects projects by; it adds
+            // no module the UI did not already link.
             dependencies: [
                 "BerryCore", "BerryCredentials", "BerryStore", "BerryLicense", "BerryAI", "BerryGraph",
-                "BerryDataSourceKit", "BerryKeyValueKit", "BerryTunnel",
+                "BerryDataSourceKit", "BerryKeyValueKit", "BerryTunnel", "BerryMCP",
             ],
             path: "Packages/BerryUI/Sources",
             resources: [.process("Resources")]

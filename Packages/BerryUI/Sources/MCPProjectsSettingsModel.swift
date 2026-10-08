@@ -1,0 +1,247 @@
+import BerryCredentials
+import BerryMCP
+import BerryStore
+import Combine
+import CryptoKit
+import Foundation
+
+/// Creates, edits and deletes the MCP projects that coding agents reach
+/// through the `berrydb-mcp` helper.
+///
+/// Every save and delete rotates the access key in one fixed order: read
+/// the stored key (abort if the Keychain refuses), build the value from the
+/// store's verified editing copy, store a new key, then write rows sealed
+/// under the new key with the old one as the re-seal source. Any failure
+/// stops at that step and sets `errorMessage`. A saved value is never built
+/// from unverified rows, so a `liveRead` written into the store file by
+/// another process is never signed by a settings save; this model exposes
+/// no way to turn `liveRead` on.
+@MainActor
+public final class MCPProjectsSettingsModel: ObservableObject {
+    /// The editable part of a project. Holds no `liveRead` or redaction
+    /// settings: those are carried over from the verified editing copy when
+    /// the draft is saved.
+    public struct Draft: Equatable {
+        public var id: UUID
+        public var name: String
+        public var isEnabled: Bool
+        public var workspaceRoots: [String]
+        /// Assigned connection profiles, in the order they were added.
+        public var profileIDs: [UUID]
+    }
+
+    @Published public private(set) var projects: [MCPProject] = []
+    @Published public private(set) var profiles: [ConnectionProfile] = []
+    /// The last failure of a load, save or delete, ready to show; cleared
+    /// by the next successful save or delete.
+    @Published public var errorMessage: String?
+
+    private let store: BerryStore
+    private let keyStore: MCPAccessKeyStore
+    private let helperURL: URL?
+
+    /// `keyStore` defaults to the Keychain item the helper reads; the
+    /// helper path is looked up once, inside the running app's bundle.
+    public convenience init(store: BerryStore, keyStore: MCPAccessKeyStore = .keychain) {
+        self.init(store: store, keyStore: keyStore, helperURL: Self.bundledHelperURL(in: Bundle.main.bundleURL))
+    }
+
+    init(store: BerryStore, keyStore: MCPAccessKeyStore, helperURL: URL?) {
+        self.store = store
+        self.keyStore = keyStore
+        self.helperURL = helperURL
+        reload()
+    }
+
+    /// Re-reads projects and connection profiles from the store.
+    public func reload() {
+        do {
+            projects = try store.mcpProjects()
+            profiles = try store.allProfiles()
+        } catch {
+            errorMessage = L("MCP projects could not be loaded: \(error.localizedDescription)")
+        }
+    }
+
+    /// An unsaved project; disabled until the user turns it on, like every
+    /// project the store creates.
+    public func draftForNewProject() -> Draft {
+        Draft(id: UUID(), name: "", isEnabled: false, workspaceRoots: [], profileIDs: [])
+    }
+
+    /// The draft of a stored project, built from the verified editing copy:
+    /// a project whose own tag does not verify under the stored key comes
+    /// back disabled.
+    public func draft(for id: UUID) -> Draft? {
+        do {
+            guard let project = try store.mcpProjectForEditing(id: id, key: keyStore.load()) else { return nil }
+            return Draft(
+                id: project.id,
+                name: project.name,
+                isEnabled: project.isEnabled,
+                workspaceRoots: project.workspaceRoots,
+                profileIDs: project.profiles.map(\.profileID)
+            )
+        } catch {
+            errorMessage = L("MCP projects could not be loaded: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// Saves `draft` under a newly rotated key. Returns false with
+    /// `errorMessage` set when a root is invalid, the key cannot be read or
+    /// written, or the store refuses the write; a root is checked before the
+    /// key is read, so an invalid draft changes nothing.
+    public func save(_ draft: Draft) -> Bool {
+        if let invalidRoot = draft.workspaceRoots.lazy.compactMap(Self.validateRoot).first {
+            return fail(invalidRoot)
+        }
+        let previousKey: SymmetricKey?
+        do {
+            previousKey = try keyStore.loadForRotation()
+        } catch {
+            return fail(Self.keyReadFailure)
+        }
+        let project: MCPProject
+        do {
+            project = try editedProject(from: draft, previousKey: previousKey)
+        } catch {
+            return fail(L("The MCP project could not be saved: \(error.localizedDescription)"))
+        }
+        let sealingKey = SymmetricKey(size: .bits256)
+        do {
+            try keyStore.replace(with: sealingKey)
+        } catch {
+            return fail(Self.keyWriteFailure)
+        }
+        do {
+            try store.saveMCPProject(project, sealingKey: sealingKey, previousKey: previousKey)
+        } catch {
+            return fail(L("The MCP project could not be saved: \(error.localizedDescription)"))
+        }
+        errorMessage = nil
+        reload()
+        return true
+    }
+
+    /// Deletes a project under a newly rotated key, so a copy of its rows
+    /// restored into the store file no longer verifies. Same failure rules
+    /// as `save`.
+    public func delete(id: UUID) -> Bool {
+        let previousKey: SymmetricKey?
+        do {
+            previousKey = try keyStore.loadForRotation()
+        } catch {
+            return fail(Self.keyReadFailure)
+        }
+        let sealingKey = SymmetricKey(size: .bits256)
+        do {
+            try keyStore.replace(with: sealingKey)
+        } catch {
+            return fail(Self.keyWriteFailure)
+        }
+        do {
+            try store.deleteMCPProject(id: id, sealingKey: sealingKey, previousKey: previousKey)
+        } catch {
+            return fail(L("The MCP project could not be deleted: \(error.localizedDescription)"))
+        }
+        errorMessage = nil
+        reload()
+        return true
+    }
+
+    /// A localized reason `path` cannot be a workspace root, or nil. A root
+    /// must be absolute and must not canonicalize to `/`, which would select
+    /// the project for every directory on the disk. Nested roots and the
+    /// home directory are allowed; the helper prefers the longest root.
+    nonisolated public static func validateRoot(_ path: String) -> String? {
+        // `NSString.isAbsolutePath` is also true for `~/…` (checked with
+        // Foundation on macOS 26.6), whose expansion depends on the caller;
+        // a root must name the same directory for the app and the helper.
+        guard path.hasPrefix("/") else { return L("A workspace root must be an absolute path.") }
+        guard canonicalRoot(path) != "/" else { return L("A workspace root cannot be the whole disk.") }
+        return nil
+    }
+
+    /// True when `path` is the user's home directory itself, a root the view
+    /// accepts but warns about because every repository under it matches.
+    nonisolated public static func isHomeDirectory(_ path: String) -> Bool {
+        canonicalRoot(path) == canonicalRoot(NSHomeDirectory())
+    }
+
+    /// The form a root is saved in: symbolic links resolved by the function
+    /// the helper applies to roots and workspaces before matching them. The
+    /// store standardizes it again on write, which can drop a leading
+    /// `/private`; matching is unaffected because the helper re-resolves it.
+    nonisolated public static func canonicalRoot(_ path: String) -> String {
+        MCPProjectSelector.canonicalPath(path)
+    }
+
+    /// The helper inside `bundleURL`, or nil when this build does not ship it.
+    nonisolated static func bundledHelperURL(in bundleURL: URL) -> URL? {
+        let helper = bundleURL.appendingPathComponent("Contents/Helpers/berrydb-mcp")
+        return FileManager.default.fileExists(atPath: helper.path) ? helper : nil
+    }
+
+    /// Host commands that register the bundled helper; empty when the helper
+    /// is not bundled. The first entry per host serves every repository,
+    /// selecting the project from the host's workspace; the second pins
+    /// `project` with `--project`. The helper path is double-quoted for a
+    /// POSIX shell so an install path with spaces stays one argument.
+    public func configurationSnippets(project: UUID) -> [(host: String, text: String)] {
+        guard let helperURL else { return [] }
+        let helper = Self.shellQuoted(helperURL.path)
+        let commands = [
+            (host: "Claude Code", text: "claude mcp add berrydb -- \(helper)"),
+            (host: "Codex", text: "codex mcp add berrydb -- \(helper)"),
+            (host: "Antigravity", text: "agy mcp add berrydb \(helper)"),
+        ]
+        let pinned = " --project \(project.uuidString.lowercased())"
+        return commands + commands.map { (host: L("\($0.host), this project only"), text: $0.text + pinned) }
+    }
+
+    private static let keyReadFailure = L(
+        "BerryDB could not read its MCP access key from the Keychain. Nothing was changed."
+    )
+    private static let keyWriteFailure = L(
+        "BerryDB could not update its MCP access key in the Keychain. Nothing was changed."
+    )
+
+    /// The value to seal: the verified editing copy of a stored project, or
+    /// a new project, with the draft applied. A profile kept from the stored
+    /// project keeps its verified access settings; a newly added one starts
+    /// with every access switch off.
+    private func editedProject(from draft: Draft, previousKey: SymmetricKey?) throws -> MCPProject {
+        var project = try store.mcpProjectForEditing(id: draft.id, key: previousKey)
+            ?? MCPProject(id: draft.id, name: draft.name)
+        let kept = Dictionary(project.profiles.map { ($0.profileID, $0) }, uniquingKeysWith: { first, _ in first })
+        project.name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        project.isEnabled = draft.isEnabled
+        project.workspaceRoots = draft.workspaceRoots.map(Self.canonicalRoot)
+        project.profiles = draft.profileIDs.map { kept[$0] ?? MCPProfileAccess(profileID: $0) }
+        project.updatedAt = Date()
+        return project
+    }
+
+    private func fail(_ message: String) -> Bool {
+        errorMessage = message
+        return false
+    }
+
+    /// Wraps `value` in double quotes, escaping the four characters a POSIX
+    /// shell still interprets inside them (`"`, `\`, `$`, backtick), per
+    /// https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html#tag_19_02_03.
+    /// Interactive history expansion of `!` in bash and zsh is outside POSIX
+    /// and not escaped; an app bundle path containing `!` would need editing.
+    private static func shellQuoted(_ value: String) -> String {
+        var quoted = "\""
+        for character in value {
+            if "\"\\$`".contains(character) {
+                quoted.append("\\")
+            }
+            quoted.append(character)
+        }
+        quoted.append("\"")
+        return quoted
+    }
+}
