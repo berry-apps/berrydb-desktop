@@ -361,7 +361,7 @@ let package = Package(
         // Packages/*/Tests directory.
         .testTarget(
             name: "BerryAppTests",
-            dependencies: ["BerryApp", "BerryDriverBootstrap"],
+            dependencies: ["BerryApp", "BerryDriverBootstrap", "BerryUI", "BerryCore"],
             path: "App/Tests"
         ),
 
