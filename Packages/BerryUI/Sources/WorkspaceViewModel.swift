@@ -214,6 +214,9 @@ public final class WorkspaceViewModel {
 
     public private(set) var profiles: [ConnectionProfile] = []
     public private(set) var storeError: String?
+    /// Set when the store did not open at launch, in which case `store` is nil
+    /// for the life of this window.
+    private(set) var storeOpenFailure: StoreOpenFailureMessage?
 
     // MARK: Active session
 
@@ -395,6 +398,8 @@ public final class WorkspaceViewModel {
         do {
             store = try BerryStore.open()
             profiles = try store?.allProfiles() ?? []
+        } catch let error where store == nil {
+            storeOpenFailure = StoreOpenFailureMessage(error)
         } catch {
             storeError = error.localizedDescription
         }
