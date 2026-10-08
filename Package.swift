@@ -352,7 +352,11 @@ let package = Package(
         ),
         .executableTarget(
             name: "BerryDBMCP",
-            dependencies: ["BerryDriverBootstrap", "BerryMCPServer"],
+            dependencies: [
+                "BerryCredentials", "BerryDriverBootstrap", "BerryGraph", "BerryMCP", "BerryMCPServer", "BerryStore",
+                .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "MCP", package: "swift-sdk"),
+            ],
             path: "MCP/Sources"
         ),
         // BerryApp has no other consumer to exercise its launch-time
@@ -548,7 +552,12 @@ let package = Package(
         ),
         .testTarget(
             name: "BerryDBMCPTests",
-            dependencies: ["BerryDBMCP", "BerryDriverBootstrap"],
+            // BerryStore/GRDB: the stdio tests write the store files the
+            // helper subprocess reads.
+            dependencies: [
+                "BerryDBMCP", "BerryDriverBootstrap", "BerryStore",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ],
             path: "MCP/Tests"
         ),
 
