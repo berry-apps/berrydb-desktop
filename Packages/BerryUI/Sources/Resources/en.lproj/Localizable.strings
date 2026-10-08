@@ -780,3 +780,8 @@
 "A folder named .berrydb.json is in the way." = "A folder named .berrydb.json is in the way.";
 "The link file could not be written: %@" = "The link file could not be written: %@";
 "This links your home folder: every folder inside it without a nearer .berrydb.json selects this project, even another project’s workspace folder." = "This links your home folder: every folder inside it without a nearer .berrydb.json selects this project, even another project’s workspace folder.";
+
+/* Local store failed to open at launch */
+"BerryDB could not open its data store." = "BerryDB could not open its data store.";
+"BerryDB could not open its data store. Upgrade step “%@” failed and changed no data." = "BerryDB could not open its data store. Upgrade step “%@” failed and changed no data.";
+"Details…" = "Details…";

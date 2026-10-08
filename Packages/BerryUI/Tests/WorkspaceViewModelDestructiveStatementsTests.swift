@@ -13,19 +13,14 @@ import Testing
 /// to review (the statement is exactly what the menu item said).
 /// The user expects a confirm-then-run flow, not an editor tab.
 ///
-/// Deliberately tests the free function against a bare `Session` (built via
-/// `ConnectionManager`, exactly like `DangerGuardTests.deniedStatementDoesNotExecute`)
-/// rather than through a `WorkspaceViewModel` — every `WorkspaceViewModel`
-/// init resets `QueryService.dangerConfirmer` to the real, NSAlert-based one
-/// as a side effect (`wireSinks()`). Doing that here made `make test` hang
-/// forever: some other suite's concurrent `WorkspaceViewModel()` construction
-/// could reset the confirmer back to the real one between this suite's swap
-/// and its consumption, hitting `NSAlert.runModal()` with no one to click it.
-/// A bare `Session` never touches that global, so cross-suite collisions
-/// (e.g. with `DangerGuardTests`, which does the same swap) are at worst a
-/// wrong count from a test-double confirmer — never the real blocking one.
-/// `.serialized` here only protects this suite's own 4 tests from each other
-/// (they all swap the same global).
+/// Tests the free function against a bare `Session` (built via
+/// `ConnectionManager`, exactly like `DangerGuardTests.deniedStatementDoesNotExecute`).
+/// `QueryService.dangerConfirmer` is process-wide, and only the app installs
+/// the NSAlert-based one, so a collision with another suite that swaps the
+/// same global (e.g. `DangerGuardTests`) is at worst a wrong count from a
+/// test-double confirmer, never a modal alert. `.serialized` here only
+/// protects this suite's own 4 tests from each other (they all swap the same
+/// global).
 @Suite("DestructiveStatementRunner.run", .serialized)
 struct WorkspaceViewModelDestructiveStatementsTests {
     private func makeSession() async throws -> Session {
@@ -150,5 +145,24 @@ struct WorkspaceViewModelDestructiveStatementsTests {
             if case .rows(let batch) = event { rows += batch }
         }
         return rows
+    }
+}
+
+/// The NSAlert-based confirmer is process-wide state, so constructing a view
+/// model must never install it. Test suites build `WorkspaceViewModel`s while
+/// other suites have their own confirmer installed for a `DELETE FROM t`; an
+/// initializer that overwrote the gate handed those statements the real
+/// confirmer, and its `NSAlert.runModal()` held the main thread of a CI run,
+/// with nobody to dismiss it, until the job timed out.
+@Suite("Danger confirmer wiring")
+struct DangerConfirmerWiringTests {
+    @MainActor
+    @Test func constructingAWorkspaceViewModelLeavesTheDangerConfirmerAlone() throws {
+        let path = NSTemporaryDirectory() + "berry-wiring-\(UUID().uuidString).sqlite"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        _ = try WorkspaceViewModel(storePath: path)
+
+        #expect(!(QueryService.dangerConfirmer is AlertDangerConfirmer))
     }
 }

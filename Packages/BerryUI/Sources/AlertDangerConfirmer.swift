@@ -4,8 +4,10 @@ import BerryCore
 /// NSAlert-based implementation of the DangerGuard confirmation gate
 /// Wired into QueryService at startup — every SQL
 /// path in the app funnels through it (principle N1).
-struct AlertDangerConfirmer: DangerConfirmer {
-    func confirm(_ level: DangerLevel, sql: String) async -> Bool {
+public struct AlertDangerConfirmer: DangerConfirmer {
+    public init() {}
+
+    public func confirm(_ level: DangerLevel, sql: String) async -> Bool {
         await MainActor.run {
             switch level {
             case .safe:

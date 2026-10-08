@@ -10,6 +10,7 @@ struct BerryDBApp: App {
 
     init() {
         BerryDBAppComposition.registerDrivers()
+        BerryDBAppComposition.installDangerConfirmer()
     }
 
     var body: some Scene {
@@ -100,6 +101,19 @@ enum BerryDBAppComposition {
         using registrar: BerryDriverRegistrar = .live
     ) -> BerryDriverRegistration {
         BerryDriverBootstrap.registerAll(using: registrar)
+    }
+
+    /// Installs the NSAlert-based gate that every dangerous SQL statement
+    /// passes through. It is process-wide state, so it is installed once per
+    /// launch here rather than by `WorkspaceViewModel`'s initializer: test
+    /// suites construct view models while other suites run `DELETE FROM t`
+    /// with their own confirmer installed, and an initializer that overwrote
+    /// it put a real modal alert on the main thread of a test run with nobody
+    /// to dismiss it.
+    static func installDangerConfirmer(
+        install: (any DangerConfirmer) -> Void = { QueryService.dangerConfirmer = $0 }
+    ) {
+        install(AlertDangerConfirmer())
     }
 }
 

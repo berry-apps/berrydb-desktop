@@ -2677,17 +2677,22 @@ private final class VersionedSkillRanker: SkillRanking {
         skillRankTimeout: .milliseconds(30)
     )
 
-    // The rank gate is never released, so `send` can only return via the
-    // timeout branch — there's no other path back. The elapsed check is a
-    // generous safety net (not a tight timing assertion, which would be
-    // flaky under a heavily parallel full-suite run) against a regression
-    // that removes the bound entirely and hangs forever.
-    let clock = ContinuousClock()
-    let started = clock.now
+    // The rank gate is never released by the test body, so `send` can only
+    // return via the timeout branch. Elapsed time is not asserted: in the
+    // fully parallel suite it includes waiting for the main actor, and CI
+    // runners measured 13-15 s for this test with a 30 ms bound. Instead a
+    // watchdog catches a regression that removes the bound: after 60 s it
+    // records the failure and releases the gate, because `send` ignores
+    // cancellation and the test would otherwise hang the whole run.
+    let watchdog = Task {
+        try? await Task.sleep(for: .seconds(60))
+        guard !Task.isCancelled else { return }
+        Issue.record("send did not return within 60 s: the skill-ranking bound was not applied")
+        await gate.release()
+    }
     await session.send("optimize this query")
-    let elapsed = clock.now - started
+    watchdog.cancel()
 
-    #expect(elapsed < .seconds(10), "a hung rank call must not block the turn indefinitely")
     #expect(transport.receivedTools.contains { $0.name == "get_schema" }, "static tools must survive a rank timeout")
     #expect(!transport.receivedTools.contains { $0.name == "skill:pg" })
 

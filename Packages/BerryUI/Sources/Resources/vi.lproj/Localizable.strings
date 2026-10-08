@@ -780,3 +780,8 @@
 "A folder named .berrydb.json is in the way." = "Đã có một thư mục tên .berrydb.json ở vị trí này.";
 "The link file could not be written: %@" = "Không thể ghi tệp liên kết: %@";
 "This links your home folder: every folder inside it without a nearer .berrydb.json selects this project, even another project’s workspace folder." = "Thao tác này liên kết thư mục home của bạn: mọi thư mục bên trong không có tệp .berrydb.json gần hơn sẽ chọn dự án này, kể cả thư mục làm việc của dự án khác.";
+
+/* Local store failed to open at launch */
+"BerryDB could not open its data store." = "BerryDB không thể mở kho dữ liệu cục bộ.";
+"BerryDB could not open its data store. Upgrade step “%@” failed and changed no data." = "BerryDB không thể mở kho dữ liệu cục bộ. Bước nâng cấp “%@” bị lỗi và không thay đổi dữ liệu nào.";
+"Details…" = "Chi tiết…";
