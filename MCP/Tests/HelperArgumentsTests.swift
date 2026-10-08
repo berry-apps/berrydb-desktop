@@ -58,6 +58,21 @@ struct HelperArgumentsTests {
         }
     }
 
+    /// A value written straight after a flag, with no `=` or space, is cut
+    /// off at the first character that cannot be part of a flag name.
+    @Test
+    func valueAttachedToAFlagIsNeverEchoed() {
+        #expect(throws: HelperArgumentsError.unknown("--store-path")) {
+            try HelperArguments.parse(["--store-path/Users/me/store.sqlite"])
+        }
+        #expect(throws: HelperArgumentsError.unknown("-s")) {
+            try HelperArguments.parse(["-s/Users/me/store.sqlite"])
+        }
+        #expect(throws: HelperArgumentsError.unknown("--store-path=")) {
+            try HelperArguments.parse(["--store-path=~/store.sqlite"])
+        }
+    }
+
     @Test
     func flagWithoutValueIsRejected() {
         #expect(throws: HelperArgumentsError.missingValue("--project")) {

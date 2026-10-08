@@ -46,16 +46,17 @@ public struct HelperArguments: Equatable {
         return HelperArguments(project: project, storePath: storePath)
     }
 
-    /// The error for an argument that is neither flag. Only a flag's name is
-    /// kept, up to and including an `=`, because the rest of an
-    /// `--store-path=<path>` argument or a stray positional argument may be
-    /// a local path, and the error is printed on standard error.
+    /// The error for an argument that is neither flag. A stray positional
+    /// argument is not echoed at all, and of a flag only the leading run of
+    /// ASCII letters and hyphens is kept, plus an `=` that directly follows
+    /// it, because the rest of `--store-path=<path>`, `--store-path<path>`
+    /// or `-s<path>` may be a local path, and the error is printed on
+    /// standard error.
     private static func rejection(of argument: String) -> HelperArgumentsError {
         guard argument.hasPrefix("-") else { return .positional }
-        if let equals = argument.firstIndex(of: "=") {
-            return .unknown(String(argument[...equals]))
-        }
-        return .unknown(argument)
+        let name = argument.prefix { $0 == "-" || ($0.isASCII && $0.isLetter) }
+        let equals = argument.dropFirst(name.count).first == "=" ? "=" : ""
+        return .unknown(name + equals)
     }
 }
 
@@ -63,7 +64,8 @@ public struct HelperArguments: Equatable {
 /// `berrydb-mcp: ` on standard error; it names at most the offending flag and
 /// never carries a value given on the command line.
 public enum HelperArgumentsError: Error, Equatable, CustomStringConvertible {
-    /// A flag other than `--project` and `--store-path`, by name only.
+    /// An argument that starts with `-` but is neither flag, cut to the
+    /// characters a flag name can have.
     case unknown(String)
     /// An argument that is not a flag, such as a stray value.
     case positional
