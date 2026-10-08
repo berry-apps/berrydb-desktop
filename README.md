@@ -6,6 +6,8 @@
 
 ### The Ultra-Fast, Native Database Client Built Exclusively for macOS Speed
 
+[![GitHub Stars](https://img.shields.io/github/stars/berry-apps/berrydb-desktop?style=for-the-badge&logo=github&color=gold)](https://github.com/berry-apps/berrydb-desktop/stargazers)
+[![Homebrew](https://img.shields.io/badge/brew-berry--apps%2Ftap%2Fberrydb-orange?style=for-the-badge&logo=homebrew)](https://github.com/berry-apps/homebrew-tap)
 [![macOS](https://img.shields.io/badge/macOS-15.0%2B-000000?style=for-the-badge&logo=apple&logoColor=white)](https://apple.com/macos)
 [![Swift 6](https://img.shields.io/badge/Swift-6.0-F05138?style=for-the-badge&logo=swift&logoColor=white)](https://swift.org)
 [![Zero Electron](https://img.shields.io/badge/Electron-0%25_Pure_Native-007ACC?style=for-the-badge)](https://db.berryhub.app)
@@ -19,6 +21,7 @@
 <p align="center">
   <a href="https://download-db.berryhub.app/BerryDB-latest.dmg"><b>Download .DMG (macOS 15+)</b></a> •
   <a href="https://db.berryhub.app"><b>Official Website</b></a> •
+  <a href="https://github.com/berry-apps/berrydb-desktop/stargazers"><b>⭐️ Star on GitHub</b></a> •
   <a href="https://ko-fi.com/dautay"><b>☕ Donate on Ko-fi</b></a>
 </p>
 
@@ -217,3 +220,9 @@ Contributions, issues, and feature requests are welcome!
 BerryDB is open-source software licensed under the **[Apache License 2.0](LICENSE)** — free for personal and commercial use.
 
 For detailed third-party attributions and compliance (including LGPL-2.1 dynamic linking compliance for FreeTDS), please refer to **[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)**.
+
+---
+
+## ⭐️ Support the Project
+
+If you find BerryDB useful, please consider giving it a **star on GitHub**! It helps more developers discover the tool and supports continuous open-source development.

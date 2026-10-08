@@ -413,10 +413,12 @@ public final class WorkspaceViewModel {
         wireSinks()
     }
 
- /// Single wiring point for the core → store sinks and the
- /// DangerGuard confirmation gate.
+    /// Single wiring point for the core → store sinks. The DangerGuard
+    /// confirmation gate is deliberately not installed here: it is a
+    /// process-wide modal alert, and tests construct view models while other
+    /// tests have their own confirmer installed. The app installs it once at
+    /// launch (`BerryDBAppComposition.installDangerConfirmer`).
     private func wireSinks() {
-        QueryService.dangerConfirmer = AlertDangerConfirmer()
         guard let store else { return }
         QueryService.historySink = StoreHistorySink(store: store)
         snapshotSink = StoreSnapshotSink(store: store)
@@ -3266,14 +3268,7 @@ public final class WorkspaceViewModel {
 
 /// `WorkspaceViewModel.runDestructiveStatements`'s logic, extracted as a pure
 /// function over an explicit `Session` (not `self.session`) so it's testable
-/// without constructing a `WorkspaceViewModel` — every `WorkspaceViewModel`
-/// init resets `QueryService.dangerConfirmer` to the real, NSAlert-based one
-/// as a side effect (`wireSinks()`), which races against any other
-/// concurrently-running test doing the same and can block forever on
-/// `NSAlert.runModal()` in a headless test run (confirmed by reproducing it:
-/// `make test` hung reliably with a `WorkspaceViewModel`-based test for this,
-/// and passed reliably once rewritten against a bare `Session` instead, the
-/// same way `DangerGuardTests.deniedStatementDoesNotExecute` already does).
+/// against a bare `Session` without constructing a `WorkspaceViewModel`.
 enum DestructiveStatementRunner {
     /// Returns an error message on failure, nil on success OR user cancel
     /// (same "can't distinguish, and doesn't need to" shape as
