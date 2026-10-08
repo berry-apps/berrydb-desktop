@@ -271,6 +271,9 @@ public struct MCPMetadataService: Sendable {
 
     /// Harvested statistics: every table when `object` is nil, otherwise one
     /// table and its indexes, resolved strictly.
+    ///
+    /// The summary lists at most 500 tables and 500 unused index names, each
+    /// keeping its sorted order; the result has no truncation marker.
     public func graphStats(
         in project: MCPVerifiedProject, connectionID: UUID, object: String?
     ) throws -> MCPGraphStats {
@@ -279,7 +282,11 @@ public struct MCPMetadataService: Sendable {
             if let object {
                 return .table(try graph.statistics(profileID: connectionID, table: object, resolution: .strict))
             }
-            return .summary(try graph.statistics(profileID: connectionID))
+            let summary = try graph.statistics(profileID: connectionID)
+            return .summary(.init(
+                tables: Array(summary.tables.prefix(Self.maximumGraphNames)),
+                unusedIndexes: Array(summary.unusedIndexes.prefix(Self.maximumGraphNames))
+            ))
         }
     }
 

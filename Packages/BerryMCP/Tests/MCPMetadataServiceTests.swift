@@ -279,6 +279,18 @@ struct MCPMetadataServiceTests {
         #expect(clamped.count == 1)
     }
 
+    @Test func searchReturnsExactlyTwoHundredWhenMoreMatch() throws {
+        var graph = SchemaGraph()
+        for index in 0 ..< 250 {
+            graph.addNode(GraphNode(id: "table:db.item\(index)", kind: .table, name: "item\(index)", database: "db"))
+        }
+        let service = try makeService(graph: graph)
+        let matches = try service.searchSchema(in: project, connectionID: production.id, query: "item", limit: 1000)
+        #expect(matches.count == 200)
+        let fewer = try service.searchSchema(in: project, connectionID: production.id, query: "item", limit: 7)
+        #expect(fewer.count == 7)
+    }
+
     @Test func searchOrdersKindsAndLeavesOwningTableNilOutsideColumns() throws {
         let matches = try makeService().searchSchema(in: project, connectionID: production.id, query: "o", limit: 50)
         let kinds = matches.map(\.kind)
@@ -441,5 +453,26 @@ struct MCPMetadataServiceTests {
         #expect(throws: MCPMetadataError.self) {
             try service.graphStats(in: project, connectionID: production.id, object: "missing_table")
         }
+    }
+
+    @Test func statisticsSummaryIsCappedAtFiveHundredTablesAndUnusedIndexes() throws {
+        var graph = SchemaGraph()
+        for index in 0 ..< 620 {
+            let name = String(format: "t%04d", index)
+            graph.addNode(GraphNode(id: "table:db.\(name)", kind: .table, name: name, database: "db", attrs: ["rows": "1"]))
+            graph.addNode(GraphNode(
+                id: "index:db.\(name).i", kind: .index, name: String(format: "i%04d", index),
+                database: "db", attrs: ["unused": "true"]
+            ))
+        }
+        let service = try makeService(graph: graph)
+        let summary = try service.graphStats(in: project, connectionID: production.id, object: nil)
+        guard case let .summary(found) = summary else { Issue.record("\(summary)"); return }
+        #expect(found.tables.count == 500)
+        #expect(found.unusedIndexes.count == 500)
+        // The cap keeps the sorted prefix.
+        #expect(found.tables.first?.name == "t0000")
+        #expect(found.tables.last?.name == "t0499")
+        #expect(found.unusedIndexes.last == "i0499")
     }
 }

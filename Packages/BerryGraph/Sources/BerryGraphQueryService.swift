@@ -79,6 +79,7 @@ public struct BerryGraphQueryService: Sendable {
         public let dependsOn: [String]
         public let dependedOnBy: [String]
 
+        /// Creates a neighbors result from already-sorted name lists.
         public init(node: String, dependsOn: [String], dependedOnBy: [String]) {
             self.node = node
             self.dependsOn = dependsOn
@@ -101,6 +102,7 @@ public struct BerryGraphQueryService: Sendable {
         public let impacted: [String]
         public let count: Int
 
+        /// Creates a blast radius result; `count` is the caller's to keep as the full count.
         public init(node: String, impacted: [String], count: Int) {
             self.node = node
             self.impacted = impacted
@@ -114,6 +116,7 @@ public struct BerryGraphQueryService: Sendable {
         public let components: [[String]]
         public var hasCycles: Bool { !components.isEmpty }
 
+        /// Creates a result from components in their final order.
         public init(components: [[String]]) {
             self.components = components
         }
@@ -144,6 +147,12 @@ public struct BerryGraphQueryService: Sendable {
     public struct StatisticsSummary: Equatable, Sendable, Codable {
         public let tables: [NodeStatistics]
         public let unusedIndexes: [String]
+
+        /// Creates a summary from already-ordered tables and unused index names.
+        public init(tables: [NodeStatistics], unusedIndexes: [String]) {
+            self.tables = tables
+            self.unusedIndexes = unusedIndexes
+        }
     }
 
     /// Level of detail requested from `schema(...)`.
