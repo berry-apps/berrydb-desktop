@@ -404,11 +404,13 @@ struct MCPProjectsSettingsModelTests {
         var draft = model.draftForNewProject()
         draft.name = "Billing"
 
+        #expect(!model.isSaved(draft.id))
         let unsaved = model.configurationSnippets(project: draft.id)
         #expect(unsaved.count == 3)
         #expect(!unsaved.contains { $0.text.contains("--project") })
 
         #expect(model.save(draft))
+        #expect(model.isSaved(draft.id))
         let saved = model.configurationSnippets(project: draft.id)
         #expect(saved.count == 6)
         #expect(saved.filter { $0.text.hasSuffix("--project \(draft.id.uuidString.lowercased())") }.count == 3)

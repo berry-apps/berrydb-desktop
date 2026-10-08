@@ -750,7 +750,8 @@
 "No saved connections yet." = "No saved connections yet.";
 "Schema and graph metadata of these connections becomes visible to coding agents you configure, and to their model providers." = "Schema and graph metadata of these connections becomes visible to coding agents you configure, and to their model providers.";
 "Agent Setup" = "Agent Setup";
-"Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder; an entry marked “this project only” always serves this project." = "Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder; an entry marked “this project only” always serves this project.";
+"Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder." = "Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder.";
+"An entry marked “this project only” always serves this project, whichever folder the agent works in." = "An entry marked “this project only” always serves this project, whichever folder the agent works in.";
 "The berrydb-mcp helper is not bundled in this build." = "The berrydb-mcp helper is not bundled in this build.";
 "%@, this project only" = "%@, this project only";
 "MCP projects could not be loaded: %@" = "MCP projects could not be loaded: %@";

@@ -750,7 +750,8 @@
 "No saved connections yet." = "Chưa có kết nối nào được lưu.";
 "Schema and graph metadata of these connections becomes visible to coding agents you configure, and to their model providers." = "Metadata schema và graph của các kết nối này sẽ hiển thị cho các coding agent bạn cấu hình, và cho nhà cung cấp mô hình của chúng.";
 "Agent Setup" = "Thiết lập agent";
-"Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder; an entry marked “this project only” always serves this project." = "Chạy một lệnh một lần cho mỗi agent; lệnh sẽ thêm một mục tên berrydb vào cấu hình người dùng của agent. Mục dùng chung hoạt động ở mọi repository và chọn dự án theo thư mục của agent; mục có ghi “chỉ dự án này” luôn phục vụ đúng dự án này.";
+"Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder." = "Chạy một lệnh một lần cho mỗi agent; lệnh sẽ thêm một mục tên berrydb vào cấu hình người dùng của agent. Mục dùng chung hoạt động ở mọi repository và chọn dự án theo thư mục của agent.";
+"An entry marked “this project only” always serves this project, whichever folder the agent works in." = "Mục có ghi “chỉ dự án này” luôn phục vụ đúng dự án này, bất kể agent đang làm việc trong thư mục nào.";
 "The berrydb-mcp helper is not bundled in this build." = "Bản build này không kèm helper berrydb-mcp.";
 "%@, this project only" = "%@, chỉ dự án này";
 "MCP projects could not be loaded: %@" = "Không thể tải các dự án MCP: %@";

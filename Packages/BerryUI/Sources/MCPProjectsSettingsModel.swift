@@ -33,9 +33,13 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     @Published public private(set) var projects: [MCPProject] = []
     @Published public private(set) var profiles: [ConnectionProfile] = []
     /// Projects whose own integrity tag does not verify under the stored
-    /// key, or every project when no key can be read. The helper refuses to
-    /// serve them, and their editing copy comes back disabled, so the list
-    /// marks them rather than showing the stored enabled flag unqualified.
+    /// key, or every project when no key can be read. The helper still
+    /// selects such a project by its stored enabled flag and serves its
+    /// schema and graph metadata, which the store file exposes anyway, with
+    /// live reads off and integrity reported as unavailable. Its editing
+    /// copy comes back disabled, so saving re-seals it enabled only when
+    /// the user turns it on again. The list marks these projects rather
+    /// than showing the stored enabled flag unqualified.
     @Published public private(set) var unverifiedProjectIDs: Set<UUID> = []
     /// The last failure of a load, save or delete, ready to show; cleared
     /// by the next `reload()`, which every successful save or delete runs.
@@ -161,6 +165,12 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         return true
     }
 
+    /// True when `projectID` is a stored project as of the last `reload()`;
+    /// only such a project gets pinned host entries.
+    public func isSaved(_ projectID: UUID) -> Bool {
+        projects.contains { $0.id == projectID }
+    }
+
     /// A localized reason `path` cannot be a workspace root, or nil. A root
     /// must be absolute and must not canonicalize to `/`, which would select
     /// the project for every directory on the disk. Nested roots and the
@@ -219,7 +229,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             (host: "Codex", text: "codex mcp add berrydb -- \(helper)"),
             (host: "Antigravity", text: "agy mcp add berrydb -- \(helper)"),
         ]
-        guard projects.contains(where: { $0.id == project }) else { return commands }
+        guard isSaved(project) else { return commands }
         let pinned = " --project \(project.uuidString.lowercased())"
         return commands + commands.map { (host: L("\($0.host), this project only"), text: $0.text + pinned) }
     }

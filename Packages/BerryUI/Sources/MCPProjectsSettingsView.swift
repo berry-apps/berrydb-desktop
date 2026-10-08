@@ -81,9 +81,7 @@ private struct MCPProjectsPane: View {
             }
         }
         .padding(16)
-        // Reloading on dismiss also clears an error left by a save that
-        // failed before the sheet was cancelled.
-        .sheet(item: $editing, onDismiss: { model.reload() }) { request in
+        .sheet(item: $editing) { request in
             MCPProjectEditorSheet(model: model, draft: request.draft, isNew: request.isNew)
         }
     }
@@ -98,8 +96,10 @@ private struct MCPProjectsPane: View {
             }
             Spacer()
             if model.unverifiedProjectIDs.contains(project.id) {
-                // The stored enabled flag is not trustworthy here: the helper
-                // refuses the project and its editing copy is disabled.
+                // The stored enabled flag is unverified. The helper still
+                // selects the project and serves its metadata, with live
+                // reads off and integrity reported as unavailable; the
+                // editing copy is disabled until the user saves it.
                 Text(L("Not verified — save to confirm"))
                     .font(.caption)
                     .foregroundStyle(.orange)
@@ -148,8 +148,15 @@ private struct MCPProjectEditorSheet: View {
                     Button(L("Delete…"), role: .destructive) { confirmDelete = true }
                 }
                 Spacer()
-                Button(L("Cancel"), role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                Button(L("Cancel"), role: .cancel) {
+                    // Clears an error left by a failed save and refreshes the
+                    // verification marks after a key that save may already
+                    // have rotated. A successful Save or Delete reloads
+                    // inside the model instead, so each path reloads once.
+                    model.reload()
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
                 Button(L("Save")) {
                     if model.save(draft) { dismiss() }
                 }
@@ -229,9 +236,14 @@ private struct MCPProjectEditorSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text(L("Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder; an entry marked “this project only” always serves this project."))
+                Text(L("Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if model.isSaved(draft.id) {
+                    Text(L("An entry marked “this project only” always serves this project, whichever folder the agent works in."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 ForEach(Array(snippets.enumerated()), id: \.offset) { _, snippet in
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
