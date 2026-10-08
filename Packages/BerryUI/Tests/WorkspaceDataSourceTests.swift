@@ -1,4 +1,5 @@
 import BerryDataSourceKit
+import BerryCredentials
 import BerryDriverKit
 import BerryDriverMongo
 import BerryDriverQdrant

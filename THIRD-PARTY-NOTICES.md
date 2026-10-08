@@ -94,3 +94,15 @@ Full text: [https://www.apache.org/licenses/LICENSE-2.0](https://www.apache.org/
 - **License:** MIT License
 - **Copyright:** (c) 2016-2017 Károly Lőrentey
 - **Project URL:** [https://github.com/attaswift/BigInt](https://github.com/attaswift/BigInt)
+
+### 13. Model Context Protocol Swift SDK
+- **Version:** 0.12.1 (`a0ae212ebf6eab5f754c3129608bc5557637e605`)
+- **License:** Apache License 2.0 and MIT License (upstream licensing transition); upstream documentation is CC-BY-4.0
+- **Copyright:** (c) 2024-2025 Model Context Protocol, a Series of LF Projects, LLC
+- **Project URL:** [https://github.com/modelcontextprotocol/swift-sdk](https://github.com/modelcontextprotocol/swift-sdk)
+
+### 14. EventSource
+- **Version:** 1.5.1 (`86b5096ac59ab46e66bd1f6377c604bc1dab0bc2`)
+- **License:** MIT License
+- **Copyright:** (c) 2025 Mattt
+- **Project URL:** [https://github.com/mattt/eventsource](https://github.com/mattt/eventsource)

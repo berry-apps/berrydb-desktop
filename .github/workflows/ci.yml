@@ -6,8 +6,10 @@ on:
       - main
     paths:
       - "App/**"
+      - "MCP/**"
       - "Packages/**"
       - "Tests/**"
+      - "Package.resolved"
       - "Package.swift"
       - ".github/workflows/ci.yml"
       - ".github/workflows/release.yml"
@@ -16,8 +18,10 @@ on:
       - main
     paths:
       - "App/**"
+      - "MCP/**"
       - "Packages/**"
       - "Tests/**"
+      - "Package.resolved"
       - "Package.swift"
       - ".github/workflows/ci.yml"
       - ".github/workflows/release.yml"

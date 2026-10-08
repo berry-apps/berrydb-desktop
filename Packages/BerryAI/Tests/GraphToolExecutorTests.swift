@@ -14,6 +14,27 @@ import Testing
 struct GraphToolExecutorTests {
     private let profile = UUID()
 
+    private final class SnapshotSequence: @unchecked Sendable {
+        private let lock = NSLock()
+        private var snapshots: [SchemaGraph]
+        private var storedLoadCount = 0
+
+        var loadCount: Int {
+            lock.withLock { storedLoadCount }
+        }
+
+        init(_ snapshots: [SchemaGraph]) {
+            self.snapshots = snapshots
+        }
+
+        func load(_: UUID) -> SchemaGraph {
+            lock.withLock {
+                storedLoadCount += 1
+                return snapshots[min(storedLoadCount - 1, snapshots.count - 1)]
+            }
+        }
+    }
+
     private func seededStore() throws -> GraphStore {
         let store = GraphStore(store: try BerryStore(path: ":memory:"))
         try store.persist(sampleGraph(), profileID: profile, now: Date(timeIntervalSince1970: 1000))
@@ -117,6 +138,54 @@ struct GraphToolExecutorTests {
         #expect(outcome.resultJSON?.contains("customers") == true)
     }
 
+    @Test func duplicateUnqualifiedNamePreservesLegacyExecutorSelection() async throws {
+        var graph = SchemaGraph()
+        graph.addNode(GraphNode(id: "tbl:alpha:orders", kind: .table, name: "orders", database: "alpha"))
+        graph.addNode(GraphNode(id: "tbl:beta:orders", kind: .table, name: "orders", database: "beta"))
+        graph.addNode(GraphNode(id: "tbl:alpha:customer", kind: .table, name: "alpha_customer"))
+        graph.addNode(GraphNode(id: "tbl:beta:customer", kind: .table, name: "beta_customer"))
+        graph.addEdge(GraphEdge(src: "tbl:alpha:orders", dst: "tbl:alpha:customer", kind: .references))
+        graph.addEdge(GraphEdge(src: "tbl:beta:orders", dst: "tbl:beta:customer", kind: .references))
+
+        let store = GraphStore(store: try BerryStore(path: ":memory:"))
+        let duplicateProfile = UUID()
+        try store.persist(graph, profileID: duplicateProfile, now: Date(timeIntervalSince1970: 1000))
+
+        let executor = GraphToolExecutor(store: store, profileID: duplicateProfile)
+        let outcome = await executor.execute(call(["op": "neighbors", "node": "orders"]))
+
+        #expect(outcome.status == "ok")
+        // Legacy accepted the duplicate and selected one match. Pin that
+        // compatibility to the smallest stable id instead of Dictionary order.
+        #expect(decode(outcome)["depends_on"] as? [String] == ["alpha_customer"])
+    }
+
+    @Test func pathResolvesBothLegacyReferencesFromOneSnapshot() async throws {
+        var first = SchemaGraph()
+        first.addNode(GraphNode(id: "tbl:a:source", kind: .table, name: "source", database: "a"))
+        first.addNode(GraphNode(id: "tbl:b:source", kind: .table, name: "source", database: "b"))
+        first.addNode(GraphNode(id: "tbl:a:target", kind: .table, name: "target", database: "a"))
+        first.addNode(GraphNode(id: "tbl:b:target", kind: .table, name: "target", database: "b"))
+        first.addEdge(GraphEdge(src: "tbl:a:source", dst: "tbl:a:target", kind: .references))
+
+        // A second load would observe a deliberately incompatible snapshot.
+        // This makes the test prove both references are resolved atomically
+        // from the one graph loaded for the operation, not merely count calls.
+        var second = SchemaGraph()
+        second.addNode(GraphNode(id: "tbl:z:source", kind: .table, name: "source", database: "z"))
+        second.addNode(GraphNode(id: "tbl:z:target", kind: .table, name: "target", database: "z"))
+
+        let source = SnapshotSequence([first, second])
+        let service = BerryGraphQueryService(loadGraph: source.load)
+        let executor = GraphToolExecutor(service: service, profileID: profile)
+        let outcome = await executor.execute(call(["op": "path", "from": "source", "to": "target"]))
+
+        #expect(outcome.status == "ok")
+        #expect(decode(outcome)["reachable"] as? Bool == true)
+        #expect(decode(outcome)["path"] as? [String] == ["source", "target"])
+        #expect(source.loadCount == 1)
+    }
+
     @Test func unknownOpIsRejected() async throws {
         let executor = GraphToolExecutor(store: try seededStore(), profileID: profile)
         let outcome = await executor.execute(call(["op": "louvain"]))
@@ -135,6 +204,15 @@ struct GraphToolExecutorTests {
         let outcome = await executor.execute(call(["op": "scc"]))
         #expect(outcome.status == "error")
         #expect(outcome.resultJSON?.contains("harvested") == true)
+    }
+
+    @Test func emptyGraphStillPrecedesUnknownOperationValidation() async throws {
+        let store = GraphStore(store: try BerryStore(path: ":memory:"))
+        let executor = GraphToolExecutor(store: store, profileID: UUID())
+        let outcome = await executor.execute(call(["op": "louvain"]))
+        #expect(outcome.status == "error")
+        #expect(decode(outcome)["error"] as? String ==
+            "No schema graph has been harvested yet for this connection.")
     }
 
  // MARK: - get_stats

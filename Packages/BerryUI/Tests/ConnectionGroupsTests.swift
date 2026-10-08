@@ -1,3 +1,4 @@
+import BerryCredentials
 import BerryStore
 import Foundation
 import Testing
