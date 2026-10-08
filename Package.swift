@@ -9,13 +9,13 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .executable(name: "BerryApp", targets: ["BerryApp"]),
-        .executable(name: "MCPCompatibilitySpike", targets: ["MCPCompatibilitySpike"]),
         .executable(name: "berrydb-mcp", targets: ["BerryDBMCP"]),
         .library(name: "BerryDriverKit", targets: ["BerryDriverKit"]),
         .library(name: "BerryDataSourceKit", targets: ["BerryDataSourceKit"]),
         .library(name: "BerryCore", targets: ["BerryCore"]),
         .library(name: "BerryCredentials", targets: ["BerryCredentials"]),
         .library(name: "BerryMCP", targets: ["BerryMCP"]),
+        .library(name: "BerryMCPServer", targets: ["BerryMCPServer"]),
         .library(name: "BerryDriverBootstrap", targets: ["BerryDriverBootstrap"]),
     ],
     dependencies: [
@@ -333,13 +333,6 @@ let package = Package(
             ],
             path: "App/Sources"
         ),
-        .executableTarget(
-            name: "MCPCompatibilitySpike",
-            dependencies: [
-                .product(name: "MCP", package: "swift-sdk"),
-            ],
-            path: "MCP/CompatibilitySpike/Sources"
-        ),
         .target(
             name: "BerryMCP",
             dependencies: [
@@ -347,9 +340,19 @@ let package = Package(
             ],
             path: "Packages/BerryMCP/Sources"
         ),
+        // MCP wire layer: stdio transport, tool/resource catalog and session context.
+        // BerryMCP stays protocol-independent; only this target imports the SDK.
+        .target(
+            name: "BerryMCPServer",
+            dependencies: [
+                "BerryMCP", "BerryStore", "BerryGraph", "BerryCredentials",
+                .product(name: "MCP", package: "swift-sdk"),
+            ],
+            path: "Packages/BerryMCPServer/Sources"
+        ),
         .executableTarget(
             name: "BerryDBMCP",
-            dependencies: ["BerryDriverBootstrap"],
+            dependencies: ["BerryDriverBootstrap", "BerryMCPServer"],
             path: "MCP/Sources"
         ),
         // BerryApp has no other consumer to exercise its launch-time
@@ -529,9 +532,12 @@ let package = Package(
             path: "Packages/BerryAI/Tests"
         ),
         .testTarget(
-            name: "MCPCompatibilitySpikeTests",
-            dependencies: ["MCPCompatibilitySpike"],
-            path: "Tests/MCPCompatibilitySpikeTests"
+            name: "BerryMCPServerTests",
+            dependencies: [
+                "BerryMCPServer", "BerryMCP", "BerryStore", "BerryGraph", "BerryCredentials",
+                .product(name: "MCP", package: "swift-sdk"),
+            ],
+            path: "Packages/BerryMCPServer/Tests"
         ),
         .testTarget(
             name: "BerryMCPTests",

@@ -1,10 +1,11 @@
 import CoreFoundation
 import Foundation
+import Logging
 import MCP
 
 /// Compatibility boundary for host messages that swift-sdk 0.12.1 cannot
 /// process correctly while this server remains on legacy MCP 2025-11-25.
-actor HostCompatibleStdioTransport: Transport {
+public actor HostCompatibleStdioTransport: Transport {
     private let base: StdioTransport
     private let stream: AsyncThrowingStream<Data, Swift.Error>
     private let continuation: AsyncThrowingStream<Data, Swift.Error>.Continuation
@@ -12,16 +13,16 @@ actor HostCompatibleStdioTransport: Transport {
 
     // Transport requires a nonisolated logger. The wrapped transport keeps its
     // own no-op logger; this second no-op instance is used only for conformance.
-    nonisolated let logger = StdioTransport().logger
+    public nonisolated let logger = StdioTransport().logger
 
-    init(base: StdioTransport = StdioTransport()) {
+    public init(base: StdioTransport = StdioTransport()) {
         self.base = base
         var continuation: AsyncThrowingStream<Data, Swift.Error>.Continuation!
         self.stream = AsyncThrowingStream { continuation = $0 }
         self.continuation = continuation
     }
 
-    func connect() async throws {
+    public func connect() async throws {
         try await base.connect()
         let base = self.base
         let continuation = self.continuation
@@ -42,18 +43,18 @@ actor HostCompatibleStdioTransport: Transport {
         }
     }
 
-    func disconnect() async {
+    public func disconnect() async {
         receiveTask?.cancel()
         receiveTask = nil
         continuation.finish()
         await base.disconnect()
     }
 
-    func send(_ data: Data) async throws {
+    public func send(_ data: Data) async throws {
         try await base.send(data)
     }
 
-    func receive() -> AsyncThrowingStream<Data, Swift.Error> {
+    public func receive() -> AsyncThrowingStream<Data, Swift.Error> {
         stream
     }
 
@@ -61,7 +62,7 @@ actor HostCompatibleStdioTransport: Transport {
     /// pre-initialize state guard first and returns `-32600`, which prevents
     /// dual-era clients such as Antigravity 1.2.11 from falling back. Replying
     /// `-32601` truthfully says this legacy server does not implement discovery.
-    static func legacyDiscoveryFallbackResponse(for data: Data) -> Data? {
+    public static func legacyDiscoveryFallbackResponse(for data: Data) -> Data? {
         guard
             let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             envelope["jsonrpc"] as? String == "2.0",
@@ -91,7 +92,7 @@ actor HostCompatibleStdioTransport: Transport {
     /// swift-sdk 0.12.1 decodes `Client.Capabilities.experimental` as
     /// `[String: String]`, while Codex 0.154.0 sends object-valued entries.
     /// Retain decodable strings and remove only unsupported values.
-    static func sanitizeIncomingMessage(_ data: Data) -> Data {
+    public static func sanitizeIncomingMessage(_ data: Data) -> Data {
         guard
             var envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             envelope["method"] as? String == "initialize",

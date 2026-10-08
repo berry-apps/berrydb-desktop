@@ -32,6 +32,8 @@ First, on inbound `initialize` messages only, it retains string-valued `params.c
 
 Second, it intercepts only request-shaped `server/discover` messages and replies with JSON-RPC `-32601 Method not found`, preserving the request identifier. The official 2026-07-28 [discovery specification](https://modelcontextprotocol.io/specification/2026-07-28/server/discover) defines discovery as the stdio backward-compatibility probe: dual-era clients should fall back to legacy `initialize` when discovery is unsupported. The pinned Swift SDK instead applies its pre-initialize state guard and returns `-32600 Server is not initialized`, which prevents Antigravity 1.2.11 from falling back. This adapter does not advertise or implement stateless MCP 2026-07-28; it truthfully declines that method so a dual-era client can negotiate the server's actual 2025-era protocol. Notifications and every method other than `server/discover` remain untouched. Remove this rule when the pinned SDK itself returns the correct method-not-found response before initialization or when BerryDB adopts a fully conformant 2026-07-28 implementation.
 
+The fixture target was removed after the shims moved into `BerryMCPServer`; the evidence above describes the fixture as it was tested.
+
 ## Evidence
 
 ### Automated tests
