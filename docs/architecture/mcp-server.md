@@ -7,8 +7,9 @@ kinds of resources for one selected project (see
 an explicit `--project`, the host's workspace roots or the working
 directory, each workspace decided by a repository link file
 (`.berrydb.json`) or by the workspace folders registered in the app. The
-app's **AI Agents** settings pane creates and edits projects, links
-repositories and shows the host setup commands. Underneath sit key
+app's **AI Agents** settings pane creates and edits projects and links
+repositories; it shows the host setup commands only once the helper is
+bundled with the app, which this version does not do. Underneath sit key
 storage, the `MCPProject` persistence model, HMAC-SHA256 row integrity and
 key rotation, a SQL-only connection coordinator with bounded shutdown, the
 SQL read policy parser and a byte-exact result limiter. No tool reads live
@@ -26,7 +27,8 @@ BerryDB has two independent MCP roles:
   launches external servers from a BerryDB-curated allowlist.
 - `berrydb-mcp` is an inbound local MCP **server**. A coding-agent host (Codex,
   Claude Code, Antigravity, or another MCP-capable application) launches the
-  signed `berrydb-mcp` helper as a subprocess and calls a bounded,
+  `berrydb-mcp` helper (signed with the app once packaging exists) as a
+  subprocess and calls a bounded,
   BerryDB-owned capability surface: schema/graph inspection and, where a
   profile allows it, bounded read-only queries (not implemented yet).
 
@@ -93,9 +95,14 @@ every other tool answers that no project is selected; nothing about any
 project is revealed. A `connection_id` that does not exist and one that
 exists but is not assigned to the project produce the identical error text,
 `Unknown connection for this project`. An unknown tool or an argument that
-breaks the input schema is a JSON-RPC invalid-params error whose message
-names the argument but never echoes its value. A structured result larger
-than 1 MiB is replaced by an `isError` result,
+breaks the input schema is a JSON-RPC invalid-params error (`-32602`) whose
+message names the argument but never echoes its value. This departs from
+the specification's suggestion to report input validation failures as tool
+results with `isError: true`
+([Error Handling](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#error-handling));
+the server keeps the stricter contract the protocol gate established, a
+protocol error for any argument the schema does not allow. A structured
+result larger than 1 MiB is replaced by an `isError` result,
 `Result too large; narrow the request`. A failure to read the store
 returns a fixed text, never SQLite's message, which can contain a path.
 
@@ -122,13 +129,15 @@ character removes the question.
 1. **The helper.** The settings pane looks for the helper at
    `BerryDB.app/Contents/Helpers/berrydb-mcp`. App builds do not include it
    yet (packaging is planned), and the pane then says the helper is not
-   bundled. From a source checkout, `swift build --product berrydb-mcp`
-   builds it; `swift build --show-bin-path` prints the folder it is in, and
-   that path takes the place of `<helper>` below. Such a build is not signed
-   by BerryDB's team: expect a Keychain approval dialog the first time it
-   loads the integrity key, and again after each rebuild, as gate G1
-   observed for an ad-hoc signed probe reading an app-created item (its
-   approval is pinned to the code hash).
+   bundled instead of showing setup commands. From a source checkout,
+   `swift build --product berrydb-mcp` builds it into the folder that
+   `swift build --show-bin-path` prints; the executable
+   `<that folder>/berrydb-mcp` is the `<helper>` in the commands below.
+   Such a build is not signed by BerryDB's team, so a Keychain approval
+   dialog is to be expected the first time it loads the integrity key and
+   again after each rebuild: gate G1 saw an ad-hoc signed probe prompted
+   when reading an app-created item, with the approval pinned to the code
+   hash. The helper itself was not observed doing so.
 2. **A project.** In **Settings → AI Agents**, create a project, turn on
    **Enabled**, choose its connections, and either add **Workspace
    Folders** (every folder below one is included) or use **Link
@@ -136,8 +145,11 @@ character removes the question.
    chosen repository. Committing that file lets every clone and worktree
    select a project of the same name in the BerryDB of whoever opens it;
    adding it to `.gitignore` keeps it local.
-3. **Each host, once.** The pane's **Agent Setup** section lists one
-   command per host, each adding a user-level entry named `berrydb`:
+3. **Each host, once.** Run one command per host, each adding a
+   user-level entry named `berrydb`. Once the helper is bundled, the pane's
+   **Agent Setup** section shows these commands with the bundled path
+   filled in; until then, run them by hand with the source-built
+   executable as `<helper>`:
 
    ```sh
    claude mcp add --scope user berrydb -- "<helper>"
@@ -149,10 +161,10 @@ character removes the question.
    from the host's workspace. Claude Code needs `--scope user` because its
    default scope, `local`, applies to the current project only; the `--`
    keeps any later `-`-prefixed argument an argument of the helper, which
-   `agy mcp add --help` (1.3.1) requires. A saved project also gets "this
-   project only" variants that append `--project <uuid>` and serve that
-   project from any folder. Both variants are named `berrydb`, so a host
-   is set up with one or the other.
+   `agy mcp add --help` (1.3.1) requires. For a saved project the pane
+   also shows "this project only" variants that append `--project <uuid>`
+   and serve that project from any folder. Both variants are named
+   `berrydb`, so a host is set up with one or the other.
 
 The helper accepts two optional arguments and rejects any other:
 `--project <uuid>` and `--store-path <absolute path>`, the latter for a
@@ -194,10 +206,12 @@ own:
 
 The workspaces of an input are then combined: an invalid link file is
 reported first (`invalid_link_file`), then a linked name no project has
-(`linked_project_not_found`), then a tie or workspaces naming different
-projects (`ambiguous_projects`). One project is selected, attributed to
-`linked_repository` when any contributing workspace used a link file, else
-to `roots` or `working_directory`. When none of the roots has a link file
+(`linked_project_not_found`), then a tie between registered folders, a
+linked name that more than one project matches (the settings pane refuses
+such names, but the store file can still hold them), or workspaces naming
+different projects (`ambiguous_projects`). One project is selected,
+attributed to `linked_repository` when any contributing workspace used a
+link file, else to `roots` or `working_directory`. When none of the roots has a link file
 or a registered match, the working directory is tried, since a host may
 open a folder BerryDB does not know; a reported problem or an ambiguity
 among the roots never falls through. With nothing matched the session is
@@ -226,7 +240,7 @@ request tries again.
 | `workspace` | when unconfigured: the folder holding an invalid link file, or the working directory when it was the input that failed; null otherwise |
 | `linked_project` | the name a link file gave when no project has it, else null |
 | `live_reads` | always `not_available` in this version |
-| `integrity` | `verified` when the project row's tag verifies under the stored key, `unavailable` when it does not or no key could be read (and when the store could not be read), null when no project is selected |
+| `integrity` | when selected: `verified` if the project row's tag verifies under the stored key, `unavailable` if it does not or no key could be read; when unconfigured: `unavailable` for `integrity_unavailable` (the store could not be read), null for every other reason |
 
 A project whose tag does not verify is still selected and served metadata:
 schema and graph metadata expose nothing a same-user process cannot read
@@ -354,6 +368,14 @@ which is packaging work (gate G1, see
 
 ## Read-only enforcement layers
 
+These layers are the design for live reads, which no tool offers yet. What
+exists today: the SQL policy parser (layer 3), and a connection coordinator
+that no tool uses, which admits only SQLite sessions, sets `PRAGMA
+query_only` on them, and rejects every other driver because its read-only
+session is not implemented. The PostgreSQL and MySQL read-only sessions and
+the least-privilege check (layers 1 and 2, whose queries gate G3 verified)
+and DynamoDB access (layer 4) are not implemented.
+
 `DangerGuard`, `QueryToolExecutor.isReadOnly`, and `dangerPreconfirmed: true`
 are never used in MCP code. Enforcement is layered; the database session and
 the least-privilege check are the boundary, the SQL policy parser is defense
@@ -431,7 +453,9 @@ Implemented:
   folders; selection on the first request, verification on every request,
   and `berrydb_status`.
 - The **AI Agents** settings pane: projects, workspace folders, repository
-  links, connections and the host setup commands.
+  links and connections. Its setup-command section is in place but shows
+  the commands only for a bundled helper, so in this version it reports
+  that the helper is not bundled.
 - Groundwork no tool uses yet: a SQL-only connection coordinator with
   bounded shutdown, the SQL read policy parser and the byte-exact result
   limiter.
