@@ -53,8 +53,24 @@ struct MCPProjectsSettingsModelTests {
         return (store, orders, events)
     }
 
+    private struct UnexpectedWrite: Error {}
+
+    /// Stands in for the link write wherever a test's case must write
+    /// nothing: the attempt is recorded as an issue naming the path and is
+    /// refused, so a regression in the checks before the write fails the
+    /// test without writing anywhere, the disk root included.
+    private static let refuseWrites: (Data, URL) throws -> Void = { _, file in
+        Issue.record("unexpected write to \(file.path)")
+        throw UnexpectedWrite()
+    }
+
+    /// Every model starts with link writes refused. A test that expects a
+    /// link file opts in to the real write, and only for folders from
+    /// `makeFolder()`.
     private func makeModel(_ store: BerryStore, _ box: KeyBox, helperURL: URL? = nil) -> MCPProjectsSettingsModel {
-        MCPProjectsSettingsModel(store: store, keyStore: box.keyStore, helperURL: helperURL)
+        let model = MCPProjectsSettingsModel(store: store, keyStore: box.keyStore, helperURL: helperURL)
+        model.linkWriter = Self.refuseWrites
+        return model
     }
 
     @Test func newProjectIsSealedAndVerifies() throws {
@@ -572,7 +588,9 @@ struct MCPProjectsSettingsModelTests {
 
     @Test func linkingWritesTheSavedNameWhereTheHelperLooksForIt() throws {
         let (store, _, _) = try makeStore()
-        let model = makeModel(store, KeyBox())
+        // Built without `makeModel` so the writer the app ships with is the
+        // one under test; both folders come from `makeFolder()`.
+        let model = MCPProjectsSettingsModel(store: store, keyStore: KeyBox().keyStore, helperURL: nil)
         let billing = try savedDraft(named: "Billing", in: model)
         let first = try makeFolder()
         let second = try makeFolder()
@@ -627,6 +645,7 @@ struct MCPProjectsSettingsModelTests {
             == [.needsOverwrite(file.path, existingProject: "Ledger")])
         #expect(try Data(contentsOf: file) == existing)
 
+        model.linkWriter = MCPProjectsSettingsModel.atomicLinkWrite
         #expect(model.linkRepositories([folder], projectID: billing.id, overwrite: true) == [.written(file.path)])
         #expect(try Data(contentsOf: file) == MCPRepositoryLink.contents(projectName: "Billing"))
     }
@@ -694,6 +713,7 @@ struct MCPProjectsSettingsModelTests {
 
         #expect(model.linkRepositories([folder], projectID: billing.id, overwrite: false)
             == [.needsOverwrite(file.path, existingProject: "Ledger")])
+        model.linkWriter = MCPProjectsSettingsModel.atomicLinkWrite
         #expect(model.linkRepositories([folder], projectID: billing.id, overwrite: true) == [.written(file.path)])
 
         #expect(try Data(contentsOf: target) == targetBytes)
@@ -810,6 +830,7 @@ struct MCPProjectsSettingsModelTests {
         #expect(model.repositoryLinkUnavailableReason(for: renamed) == nil)
         let folder = try makeFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
+        model.linkWriter = MCPProjectsSettingsModel.atomicLinkWrite
         #expect(model.linkRepositories([folder], projectID: renamed.id, overwrite: false)
             == [.written(linkFile(in: folder).path)])
         #expect(try Data(contentsOf: linkFile(in: folder)) == MCPRepositoryLink.contents(projectName: "Billing API"))

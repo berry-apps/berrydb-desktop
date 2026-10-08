@@ -64,6 +64,11 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     private let store: BerryStore
     private let keyStore: MCPAccessKeyStore
     private let helperURL: URL?
+    /// Writes one link file; the atomic write `atomicLinkWrite` in the app.
+    /// Tests replace it to refuse every write their case must not make, so a
+    /// regression in the checks before it fails the test instead of writing
+    /// outside its temporary folders, at the disk root for one.
+    var linkWriter: (Data, URL) throws -> Void = MCPProjectsSettingsModel.atomicLinkWrite
 
     /// `keyStore` defaults to the Keychain item the helper reads; the
     /// helper path is looked up once, inside the running app's bundle.
@@ -233,7 +238,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         guard let project = projects.first(where: { $0.id == projectID }) else {
             return folders.map { .rejected(Self.linkFilePath(in: $0), reason: Self.saveBeforeLinking) }
         }
-        return folders.map { Self.link($0, projectName: project.name, overwrite: overwrite) }
+        return folders.map { Self.link($0, projectName: project.name, overwrite: overwrite, write: linkWriter) }
     }
 
     /// A localized reason `path` cannot be a workspace root, or nil. A root
@@ -375,6 +380,10 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         return L("This links your home folder: every folder inside it without a nearer .berrydb.json selects this project, even another project’s workspace folder.")
     }
 
+    nonisolated static func atomicLinkWrite(_ contents: Data, to file: URL) throws {
+        try contents.write(to: file, options: .atomic)
+    }
+
     nonisolated private static func linkFilePath(in folder: URL) -> String {
         folder.appendingPathComponent(MCPRepositoryLink.fileName).path
     }
@@ -398,7 +407,9 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// the new file and its target is left as it was, and a folder of that
     /// name makes the write fail. A folder is therefore reported as in the
     /// way rather than offered for replacement.
-    nonisolated private static func link(_ folder: URL, projectName: String, overwrite: Bool) -> MCPRepositoryLinkResult {
+    nonisolated private static func link(
+        _ folder: URL, projectName: String, overwrite: Bool, write: (Data, URL) throws -> Void
+    ) -> MCPRepositoryLinkResult {
         let contents = MCPRepositoryLink.contents(projectName: projectName)
         let file = folder.appendingPathComponent(MCPRepositoryLink.fileName)
         let path = file.path
@@ -426,7 +437,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             }
         }
         do {
-            try contents.write(to: file, options: .atomic)
+            try write(contents, file)
         } catch {
             return .rejected(path, reason: L("The link file could not be written: \(error.localizedDescription)"))
         }
