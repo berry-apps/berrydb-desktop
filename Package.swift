@@ -519,11 +519,13 @@ let package = Package(
             // BerryKeyValueKit/BerryDriverRedis: the Redis workspace wiring
  // has its own Docker/local-server-gated
             // conformance suite here too, same pattern as Mongo/Qdrant above.
+            // BerryMCP: link files written by the MCP settings model are read
+            // back with the lookup the berrydb-mcp helper uses.
             dependencies: [
                 "BerryUI", "BerryCore", "BerryCredentials", "BerryStore", "BerryGraph", "BerryAI",
                 "BerryDriverKit", "BerryDriverSQLite",
                 "BerryDataSourceKit", "BerryDriverMongo", "BerryDriverQdrant", "BerryDriverTestKit",
-                "BerryKeyValueKit", "BerryDriverRedis",
+                "BerryKeyValueKit", "BerryDriverRedis", "BerryMCP",
             ],
             path: "Packages/BerryUI/Tests"
         ),

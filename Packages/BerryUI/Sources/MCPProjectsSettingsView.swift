@@ -128,6 +128,12 @@ private struct MCPProjectEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var rootError: String?
     @State private var confirmDelete = false
+    /// The outcome of the last link, one entry per chosen folder.
+    @State private var linkResults: [MCPRepositoryLinkResult] = []
+    /// Folders whose existing file the replace dialog lists, in the order
+    /// their `needsOverwrite` entries appear in `linkResults`.
+    @State private var foldersToReplace: [URL] = []
+    @State private var confirmReplace = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -136,10 +142,17 @@ private struct MCPProjectEditorSheet: View {
                 TextField(L("Name"), text: $draft.name)
                 Toggle(L("Enabled"), isOn: $draft.isEnabled)
                 rootsSection
+                repositoryLinksSection
                 connectionsSection
                 snippetsSection
             }
             .formStyle(.grouped)
+            .confirmationDialog(L("Replace existing link files?"), isPresented: $confirmReplace, titleVisibility: .visible) {
+                Button(L("Replace"), role: .destructive, action: replaceConfirmedLinks)
+                Button(L("Cancel"), role: .cancel) { foldersToReplace = [] }
+            } message: {
+                Text(replaceMessage)
+            }
             if let error = model.errorMessage {
                 Text(error).font(.caption).foregroundStyle(.red)
             }
@@ -214,6 +227,29 @@ private struct MCPProjectEditorSheet: View {
                 Text(rootError)
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var repositoryLinksSection: some View {
+        Section(L("Repository Links")) {
+            Text(L("Writes .berrydb.json naming this project. Commit it so clones and teammates select a project with the same name in their BerryDB, or add it to .gitignore to keep it local."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            let unavailable = model.repositoryLinkUnavailableReason(for: draft)
+            Button(L("Link Repository…"), action: chooseRepositories)
+                .disabled(unavailable != nil)
+            if let unavailable {
+                Text(unavailable)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(Array(linkResults.enumerated()), id: \.offset) { _, result in
+                Text(Self.outcome(of: result))
+                    .font(.caption)
+                    .foregroundStyle(Self.outcomeColor(of: result))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -299,6 +335,61 @@ private struct MCPProjectEditorSheet: View {
         let addition = MCPProjectsSettingsModel.addingRoots(panel.urls.map(\.path), to: draft.workspaceRoots)
         draft.workspaceRoots = addition.roots
         rootError = addition.rejections.isEmpty ? nil : addition.rejections.joined(separator: "\n")
+    }
+
+    /// Links the chosen folders without replacing anything, then asks before
+    /// replacing the files that are in the way.
+    private func chooseRepositories() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        let folders = panel.urls
+        linkResults = model.linkRepositories(folders, projectID: draft.id, overwrite: false)
+        foldersToReplace = zip(folders, linkResults).compactMap { folder, result in
+            guard case .needsOverwrite = result else { return nil }
+            return folder
+        }
+        confirmReplace = !foldersToReplace.isEmpty
+    }
+
+    /// Relinks the listed folders with `overwrite` and puts each new result
+    /// in place of the `needsOverwrite` entry it answers; both lists are in
+    /// the same order.
+    private func replaceConfirmedLinks() {
+        var replaced = model.linkRepositories(foldersToReplace, projectID: draft.id, overwrite: true).makeIterator()
+        linkResults = linkResults.map { result in
+            guard case .needsOverwrite = result, let next = replaced.next() else { return result }
+            return next
+        }
+        foldersToReplace = []
+    }
+
+    private var replaceMessage: String {
+        let files = linkResults.compactMap { result -> String? in
+            guard case let .needsOverwrite(path, existingProject) = result else { return nil }
+            guard let existingProject else { return L("\(path) (names no project)") }
+            return L("\(path) (names “\(existingProject)”)")
+        }
+        return ([L("These files will be replaced:")] + files).joined(separator: "\n")
+    }
+
+    private static func outcome(of result: MCPRepositoryLinkResult) -> String {
+        switch result {
+        case let .written(path): L("Wrote \(path)")
+        case let .unchanged(path): L("\(path) already links this project")
+        case let .needsOverwrite(path, _): L("\(path) was not replaced")
+        case let .rejected(path, reason): "\(path): \(reason)"
+        }
+    }
+
+    private static func outcomeColor(of result: MCPRepositoryLinkResult) -> Color {
+        switch result {
+        case .written, .unchanged: .secondary
+        case .needsOverwrite: .orange
+        case .rejected: .red
+        }
     }
 
     private func copy(_ text: String) {

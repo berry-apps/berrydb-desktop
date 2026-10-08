@@ -1,3 +1,4 @@
+import BerryMCP
 import CryptoKit
 import Foundation
 import Testing
@@ -498,5 +499,263 @@ struct MCPProjectsSettingsModelTests {
 
         #expect(result.roots == ["/work/billing", "/work/ledger"])
         #expect(result.rejections.isEmpty)
+    }
+
+    // MARK: Unique names
+
+    private static let duplicateName = L("Another project already uses this name. Repository links select projects by name.")
+
+    @Test func aNameAnotherProjectUsesIsRefusedBeforeTheKeyIsTouched() throws {
+        let (store, _, _) = try makeStore()
+        let box = KeyBox()
+        let model = makeModel(store, box)
+        var billing = model.draftForNewProject()
+        billing.name = "Billing"
+        #expect(model.save(billing))
+        let keyBefore = try #require(box.data)
+        let writesBefore = box.writeCount
+
+        var duplicate = model.draftForNewProject()
+        duplicate.name = "  BILLING "
+        #expect(model.save(duplicate) == false)
+
+        #expect(model.errorMessage == Self.duplicateName)
+        #expect(try store.mcpProjects().map(\.id) == [billing.id])
+        #expect(box.data == keyBefore)
+        #expect(box.writeCount == writesBefore)
+    }
+
+    @Test func renamingOntoAnotherProjectsNameIsRefusedButRecasingItsOwnIsNot() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        var billing = model.draftForNewProject()
+        billing.name = "Billing"
+        var analytics = model.draftForNewProject()
+        analytics.name = "Analytics"
+        #expect(model.save(billing))
+        #expect(model.save(analytics))
+
+        var renamed = try #require(model.draft(for: analytics.id))
+        renamed.name = "billing"
+        #expect(model.save(renamed) == false)
+        #expect(model.errorMessage == Self.duplicateName)
+        #expect(try store.mcpProject(id: analytics.id)?.name == "Analytics")
+
+        var recased = try #require(model.draft(for: billing.id))
+        recased.name = "BILLING"
+        #expect(model.save(recased))
+        #expect(try store.mcpProject(id: billing.id)?.name == "BILLING")
+    }
+
+    // MARK: Repository links
+
+    private static let saveBeforeLinking = L("Save the project before linking repositories.")
+
+    private func makeFolder() throws -> URL {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("berrydb-link-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
+    private func linkFile(in folder: URL) -> URL {
+        folder.appendingPathComponent(MCPRepositoryLink.fileName)
+    }
+
+    /// A saved project called `name`, as the editor opens it.
+    private func savedDraft(named name: String, in model: MCPProjectsSettingsModel) throws -> MCPProjectsSettingsModel.Draft {
+        var draft = model.draftForNewProject()
+        draft.name = name
+        #expect(model.save(draft))
+        return try #require(model.draft(for: draft.id))
+    }
+
+    @Test func linkingWritesTheSavedNameWhereTheHelperLooksForIt() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        let billing = try savedDraft(named: "Billing", in: model)
+        let first = try makeFolder()
+        let second = try makeFolder()
+        defer {
+            try? FileManager.default.removeItem(at: first)
+            try? FileManager.default.removeItem(at: second)
+        }
+
+        #expect(model.repositoryLinkUnavailableReason(for: billing) == nil)
+        let results = model.linkRepositories([first, second], projectID: billing.id, overwrite: false)
+
+        #expect(results == [.written(linkFile(in: first).path), .written(linkFile(in: second).path)])
+        let expected = MCPRepositoryLink.contents(projectName: "Billing")
+        #expect(try Data(contentsOf: linkFile(in: first)) == expected)
+        #expect(try Data(contentsOf: linkFile(in: second)) == expected)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: first.path) == [MCPRepositoryLink.fileName])
+        let nested = first.appendingPathComponent("services/api", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        #expect(MCPRepositoryLink.find(from: nested.path)
+            == .found(directory: MCPProjectSelector.canonicalPath(first.path), projectName: "Billing"))
+    }
+
+    @Test func anIdenticalLinkFileIsLeftUntouched() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        let billing = try savedDraft(named: "Billing", in: model)
+        let folder = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = linkFile(in: folder)
+        try MCPRepositoryLink.contents(projectName: "Billing").write(to: file)
+        // An atomic write replaces the file, so an unchanged inode shows no
+        // write happened.
+        let inode = try FileManager.default.attributesOfItem(atPath: file.path)[.systemFileNumber] as? Int
+
+        #expect(model.linkRepositories([folder], projectID: billing.id, overwrite: false) == [.unchanged(file.path)])
+        #expect(model.linkRepositories([folder], projectID: billing.id, overwrite: true) == [.unchanged(file.path)])
+
+        #expect(try FileManager.default.attributesOfItem(atPath: file.path)[.systemFileNumber] as? Int == inode)
+    }
+
+    @Test func aDifferentLinkFileIsReplacedOnlyWhenOverwriteIsConfirmed() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        let billing = try savedDraft(named: "Billing", in: model)
+        let folder = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = linkFile(in: folder)
+        let existing = Data(#"{"project":"Ledger","comment":"team"}"#.utf8)
+        try existing.write(to: file)
+
+        #expect(model.linkRepositories([folder], projectID: billing.id, overwrite: false)
+            == [.needsOverwrite(file.path, existingProject: "Ledger")])
+        #expect(try Data(contentsOf: file) == existing)
+
+        #expect(model.linkRepositories([folder], projectID: billing.id, overwrite: true) == [.written(file.path)])
+        #expect(try Data(contentsOf: file) == MCPRepositoryLink.contents(projectName: "Billing"))
+    }
+
+    @Test func aFileThatNamesNoProjectAlsoNeedsConfirmation() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        let billing = try savedDraft(named: "Billing", in: model)
+        let folder = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = linkFile(in: folder)
+        let existing = Data("{".utf8)
+        try existing.write(to: file)
+
+        #expect(model.linkRepositories([folder], projectID: billing.id, overwrite: false)
+            == [.needsOverwrite(file.path, existingProject: nil)])
+        #expect(try Data(contentsOf: file) == existing)
+    }
+
+    @Test func aSymbolicLinkIsReplacedWithoutWritingThroughIt() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        let billing = try savedDraft(named: "Billing", in: model)
+        let folder = try makeFolder()
+        let outside = try makeFolder()
+        defer {
+            try? FileManager.default.removeItem(at: folder)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let target = outside.appendingPathComponent("shared.json")
+        let targetBytes = Data(#"{"project":"Ledger"}"#.utf8)
+        try targetBytes.write(to: target)
+        let file = linkFile(in: folder)
+        try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
+
+        #expect(model.linkRepositories([folder], projectID: billing.id, overwrite: false)
+            == [.needsOverwrite(file.path, existingProject: "Ledger")])
+        #expect(model.linkRepositories([folder], projectID: billing.id, overwrite: true) == [.written(file.path)])
+
+        #expect(try Data(contentsOf: target) == targetBytes)
+        let type = try FileManager.default.attributesOfItem(atPath: file.path)[.type] as? FileAttributeType
+        #expect(type == .typeRegular)
+        #expect(try Data(contentsOf: file) == MCPRepositoryLink.contents(projectName: "Billing"))
+    }
+
+    @Test func aFolderNamedLikeTheLinkFileIsNeverReplaced() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        let billing = try savedDraft(named: "Billing", in: model)
+        let folder = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = linkFile(in: folder)
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+
+        for overwrite in [false, true] {
+            let results = model.linkRepositories([folder], projectID: billing.id, overwrite: overwrite)
+            #expect(results == [.rejected(file.path, reason: L("A folder named .berrydb.json is in the way."))])
+        }
+
+        var isDirectory: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory))
+        #expect(isDirectory.boolValue)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: file.path).isEmpty)
+    }
+
+    @Test func theWholeDiskAndAnythingButAFolderAreRejected() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        let billing = try savedDraft(named: "Billing", in: model)
+        let folder = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let notes = folder.appendingPathComponent("notes.txt")
+        let notesBytes = Data("notes".utf8)
+        try notesBytes.write(to: notes)
+        let missing = folder.appendingPathComponent("missing", isDirectory: true)
+        let disk = URL(fileURLWithPath: "/private/tmp/../..", isDirectory: true)
+
+        let results = model.linkRepositories([disk, notes, missing], projectID: billing.id, overwrite: true)
+
+        let notAFolder = L("Only a folder can be linked to a project.")
+        #expect(results == [
+            .rejected(linkFile(in: disk).path, reason: L("The whole disk cannot be linked to a project.")),
+            .rejected(linkFile(in: notes).path, reason: notAFolder),
+            .rejected(linkFile(in: missing).path, reason: notAFolder),
+        ])
+        #expect(try Data(contentsOf: notes) == notesBytes)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["notes.txt"])
+    }
+
+    @Test func anUnsavedProjectLinksNothing() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        var draft = model.draftForNewProject()
+        draft.name = "Billing"
+        let folder = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        #expect(model.repositoryLinkUnavailableReason(for: draft) == Self.saveBeforeLinking)
+        #expect(model.linkRepositories([folder], projectID: draft.id, overwrite: true)
+            == [.rejected(linkFile(in: folder).path, reason: Self.saveBeforeLinking)])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
+    }
+
+    @Test func aRenamedDraftCannotLinkUntilItIsSaved() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        let billing = try savedDraft(named: "Billing", in: model)
+
+        var renamed = billing
+        renamed.name = "Billing API"
+        #expect(model.repositoryLinkUnavailableReason(for: renamed) == Self.saveBeforeLinking)
+        var recased = billing
+        recased.name = "billing"
+        #expect(model.repositoryLinkUnavailableReason(for: recased) == Self.saveBeforeLinking)
+        // Saving trims the name, so surrounding spaces do not rename it.
+        var padded = billing
+        padded.name = " Billing "
+        #expect(model.repositoryLinkUnavailableReason(for: padded) == nil)
+        var otherFieldsEdited = billing
+        otherFieldsEdited.isEnabled.toggle()
+        otherFieldsEdited.workspaceRoots = ["/work/billing"]
+        #expect(model.repositoryLinkUnavailableReason(for: otherFieldsEdited) == nil)
+
+        #expect(model.save(renamed))
+        #expect(model.repositoryLinkUnavailableReason(for: renamed) == nil)
+        let folder = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        #expect(model.linkRepositories([folder], projectID: renamed.id, overwrite: false)
+            == [.written(linkFile(in: folder).path)])
+        #expect(try Data(contentsOf: linkFile(in: folder)) == MCPRepositoryLink.contents(projectName: "Billing API"))
     }
 }
