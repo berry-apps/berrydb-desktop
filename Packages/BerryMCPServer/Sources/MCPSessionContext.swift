@@ -46,7 +46,7 @@ public actor MCPSessionContext {
 
     private enum Selection {
         case project(UUID, source: MCPSelectionSource, workspace: String?)
-        case unconfigured(MCPUnconfiguredReason, workspace: String?)
+        case unconfigured(MCPUnconfiguredReason, workspace: String?, linkedProject: String?)
     }
 
     private let resolver: MCPProjectContextResolver
@@ -146,21 +146,22 @@ public actor MCPSessionContext {
         switch selection {
         case let .project(id, source, workspace):
             return try resolver.verified(id: id, source: source, workspace: workspace)
-        case let .unconfigured(reason, workspace):
-            return .unconfigured(reason, workspace: workspace)
+        case let .unconfigured(reason, workspace, linkedProject):
+            return .unconfigured(reason, workspace: workspace, linkedProject: linkedProject)
         }
     }
 
     /// The workspace kept with a selected project is the one the resolver
     /// reports if that project later turns out disabled or deleted: the
-    /// working directory when it decided the selection, nil otherwise.
+    /// working directory when its registered roots decided the selection,
+    /// nil otherwise, including a selection made by a link file.
     private func selectionOutcome(of context: MCPProjectContext) -> Selection {
         switch context {
         case let .selected(verified, source):
             let workspace = source == .workingDirectory ? workingDirectory : nil
             return .project(verified.project.id, source: source, workspace: workspace)
-        case let .unconfigured(reason, workspace):
-            return .unconfigured(reason, workspace: workspace)
+        case let .unconfigured(reason, workspace, linkedProject):
+            return .unconfigured(reason, workspace: workspace, linkedProject: linkedProject)
         }
     }
 }

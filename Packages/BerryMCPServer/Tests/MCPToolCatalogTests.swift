@@ -393,11 +393,14 @@ struct MCPToolCatalogTests {
         let result = try call(.status, [:])
         let status = object(result)
         #expect(result.isError != true)
-        #expect(Set(status.keys) == ["state", "reason", "project", "selected_by", "workspace", "live_reads", "integrity"])
+        #expect(Set(status.keys) == [
+            "state", "reason", "project", "selected_by", "workspace", "linked_project", "live_reads", "integrity",
+        ])
         #expect(status["state"]?.stringValue == "selected")
         #expect(status["reason"]?.isNull == true)
         #expect(status["selected_by"]?.stringValue == "working_directory")
         #expect(status["workspace"]?.isNull == true)
+        #expect(status["linked_project"]?.isNull == true)
         #expect(status["live_reads"]?.stringValue == "not_available")
         #expect(status["integrity"]?.stringValue == "verified")
         let project = try #require(status["project"]?.objectValue)
@@ -414,7 +417,34 @@ struct MCPToolCatalogTests {
         #expect(status["project"]?.isNull == true)
         #expect(status["selected_by"]?.isNull == true)
         #expect(status["workspace"]?.stringValue == "/work/app")
+        #expect(status["linked_project"]?.isNull == true)
         #expect(status["live_reads"]?.stringValue == "not_available")
+    }
+
+    @Test func statusReportsALinkedRepositorySelection() throws {
+        let status = object(try call(.status, nil, context: .selected(project(), source: .linkedRepository)))
+        #expect(status["state"]?.stringValue == "selected")
+        #expect(status["selected_by"]?.stringValue == "linked_repository")
+        #expect(status["project"]?.objectValue?["name"]?.stringValue == "Shop project")
+        #expect(status["linked_project"]?.isNull == true)
+    }
+
+    @Test func statusShowsTheNameALinkFileGaveWhenNoProjectHasIt() throws {
+        let missing = try call(
+            .status, nil, context: .unconfigured(.linkedProjectNotFound, workspace: "/work/app", linkedProject: "Ledger")
+        )
+        expectJSONText(missing)
+        let status = object(missing)
+        #expect(status["state"]?.stringValue == "unconfigured")
+        #expect(status["reason"]?.stringValue == "linked_project_not_found")
+        #expect(status["linked_project"]?.stringValue == "Ledger")
+        #expect(status["project"]?.isNull == true)
+        #expect(status["selected_by"]?.isNull == true)
+        #expect(status["workspace"]?.stringValue == "/work/app")
+
+        let invalid = object(try call(.status, nil, context: .unconfigured(.invalidLinkFile, workspace: nil)))
+        #expect(invalid["reason"]?.stringValue == "invalid_link_file")
+        #expect(invalid["linked_project"]?.isNull == true)
     }
 
     @Test func statusIntegrityIsPinnedForEveryCase() throws {
@@ -620,13 +650,16 @@ struct MCPToolCatalogTests {
         }
         let contexts: [MCPProjectContext] = [
             selected(), selected(integrity: false),
+            .selected(project(), source: .linkedRepository),
             .unconfigured(.integrityUnavailable, workspace: nil),
             .unconfigured(.noMatchingProject, workspace: "/work"),
+            .unconfigured(.linkedProjectNotFound, workspace: nil, linkedProject: "Ledger"),
+            .unconfigured(.invalidLinkFile, workspace: "/work"),
         ]
         let statusSchema = try #require(tools["berrydb_status"]?.outputSchema)
         for context in contexts {
             let structured = try #require(try call(.status, nil, context: context).structuredContent)
-            #expect(violation(structured, against: statusSchema) == nil)
+            #expect(violation(structured, against: statusSchema) == nil, "\(context): \(violation(structured, against: statusSchema) ?? "")")
         }
     }
 

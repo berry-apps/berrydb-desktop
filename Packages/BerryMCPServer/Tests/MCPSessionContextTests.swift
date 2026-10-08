@@ -39,7 +39,8 @@ struct MCPSessionContextTests {
             verify: { id in
                 projects.first { $0.id == id }.map { MCPVerifiedProject(project: $0, liveReadProfileIDs: []) }
             },
-            selector: MCPProjectSelector(canonicalize: { $0 })
+            selector: MCPProjectSelector(canonicalize: { $0 }),
+            findLink: { _ in .none }
         )
     }
 

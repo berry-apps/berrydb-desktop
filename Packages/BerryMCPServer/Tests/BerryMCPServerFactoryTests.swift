@@ -58,10 +58,12 @@ struct BerryMCPServerFactoryTests {
         )
     }
 
-    /// The projects the resolver reads, and whether reading them fails.
+    /// The projects the resolver reads, whether reading them fails, and the
+    /// link file lookup of each workspace that has one.
     struct Store: Sendable {
         var projects: [MCPProject]
         var unreadable = false
+        var links: [String: MCPRepositoryLink.Lookup] = [:]
     }
 
     fileprivate func resolver(_ store: Locked<Store>) -> MCPProjectContextResolver {
@@ -78,7 +80,8 @@ struct BerryMCPServerFactoryTests {
                     MCPVerifiedProject(project: $0, liveReadProfileIDs: [])
                 }
             },
-            selector: MCPProjectSelector(canonicalize: { $0 })
+            selector: MCPProjectSelector(canonicalize: { $0 }),
+            findLink: { store.value.links[$0] ?? .none }
         )
     }
 
@@ -218,6 +221,51 @@ struct BerryMCPServerFactoryTests {
             #expect(Self.projectID(status) == expectedB)
         }
         #expect(requests.value == 0)
+    }
+
+    @Test func linkedProjectIsKeptForTheConnectionAndVerifiedOnEveryRequest() async throws {
+        let store = Locked(Store(
+            projects: [projectA, projectB], links: ["/work/a": .found(directory: "/work/a", projectName: "b")]
+        ))
+        let requests = Locked(0)
+        let linked = projectB.id
+        try await withSession(store: store, roots: .declared(["file:///work/a"]), rootsRequests: requests) { client in
+            let first = try await Self.status(client)
+            #expect(first["selected_by"] == "linked_repository")
+            #expect(Self.projectID(first) == linked.uuidString)
+            #expect(try await client.listTools().tools.count == 6)
+
+            store.update { state in
+                state.projects = state.projects.map { project in
+                    var copy = project
+                    if copy.id == linked { copy.name = "Billing" }
+                    return copy
+                }
+            }
+            let renamed = try await Self.status(client)
+            #expect(renamed["selected_by"] == "linked_repository")
+            #expect(Self.projectID(renamed) == linked.uuidString)
+
+            store.update { $0.projects.removeAll { $0.id == linked } }
+            let deleted = try await Self.status(client)
+            #expect(deleted["reason"] == "no_matching_project")
+            #expect(deleted["workspace"] == .null)
+        }
+        #expect(requests.value == 1)
+    }
+
+    @Test func linkNamingAnUnknownProjectIsReportedWithItsName() async throws {
+        let store = Locked(Store(
+            projects: [projectA, projectB], links: ["/work/a": .found(directory: "/work/a", projectName: "Ledger")]
+        ))
+        try await withSession(store: store, roots: .undeclared([])) { client in
+            #expect(try await client.listTools().tools.map(\.name) == ["berrydb_status"])
+            let status = try await Self.status(client)
+            #expect(status["state"] == "unconfigured")
+            #expect(status["reason"] == "linked_project_not_found")
+            #expect(status["linked_project"] == "Ledger")
+            #expect(status["workspace"] == "/work/a")
+        }
     }
 
     // MARK: Tools and resources over the wire

@@ -138,10 +138,13 @@ public enum MCPToolCatalog {
             "project": ["type": ["object", "null"], "properties": ["id": connectionID, "name": text]],
             "selected_by": ["type": ["string", "null"]],
             "workspace": ["type": ["string", "null"]],
+            "linked_project": ["type": ["string", "null"]],
             "live_reads": ["type": "string", "enum": ["not_available"]],
             "integrity": ["type": ["string", "null"], "enum": ["verified", "unavailable", .null]],
         ],
-        required: ["state", "reason", "project", "selected_by", "workspace", "live_reads", "integrity"]
+        required: [
+            "state", "reason", "project", "selected_by", "workspace", "linked_project", "live_reads", "integrity",
+        ]
     )
 
     private static let schemaOutput: Value = {
@@ -263,13 +266,14 @@ public struct MCPToolRouter: Sendable {
             fields = [
                 "state": "selected", "reason": .null,
                 "project": ["id": .string(verified.project.id.uuidString), "name": .string(verified.project.name)],
-                "selected_by": .string(source.rawValue), "workspace": .null,
+                "selected_by": .string(source.rawValue), "workspace": .null, "linked_project": .null,
                 "integrity": verified.projectTagValid ? "verified" : "unavailable",
             ]
-        case let .unconfigured(reason, workspace):
+        case let .unconfigured(reason, workspace, linkedProject):
             fields = [
                 "state": "unconfigured", "reason": .string(reason.rawValue), "project": .null,
                 "selected_by": .null, "workspace": workspace.map { .string($0) } ?? .null,
+                "linked_project": linkedProject.map { .string($0) } ?? .null,
                 "integrity": reason == .integrityUnavailable ? Value.string("unavailable") : Value.null,
             ]
         }
