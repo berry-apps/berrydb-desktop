@@ -16,6 +16,7 @@ final class HelperProcess: @unchecked Sendable {
         case executableMissing([String])
         case timeout(String)
         case outputClosed(String)
+        case exited(String)
 
         var description: String {
             switch self {
@@ -26,6 +27,8 @@ final class HelperProcess: @unchecked Sendable {
                 return "Timed out waiting for \(operation)"
             case let .outputClosed(operation):
                 return "The helper closed standard output before \(operation)"
+            case let .exited(operation):
+                return "The helper exited before \(operation)"
             }
         }
     }
@@ -98,6 +101,29 @@ final class HelperProcess: @unchecked Sendable {
         kill(process.processIdentifier, signal)
     }
 
+    /// Returns once the helper ignores `signal`, which it does only after its
+    /// handler for that signal is registered. Polls the kernel's view of the
+    /// process with `Task.sleep` between reads, so no thread is blocked.
+    func ignoring(_ signal: Int32) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: Self.timeout)
+        while !Self.ignores(signal, pid: process.processIdentifier) {
+            if exit.hasExited { throw HarnessError.exited("ignoring signal \(signal)") }
+            guard clock.now < deadline else { throw HarnessError.timeout("signal \(signal) to be ignored") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    /// Whether process `pid` ignores `signal`, read from `p_sigignore` of its
+    /// `kinfo_proc` (sysctl(3), `KERN_PROC_PID`).
+    private static func ignores(_ signal: Int32, pid: pid_t) -> Bool {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&name, u_int(name.count), &info, &size, nil, 0) == 0, size > 0 else { return false }
+        return info.kp_proc.p_sigignore & (1 << UInt32(signal - 1)) != 0
+    }
+
     /// The helper's exit status and how it ended, once it has exited.
     func termination() async throws -> (status: Int32, reason: Process.TerminationReason) {
         try await Self.within("process exit") { [exit] in await exit.termination() }
@@ -120,24 +146,20 @@ final class HelperProcess: @unchecked Sendable {
         }
     }
 
-    /// The debug build of `berrydb-mcp`: next to the test bundle, else under
-    /// the package's `.build/debug`. Observed with Swift 6.3: SwiftPM writes
-    /// both products to `.build/<triple>/debug`, and `swift test` alone
-    /// rebuilds a deleted `berrydb-mcp` before running the tests.
+    /// The `berrydb-mcp` built with the test bundle, in the same build
+    /// products directory. Only that location is used, so a binary left over
+    /// from another configuration is never picked up. Observed with Swift
+    /// 6.3: SwiftPM writes both products to `.build/<triple>/debug`, and
+    /// `swift test` alone rebuilds a deleted `berrydb-mcp` before running the
+    /// tests.
     private static func executableURL() throws -> URL {
-        let bundleDirectory = Bundle(for: HelperProcess.self).bundleURL.deletingLastPathComponent()
-        let packageRoot = URL(fileURLWithPath: #filePath)
+        let executable = Bundle(for: HelperProcess.self).bundleURL
             .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let candidates = [
-            bundleDirectory.appendingPathComponent("berrydb-mcp"),
-            packageRoot.appendingPathComponent(".build/debug/berrydb-mcp"),
-        ]
-        guard let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
-            throw HarnessError.executableMissing(candidates.map(\.path))
+            .appendingPathComponent("berrydb-mcp")
+        guard FileManager.default.isExecutableFile(atPath: executable.path) else {
+            throw HarnessError.executableMissing([executable.path])
         }
-        return found
+        return executable
     }
 
     private static func record(_ handle: FileHandle, into recorder: LineRecorder) {
@@ -277,6 +299,10 @@ private final class ExitWatch: Sendable {
     }
 
     private let state = Mutex(State())
+
+    var hasExited: Bool {
+        state.withLock { $0.termination != nil }
+    }
 
     func record(_ status: Int32, reason: Process.TerminationReason) {
         let waiters = state.withLock { state in

@@ -41,11 +41,20 @@ struct HelperArgumentsTests {
         #expect(throws: HelperArgumentsError.unknown("--verbose")) {
             try HelperArguments.parse(["--verbose"])
         }
-        #expect(throws: HelperArgumentsError.unknown("--store-path=/tmp/store.sqlite")) {
-            try HelperArguments.parse(["--store-path=/tmp/store.sqlite"])
+        #expect(throws: HelperArgumentsError.unknown("-v")) {
+            try HelperArguments.parse(["-v"])
         }
-        #expect(throws: HelperArgumentsError.unknown("stray")) {
-            try HelperArguments.parse(["--project", project.uuidString, "stray"])
+    }
+
+    /// An `=` form or a stray value may carry a store path; the error keeps
+    /// only the flag name, or nothing of a positional argument.
+    @Test
+    func rejectedArgumentsNeverCarryTheirValue() {
+        #expect(throws: HelperArgumentsError.unknown("--store-path=")) {
+            try HelperArguments.parse(["--store-path=/Users/me/store.sqlite"])
+        }
+        #expect(throws: HelperArgumentsError.positional) {
+            try HelperArguments.parse(["--project", project.uuidString, "/Users/me/store.sqlite"])
         }
     }
 
@@ -95,6 +104,7 @@ struct HelperArgumentsTests {
     @Test
     func errorMessagesNameTheOffendingFlag() {
         #expect(HelperArgumentsError.unknown("--verbose").description == "unknown argument '--verbose'")
+        #expect(HelperArgumentsError.positional.description == "unexpected positional argument")
         #expect(HelperArgumentsError.missingValue("--project").description == "missing value for --project")
         #expect(HelperArgumentsError.repeated("--project").description == "--project given more than once")
         #expect(HelperArgumentsError.invalidProject.description == "--project expects a project UUID")

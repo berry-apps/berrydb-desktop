@@ -1,6 +1,7 @@
 import BerryStore
 import Foundation
 import GRDB
+import SQLite3
 import Testing
 
 /// The stdio contract of the built `berrydb-mcp` executable, exercised as a
@@ -105,7 +106,9 @@ struct BerryMCPStdioTests {
         let discovery = try await helper.response(id: 1)
         #expect((discovery["error"] as? [String: Any])?["code"] as? Int == -32601)
 
-        try helper.send(Self.initialize(id: 2, protocolVersion: "2025-11-25", client: "antigravity-client"))
+        try helper.send(
+            Self.initialize(id: 2, protocolVersion: "2025-11-25", client: "antigravity-client", version: "v1.0.0")
+        )
         let initialize = try await helper.response(id: 2)
         #expect((initialize["result"] as? [String: Any])?["protocolVersion"] as? String == "2025-11-25")
 
@@ -161,10 +164,49 @@ struct BerryMCPStdioTests {
         #expect(helper.stderr.text == "berrydb-mcp: unknown argument '--verbose'\n")
     }
 
+    @Test
+    func rejectedStorePathArgumentStaysOffStderr() async throws {
+        let store = try TemporaryStore()
+        defer { store.remove() }
+        let helper = try HelperProcess(arguments: ["--store-path=\(store.path)"], workingDirectory: store.directory)
+        defer { helper.stop() }
+
+        let termination = try await helper.termination()
+        try await helper.outputFinished()
+
+        #expect(termination.reason == .exit)
+        #expect(termination.status == 2)
+        #expect(helper.stdout.lines.isEmpty)
+        #expect(helper.stderr.text == "berrydb-mcp: unknown argument '--store-path='\n")
+        #expect(!helper.stderr.text.contains(store.directory.path))
+    }
+
+    @Test
+    func storeFromNewerAppExitsWithStderrOnly() async throws {
+        let store = try TemporaryStore()
+        defer { store.remove() }
+        try store.overwriteWithNewerStore()
+        let helper = try HelperProcess(arguments: ["--store-path", store.path], workingDirectory: store.directory)
+        defer { helper.stop() }
+
+        let termination = try await helper.termination()
+        try await helper.outputFinished()
+
+        #expect(termination.reason == .exit)
+        #expect(termination.status == 1)
+        #expect(helper.stdout.lines.isEmpty)
+        #expect(helper.stdout.unterminated.isEmpty)
+        #expect(
+            helper.stderr.text
+                == "berrydb-mcp: cannot open the BerryDB store (it was written by a different version of BerryDB)\n"
+        )
+        #expect(!helper.stderr.text.contains(store.directory.path))
+    }
+
     /// The exit must be the handler's clean exit: the default action of
     /// either signal would end the process with `.uncaughtSignal`.
     @Test(arguments: [SIGTERM, SIGINT])
-    func sigtermStopsPromptly(signal: Int32) async throws {
+    func signalStopsCleanly(signal: Int32) async throws {
         let store = try TemporaryStore()
         defer { store.remove() }
         let helper = try HelperProcess(arguments: ["--store-path", store.path], workingDirectory: store.directory)
@@ -177,6 +219,35 @@ struct BerryMCPStdioTests {
         let termination = try await helper.termination()
         #expect(termination.reason == .exit)
         #expect(termination.status == 0)
+    }
+
+    /// A signal that arrives while the helper is still starting is handled,
+    /// not left to the default action, and ends the server as soon as it
+    /// starts. An exclusive lock on the store holds the helper inside its
+    /// store open, so the signal deterministically arrives before serving.
+    @Test
+    func signalBeforeServingStopsCleanly() async throws {
+        let store = try TemporaryStore()
+        defer { store.remove() }
+        let lock = try StoreLock(path: store.path)
+        let helper = try HelperProcess(arguments: ["--store-path", store.path], workingDirectory: store.directory)
+        defer { helper.stop() }
+
+        try await helper.ignoring(SIGTERM)
+        helper.send(signal: SIGTERM)
+        try lock.release()
+
+        let termination = try await helper.termination()
+        try await helper.outputFinished()
+        #expect(termination.reason == .exit)
+        // The helper waits at most five seconds for the store lock. Released
+        // later than that on a stalled runner, the open fails and the helper
+        // exits 1; the signal was still handled rather than fatal.
+        if termination.status != 0 {
+            #expect(termination.status == 1)
+            #expect(helper.stderr.text.hasPrefix("berrydb-mcp: cannot open the BerryDB store ("))
+        }
+        #expect(helper.stdout.lines.isEmpty)
     }
 
     /// The store is validated once, at open; a file replaced underneath the
@@ -196,8 +267,7 @@ struct BerryMCPStdioTests {
         try store.overwriteWithNewerStore()
 
         try helper.send(Self.callStatus(id: 2))
-        let status = try await helper.response(id: 2)
-        #expect(status["result"] != nil || status["error"] != nil)
+        #expect(try await Self.statusReason(helper.response(id: 2)) == "no_matching_project")
         try helper.send(["jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": [:]])
         _ = try await helper.response(id: 3)
 
@@ -209,13 +279,15 @@ struct BerryMCPStdioTests {
 
     // MARK: Messages
 
-    private static func initialize(id: Int, protocolVersion: String, client: String) -> [String: Any] {
+    private static func initialize(
+        id: Int, protocolVersion: String, client: String, version: String = "1.0"
+    ) -> [String: Any] {
         [
             "jsonrpc": "2.0", "id": id, "method": "initialize",
             "params": [
                 "protocolVersion": protocolVersion,
                 "capabilities": [:],
-                "clientInfo": ["name": client, "version": "1.0"],
+                "clientInfo": ["name": client, "version": version],
             ],
         ]
     }
@@ -250,6 +322,35 @@ struct BerryMCPStdioTests {
             #expect(object?["jsonrpc"] as? String == "2.0", "not a JSON-RPC line: \(String(decoding: line, as: UTF8.self))")
         }
         #expect(stdout.unterminated.isEmpty)
+    }
+}
+
+/// An exclusive SQLite lock on a store file, which keeps every other
+/// connection from reading it until `release()`. Uses the C API because GRDB
+/// refuses to leave a transaction open between database accesses.
+private final class StoreLock {
+    struct Failure: Error {
+        let code: Int32
+    }
+
+    private var connection: OpaquePointer?
+
+    init(path: String) throws {
+        var connection: OpaquePointer?
+        let opened = sqlite3_open_v2(path, &connection, SQLITE_OPEN_READWRITE, nil)
+        self.connection = connection
+        guard opened == SQLITE_OK else { throw Failure(code: opened) }
+        let locked = sqlite3_exec(connection, "BEGIN EXCLUSIVE", nil, nil, nil)
+        guard locked == SQLITE_OK else { throw Failure(code: locked) }
+    }
+
+    func release() throws {
+        let committed = sqlite3_exec(connection, "COMMIT", nil, nil, nil)
+        guard committed == SQLITE_OK else { throw Failure(code: committed) }
+    }
+
+    deinit {
+        sqlite3_close(connection)
     }
 }
 
