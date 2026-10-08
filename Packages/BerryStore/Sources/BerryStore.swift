@@ -47,7 +47,13 @@ public final class BerryStore: Sendable {
             try SQLiteVecExtension.install(into: db)
         }
         dbQueue = try DatabaseQueue(path: path, configuration: configuration)
-        try Self.migrator.migrate(dbQueue)
+        try Self.retireSupersededMigrations(in: dbQueue)
+        let migrator = Self.migrator
+        do {
+            try migrator.migrate(dbQueue)
+        } catch {
+            throw Self.openError(afterFailedMigration: error, migrator: migrator, in: dbQueue)
+        }
     }
 
     /// Test-only: wraps an already-prepared `DatabaseQueue` as-is, running no
@@ -56,6 +62,110 @@ public final class BerryStore: Sendable {
     /// exercise `BerryStore`'s own methods against the result.
     init(dbQueue: DatabaseQueue) {
         self.dbQueue = dbQueue
+    }
+
+    /// `init(path:)` failure modes of its own. Any other failure to open the
+    /// file is thrown as the underlying error.
+    public enum OpenError: Error, Equatable, LocalizedError {
+        /// The migration `identifier` threw; `reason` is that error's text,
+        /// which may quote SQL. The step was rolled back, so it changed no
+        /// data; steps applied before it in the same open stay committed.
+        case migrationFailed(identifier: String, reason: String)
+
+        public var errorDescription: String? {
+            "BerryDB could not upgrade its data store."
+        }
+
+        public var failureReason: String? {
+            switch self {
+            case let .migrationFailed(identifier, _):
+                "Upgrade step \"\(identifier)\" failed and was rolled back, so it changed no data."
+            }
+        }
+    }
+
+    /// A migration a development build registered and a later build withdrew.
+    private struct SupersededMigration {
+        let identifier: String
+        /// The registered migration that took its place. A store that applied
+        /// both (legacy tables dropped by hand, then the replacement run) holds
+        /// the replacement's schema and data under the same table names.
+        let replacement: String
+        /// Tables the withdrawn migration created, children before the parents
+        /// they reference: with foreign keys enforced, DROP TABLE first runs an
+        /// implicit DELETE, which a remaining child row would otherwise block
+        /// (https://www.sqlite.org/lang_droptable.html). Indexes go with their
+        /// table, per the same page.
+        let tables: [String]
+    }
+
+    /// Withdrawn migrations whose identifier a store may still record. GRDB
+    /// keeps only identifiers, so a store that ran the withdrawn definition
+    /// has its tables while the migrator, which no longer knows that
+    /// identifier, runs the replacement against them and fails on every open.
+    ///
+    /// `v30-mcp-project-grant` was never in a release. It created
+    /// `mcp_project`, `mcp_project_profile` and `mcp_project_grant` for an
+    /// access model replaced before any release had MCP projects: grants
+    /// were removed, and per-project capability and production-access
+    /// columns became per-profile access with integrity tags. Its rows have no
+    /// meaning in that model, so they are dropped, deliberately, and
+    /// `v30-mcp-project` then creates the current tables.
+    private static let supersededMigrations = [
+        SupersededMigration(
+            identifier: "v30-mcp-project-grant",
+            replacement: "v30-mcp-project",
+            tables: ["mcp_project_grant", "mcp_project_profile", "mcp_project"]
+        ),
+    ]
+
+    /// Clears what withdrawn migrations left in the store, in one transaction,
+    /// before the migrator runs. A store without `grdb_migrations` (a new
+    /// file) or without a withdrawn identifier is left as it is. Only
+    /// `init(path:)` calls this: `openReadOnly(path:)` never writes, and keeps
+    /// refusing such a store through its applied-set check.
+    private static func retireSupersededMigrations(in dbQueue: DatabaseQueue) throws {
+        try dbQueue.write { db in
+            guard try db.tableExists("grdb_migrations") else { return }
+            let applied = try String.fetchSet(db, sql: "SELECT identifier FROM grdb_migrations")
+            for superseded in supersededMigrations where applied.contains(superseded.identifier) {
+                if !applied.contains(superseded.replacement) {
+                    for table in superseded.tables {
+                        try db.execute(sql: "DROP TABLE IF EXISTS \(table.quotedDatabaseIdentifier)")
+                    }
+                }
+                try db.execute(
+                    sql: "DELETE FROM grdb_migrations WHERE identifier = ?",
+                    arguments: [superseded.identifier]
+                )
+            }
+        }
+    }
+
+    /// Names the migration a failed `migrate` call was running. GRDB 7.11.1
+    /// runs unapplied migrations in registration order and stops at the first
+    /// that throws (`DatabaseMigrator.runMigrations`); each runs in its own
+    /// transaction that inserts its identifier into `grdb_migrations` before
+    /// committing (`Migration.updateAppliedIdentifier`), and a thrown error
+    /// rolls that transaction back before it is rethrown
+    /// (`Database.inTransaction`). The first registered identifier missing
+    /// from `grdb_migrations` is therefore the one that threw. When none is
+    /// missing, or the table cannot be read (GRDB creates it before running
+    /// any migration, so its absence means that step failed), the failure
+    /// happened outside any migration and keeps its own error. Internal so a
+    /// test can reach that case, which no store file produces on demand.
+    static func openError(
+        afterFailedMigration error: any Error,
+        migrator: DatabaseMigrator,
+        in dbQueue: DatabaseQueue
+    ) -> any Error {
+        let applied = try? dbQueue.read { db in
+            try String.fetchSet(db, sql: "SELECT identifier FROM grdb_migrations")
+        }
+        guard let applied,
+              let failed = migrator.migrations.first(where: { !applied.contains($0) })
+        else { return error }
+        return OpenError.migrationFailed(identifier: failed, reason: error.localizedDescription)
     }
 
     /// `openReadOnly(path:)` failure modes.
