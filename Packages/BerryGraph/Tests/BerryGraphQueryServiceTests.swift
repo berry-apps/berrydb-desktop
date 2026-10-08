@@ -283,4 +283,61 @@ struct BerryGraphQueryServiceTests {
             #expect(available.last == "table_49")
         }
     }
+
+    private func mcpEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        return encoder
+    }
+
+    @Test func graphResultsEncodeWithStableKeys() throws {
+        let encoder = mcpEncoder()
+        let neighbors = BerryGraphQueryService.Neighbors(node: "orders", dependsOn: ["customers"], dependedOnBy: [])
+        #expect(String(decoding: try encoder.encode(neighbors), as: UTF8.self)
+            == #"{"depended_on_by":[],"depends_on":["customers"],"node":"orders"}"#)
+        let listing = BerryGraphQueryService.SchemaListing(objects: [], omittedCount: 3, harvestedAt: nil)
+        #expect(String(decoding: try encoder.encode(listing), as: UTF8.self) == #"{"objects":[],"omitted_count":3}"#)
+    }
+
+    @Test func circularDependenciesEncodeDerivedFlagAndRoundTrip() throws {
+        let encoder = mcpEncoder()
+        let none = BerryGraphQueryService.CircularDependencies(components: [])
+        #expect(String(decoding: try encoder.encode(none), as: UTF8.self) == #"{"components":[],"has_cycles":false}"#)
+        let cyclic = BerryGraphQueryService.CircularDependencies(components: [["a", "b"]])
+        let data = try encoder.encode(cyclic)
+        #expect(String(decoding: data, as: UTF8.self) == #"{"components":[["a","b"]],"has_cycles":true}"#)
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        #expect(try decoder.decode(BerryGraphQueryService.CircularDependencies.self, from: data) == cyclic)
+    }
+
+    @Test func queryResultsFromAGraphEncodeSnakeCaseKeys() throws {
+        let encoder = mcpEncoder()
+        let query = try service(graph: graph())
+        func json<T: Encodable>(_ value: T) throws -> String {
+            String(decoding: try encoder.encode(value), as: UTF8.self)
+        }
+        #expect(try json(query.path(profileID: profileID, from: "order_items", to: "customers"))
+            == #"{"from":"order_items","path":["order_items","orders","customers"],"reachable":true,"to":"customers"}"#)
+        #expect(try json(query.blastRadius(profileID: profileID, node: "customers"))
+            == #"{"count":3,"impacted":["order_items","order_summary","orders"],"node":"customers"}"#)
+        #expect(try json(query.topCentrality(profileID: profileID, limit: 1))
+            == #"[{"in_degree":2,"node":"orders"}]"#)
+        #expect(try json(query.statistics(profileID: profileID)).contains(#""unused_indexes":["z_idx"]"#))
+        #expect(try json(query.statistics(profileID: profileID, table: "orders")).contains(#""indexes":["#))
+
+        let detailed = try query.schema(profileID: profileID, objectNames: ["orders"], detail: .full, limit: 200)
+        let text = try json(detailed)
+        #expect(text.contains(#""omitted_count":0"#))
+        #expect(text.contains(#""harvested_at":"#))
+        let column = BerryGraphQueryService.SchemaObject.Column(name: "id", type: "int", nullable: false, primaryKey: true)
+        #expect(try json(column) == #"{"name":"id","nullable":false,"primary_key":true,"type":"int"}"#)
+        let foreignKey = BerryGraphQueryService.SchemaObject.ForeignKey(
+            column: "customer_id", referencedDatabase: nil, referencedTable: "customers", referencedColumn: "id")
+        #expect(try json(foreignKey)
+            == #"{"column":"customer_id","referenced_column":"id","referenced_table":"customers"}"#)
+        #expect(try json(BerryGraphQueryService.SchemaDetail.overview) == #""overview""#)
+    }
 }
