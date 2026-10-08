@@ -88,6 +88,19 @@ immutable `@unchecked Sendable` struct, the pattern `DynamoDBPage` and
 `ResultBox` already use. Treat the pull request's CI run as the
 authoritative build.
 
+## Store migrations are append-only
+
+Never rename, reorder or edit a migration registered in `BerryStore.migrator`
+once any build, including a development build run against a real store, may
+have applied it; add a new migration instead. GRDB records only the
+identifier of an applied migration, so when `v30-mcp-project-grant` was
+rewritten in place as `v30-mcp-project`, every store that had run the earlier
+build failed to open with `table "mcp_project" already exists` and the app
+started without its connection profiles. If a migration must be withdrawn
+anyway, add its identifier and the tables it created to
+`BerryStore.supersededMigrations`, so stores that applied it recover on the
+next open.
+
 ## Pull requests
 
 - English only. Title is a conventional commit (`feat(dynamodb): …`). Link
