@@ -507,6 +507,22 @@ struct MCPToolCatalogTests {
         #expect(!String(describing: result).contains("db.internal.example"))
     }
 
+    /// A connection whose graph was never harvested carries the key with a
+    /// null value, so every connection has the same fields.
+    @Test func unharvestedGraphIsReportedAsNull() throws {
+        let tools = Dictionary(uniqueKeysWithValues: MCPToolCatalog.tools(for: selected()).map { ($0.name, $0) })
+        let result = try call(.listConnections, [:], router: MCPToolRouter(metadata: service(harvested: false)))
+        expectJSONText(result)
+        let first = try #require(object(result)["connections"]?.arrayValue?.first?.objectValue)
+        #expect(first["graph_harvested_at"] == .null)
+        let schema = try #require(tools["berrydb_list_connections"]?.outputSchema)
+        let structured = try #require(result.structuredContent)
+        #expect(violation(structured, against: schema) == nil)
+        let required = schema.objectValue?["properties"]?.objectValue?["connections"]?.objectValue?["items"]?
+            .objectValue?["required"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        #expect(required.contains("graph_harvested_at"))
+    }
+
     @Test func getSchemaReturnsObjectsWithSnakeCaseKeys() throws {
         let overview = try call(.getSchema, ["connection_id": connectionID])
         expectJSONText(overview)
@@ -564,6 +580,15 @@ struct MCPToolCatalogTests {
         expectJSONText(table)
         #expect(object(table)["table"]?.stringValue == "orders")
         #expect(object(table)["fields"]?.objectValue?["rows"]?.stringValue == "10")
+    }
+
+    /// A host that forwards the text block shows the model these bytes, so
+    /// a path reads as written rather than with `\/` escapes.
+    @Test func textContentLeavesSlashesUnescaped() throws {
+        let result = try call(.status, [:])
+        expectJSONText(result)
+        #expect(text(result).contains(#""workspace":"/work/shop""#))
+        #expect(!text(result).contains(#"\/"#))
     }
 
     @Test func textContentIsTheCompactJSONOfTheStructuredResult() throws {

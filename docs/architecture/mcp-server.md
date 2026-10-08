@@ -84,7 +84,7 @@ structured content
 | Tool | Arguments | Returns |
 |---|---|---|
 | `berrydb_status` | none | Which project the session serves, or why none (see [Status](#status)). Always listed. |
-| `berrydb_list_connections` | none | The project's connections: ID, name, driver, `environment` (`production` or `unlabeled`), capabilities and when the graph was last harvested. |
+| `berrydb_list_connections` | none | The project's connections: ID, name, driver, `environment` (`production` or `unlabeled`), capabilities and `graph_harvested_at`, when the graph was last harvested or null if never. |
 | `berrydb_get_schema` | `connection_id`; optional `object_names` (at most 50), `detail` (`overview` or `full`) | Tables and views, at most 200 per call with an `omitted_count`; `full` adds columns, indexes and foreign keys. |
 | `berrydb_search_schema` | `connection_id`, `query` (1–200 characters); optional `limit` (1–200, default 50) | Case-insensitive substring matches over table, view, column and index names. |
 | `berrydb_graph_query` | `connection_id`, `operation`; `node` for `neighbors` and `blast_radius`, `from` and `to` for `path`, optional `limit` (1–50) for `top_centrality` | The dependency-graph answer; name lists are capped at 500. `circular_dependencies` takes no further argument. |

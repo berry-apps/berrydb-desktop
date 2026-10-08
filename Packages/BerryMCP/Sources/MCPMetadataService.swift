@@ -17,6 +17,27 @@ public struct MCPConnectionDescriptor: Codable, Equatable, Sendable {
     public let capabilities: [String]
     /// When the persisted graph was last harvested; nil when it never was.
     public let graphHarvestedAt: Date?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, driver, environment, capabilities, graphHarvestedAt
+    }
+
+    /// Writes `graphHarvestedAt` as null when it is nil; the synthesized
+    /// encoder would leave the key out, so connections would differ in their
+    /// fields depending on whether a graph exists.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(driver, forKey: .driver)
+        try container.encode(environment, forKey: .environment)
+        try container.encode(capabilities, forKey: .capabilities)
+        if let graphHarvestedAt {
+            try container.encode(graphHarvestedAt, forKey: .graphHarvestedAt)
+        } else {
+            try container.encodeNil(forKey: .graphHarvestedAt)
+        }
+    }
 }
 
 /// One schema object found by `searchSchema`.

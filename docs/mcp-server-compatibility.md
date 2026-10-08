@@ -418,9 +418,10 @@ linked folder while the process ran in the temporary root, selection was
 - **Result content.** The helper returns the same compact JSON as
   `structuredContent` and as a text block. Codex's event stream carried
   both, equal after parsing. Antigravity's tool output was the text block
-  verbatim, including the `\/` escapes the helper's encoder writes. Claude
-  Code passed the model JSON equal to `structuredContent` without those
-  escapes, so it does not forward the text block byte for byte. All three
+  verbatim, including the `\/` escapes the helper's encoder wrote then (it
+  has since stopped escaping `/`). Claude Code passed the model JSON equal
+  to `structuredContent` without those escapes, so it does not forward the
+  text block byte for byte. All three
   models reproduced the same fields.
 - **Tool loading.** Claude Code listed the server's tools as deferred; the
   model loaded `berrydb_status` through its tool search before calling it.

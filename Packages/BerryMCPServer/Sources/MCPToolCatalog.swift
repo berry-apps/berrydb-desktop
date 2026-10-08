@@ -122,9 +122,9 @@ public enum MCPToolCatalog {
             "id": connectionID, "name": text, "driver": text,
             "environment": ["type": "string", "enum": ["production", "unlabeled"]],
             "capabilities": array(of: text),
-            "graph_harvested_at": ["type": "string", "format": "date-time"],
+            "graph_harvested_at": ["type": ["string", "null"], "format": "date-time"],
         ],
-        required: ["id", "name", "driver", "environment", "capabilities"]
+        required: ["id", "name", "driver", "environment", "capabilities", "graph_harvested_at"]
     )
 
     private static let matchItem: Value = object(
@@ -314,11 +314,12 @@ public struct MCPToolRouter: Sendable {
 }
 
 /// Encodes tool payloads as compact JSON with snake_case keys, sorted keys and
-/// ISO-8601 dates.
+/// ISO-8601 dates. Slashes are left unescaped: a host can hand the text block
+/// to the model verbatim, and `\/` in every path is noise there.
 enum MCPStructuredEncoding {
     static func data<T: Encodable>(_ payload: T) throws -> Data {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
         encoder.keyEncodingStrategy = .convertToSnakeCase
         return try encoder.encode(payload)
