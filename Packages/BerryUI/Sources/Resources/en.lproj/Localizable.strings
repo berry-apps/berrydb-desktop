@@ -727,3 +727,8 @@
 "On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on above, or add a trial, license, or credit in License settings to use cloud AI instead." = "On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on above, or add a trial, license, or credit in License settings to use cloud AI instead.";
 "Use Free On-Device Instead" = "Use Free On-Device Instead";
 "This Mac supports Apple Intelligence — skip the trial and run AI on-device for free." = "This Mac supports Apple Intelligence — skip the trial and run AI on-device for free.";
+
+/* Local store failed to open at launch */
+"BerryDB could not open its data store." = "BerryDB could not open its data store.";
+"BerryDB could not open its data store. Upgrade step “%@” failed and changed no data." = "BerryDB could not open its data store. Upgrade step “%@” failed and changed no data.";
+"Details…" = "Details…";

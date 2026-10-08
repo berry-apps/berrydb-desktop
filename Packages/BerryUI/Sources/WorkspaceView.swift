@@ -959,7 +959,9 @@ public struct WorkspaceView: View {
         }
         .font(BerryTheme.Typeface.sidebarRow)
         .overlay(alignment: .bottom) {
-            if let storeError = viewModel.storeError {
+            if let failure = viewModel.storeOpenFailure {
+                StoreOpenFailureNotice(message: failure)
+            } else if let storeError = viewModel.storeError {
                 Text(storeError)
                     .font(.caption2)
                     .foregroundStyle(.red)
