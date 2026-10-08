@@ -87,7 +87,7 @@ structured content
 | `berrydb_list_connections` | none | The project's connections: ID, name, driver, `environment` (`production` or `unlabeled`), capabilities and `graph_harvested_at`, when the graph was last harvested or null if never. |
 | `berrydb_get_schema` | `connection_id`; optional `object_names` (at most 50), `detail` (`overview` or `full`) | Tables and views, at most 200 per call with an `omitted_count`; `full` adds columns, indexes and foreign keys. |
 | `berrydb_search_schema` | `connection_id`, `query` (1–200 characters); optional `limit` (1–200, default 50) | Case-insensitive substring matches over table, view, column and index names. |
-| `berrydb_graph_query` | `connection_id`, `operation`; `node` for `neighbors` and `blast_radius`, `from` and `to` for `path`, optional `limit` (1–50) for `top_centrality` | The dependency-graph answer; name lists are capped at 500. `circular_dependencies` takes no further argument. |
+| `berrydb_graph_query` | `connection_id`, `operation`; `node` for `neighbors` and `blast_radius`, `from` and `to` for `path`, optional `limit` (1–50) for `top_centrality` | The dependency-graph answer. The name lists of `neighbors`, `blast_radius` and `circular_dependencies` are capped at 500; a `path` is returned whole, bounded only by the 1 MiB result ceiling. `circular_dependencies` takes no further argument. |
 | `berrydb_get_graph_stats` | `connection_id`; optional `object` | Harvested statistics (rows, size, scans) for every table, or for one table and its indexes; at most 500 tables and 500 unused index names. |
 
 With no project selected, `tools/list` returns only `berrydb_status` and
@@ -133,11 +133,20 @@ character removes the question.
    `swift build --product berrydb-mcp` builds it into the folder that
    `swift build --show-bin-path` prints; the executable
    `<that folder>/berrydb-mcp` is the `<helper>` in the commands below.
-   Such a build is not signed by BerryDB's team, so a Keychain approval
-   dialog is to be expected the first time it loads the integrity key and
-   again after each rebuild: gate G1 saw an ad-hoc signed probe prompted
-   when reading an app-created item, with the approval pinned to the code
-   hash. The helper itself was not observed doing so.
+   Such a build is not signed by BerryDB's team, so it is not in the
+   access list of the integrity key's Keychain item, and the helper reads
+   that key on every request that serves a selected project. Expect a
+   Keychain dialog on those reads: gate G1 saw one when an ad-hoc signed
+   probe read an app-created item. Choose **Always Allow** for a
+   source-built helper; it adds the build to the item's access list,
+   pinned to its code hash, so the dialog returns only after a rebuild.
+   **Allow** grants that one read and **Deny** refuses it
+   ([If you're asked for access to your keychain](https://support.apple.com/guide/keychain-access/if-youre-asked-for-access-to-your-keychain-kyca1243/mac)
+   calls the one-time choice "Allow Once"), so the next request asks
+   again; each request waits while its dialog is open, and a refused read
+   serves that request with `integrity: "unavailable"`. The helper itself
+   was not observed being prompted. A helper read that never shows a
+   dialog is planned with packaging.
 2. **A project.** In **Settings → AI Agents**, create a project, turn on
    **Enabled**, choose its connections, and either add **Workspace
    Folders** (every folder below one is included) or use **Link
@@ -478,6 +487,7 @@ Not implemented:
   consent in the settings pane; the production-labeled limits.
 - The audit log.
 - Packaging: the helper bundled in and signed with the app, after which the
-  settings pane shows the setup commands; closing the Keychain key-planting
-  gap noted above (deleting or pre-creating the key item).
+  settings pane shows the setup commands; a read of the integrity key that
+  never shows a Keychain dialog; closing the Keychain key-planting gap
+  noted above (deleting or pre-creating the key item).
 - Any Cursor verification.
