@@ -1,0 +1,398 @@
+import BerryGraph
+import BerryMCP
+import BerryStore
+import Foundation
+import MCP
+
+/// The tools the server offers. Raw values use `[a-z0-9_]` only because model
+/// APIs reject other characters, such as `.`, in tool names.
+public enum MCPToolName: String, CaseIterable, Sendable {
+    case status = "berrydb_status"
+    case listConnections = "berrydb_list_connections"
+    case getSchema = "berrydb_get_schema"
+    case searchSchema = "berrydb_search_schema"
+    case graphQuery = "berrydb_graph_query"
+    case getGraphStats = "berrydb_get_graph_stats"
+}
+
+/// Tool definitions, independent of any transport.
+///
+/// Invariant: every tool declares a closed input schema (`additionalProperties`
+/// false) and an output schema, and only `berrydb_status` is listed when no
+/// project is selected, so an unconfigured session exposes no metadata tool.
+public enum MCPToolCatalog {
+    /// Largest serialized structured result a tool returns, in bytes.
+    public static let maximumResultBytes = 1_048_576
+
+    /// Tools listed for a context: only `berrydb_status` unless a project is selected.
+    public static func tools(for context: MCPProjectContext) -> [Tool] {
+        guard case .selected = context else { return [definition(.status)] }
+        return MCPToolName.allCases.map(definition)
+    }
+
+    private static func definition(_ tool: MCPToolName) -> Tool {
+        let input: Value
+        let output: Value
+        let description: String
+        switch tool {
+        case .status:
+            description = "Reports which BerryDB project this session serves and why none is selected. Call it first."
+            input = object([:])
+            output = statusOutput
+        case .listConnections:
+            description = "Lists the connections of the selected project that expose schema and graph metadata."
+            input = object([:])
+            output = object(["connections": array(of: connectionItem)], required: ["connections"])
+        case .getSchema:
+            description = "Lists tables and views of one connection from its last harvested schema, at most 200 per call. Overview returns names; full adds columns, indexes and foreign keys."
+            input = object(
+                [
+                    "connection_id": connectionID,
+                    "object_names": ["type": "array", "items": ["type": "string"], "maxItems": 50],
+                    "detail": ["type": "string", "enum": ["overview", "full"], "default": "overview"],
+                ],
+                required: ["connection_id"]
+            )
+            output = schemaOutput
+        case .searchSchema:
+            description = "Case-insensitive substring search over table, view, column and index names of one connection."
+            input = object(
+                [
+                    "connection_id": connectionID,
+                    "query": ["type": "string", "minLength": 1, "maxLength": 200],
+                    "limit": ["type": "integer", "minimum": 1, "maximum": 200, "default": 50],
+                ],
+                required: ["connection_id", "query"]
+            )
+            output = object(["matches": array(of: matchItem)], required: ["matches"])
+        case .graphQuery:
+            description = "Runs a dependency-graph query on one connection: neighbors, path, blast_radius, circular_dependencies or top_centrality. neighbors and blast_radius need node; path needs from and to."
+            input = object(
+                [
+                    "connection_id": connectionID,
+                    "operation": operationSchema,
+                    "node": ["type": "string"],
+                    "from": ["type": "string"],
+                    "to": ["type": "string"],
+                    "limit": ["type": "integer", "minimum": 1, "maximum": 50, "default": 10],
+                ],
+                required: ["connection_id", "operation"]
+            )
+            output = object(
+                ["operation": operationSchema, "result": ["type": ["object", "array"]]],
+                required: ["operation", "result"]
+            )
+        case .getGraphStats:
+            description = "Harvested statistics (rows, size, scans) for every table, or for one table and its indexes when object is given."
+            input = object(["connection_id": connectionID, "object": ["type": "string"]], required: ["connection_id"])
+            output = statsOutput
+        }
+        return Tool(
+            name: tool.rawValue,
+            description: description,
+            inputSchema: input,
+            annotations: .init(readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false),
+            outputSchema: output
+        )
+    }
+
+    // MARK: Schemas
+
+    private static let connectionID: Value = ["type": "string", "format": "uuid"]
+    private static let text: Value = ["type": "string"]
+    private static let operationSchema: Value = [
+        "type": "string",
+        "enum": ["neighbors", "path", "blast_radius", "circular_dependencies", "top_centrality"],
+    ]
+
+    private static func object(_ properties: [String: Value], required: [String] = []) -> Value {
+        var schema: [String: Value] = [
+            "type": "object", "properties": .object(properties), "additionalProperties": false,
+        ]
+        if !required.isEmpty { schema["required"] = .array(required.map { .string($0) }) }
+        return .object(schema)
+    }
+
+    private static func array(of item: Value) -> Value {
+        ["type": "array", "items": item]
+    }
+
+    private static let connectionItem: Value = object(
+        [
+            "id": connectionID, "name": text, "driver": text,
+            "environment": ["type": "string", "enum": ["production", "unlabeled"]],
+            "capabilities": array(of: text),
+            "graph_harvested_at": ["type": "string", "format": "date-time"],
+        ],
+        required: ["id", "name", "driver", "environment", "capabilities"]
+    )
+
+    private static let matchItem: Value = object(
+        ["name": text, "kind": text, "database": text, "table": text], required: ["name", "kind"]
+    )
+
+    private static let statusOutput: Value = object(
+        [
+            "state": ["type": "string", "enum": ["selected", "unconfigured"]],
+            "reason": ["type": ["string", "null"]],
+            "project": ["type": ["object", "null"], "properties": ["id": connectionID, "name": text]],
+            "selected_by": ["type": ["string", "null"]],
+            "workspace": ["type": ["string", "null"]],
+            "live_reads": ["type": "string", "enum": ["not_available"]],
+            "integrity": ["type": ["string", "null"], "enum": ["verified", "unavailable", .null]],
+        ],
+        required: ["state", "reason", "project", "selected_by", "workspace", "live_reads", "integrity"]
+    )
+
+    private static let schemaOutput: Value = {
+        let column = object(
+            ["name": text, "type": text, "nullable": ["type": "boolean"], "primary_key": ["type": "boolean"]],
+            required: ["name", "type", "nullable", "primary_key"]
+        )
+        let index = object(
+            ["name": text, "columns": array(of: text), "unique": ["type": "boolean"]],
+            required: ["name", "columns", "unique"]
+        )
+        let foreignKey = object(
+            ["column": text, "referenced_database": text, "referenced_table": text, "referenced_column": text],
+            required: ["column", "referenced_table", "referenced_column"]
+        )
+        let item = object(
+            [
+                "name": text, "database": text, "kind": ["type": "string", "enum": ["table", "view"]],
+                "columns": array(of: column), "indexes": array(of: index), "foreign_keys": array(of: foreignKey),
+            ],
+            required: ["name", "kind", "columns", "indexes", "foreign_keys"]
+        )
+        return object(
+            [
+                "objects": array(of: item), "omitted_count": ["type": "integer"],
+                "harvested_at": ["type": "string", "format": "date-time"],
+            ],
+            required: ["objects", "omitted_count"]
+        )
+    }()
+
+    private static let statsOutput: Value = {
+        let fields: Value = ["type": "object", "additionalProperties": ["type": "string"]]
+        let node = object(["name": text, "fields": fields], required: ["name", "fields"])
+        return object([
+            "tables": array(of: node), "unused_indexes": array(of: text),
+            "table": text, "fields": fields, "indexes": array(of: node),
+        ])
+    }()
+}
+
+/// Runs tool calls against the metadata service.
+///
+/// Invariants: unknown tools and malformed arguments are protocol errors
+/// (`MCPError.invalidParams`); everything else is a tool result. Only
+/// `MCPMetadataError` texts, which are written for the agent, are ever shown;
+/// any other failure becomes a fixed text, because a store error can carry a
+/// file path.
+public struct MCPToolRouter: Sendable {
+    static let noProjectText = "No BerryDB project is selected for this workspace. Call berrydb_status for details."
+    static let tooLargeText = "Result too large; narrow the request"
+    static let storeFailureText = "BerryDB could not read its store for this request."
+
+    private let metadata: MCPMetadataService
+
+    public init(metadata: MCPMetadataService) {
+        self.metadata = metadata
+    }
+
+    /// Throws `MCPError.invalidParams` for unknown tools and malformed arguments;
+    /// returns `isError: true` results for expected failures.
+    public func call(_ name: String, arguments: [String: Value]?, context: MCPProjectContext) throws -> CallTool.Result {
+        guard let tool = MCPToolName(rawValue: name) else { throw MCPError.invalidParams("Unknown tool") }
+        if tool == .status {
+            _ = try MCPToolArguments(arguments, allowing: MCPToolArguments.allowedKeys(for: tool))
+            return status(context)
+        }
+        guard case let .selected(project, _) = context else { return Self.failure(Self.noProjectText) }
+        let arguments = try MCPToolArguments(arguments, allowing: MCPToolArguments.allowedKeys(for: tool))
+        do {
+            return try run(tool, arguments, in: project, context: context)
+        } catch let error as MCPError {
+            throw error
+        } catch let error as MCPMetadataError {
+            return Self.failure(error.description)
+        } catch {
+            return Self.failure(Self.storeFailureText)
+        }
+    }
+
+    private func run(
+        _ tool: MCPToolName, _ arguments: MCPToolArguments, in project: MCPVerifiedProject, context: MCPProjectContext
+    ) throws -> CallTool.Result {
+        switch tool {
+        case .status:
+            return status(context)
+        case .listConnections:
+            let connections = try metadata.listConnections(in: project)
+            return try respond(ConnectionList(connections: connections), summary: Self.count(connections.count, "connection"))
+        case .getSchema:
+            let listing = try metadata.schema(
+                in: project, connectionID: try arguments.connectionID(),
+                objectNames: try arguments.objectNames(), detail: try arguments.schemaDetail()
+            )
+            let omitted = listing.omittedCount > 0 ? " (\(listing.omittedCount) omitted)" : ""
+            return try respond(listing, summary: Self.count(listing.objects.count, "object") + omitted)
+        case .searchSchema:
+            let matches = try metadata.searchSchema(
+                in: project, connectionID: try arguments.connectionID(),
+                query: try arguments.query(), limit: try arguments.searchLimit()
+            )
+            return try respond(MatchList(matches: matches), summary: Self.count(matches.count, "match", plural: "matches"))
+        case .graphQuery:
+            let result = try metadata.graphQuery(
+                in: project, connectionID: try arguments.connectionID(), operation: try arguments.graphOperation()
+            )
+            return try respond(result, summary: Self.summary(of: result))
+        case .getGraphStats:
+            let stats = try metadata.graphStats(
+                in: project, connectionID: try arguments.connectionID(), object: try arguments.statisticsObject()
+            )
+            return try respond(stats, summary: Self.summary(of: stats))
+        }
+    }
+
+    private func status(_ context: MCPProjectContext) -> CallTool.Result {
+        let fields: [String: Value]
+        let summary: String
+        switch context {
+        case let .selected(verified, source):
+            fields = [
+                "state": "selected", "reason": .null,
+                "project": ["id": .string(verified.project.id.uuidString), "name": .string(verified.project.name)],
+                "selected_by": .string(source.rawValue), "workspace": .null,
+                "integrity": verified.projectTagValid ? "verified" : "unavailable",
+            ]
+            summary = "Project \(verified.project.name) selected; schema and graph metadata only"
+        case let .unconfigured(reason, workspace):
+            fields = [
+                "state": "unconfigured", "reason": .string(reason.rawValue), "project": .null,
+                "selected_by": .null, "workspace": workspace.map { .string($0) } ?? .null,
+                "integrity": reason == .integrityUnavailable ? Value.string("unavailable") : Value.null,
+            ]
+            summary = "No BerryDB project selected (\(reason.rawValue))"
+        }
+        var structured = fields
+        structured["live_reads"] = "not_available"
+        return Self.success(.object(structured), summary: summary)
+    }
+
+    private func respond<T: Encodable>(_ payload: T, summary: String) throws -> CallTool.Result {
+        let data = try MCPStructuredEncoding.data(payload)
+        guard data.count <= MCPToolCatalog.maximumResultBytes else { return Self.failure(Self.tooLargeText) }
+        return Self.success(try MCPStructuredEncoding.value(from: data), summary: summary)
+    }
+
+    private static func success(_ structured: Value, summary: String) -> CallTool.Result {
+        CallTool.Result(
+            content: [.text(text: oneLine(summary), annotations: nil, _meta: nil)],
+            structuredContent: Optional.some(structured)
+        )
+    }
+
+    private static func failure(_ message: String) -> CallTool.Result {
+        CallTool.Result(content: [.text(text: oneLine(message), annotations: nil, _meta: nil)], isError: true)
+    }
+
+    // MARK: Text fallback
+
+    private struct ConnectionList: Encodable {
+        let connections: [MCPConnectionDescriptor]
+    }
+
+    private struct MatchList: Encodable {
+        let matches: [MCPSchemaMatch]
+    }
+
+    private static func summary(of result: MCPGraphResult) -> String {
+        switch result {
+        case let .neighbors(value):
+            return "neighbors of \(value.node): \(count(value.dependsOn.count, "dependency", plural: "dependencies")), "
+                + count(value.dependedOnBy.count, "dependent")
+        case let .path(value):
+            guard value.reachable else { return "no path from \(value.from) to \(value.to)" }
+            return "path from \(value.from) to \(value.to): \(count(max(value.path.count - 1, 0), "step"))"
+        case let .blastRadius(value):
+            return "blast radius of \(value.node): \(value.count) impacted"
+        case let .circularDependencies(value):
+            return value.hasCycles
+                ? "circular dependencies: \(count(value.components.count, "cycle"))" : "circular dependencies: none"
+        case let .topCentrality(entries):
+            return "top centrality: \(count(entries.count, "node"))"
+        }
+    }
+
+    private static func summary(of stats: MCPGraphStats) -> String {
+        switch stats {
+        case let .summary(value):
+            return "statistics for \(count(value.tables.count, "table")), "
+                + count(value.unusedIndexes.count, "unused index", plural: "unused indexes")
+        case let .table(value):
+            return "statistics for \(value.table): \(count(value.indexes.count, "index", plural: "indexes"))"
+        }
+    }
+
+    private static func count(_ number: Int, _ singular: String, plural: String? = nil) -> String {
+        "\(number) \(number == 1 ? singular : (plural ?? singular + "s"))"
+    }
+
+    /// Collapses every run of whitespace, line breaks included, so a schema
+    /// name containing a newline cannot split the one-line fallback.
+    private static func oneLine(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+}
+
+/// Encodes tool payloads as JSON for `structuredContent`.
+enum MCPStructuredEncoding {
+    /// The name of the one property whose keys are data (statistic names), not
+    /// field names: `NodeStatistics.fields` and `TableStatistics.fields`.
+    /// Whether `JSONEncoder` passes dictionary keys through `convertToSnakeCase`
+    /// depends on the Foundation release (a standalone encoder on Swift 6.3.3
+    /// leaves them alone), so the strategy below skips keys under this
+    /// property itself, keeping a key such as `rowCount` intact on every release.
+    private static let dataKeyedProperty = "fields"
+
+    static func data<T: Encodable>(_ payload: T) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.keyEncodingStrategy = .custom { path in
+            let key = path[path.count - 1]
+            if path.dropLast().contains(where: { $0.stringValue == dataKeyedProperty }) { return key }
+            return SnakeCaseKey(snakeCase(key.stringValue))
+        }
+        return try encoder.encode(payload)
+    }
+
+    static func value<T: Encodable>(_ payload: T) throws -> Value {
+        try value(from: data(payload))
+    }
+
+    static func value(from data: Data) throws -> Value {
+        try JSONDecoder().decode(Value.self, from: data)
+    }
+
+    private static func snakeCase(_ name: String) -> String {
+        var result = ""
+        for character in name {
+            if character.isUppercase { result.append("_") }
+            result.append(contentsOf: character.lowercased())
+        }
+        return result
+    }
+
+    private struct SnakeCaseKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+
+        init(_ stringValue: String) { self.stringValue = stringValue }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+}
