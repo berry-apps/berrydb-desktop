@@ -41,7 +41,7 @@ struct MCPToolCatalogTests {
     }
 
     /// `orders` references `customers`; `orders` has an `id` and a `createdAt`
-    /// column and `customers` an `email` index-less column.
+    /// column and `customers` has no columns.
     func shopGraph() -> SchemaGraph {
         var graph = SchemaGraph()
         graph.addNode(GraphNode(id: "t:orders", kind: .table, name: "orders", attrs: ["rows": "10"]))
@@ -60,17 +60,18 @@ struct MCPToolCatalogTests {
         return graph
     }
 
-    func service(graph: SchemaGraph? = nil, failure: Error? = nil) -> MCPMetadataService {
+    func service(graph: SchemaGraph? = nil, failure: Error? = nil, harvested: Bool = true) -> MCPMetadataService {
         let built = graph ?? shopGraph()
         let profiles = [shop, outsider]
+        let harvestedAt: Date? = harvested ? Self.harvestTime : nil
         let load: @Sendable (UUID) throws -> SchemaGraph = { _ in
             if let failure { throw failure }
             return built
         }
         return MCPMetadataService(
             profiles: { profiles },
-            graph: BerryGraphQueryService(loadGraph: load, harvestedAt: { _ in Self.harvestTime }),
-            harvestedAt: { _ in Self.harvestTime },
+            graph: BerryGraphQueryService(loadGraph: load, harvestedAt: { _ in harvestedAt }),
+            harvestedAt: { _ in harvestedAt },
             loadGraph: load
         )
     }
@@ -103,6 +104,13 @@ struct MCPToolCatalogTests {
     func text(_ result: CallTool.Result) -> String {
         guard case let .text(text, _, _)? = result.content.first else { return "" }
         return text
+    }
+
+    /// The text content must be the compact JSON of `structuredContent`, on one line.
+    func expectJSONText(_ result: CallTool.Result, sourceLocation: SourceLocation = #_sourceLocation) {
+        let decoded = try? JSONDecoder().decode(Value.self, from: Data(text(result).utf8))
+        #expect(decoded != nil && decoded == result.structuredContent, sourceLocation: sourceLocation)
+        #expect(!text(result).contains("\n") && !text(result).contains("\r"), sourceLocation: sourceLocation)
     }
 
     func object(_ result: CallTool.Result) -> [String: Value] {
@@ -263,6 +271,27 @@ struct MCPToolCatalogTests {
         #expect(invalidParamsMessage("berrydb_run_query", [:]) != nil)
         #expect(invalidParamsMessage("", nil) != nil)
         #expect(invalidParamsMessage("berrydb_run_query", [:], context: .unconfigured(.noMatchingProject, workspace: nil)) != nil)
+    }
+
+    @Test func graphQueryChecksEveryPresentArgumentRegardlessOfOperation() {
+        let id = connectionID
+        func graph(_ extra: [String: Value]) -> String? {
+            invalidParamsMessage("berrydb_graph_query", ["connection_id": id].merging(extra) { $1 })
+        }
+        #expect(graph(["operation": "neighbors", "node": "orders", "limit": .int(999)])?.contains("limit") == true)
+        #expect(graph(["operation": "circular_dependencies", "node": .int(5)])?.contains("node") == true)
+        #expect(graph(["operation": "path", "from": "a", "to": "b", "limit": "ten"])?.contains("limit") == true)
+        #expect(graph(["operation": "blast_radius", "node": "a", "from": .bool(true)])?.contains("from") == true)
+        #expect(graph(["operation": "top_centrality", "to": .int(1)])?.contains("to") == true)
+        #expect(graph(["operation": "circular_dependencies", "limit": .int(0)])?.contains("limit") == true)
+    }
+
+    @Test func whitespaceOnlyQueryIsInvalidParams() {
+        for query in ["   ", "\n\t "] {
+            #expect(invalidParamsMessage(
+                "berrydb_search_schema", ["connection_id": connectionID, "query": .string(query)]
+            )?.contains("query") == true)
+        }
     }
 
     // MARK: Expected failures
@@ -427,7 +456,7 @@ struct MCPToolCatalogTests {
 
     @Test func listConnectionsReturnsDescriptors() throws {
         let result = try call(.listConnections, [:])
-        #expect(text(result) == "1 connection")
+        expectJSONText(result)
         let connections = try #require(object(result)["connections"]?.arrayValue)
         #expect(connections.count == 1)
         let first = try #require(connections.first?.objectValue)
@@ -440,12 +469,12 @@ struct MCPToolCatalogTests {
 
     @Test func getSchemaReturnsObjectsWithSnakeCaseKeys() throws {
         let overview = try call(.getSchema, ["connection_id": connectionID])
-        #expect(text(overview) == "2 objects")
+        expectJSONText(overview)
         #expect(object(overview)["omitted_count"]?.intValue == 0)
         #expect(object(overview)["harvested_at"]?.stringValue == "2023-11-14T22:13:20Z")
 
         let full = try call(.getSchema, ["connection_id": connectionID, "object_names": ["orders"], "detail": "full"])
-        #expect(text(full) == "1 object")
+        expectJSONText(full)
         let orders = try #require(object(full)["objects"]?.arrayValue?.first?.objectValue)
         let columns = try #require(orders["columns"]?.arrayValue)
         let created = try #require(columns.compactMap(\.objectValue).first { $0["name"]?.stringValue == "createdAt" })
@@ -457,12 +486,12 @@ struct MCPToolCatalogTests {
         let result = try call(.searchSchema, ["connection_id": connectionID, "query": "order"])
         let matches = try #require(object(result)["matches"]?.arrayValue)
         #expect(matches.compactMap { $0.objectValue?["name"]?.stringValue } == ["orders"])
-        #expect(text(result) == "1 match")
+        expectJSONText(result)
     }
 
     @Test func graphQueryReturnsOperationAndResult() throws {
         let neighbors = try call(.graphQuery, ["connection_id": connectionID, "operation": "neighbors", "node": "orders"])
-        #expect(text(neighbors) == "neighbors of orders: 1 dependency, 0 dependents")
+        expectJSONText(neighbors)
         #expect(object(neighbors)["operation"]?.stringValue == "neighbors")
         let payload = try #require(object(neighbors)["result"]?.objectValue)
         #expect(payload["depends_on"]?.arrayValue?.compactMap(\.stringValue) == ["customers"])
@@ -471,33 +500,33 @@ struct MCPToolCatalogTests {
         let path = try call(.graphQuery, [
             "connection_id": connectionID, "operation": "path", "from": "orders", "to": "customers",
         ])
-        #expect(text(path) == "path from orders to customers: 1 step")
+        expectJSONText(path)
 
         let radius = try call(.graphQuery, ["connection_id": connectionID, "operation": "blast_radius", "node": "customers"])
         #expect(object(radius)["operation"]?.stringValue == "blast_radius")
-        #expect(text(radius) == "blast radius of customers: 1 impacted")
+        expectJSONText(radius)
 
         let cycles = try call(.graphQuery, ["connection_id": connectionID, "operation": "circular_dependencies"])
-        #expect(text(cycles) == "circular dependencies: none")
+        expectJSONText(cycles)
         #expect(object(cycles)["result"]?.objectValue?["has_cycles"] == .bool(false))
 
         let central = try call(.graphQuery, ["connection_id": connectionID, "operation": "top_centrality", "limit": .int(1)])
         #expect(object(central)["operation"]?.stringValue == "top_centrality")
-        #expect(text(central) == "top centrality: 1 node")
+        expectJSONText(central)
         #expect(object(central)["result"]?.arrayValue?.first?.objectValue?["in_degree"]?.intValue == 1)
     }
 
     @Test func graphStatsReturnsSummaryAndTable() throws {
         let summary = try call(.getGraphStats, ["connection_id": connectionID])
-        #expect(text(summary) == "statistics for 2 tables, 0 unused indexes")
+        expectJSONText(summary)
         #expect(object(summary)["unused_indexes"]?.arrayValue == [])
         let table = try call(.getGraphStats, ["connection_id": connectionID, "object": "orders"])
-        #expect(text(table) == "statistics for orders: 0 indexes")
+        expectJSONText(table)
         #expect(object(table)["table"]?.stringValue == "orders")
         #expect(object(table)["fields"]?.objectValue?["rows"]?.stringValue == "10")
     }
 
-    @Test func textFallbackIsOneLine() throws {
+    @Test func textContentIsTheCompactJSONOfTheStructuredResult() throws {
         var graph = shopGraph()
         graph.addNode(GraphNode(id: "t:evil", kind: .table, name: "evil\nname\r\nwith breaks"))
         let result = try call(
@@ -505,11 +534,14 @@ struct MCPToolCatalogTests {
             router: router(graph: graph)
         )
         #expect(result.isError != true)
-        #expect(!text(result).contains("\n"))
-        #expect(!text(result).contains("\r"))
+        expectJSONText(result)
+        #expect(object(result)["result"]?.objectValue?["node"]?.stringValue == "evil\nname\r\nwith breaks")
         for status in [selected(), .unconfigured(.noMatchingProject, workspace: "/a\nb")] {
-            #expect(!text(try call(.status, nil, context: status)).contains("\n"))
+            expectJSONText(try call(.status, nil, context: status))
         }
+        let failure = try call(.graphQuery, ["connection_id": connectionID, "operation": "neighbors", "node": "x\ny"])
+        #expect(failure.isError == true)
+        #expect(!text(failure).contains("\n"))
     }
 
     // MARK: Output schemas
@@ -581,6 +613,7 @@ struct MCPToolCatalogTests {
         for (name, arguments) in calls {
             let result = try call(name, arguments)
             #expect(result.isError != true)
+            expectJSONText(result)
             let structured = try #require(result.structuredContent)
             let schema = try #require(tools[name.rawValue]?.outputSchema)
             #expect(violation(structured, against: schema) == nil, "\(name.rawValue): \(violation(structured, against: schema) ?? "")")
@@ -654,6 +687,19 @@ struct MCPToolCatalogTests {
         #expect((graphJSON["tables"] as? [Any])?.count == 2)
         #expect(graph.first?.uri == graphURI)
         #expect(graph.first?.mimeType == "application/json")
+    }
+
+    @Test func unharvestedConnectionHasNoGraphResource() throws {
+        let unharvested = service(harvested: false)
+        let resources = try MCPResourceCatalog.resources(for: selected(), metadata: unharvested)
+        #expect(resources.map(\.uri) == ["berrydb://project"])
+
+        let empty = service(graph: SchemaGraph(), harvested: false)
+        #expect(throws: MCPError.invalidParams(MCPMetadataError.noSnapshot.description)) {
+            try MCPResourceCatalog.read(
+                uri: "berrydb://connections/\(shop.id.uuidString)/graph", context: selected(), metadata: empty
+            )
+        }
     }
 
     @Test func resourceReadRejectsUnassignedConnectionLikeUnknownURI() throws {

@@ -73,32 +73,43 @@ struct MCPToolArguments {
         }
     }
 
+    /// The trimmed query. The length limit applies to the text as sent and the
+    /// query must hold at least one non-whitespace character.
     func query() throws -> String {
         guard let text = try string("query") else { throw MCPError.invalidParams("query is required") }
-        guard (1 ... Self.maximumQueryLength).contains(text.count) else {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count <= Self.maximumQueryLength, !trimmed.isEmpty else {
             throw MCPError.invalidParams("query must be 1 to \(Self.maximumQueryLength) characters")
         }
-        return text
+        return trimmed
     }
 
     func searchLimit() throws -> Int {
         try integer("limit", in: Self.searchLimitRange) ?? Self.defaultSearchLimit
     }
 
+    /// Every present key is type- and range-checked before the operation is
+    /// considered, so a bad value is never ignored just because the chosen
+    /// operation does not read it.
     func graphOperation() throws -> MCPGraphOperation {
-        guard let name = try string("operation") else { throw MCPError.invalidParams("operation is required") }
-        switch name {
+        let operation = try string("operation")
+        let node = try string("node")
+        let from = try string("from")
+        let to = try string("to")
+        let limit = try integer("limit", in: Self.graphLimitRange)
+        switch operation {
+        case nil:
+            throw MCPError.invalidParams("operation is required")
         case "neighbors":
-            return .neighbors(node: try requiredName("node", for: name))
+            return .neighbors(node: try required(node, "node", for: "neighbors"))
         case "path":
-            return .path(from: try requiredName("from", for: name), to: try requiredName("to", for: name))
+            return .path(from: try required(from, "from", for: "path"), to: try required(to, "to", for: "path"))
         case "blast_radius":
-            return .blastRadius(node: try requiredName("node", for: name))
+            return .blastRadius(node: try required(node, "node", for: "blast_radius"))
         case "circular_dependencies":
             return .circularDependencies
         case "top_centrality":
-            let limit = try integer("limit", in: Self.graphLimitRange) ?? BerryGraphQueryService.defaultCentralityLimit
-            return .topCentrality(limit: limit)
+            return .topCentrality(limit: limit ?? BerryGraphQueryService.defaultCentralityLimit)
         default:
             throw MCPError.invalidParams(
                 "operation must be one of neighbors, path, blast_radius, circular_dependencies, top_centrality"
@@ -113,8 +124,8 @@ struct MCPToolArguments {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private func requiredName(_ key: String, for operation: String) throws -> String {
-        let trimmed = try string(key)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    private func required(_ value: String?, _ key: String, for operation: String) throws -> String {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty else {
             throw MCPError.invalidParams("operation '\(operation)' requires '\(key)'")
         }

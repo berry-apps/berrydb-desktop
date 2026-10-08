@@ -230,36 +230,34 @@ public struct MCPToolRouter: Sendable {
             return status(context)
         case .listConnections:
             let connections = try metadata.listConnections(in: project)
-            return try respond(ConnectionList(connections: connections), summary: Self.count(connections.count, "connection"))
+            return try respond(ConnectionList(connections: connections))
         case .getSchema:
             let listing = try metadata.schema(
                 in: project, connectionID: try arguments.connectionID(),
                 objectNames: try arguments.objectNames(), detail: try arguments.schemaDetail()
             )
-            let omitted = listing.omittedCount > 0 ? " (\(listing.omittedCount) omitted)" : ""
-            return try respond(listing, summary: Self.count(listing.objects.count, "object") + omitted)
+            return try respond(listing)
         case .searchSchema:
             let matches = try metadata.searchSchema(
                 in: project, connectionID: try arguments.connectionID(),
                 query: try arguments.query(), limit: try arguments.searchLimit()
             )
-            return try respond(MatchList(matches: matches), summary: Self.count(matches.count, "match", plural: "matches"))
+            return try respond(MatchList(matches: matches))
         case .graphQuery:
             let result = try metadata.graphQuery(
                 in: project, connectionID: try arguments.connectionID(), operation: try arguments.graphOperation()
             )
-            return try respond(result, summary: Self.summary(of: result))
+            return try respond(result)
         case .getGraphStats:
             let stats = try metadata.graphStats(
                 in: project, connectionID: try arguments.connectionID(), object: try arguments.statisticsObject()
             )
-            return try respond(stats, summary: Self.summary(of: stats))
+            return try respond(stats)
         }
     }
 
     private func status(_ context: MCPProjectContext) -> CallTool.Result {
-        let fields: [String: Value]
-        let summary: String
+        var fields: [String: Value]
         switch context {
         case let .selected(verified, source):
             fields = [
@@ -268,38 +266,38 @@ public struct MCPToolRouter: Sendable {
                 "selected_by": .string(source.rawValue), "workspace": .null,
                 "integrity": verified.projectTagValid ? "verified" : "unavailable",
             ]
-            summary = "Project \(verified.project.name) selected; schema and graph metadata only"
         case let .unconfigured(reason, workspace):
             fields = [
                 "state": "unconfigured", "reason": .string(reason.rawValue), "project": .null,
                 "selected_by": .null, "workspace": workspace.map { .string($0) } ?? .null,
                 "integrity": reason == .integrityUnavailable ? Value.string("unavailable") : Value.null,
             ]
-            summary = "No BerryDB project selected (\(reason.rawValue))"
         }
-        var structured = fields
-        structured["live_reads"] = "not_available"
-        return Self.success(.object(structured), summary: summary)
+        fields["live_reads"] = "not_available"
+        guard let result = try? respond(Value.object(fields)) else { return Self.failure(Self.storeFailureText) }
+        return result
     }
 
-    private func respond<T: Encodable>(_ payload: T, summary: String) throws -> CallTool.Result {
+    /// Returns the payload as `structuredContent` and, byte for byte, as the
+    /// text content: the protocol asks a tool that returns structured content
+    /// to also return the serialized JSON in a text block, because hosts that
+    /// ignore `structuredContent` would otherwise get no data at all. The size
+    /// ceiling applies to that one JSON.
+    private func respond<T: Encodable>(_ payload: T) throws -> CallTool.Result {
         let data = try MCPStructuredEncoding.data(payload)
         guard data.count <= MCPToolCatalog.maximumResultBytes else { return Self.failure(Self.tooLargeText) }
-        return Self.success(try MCPStructuredEncoding.value(from: data), summary: summary)
-    }
-
-    private static func success(_ structured: Value, summary: String) -> CallTool.Result {
-        CallTool.Result(
-            content: [.text(text: oneLine(summary), annotations: nil, _meta: nil)],
-            structuredContent: Optional.some(structured)
+        return CallTool.Result(
+            content: [.text(text: String(decoding: data, as: UTF8.self), annotations: nil, _meta: nil)],
+            structuredContent: Optional.some(try MCPStructuredEncoding.value(from: data))
         )
     }
 
+    /// An error result keeps a plain one-line text; collapsing whitespace
+    /// stops a name inside a metadata error from splitting it.
     private static func failure(_ message: String) -> CallTool.Result {
-        CallTool.Result(content: [.text(text: oneLine(message), annotations: nil, _meta: nil)], isError: true)
+        let line = message.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return CallTool.Result(content: [.text(text: line, annotations: nil, _meta: nil)], isError: true)
     }
-
-    // MARK: Text fallback
 
     private struct ConnectionList: Encodable {
         let connections: [MCPConnectionDescriptor]
@@ -308,65 +306,16 @@ public struct MCPToolRouter: Sendable {
     private struct MatchList: Encodable {
         let matches: [MCPSchemaMatch]
     }
-
-    private static func summary(of result: MCPGraphResult) -> String {
-        switch result {
-        case let .neighbors(value):
-            return "neighbors of \(value.node): \(count(value.dependsOn.count, "dependency", plural: "dependencies")), "
-                + count(value.dependedOnBy.count, "dependent")
-        case let .path(value):
-            guard value.reachable else { return "no path from \(value.from) to \(value.to)" }
-            return "path from \(value.from) to \(value.to): \(count(max(value.path.count - 1, 0), "step"))"
-        case let .blastRadius(value):
-            return "blast radius of \(value.node): \(value.count) impacted"
-        case let .circularDependencies(value):
-            return value.hasCycles
-                ? "circular dependencies: \(count(value.components.count, "cycle"))" : "circular dependencies: none"
-        case let .topCentrality(entries):
-            return "top centrality: \(count(entries.count, "node"))"
-        }
-    }
-
-    private static func summary(of stats: MCPGraphStats) -> String {
-        switch stats {
-        case let .summary(value):
-            return "statistics for \(count(value.tables.count, "table")), "
-                + count(value.unusedIndexes.count, "unused index", plural: "unused indexes")
-        case let .table(value):
-            return "statistics for \(value.table): \(count(value.indexes.count, "index", plural: "indexes"))"
-        }
-    }
-
-    private static func count(_ number: Int, _ singular: String, plural: String? = nil) -> String {
-        "\(number) \(number == 1 ? singular : (plural ?? singular + "s"))"
-    }
-
-    /// Collapses every run of whitespace, line breaks included, so a schema
-    /// name containing a newline cannot split the one-line fallback.
-    private static func oneLine(_ text: String) -> String {
-        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-    }
 }
 
-/// Encodes tool payloads as JSON for `structuredContent`.
+/// Encodes tool payloads as compact JSON with snake_case keys, sorted keys and
+/// ISO-8601 dates.
 enum MCPStructuredEncoding {
-    /// The name of the one property whose keys are data (statistic names), not
-    /// field names: `NodeStatistics.fields` and `TableStatistics.fields`.
-    /// Whether `JSONEncoder` passes dictionary keys through `convertToSnakeCase`
-    /// depends on the Foundation release (a standalone encoder on Swift 6.3.3
-    /// leaves them alone), so the strategy below skips keys under this
-    /// property itself, keeping a key such as `rowCount` intact on every release.
-    private static let dataKeyedProperty = "fields"
-
     static func data<T: Encodable>(_ payload: T) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        encoder.keyEncodingStrategy = .custom { path in
-            let key = path[path.count - 1]
-            if path.dropLast().contains(where: { $0.stringValue == dataKeyedProperty }) { return key }
-            return SnakeCaseKey(snakeCase(key.stringValue))
-        }
+        encoder.keyEncodingStrategy = .convertToSnakeCase
         return try encoder.encode(payload)
     }
 
@@ -376,23 +325,5 @@ enum MCPStructuredEncoding {
 
     static func value(from data: Data) throws -> Value {
         try JSONDecoder().decode(Value.self, from: data)
-    }
-
-    private static func snakeCase(_ name: String) -> String {
-        var result = ""
-        for character in name {
-            if character.isUppercase { result.append("_") }
-            result.append(contentsOf: character.lowercased())
-        }
-        return result
-    }
-
-    private struct SnakeCaseKey: CodingKey {
-        let stringValue: String
-        var intValue: Int? { nil }
-
-        init(_ stringValue: String) { self.stringValue = stringValue }
-        init?(stringValue: String) { self.stringValue = stringValue }
-        init?(intValue: Int) { nil }
     }
 }

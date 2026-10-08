@@ -17,7 +17,8 @@ public enum MCPResourceCatalog {
     private static let graphSuffix = "/graph"
     private static let mimeType = "application/json"
 
-    /// The resources of a context; none when no project is selected.
+    /// The resources of a context; none when no project is selected. A
+    /// connection's graph is listed only once it has been harvested.
     public static func resources(for context: MCPProjectContext, metadata: MCPMetadataService) throws -> [Resource] {
         guard case let .selected(project, _) = context else { return [] }
         let connections = try mapping { try metadata.listConnections(in: project) }
@@ -25,7 +26,7 @@ public enum MCPResourceCatalog {
             name: "project", uri: projectURI, title: "BerryDB project",
             description: "The selected project and the connections it exposes.", mimeType: mimeType
         )
-        let graphs = connections.map { connection in
+        let graphs = connections.filter { $0.graphHarvestedAt != nil }.map { connection in
             Resource(
                 name: "graph-\(connection.id.uuidString)", uri: graphURI(connection.id),
                 title: "\(connection.name) schema graph",
