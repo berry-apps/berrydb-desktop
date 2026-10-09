@@ -38,6 +38,11 @@ GENERATED_BODY = (
     "\n"
     "**Full Changelog**: https://github.com/berry-apps/berrydb-desktop/compare/v1.0.7...v1.0.8"
 )
+# What a reader should see of it once GitHub's generated boilerplate is gone.
+ANNOUNCED_BODY = (
+    "What's Changed\n"
+    "• feat: preserve schema qualifiers and add adaptive tree view for multi-schema databases"
+)
 RELEASE_JSON = {
     "name": "BerryDB 1.0.8",
     "tag_name": TAG,
@@ -195,6 +200,64 @@ class MarkdownToTextTests(unittest.TestCase):
         self.assertEqual(announce.markdown_to_text(""), "")
 
 
+class GeneratedBoilerplateTests(unittest.TestCase):
+    PR = "https://github.com/berry-apps/berrydb-desktop/pull/23"
+
+    def test_a_generated_bullet_loses_its_attribution_suffix_and_keeps_its_title(self):
+        md = f"* feat: add a tree view by @quangtaned in {self.PR}"
+        self.assertEqual(announce.strip_generated_boilerplate(md), "* feat: add a tree view")
+
+    def test_a_bot_author_is_stripped_too(self):
+        md = f"* Bump swift-nio from 2.1 to 2.2 by @dependabot[bot] in {self.PR}"
+        self.assertEqual(announce.strip_generated_boilerplate(md), "* Bump swift-nio from 2.1 to 2.2")
+
+    def test_only_the_trailing_attribution_goes_when_the_title_has_one_too(self):
+        md = f"* Fix lookup by @alias in tables by @bob in {self.PR}"
+        self.assertEqual(announce.strip_generated_boilerplate(md), "* Fix lookup by @alias in tables")
+
+    def test_the_full_changelog_line_is_dropped(self):
+        md = "* a\n\n**Full Changelog**: https://github.com/berry-apps/berrydb-desktop/compare/v1.0.7...v1.0.8"
+        self.assertEqual(announce.strip_generated_boilerplate(md).strip(), "* a")
+
+    def test_hand_written_by_at_someone_text_is_kept(self):
+        for line in (
+            "* Reviewed by @alice before merging",
+            "* Reported by @alice in the sidebar thread",
+            "* Reported by @alice in https://github.com/berry-apps/berrydb-desktop/issues/12",
+            "Thanks to everyone, especially work by @alice.",
+            "by @alice in https://example.com/pull/9",
+        ):
+            self.assertEqual(announce.strip_generated_boilerplate(line), line)
+
+    def test_a_line_that_is_not_a_bullet_is_kept_even_if_it_ends_like_one(self):
+        line = f"Merged by @alice in {self.PR}"
+        self.assertEqual(announce.strip_generated_boilerplate(line), line)
+
+    def test_a_hand_written_changelog_mention_is_kept(self):
+        for line in (
+            "**Full Changelog** lives on the wiki",
+            "Full Changelog: https://github.com/berry-apps/berrydb-desktop/compare/v1.0.7...v1.0.8",
+            "See the **Full Changelog**: https://example.com/changes",
+        ):
+            self.assertEqual(announce.strip_generated_boilerplate(line), line)
+
+    def test_the_new_contributors_line_is_left_alone(self):
+        line = f"* @alice made their first contribution in {self.PR}"
+        self.assertEqual(announce.strip_generated_boilerplate(line), line)
+
+    def test_a_whole_generated_body_reads_as_an_announcement(self):
+        text = announce.markdown_to_text(announce.strip_generated_boilerplate(GENERATED_BODY))
+        self.assertEqual(text, ANNOUNCED_BODY)
+
+    def test_crlf_line_ends_do_not_hide_the_generated_lines(self):
+        md = f"* a by @x in {self.PR}\r\n\r\n**Full Changelog**: https://github.com/o/r/compare/v1...v2\r\n"
+        self.assertEqual(announce.markdown_to_text(announce.strip_generated_boilerplate(md)), "• a")
+
+    def test_nothing_to_strip_is_returned_unchanged(self):
+        md = "## Highlights\n* faster grids\n* a new tree view"
+        self.assertEqual(announce.strip_generated_boilerplate(md), md)
+
+
 class BuildMessageTests(unittest.TestCase):
     def test_layout_is_name_then_body_then_url(self):
         msg = announce.build_message("BerryDB 1.0.8", "Notes here", RELEASE_URL, limit=4096)
@@ -294,7 +357,7 @@ class FetchReleaseTests(unittest.TestCase):
         self.assertEqual(sent.method, "GET")
         self.assertEqual(sent.url, f"https://api.github.com/repos/{REPO}/releases/tags/{TAG}")
         self.assertEqual(sent.headers["authorization"], f"Bearer {GH_TOKEN}")
-        self.assertEqual(release, announce.Release("BerryDB 1.0.8", announce.markdown_to_text(GENERATED_BODY), RELEASE_URL))
+        self.assertEqual(release, announce.Release("BerryDB 1.0.8", ANNOUNCED_BODY, RELEASE_URL))
 
     def test_untitled_release_falls_back_to_the_tag(self):
         opener = FakeOpener(release={**RELEASE_JSON, "name": None, "body": None})
