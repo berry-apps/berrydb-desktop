@@ -3,12 +3,12 @@
 Status: **metadata tools**. `berrydb-mcp` runs as a stdio MCP server over
 the app's store opened read-only and serves six metadata tools and two
 kinds of resources for one selected project (see
-[Tools and resources](#tools-and-resources)). The project is selected from
-an explicit `--project`, the host's workspace roots or the working
-directory, each workspace decided by a repository link file
-(`.berrydb.json`) or by the workspace folders registered in the app. The
-app's **AI Agents** settings pane creates and edits projects and links
-repositories; it shows the host setup commands only once the helper is
+[Tools and resources](#tools-and-resources)). The project is selected by
+an explicit `--project`, which takes a project ID or name, or else from
+the host's workspace roots or the working directory, matched against the
+workspace folders registered in the app. The app's **AI Agents** settings
+pane creates and edits projects; it shows the host setup commands only
+once the helper is
 bundled with the app, which this version does not do. Underneath sit key
 storage, the `MCPProject` persistence model, HMAC-SHA256 row integrity and
 key rotation, a SQL-only connection coordinator with bounded shutdown, the
@@ -61,7 +61,7 @@ this user's files or Keychain), a compromised BerryDB binary.
 | Helper-side capability policy (read-only, limits, no `Scan`) | Yes | Enforced in signed code the agent cannot modify. |
 | Database session read-only + least-privilege DB user | Yes | Enforced by the database itself. |
 | Per-profile live-read setting and project settings | Yes, via integrity check | Stored in a user-writable file; an HMAC keyed from Keychain is what stops the agent from enabling itself. |
-| Project selection (which project a process serves) | No | A process can pass `--project` for any project ID it can read from the store, and a repository's `.berrydb.json` can name any project. Selection prevents mistakes and limits exposure; it does not stop a hostile agent or repository from reaching another project's already-enabled capabilities. |
+| Project selection (which project a process serves) | No | A process can pass `--project` with any project ID or name it can read from the store, and a repository's agent configuration, once the user trusts that repository, can name any project. Selection prevents mistakes and limits exposure; it does not stop a hostile agent or repository from reaching another project's already-enabled capabilities. |
 | Audit log | No (visibility only) | The agent can edit it. |
 
 Every guarantee this document calls a boundary holds for any project a
@@ -170,14 +170,9 @@ character removes the question.
    shows a dialog is planned with packaging.
 2. **A project.** In **Settings → AI Agents**, create a project, turn on
    **Enabled**, choose its connections, and either add **Workspace
-   Folders** (every folder below one is included, unless a `.berrydb.json`
-   in or above it decides first) or use **Link Repository…**, which writes
-   `.berrydb.json` naming the project into the chosen repository. A
-   `.berrydb.json` that is a symbolic link or belongs to another user is
-   offered for replacement rather than counted as linked. Committing that
-   file lets every clone and worktree select a project of the same name in
-   the BerryDB of whoever opens it; adding it to `.gitignore` keeps it
-   local.
+   Folders** (every folder below one is included) or name the project in
+   the repository's own agent configuration
+   ([Per-repository agent configuration](#per-repository-agent-configuration)).
 3. **Each host, once.** Run one command per host, each adding a
    user-level entry named `berrydb`. Once the helper is bundled, the pane's
    **Agent Setup** section shows these commands with the bundled path
@@ -197,13 +192,83 @@ character removes the question.
    `agy mcp add --help` (1.3.1) requires. For a saved project the pane
    also shows "always this project" variants that append
    `--project <uuid>`; they are installed at the same user level and serve
-   that project from every folder, whatever its link file or workspace
-   folders would select. Both variants are named `berrydb`, so a host is
-   set up with one or the other.
+   that project from every folder, whatever workspace folders would
+   select. Both variants are named `berrydb`, so a host is set up with one
+   or the other.
 
 The helper accepts two optional arguments and rejects any other:
-`--project <uuid>` and `--store-path <absolute path>`, the latter for a
-store other than the app's.
+`--project <uuid|name>` and `--store-path <absolute path>`, the latter for
+a store other than the app's. A `--project` value that is a UUID once
+surrounding whitespace is trimmed is a project ID, and only ever an ID,
+even when some project is named that way; any other non-empty value is a
+project name, matched without letter case after trimming surrounding
+whitespace. The settings pane refuses to save a project whose name
+matches another project's that way, and warns when a rename stops
+matching the old name. An empty value is rejected, and the error never
+echoes the value given.
+
+### Per-repository agent configuration
+
+A repository can carry its own agent entry that passes `--project <name>`,
+so every clone selects the project of that name without registering a
+folder in the app. Use the name, not the ID: an ID differs in every store,
+while a name also matches a teammate's project of the same name. The
+hosts that support this gate configuration a repository defines behind
+the user's trust; the helper adds no gate of its own. For a saved project,
+and once the helper is bundled, the pane's **Agent Setup** section shows
+these entries with the helper path and the name filled in, quoted for the
+shell and as TOML strings.
+
+- **Claude Code.** Run in the repository's top folder:
+
+  ```sh
+  claude mcp add --scope project berrydb -- "<helper>" --project "<name>"
+  ```
+
+  This writes `.mcp.json` in that folder, which can be committed. Claude
+  Code asks for approval in an interactive session before it uses a server
+  from `.mcp.json`, and loads it without asking in `claude -p` runs
+  ([Project scope](https://code.claude.com/docs/en/mcp#project-scope)).
+  Observed on 2026-10-09 with Claude Code 2.1.295 and a throwaway `HOME`:
+  `claude mcp add --scope project berrydb -- /usr/bin/true --project "repo
+  pinned"` wrote `.mcp.json` in the current folder with
+  `"args": ["--project", "repo pinned"]`. With a user-level `berrydb`
+  entry also present, and the project entry approved through
+  `enabledMcpjsonServers` in `.claude/settings.local.json`,
+  `claude mcp get berrydb` and `claude mcp list` used the user-level entry,
+  and `claude mcp list` printed `[Conflicting scopes] Server "berrydb" is
+  defined in multiple scopes with different endpoints: user (...), project
+  (...)`. Claude Code's documentation ranks project scope above user scope
+  ([Scope hierarchy and precedence](https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence)),
+  which that run did not show. Either way, remove the user-level entry
+  (`claude mcp remove berrydb -s user`) when a repository carries its own;
+  the pane's caption says so.
+- **Codex.** Add to the repository's `.codex/config.toml`:
+
+  ```toml
+  [mcp_servers.berrydb]
+  command = "<helper>"
+  args = ["--project", "<name>"]
+  ```
+
+  Codex reads that file only for a trusted project, and there it takes
+  precedence over the user-level `berrydb` entry. Observed on 2026-10-09
+  with codex-cli 0.157.1 and a throwaway `HOME`, with
+  `[mcp_servers.berrydb]` in the user `config.toml` (`args = []`) and in a
+  repository's `.codex/config.toml` (`args = ["--project",
+  "repo-pinned"]`): `codex mcp get berrydb` run inside the repository
+  showed `args: --project repo-pinned` when the user configuration marked
+  the folder `trust_level = "trusted"`, and `args: -` in an untrusted
+  folder.
+- **Antigravity.** No per-repository entry. Observed on 2026-10-09 with
+  agy 1.3.1: `agy mcp list` inside a folder holding
+  `.agents/mcp_config.json` (and `.agent/mcp_config.json`) with a server
+  named `berrydb-ws` listed only the user-level server, and the CLI's
+  embedded documentation names only `~/.gemini/config/mcp_config.json` and
+  `plugins/<name>/mcp_config.json`.
+
+Nothing was installed into a real host configuration for these
+observations.
 
 ## Project selection and why it is not a boundary
 
@@ -219,50 +284,35 @@ made without roots, from `--project` or the working directory, and that
 selection is not kept, so one early request cannot fix the project before
 the host's roots are known. The inputs are tried in this order:
 
-1. `--project <uuid>` if given; roots are then never requested.
+1. `--project` if given; roots are then never requested. An ID or a name
+   that no project has is `explicit_project_not_found`, and a name that
+   several projects share, possible only in a store edited outside the
+   app, is `ambiguous_projects`; neither falls through to the next input.
 2. Else the workspace roots from MCP `roots/list`, if the host declared the
    roots capability. The request is made once per connection and bounded to
    5 seconds; no answer, an error or a timeout falls through to the next
    input. Roots that are not `file:` URIs are ignored.
 3. Else the process working directory.
 
-Within roots or the working directory, each workspace is decided on its
-own:
+Within roots or the working directory, each workspace is matched against
+the registered workspace folders. A workspace matches a project when it
+equals or is contained in one of the project's workspace folders, compared
+on path components after resolving symlinks and the file system's
+spelling of case. A folder that resolves to `/` is never used. The longest
+matching folder wins; an exact tie between two projects is ambiguous.
 
-- **By its link file when it has one.** The nearest `.berrydb.json` at or
-  above the workspace, stopping before `/`, names the project as
-  `{"project": "<name>"}`. Names match case-insensitively after trimming
-  surrounding whitespace, and the settings pane refuses two projects whose
-  names match this way. A file larger than 4 KiB, one that is not a JSON
-  object with a non-empty `project` string, or an entry that cannot be read
-  as a regular file, including a symbolic link (never followed), is
-  invalid; it is reported, never skipped, so a link does not silently give
-  way to another input. A readable regular file owned by another user is
-  ignored as if absent, and the walk continues upward; a file this user
-  cannot read, or a FIFO, is invalid like any other unusable entry. Other
-  keys are ignored.
-- **Otherwise by registered workspace folders.** A workspace matches a
-  project when it equals or is contained in one of the project's workspace
-  folders, compared on path components after resolving symlinks and the
-  file system's spelling of case. A folder that resolves to `/` is never
-  used. The longest matching folder wins; an exact tie between two projects
-  is ambiguous.
-
-The workspaces of an input are then combined: an invalid link file is
-reported first (`invalid_link_file`), then a linked name no project has
-(`linked_project_not_found`), then a tie between registered folders, a
-linked name that more than one project matches (the settings pane refuses
-such names, but the store file can still hold them), or workspaces naming
-different projects (`ambiguous_projects`). One project is selected,
-attributed to `linked_repository` when any contributing workspace used a
-link file, else to `roots` or `working_directory`. When none of the roots has a link file
-or a registered match, the working directory is tried, since a host may
-open a folder BerryDB does not know; a reported problem or an ambiguity
-among the roots never falls through. With nothing matched the session is
-unconfigured with `no_matching_project`.
+The workspaces of an input are then combined: a tie on any of them, or
+workspaces matching different projects, is `ambiguous_projects`;
+otherwise the one project matched is selected, attributed to `roots` or
+`working_directory`. When none of the roots matches, the working directory
+is tried, since a host may open a folder BerryDB does not know; an
+ambiguity among the roots never falls through. With nothing matched the
+session is unconfigured with `no_matching_project`.
 
 The outcome, a project or a reason, is kept for the connection: a project
 created or re-mapped in the app is picked up by the host's next session.
+A project selected by name is kept by its ID, so renaming it in the app
+does not change the session's selection.
 Verification is not kept: every request re-reads the selected project's row
 and the integrity key, so a project disabled or deleted in the app stops
 being served on the next request (`project_disabled` or
@@ -287,20 +337,19 @@ the settings pane says so.
 | Field | Value |
 |---|---|
 | `state` | `selected` or `unconfigured` |
-| `reason` | null when selected; otherwise `no_matching_project`, `ambiguous_projects`, `explicit_project_not_found`, `project_disabled`, `integrity_unavailable`, `linked_project_not_found` or `invalid_link_file` |
+| `reason` | null when selected; otherwise `no_matching_project`, `ambiguous_projects`, `explicit_project_not_found`, `project_disabled` or `integrity_unavailable` |
 | `project` | `{"id", "name"}` of the selected project, else null |
-| `selected_by` | `explicit`, `roots`, `working_directory` or `linked_repository`, else null |
-| `workspace` | the location that decided the selection: the folder holding the link file for `linked_repository`, the host root or working directory that a workspace folder matched for `roots` or `working_directory`, null for `explicit`; the same location when that project is now `project_disabled` or `no_matching_project`. Otherwise, when unconfigured: the folder holding the link file for `invalid_link_file` and `linked_project_not_found`, the working directory when it was the input that failed, null for the rest |
-| `linked_project` | the name a link file gave when no project has it, else null |
+| `selected_by` | `explicit`, `roots` or `working_directory`, else null |
+| `workspace` | the location that decided the selection: the host root or working directory that a workspace folder matched for `roots` or `working_directory`, null for `explicit`; the same location when that project is now `project_disabled` or `no_matching_project`. Otherwise, when unconfigured: the working directory when it was the input that failed, null for the rest |
 | `live_reads` | always `not_available` in this version |
 | `integrity` | when selected: `verified` if the project row's tag verifies under the stored key, `unavailable` if it does not or no key could be read; when unconfigured: `unavailable` for `integrity_unavailable` (the store could not be read), null for every other reason |
 
 The project row's tag covers the project's ID, its enabled flag and its
 workspace folders, and nothing else. It does not cover the project's name,
-which link files select by, and a connection's access row is checked only
-when it claims live reads: the connections a project lists, and serves
-metadata for, are taken from the stored rows whether or not their tags
-verify. `verified` therefore says that the ID, enabled flag and workspace
+which `--project <name>` selects by, and a connection's access row is
+checked only when it claims live reads: the connections a project lists,
+and serves metadata for, are taken from the stored rows whether or not
+their tags verify. `verified` therefore says that the ID, enabled flag and workspace
 folders are as the app last saved them, not that the name or the list of
 connections is.
 
@@ -312,35 +361,40 @@ from the store file directly. What the tag gates is live reads.
 
 Selection identifies which project a session is *for*, not which project a
 process is *authorized* to reach. Per the threat model, a process on the same
-machine can pass `--project` for any project ID stored locally, so selection
-limits accidental cross-project exposure and mistakes, not deliberate
-misuse. The capabilities available once a project is selected — whether
+machine can pass `--project` with any project ID or name stored locally,
+so selection limits accidental cross-project exposure and mistakes, not
+deliberate misuse. The capabilities available once a project is selected — whether
 `liveRead` is on for a profile — are the actual gate, and that gate is
 verified independently through row integrity (below), not through how the
 project was chosen.
 
-A link file comes from the repository, which is untrusted: any repository
-whose `.berrydb.json` names a project, including one cloned from someone
-else, selects that project on the machine, and opening it in a coding
-agent then exposes that project's schema and graph metadata to the agent
-and to its model provider. The file decides its workspace before the
-workspace folders registered in the app, so it also wins inside a folder
-registered for another project. The settings pane states this where it
-offers repository links. A link only selects; live reads, once they exist,
-still require the sealed per-profile opt-in made in the app. The walk up
-from a workspace also passes folders other users can write to, such as
-`/private/tmp` or `/Users/Shared`. A `.berrydb.json` file another local
-user owns there is ignored, as git refuses to read the configuration of a
-repository another user owns
-([`safe.directory`](https://git-scm.com/docs/git-config#Documentation/git-config.txt-safedirectory)),
-so it selects nothing. That applies to a regular file this user can read;
-anything else of that name another user leaves there, such as a folder, a
-symbolic link, a FIFO or a file this user cannot read, reads as
-`invalid_link_file` for workspaces below it with no nearer link: a denial,
-not a selection. A link in the home
-folder applies to every folder inside it without a nearer link, including
-another project's workspace folders; the settings pane warns when it writes
-one there.
+A repository's own agent configuration can name a project with
+`--project <name>` (see
+[Per-repository agent configuration](#per-repository-agent-configuration)).
+Once the user's agent accepts that configuration, the repository selects
+that project as surely as a registered folder would, including a
+repository cloned from someone else that happens to name one of the
+user's projects, and opening it in the agent then exposes that project's
+schema and graph metadata to the agent and its model provider. The
+agent's trust gate is what decides whether the configuration is used;
+selection by name, like any selection, never turns on live reads, which
+still require the sealed per-profile opt-in made in the app.
+
+### Withdrawn before release: repository link files
+
+Development builds once selected a project through a `.berrydb.json`
+file, `{"project": "<name>"}`, which the helper looked up at and above each
+workspace, ahead of the registered workspace folders, and which the
+settings pane could write into a chosen repository. It was removed before
+any release shipped it. A file inside the repository selected one of the
+user's projects with no prompt, so any cloned repository naming a project
+the user has got that project's schema metadata. Coding agents already
+gate repository-defined MCP configuration behind a trust prompt: Claude
+Code asks before it starts a server from a repository's `.mcp.json`, and
+Codex reads a repository's `.codex/config.toml` only for a trusted
+project. A per-repository entry that passes `--project <name>` gets the
+same convenience behind that gate. A file in the repository that the
+helper reads on its own should not come back without a gate of its own.
 
 ## Per-profile access and integrity
 
@@ -522,12 +576,12 @@ Implemented:
   [`../mcp-server-compatibility.md`](../mcp-server-compatibility.md).
 - The six metadata tools and the two kinds of resources above, served from
   the persisted schema and dependency graph.
-- Project selection by `--project`, roots or working directory, each
-  workspace decided by its `.berrydb.json` or by registered workspace
-  folders; selection on the first request, verification on every request,
-  and `berrydb_status`.
-- The **AI Agents** settings pane: projects, workspace folders, repository
-  links and connections. Its setup-command section is in place but shows
+- Project selection by `--project` (a project ID or name), roots or
+  working directory, matched against registered workspace folders;
+  selection on the first request, verification on every request, and
+  `berrydb_status`.
+- The **AI Agents** settings pane: projects, workspace folders and
+  connections. Its setup-command section is in place but shows
   the commands only for a bundled helper, so in this version it reports
   that the helper is not bundled.
 - Groundwork no tool uses yet: a SQL-only connection coordinator with
