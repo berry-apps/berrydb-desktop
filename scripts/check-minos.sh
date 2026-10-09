@@ -1,5 +1,6 @@
 #!/bin/sh
-# Guards against an embedded Contents/Frameworks/ dylib declaring a higher
+# Guards against an embedded Contents/Frameworks/ dylib, or the berrydb-mcp
+# helper in Contents/Helpers/, declaring a higher
 # LC_BUILD_VERSION/LC_VERSION_MIN_MACOSX minos than the app's own main binary.
 #
 # This is the exact drift behind
@@ -54,17 +55,22 @@ APP_MINOS="$(max_minos "$BIN")"
     exit 1
 }
 
-FRAMEWORKS="$APP/Contents/Frameworks"
 MISMATCHES="$(mktemp)"
 FILELIST="$(mktemp)"
 trap 'rm -f "$MISMATCHES" "$FILELIST"' EXIT
 
-if [ -d "$FRAMEWORKS" ]; then
+# Contents/Helpers/ holds the berrydb-mcp helper, which coding agents launch
+# on the same Macs the app itself must run on, so it gets the same check as
+# the embedded dylibs.
+for dir in "$APP/Contents/Frameworks" "$APP/Contents/Helpers"; do
+    [ -d "$dir" ] || continue
     # -type f (not symlinks) so e.g. libsybdb.dylib -> libsybdb.5.dylib is
     # followed to the one real file instead of double-reported, and so a
     # nested bundle's real binary (Sparkle.framework/Versions/B/Sparkle) is
     # found rather than only the top-level .framework directory.
-    find "$FRAMEWORKS" -type f > "$FILELIST"
+    find "$dir" -type f >> "$FILELIST"
+done
+if [ -s "$FILELIST" ]; then
     while IFS= read -r f; do
         DEP_MINOS="$(max_minos "$f")"
         [ -n "$DEP_MINOS" ] || continue
@@ -76,7 +82,7 @@ if [ -d "$FRAMEWORKS" ]; then
 fi
 
 if [ -s "$MISMATCHES" ]; then
-    echo "FAIL: embedded dylib(s) declare a higher minimum OS than $BIN itself (minos $APP_MINOS):" >&2
+    echo "FAIL: embedded code declares a higher minimum OS than $BIN itself (minos $APP_MINOS):" >&2
     cat "$MISMATCHES" >&2
     echo "  Either rebuild/repin the dependency for the app's own minimum OS, or raise" >&2
     echo "  the app's declared minimum (Package.swift, LSMinimumSystemVersion, README.md," >&2
@@ -84,4 +90,4 @@ if [ -s "$MISMATCHES" ]; then
     exit 1
 fi
 
-echo "OK: all embedded Frameworks/ dylibs declare minos <= app's own $APP_MINOS"
+echo "OK: all embedded Frameworks/ and Helpers/ code declares minos <= app's own $APP_MINOS"

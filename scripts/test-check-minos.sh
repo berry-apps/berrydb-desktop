@@ -116,7 +116,37 @@ set -e
     && pass "passes when there is no Frameworks/ directory at all" \
     || fail "passes when there is no Frameworks/ directory at all" "exit=$CODE out: $OUT"
 
-# 6. A bundle whose main binary is missing entirely refuses to check anything,
+# 6. The berrydb-mcp helper in Contents/Helpers/ is launched by coding agents
+#    on the same Macs the app runs on, so a helper built for a newer macOS
+#    than the app's own minimum fails the check just like a dylib does.
+BUNDLE="$(make_bundle 14.0)"
+mkdir -p "$BUNDLE/Contents/Helpers"
+build_macho "$BUNDLE/Contents/Helpers/berrydb-mcp" 15.0 exe
+set +e
+OUT="$(sh "$SCRIPT" "$BUNDLE" 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" -ne 0 ] \
+    && pass "fails when the bundled helper's minos exceeds the app's" \
+    || fail "fails when the bundled helper's minos exceeds the app's" "exit=$CODE out: $OUT"
+case "$OUT" in
+    *Contents/Helpers/berrydb-mcp*15.0*14.0*) pass "failure message names the helper and both versions" ;;
+    *) fail "failure message names the helper and both versions" "$OUT" ;;
+esac
+
+# 7. Guard for case 6: a helper built for the app's own minimum passes.
+BUNDLE="$(make_bundle 14.0)"
+mkdir -p "$BUNDLE/Contents/Helpers"
+build_macho "$BUNDLE/Contents/Helpers/berrydb-mcp" 14.0 exe
+set +e
+OUT="$(sh "$SCRIPT" "$BUNDLE" 2>&1)"
+CODE=$?
+set -e
+[ "$CODE" -eq 0 ] \
+    && pass "passes when the bundled helper's minos matches the app's" \
+    || fail "passes when the bundled helper's minos matches the app's" "exit=$CODE out: $OUT"
+
+# 8. A bundle whose main binary is missing entirely refuses to check anything,
 #    rather than silently reporting success.
 set +e
 OUT="$(sh "$SCRIPT" "$TMP/does-not-exist.app" 2>&1)"
