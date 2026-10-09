@@ -78,6 +78,10 @@ Connect to SQL, NoSQL, Key-Value, and Vector databases all in a unified native w
 - **Where the AI runs**: In cloud mode (free trial, then a paid plan), your questions, the database type, your schema (table and column names), and the results of queries the assistant runs (up to 100 rows each) are sent to BerryDB's AI service; table sample rows are shared only if you turn that on. On macOS 26 with Apple Intelligence you can switch to Apple's on-device model for free; the conversation text is still sent to BerryDB's service to index your chat history for search.
 - **What runs without asking**: Read-only queries the assistant writes run automatically unless you turn off *Auto-run safe SELECTs*; anything that changes data needs your approval. AI is off by default on connections marked as production.
 
+### 🔌 Schema for Coding Agents (MCP)
+- **Local MCP helper**: Claude Code, Codex, and Antigravity can start `berrydb-mcp`, a helper inside BerryDB.app, to read the schema BerryDB has cached for the connections you choose: tables, columns, keys, indexes, relationships, and the schema graph.
+- **Metadata only**: The helper opens BerryDB's local store read-only, never connects to your databases, and never reads connection passwords. Whatever it returns goes to the agent and from there to that agent's model provider.
+
 ### 📊 Database Intelligence & ER Diagrams
 - **Mermaid Diagrams**: The AI assistant can draw Mermaid diagrams, such as an ER diagram of your schema, and open them in a tab.
 - **Table Analytics & Health**: On-demand table sizing, index usage statistics, and row count estimations.
@@ -189,6 +193,17 @@ make run
 ### 4. Editing Data Directly in the Grid
 - Double-click a cell in the data grid to edit it inline (the result needs a primary key).
 - Edited values show in orange and deleted rows are dimmed. Use the **Apply** (✓) or **Discard** button in the status bar to commit them in one transaction or revert.
+
+### 5. Connecting Coding Agents (MCP)
+1. Run BerryDB from your **Applications** folder, and open each connection you want agents to see once, so BerryDB caches its schema. Connections marked as production are not cached.
+2. Open **Settings** (⌘,) → **AI Agents** → **New Project…**. Name the project, turn on **Enabled**, add the repositories it covers under **Workspace Folders**, turn on its connections, and click **Save**.
+3. Copy your agent's command from the project's **Agent Setup** section and run it once in Terminal. For Claude Code it looks like this:
+   ```sh
+   claude mcp add --scope user berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp'
+   ```
+4. Start a new agent session in one of those folders and ask the agent to call `berrydb_status`. If macOS asks whether `berrydb-mcp` may use a key in your login keychain, choose **Always Allow**.
+
+Only add connections whose schema you are willing to share: what the tools return goes to the agent's model provider. Per-repository entries, status reasons, and current limits are in the [Coding Agents (MCP) guide](https://db.berryhub.app/docs#coding-agents).
 
 ---
 
