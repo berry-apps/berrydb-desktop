@@ -122,6 +122,42 @@ struct BerryMCPStdioTests {
         Self.expectOnlyJSONRPC(helper.stdout, messages: 3)
     }
 
+    /// `--project` with a name no project has selects nothing, and an
+    /// explicit project keeps the helper from asking for the host's roots
+    /// even though the host declared the capability.
+    @Test
+    func unknownProjectNameIsReportedWithoutAskingForRoots() async throws {
+        let store = try TemporaryStore()
+        defer { store.remove() }
+        let helper = try HelperProcess(
+            arguments: ["--store-path", store.path, "--project", "No Such Project"], workingDirectory: store.directory
+        )
+        defer { helper.stop() }
+
+        try helper.send(
+            Self.initialize(id: 1, protocolVersion: "2025-11-25", client: "berrydb-tests", capabilities: ["roots": [:]])
+        )
+        _ = try await helper.response(id: 1)
+        try helper.send(["jsonrpc": "2.0", "method": "notifications/initialized"])
+        try helper.send(Self.callStatus(id: 2))
+
+        let next = try await helper.message("roots/list or JSON-RPC response 2") {
+            $0["method"] as? String == "roots/list" || (($0["id"] as? Int) == 2 && $0["method"] == nil)
+        }
+        #expect(next["method"] as? String != "roots/list", "the host's roots were requested")
+        let status = try await Self.status(helper.response(id: 2))
+        #expect(status["reason"] as? String == "explicit_project_not_found")
+        #expect(status["selected_by"] is NSNull)
+        #expect(status["workspace"] is NSNull)
+        try helper.send(["jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": [:]])
+        #expect(try await Self.toolNames(helper.response(id: 3)) == ["berrydb_status"])
+
+        try helper.closeInput()
+        #expect(try await helper.termination().status == 0)
+        try await helper.outputFinished()
+        Self.expectOnlyJSONRPC(helper.stdout, messages: 3)
+    }
+
     /// A request sent before `initialize` is answered from the working
     /// directory, and that selection is not kept: once the host has
     /// initialized with the roots capability, its roots decide. Both link

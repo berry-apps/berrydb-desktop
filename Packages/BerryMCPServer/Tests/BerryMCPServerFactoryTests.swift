@@ -104,7 +104,7 @@ struct BerryMCPServerFactoryTests {
         store: Locked<Store>,
         roots: RootsBehavior,
         workingDirectory: String = "/work/a",
-        explicitProject: UUID? = nil,
+        explicitProject: MCPProjectReference? = nil,
         rootsRequests: Locked<Int> = Locked(0),
         diagnostics: Locked<[String]> = Locked([]),
         _ body: @escaping @Sendable (Client) async throws -> Void
@@ -216,11 +216,41 @@ struct BerryMCPServerFactoryTests {
         let requests = Locked(0)
         let expectedB = projectB.id.uuidString
         try await withSession(
-            store: store, roots: .declared(["file:///work/a"]), explicitProject: projectB.id, rootsRequests: requests
+            store: store, roots: .declared(["file:///work/a"]), explicitProject: .id(projectB.id), rootsRequests: requests
         ) { client in
             let status = try await Self.status(client)
             #expect(status["selected_by"] == "explicit")
             #expect(Self.projectID(status) == expectedB)
+            #expect(status["workspace"] == .null)
+        }
+        #expect(requests.value == 0)
+    }
+
+    @Test func explicitProjectNameWinsWithoutAskingForRoots() async throws {
+        let store = Locked(Store(projects: [projectA, projectB]))
+        let requests = Locked(0)
+        let expectedB = projectB.id.uuidString
+        try await withSession(
+            store: store, roots: .declared(["file:///work/a"]), explicitProject: .name("b"), rootsRequests: requests
+        ) { client in
+            let status = try await Self.status(client)
+            #expect(status["selected_by"] == "explicit")
+            #expect(Self.projectID(status) == expectedB)
+            #expect(status["workspace"] == .null)
+        }
+        #expect(requests.value == 0)
+    }
+
+    @Test func explicitProjectNameNoProjectHasIsReportedWithoutAskingForRoots() async throws {
+        let store = Locked(Store(projects: [projectA, projectB]))
+        let requests = Locked(0)
+        try await withSession(
+            store: store, roots: .declared(["file:///work/a"]), explicitProject: .name("Ledger"), rootsRequests: requests
+        ) { client in
+            #expect(try await client.listTools().tools.map(\.name) == ["berrydb_status"])
+            let status = try await Self.status(client)
+            #expect(status["reason"] == "explicit_project_not_found")
+            #expect(status["selected_by"] == .null)
             #expect(status["workspace"] == .null)
         }
         #expect(requests.value == 0)

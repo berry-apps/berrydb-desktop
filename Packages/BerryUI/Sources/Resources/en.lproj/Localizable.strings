@@ -741,7 +741,7 @@
 "Disabled" = "Disabled";
 "Not verified — save to confirm" = "Not verified — save to confirm";
 "This project opened disabled because its saved settings could not be verified. Turn Enabled on and save to confirm them." = "This project opened disabled because its saved settings could not be verified. Turn Enabled on and save to confirm them.";
-"Repositories linked to “%@” stop selecting this project until they are linked again." = "Repositories linked to “%@” stop selecting this project until they are linked again.";
+"Agent entries that name “%@” stop selecting this project until they use the new name." = "Agent entries that name “%@” stop selecting this project until they use the new name.";
 "New MCP Project" = "New MCP Project";
 "Edit MCP Project" = "Edit MCP Project";
 "Delete…" = "Delete…";
@@ -765,7 +765,7 @@
 "A workspace root cannot be the whole disk." = "A workspace root cannot be the whole disk.";
 "BerryDB could not read its MCP access key from the Keychain. Nothing was changed." = "BerryDB could not read its MCP access key from the Keychain. Nothing was changed.";
 "BerryDB could not update its MCP access key in the Keychain. Nothing was changed." = "BerryDB could not update its MCP access key in the Keychain. Nothing was changed.";
-"Another project already uses this name. Repository links select projects by name." = "Another project already uses this name. Repository links select projects by name.";
+"Another project already uses this name. Agent entries can select a project by its name." = "Another project already uses this name. Agent entries can select a project by its name.";
 "Another project already uses the workspace folder %@. Agents working there would get neither project." = "Another project already uses the workspace folder %@. Agents working there would get neither project.";
 "Repository Links" = "Repository Links";
 "Writes .berrydb.json naming this project. Commit it so clones and teammates select a project with the same name in their BerryDB, or add it to .gitignore to keep it local." = "Writes .berrydb.json naming this project. Commit it so clones and teammates select a project with the same name in their BerryDB, or add it to .gitignore to keep it local.";

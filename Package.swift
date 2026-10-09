@@ -561,9 +561,10 @@ let package = Package(
         .testTarget(
             name: "BerryDBMCPTests",
             // BerryStore/GRDB: the stdio tests write the store files the
-            // helper subprocess reads.
+            // helper subprocess reads. BerryMCP: `HelperArguments` returns
+            // its `MCPProjectReference`.
             dependencies: [
-                "BerryDBMCP", "BerryDriverBootstrap", "BerryStore",
+                "BerryDBMCP", "BerryDriverBootstrap", "BerryMCP", "BerryStore",
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "MCP/Tests"

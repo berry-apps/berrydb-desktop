@@ -123,19 +123,6 @@ public enum MCPRepositoryLink {
         return data
     }
 
-    /// Whether a link naming `linkedName` selects a project called
-    /// `projectName`: names are compared without letter case after trimming
-    /// surrounding whitespace, so a link survives a change of capitalization
-    /// on either side.
-    ///
-    /// The app's settings refuse to save a project whose name matches
-    /// another project's by this same rule, so that a link names one project.
-    public static func matches(projectName: String, linkedName: String) -> Bool {
-        let project = projectName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let linked = linkedName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return project.caseInsensitiveCompare(linked) == .orderedSame
-    }
-
     /// The trimmed project name `data` holds, or nil when it is over the
     /// size limit, is not a JSON object, or has no non-empty `project`
     /// string. Other keys are ignored.

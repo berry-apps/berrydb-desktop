@@ -1,20 +1,22 @@
+import BerryMCP
 import Foundation
 
-/// The command line of `berrydb-mcp`: `--project <uuid>` and
+/// The command line of `berrydb-mcp`: `--project <uuid|name>` and
 /// `--store-path <absolute path>`, each optional and given at most once.
 ///
 /// Neither value is a secret; both are visible in the process list. An
 /// explicit project is a selection input, not an authorization: the project
 /// is still verified against the store on every request.
 public struct HelperArguments: Equatable {
-    /// The project to serve regardless of the host's workspace; nil lets the
-    /// host's roots or the working directory decide.
-    public let project: UUID?
+    /// The project to serve regardless of the host's workspace, by its ID
+    /// or by its name as `MCPProjectReference(argument:)` parses the value;
+    /// nil lets the host's roots or the working directory decide.
+    public let project: MCPProjectReference?
     /// The store file to read instead of the app's default location; always
     /// absolute, so it never depends on the directory a host launches from.
     public let storePath: String?
 
-    public init(project: UUID?, storePath: String?) {
+    public init(project: MCPProjectReference?, storePath: String?) {
         self.project = project
         self.storePath = storePath
     }
@@ -24,7 +26,7 @@ public struct HelperArguments: Equatable {
     /// ignored, so a misspelled flag in a host configuration fails loudly
     /// instead of silently serving a different project or store.
     public static func parse(_ arguments: [String]) throws -> HelperArguments {
-        var project: UUID?
+        var project: MCPProjectReference?
         var storePath: String?
         var remaining = arguments[...]
         while let flag = remaining.popFirst() {
@@ -32,8 +34,10 @@ public struct HelperArguments: Equatable {
             case "--project":
                 guard project == nil else { throw HelperArgumentsError.repeated(flag) }
                 guard let value = remaining.popFirst() else { throw HelperArgumentsError.missingValue(flag) }
-                guard let id = UUID(uuidString: value) else { throw HelperArgumentsError.invalidProject }
-                project = id
+                guard let reference = MCPProjectReference(argument: value) else {
+                    throw HelperArgumentsError.invalidProject
+                }
+                project = reference
             case "--store-path":
                 guard storePath == nil else { throw HelperArgumentsError.repeated(flag) }
                 guard let value = remaining.popFirst() else { throw HelperArgumentsError.missingValue(flag) }
@@ -85,7 +89,7 @@ public enum HelperArgumentsError: Error, Equatable, CustomStringConvertible {
         case let .repeated(flag):
             return "\(flag) given more than once"
         case .invalidProject:
-            return "--project expects a project UUID"
+            return "--project expects a project UUID or name"
         case .relativeStorePath:
             return "--store-path expects an absolute path"
         }

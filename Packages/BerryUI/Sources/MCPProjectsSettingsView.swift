@@ -163,7 +163,7 @@ private struct MCPProjectEditorSheet: View {
             Divider()
             Form {
                 TextField(L("Name"), text: $draft.name)
-                if let notice = model.renameLinkNotice(for: draft) {
+                if let notice = model.renameNotice(for: draft) {
                     Text(notice)
                         .font(.caption)
                         .foregroundStyle(.orange)

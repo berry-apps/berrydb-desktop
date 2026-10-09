@@ -617,7 +617,7 @@ struct MCPProjectsSettingsModelTests {
 
     // MARK: Unique names
 
-    private static let duplicateName = L("Another project already uses this name. Repository links select projects by name.")
+    private static let duplicateName = L("Another project already uses this name. Agent entries can select a project by its name.")
 
     @Test func aNameAnotherProjectUsesIsRefusedBeforeTheKeyIsTouched() throws {
         let (store, _, _) = try makeStore()
@@ -675,27 +675,28 @@ struct MCPProjectsSettingsModelTests {
         #expect(model.repositoryLinkUnavailableReason(for: draft) == nil)
     }
 
-    /// A link file names the project, so a rename that the link's name rule
-    /// does not absorb leaves every linked repository selecting nothing.
-    @Test func renamingASavedProjectWarnsThatLinksToTheOldNameStopSelectingIt() throws {
+    /// An agent entry can name the project with `--project <name>`, so a
+    /// rename that the name rule does not absorb leaves every such entry
+    /// selecting nothing.
+    @Test func renamingASavedProjectWarnsThatEntriesNamingTheOldNameStopSelectingIt() throws {
         let (store, _, _) = try makeStore()
         let model = makeModel(store, KeyBox())
         let billing = try savedDraft(named: "Billing", in: model)
-        let notice = L("Repositories linked to “\("Billing")” stop selecting this project until they are linked again.")
+        let notice = L("Agent entries that name “\("Billing")” stop selecting this project until they use the new name.")
 
         var renamed = billing
         renamed.name = "Billing API"
-        #expect(model.renameLinkNotice(for: renamed) == notice)
+        #expect(model.renameNotice(for: renamed) == notice)
         var recased = billing
         recased.name = " BILLING "
-        #expect(model.renameLinkNotice(for: recased) == nil)
-        #expect(model.renameLinkNotice(for: billing) == nil)
+        #expect(model.renameNotice(for: recased) == nil)
+        #expect(model.renameNotice(for: billing) == nil)
         var cleared = billing
         cleared.name = "  "
-        #expect(model.renameLinkNotice(for: cleared) == nil)
+        #expect(model.renameNotice(for: cleared) == nil)
         var unsaved = model.draftForNewProject()
         unsaved.name = "Ledger"
-        #expect(model.renameLinkNotice(for: unsaved) == nil)
+        #expect(model.renameNotice(for: unsaved) == nil)
     }
 
     // MARK: Repository links

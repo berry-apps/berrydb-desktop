@@ -153,14 +153,12 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         } catch {
             return fail(L("The MCP project could not be saved: \(error.localizedDescription)"))
         }
-        // A link file names a project, and the helper selects every project
-        // whose name that link matches; two such projects would make every
-        // link to either one ambiguous.
-        let nameTaken = others.contains {
-            MCPRepositoryLink.matches(projectName: $0.name, linkedName: draft.name)
-        }
+        // An agent entry can name a project with `--project <name>`, and
+        // the helper selects every project whose name matches; two such
+        // projects would leave every entry naming either one ambiguous.
+        let nameTaken = others.contains { MCPProjectSelector.namesMatch($0.name, draft.name) }
         if nameTaken {
-            return fail(L("Another project already uses this name. Repository links select projects by name."))
+            return fail(L("Another project already uses this name. Agent entries can select a project by its name."))
         }
         // Two projects with the same root tie for every workspace inside it,
         // and the helper serves neither of them there. Nested roots stay
@@ -242,19 +240,18 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         return nil
     }
 
-    /// A notice to show under the name field, or nil. Link files name a
-    /// project, and the helper decides a workspace with a link file by that
-    /// file alone, so renaming a saved project leaves every repository
-    /// linked to the old name selecting nothing. A change of letter case or
-    /// surrounding whitespace still matches the old name by the link rule
-    /// and gets no notice, and neither does a cleared field, which cannot be
-    /// saved.
-    public func renameLinkNotice(for draft: Draft) -> String? {
+    /// A notice to show under the name field, or nil. An agent entry can
+    /// name a project with `--project <name>`, so renaming a saved project
+    /// leaves every entry naming the old name selecting nothing. A change of
+    /// letter case or surrounding whitespace still matches the old name by
+    /// the helper's name rule and gets no notice, and neither does a cleared
+    /// field, which cannot be saved.
+    public func renameNotice(for draft: Draft) -> String? {
         guard let saved = projects.first(where: { $0.id == draft.id }),
               !draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !MCPRepositoryLink.matches(projectName: saved.name, linkedName: draft.name)
+              !MCPProjectSelector.namesMatch(saved.name, draft.name)
         else { return nil }
-        return L("Repositories linked to “\(saved.name)” stop selecting this project until they are linked again.")
+        return L("Agent entries that name “\(saved.name)” stop selecting this project until they use the new name.")
     }
 
     /// Links each folder of `folders` to the saved project `projectID` by
@@ -485,7 +482,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         let existingProject = existing.flatMap(MCPRepositoryLink.projectName(in:))
         if let existing {
             let selectsProject = existingProject.map {
-                MCPRepositoryLink.matches(projectName: projectName, linkedName: $0)
+                MCPProjectSelector.namesMatch(projectName, $0)
             } == true
             if existing == contents || selectsProject {
                 return .unchanged(path)

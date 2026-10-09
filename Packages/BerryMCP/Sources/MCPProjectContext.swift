@@ -49,10 +49,11 @@ public enum MCPSelectionOutcome: Equatable, Sendable {
 }
 
 /// Decides which project a host session serves, independent of any wire
-/// protocol: an explicit project id wins, then the host's workspace roots,
-/// then the process working directory. Each of those workspaces is decided
-/// on its own by its repository link file (`MCPRepositoryLink`) when it has
-/// one, otherwise by the workspace roots registered in the app.
+/// protocol: an explicit project, named by its ID or its name, wins, then
+/// the host's workspace roots, then the process working directory. Each of
+/// those workspaces is decided on its own by its repository link file
+/// (`MCPRepositoryLink`) when it has one, otherwise by the workspace roots
+/// registered in the app.
 ///
 /// Selection is a convenience, not authorization: verification of the
 /// selected project decides what is served. An unverifiable integrity tag
@@ -94,7 +95,7 @@ public struct MCPProjectContextResolver: Sendable {
 
     /// Selects and verifies the project for one session in a single step;
     /// see `select` for the inputs and `context(of:)` for verification.
-    public func resolve(explicit: UUID?, roots: [String]?, workingDirectory: String) throws -> MCPProjectContext {
+    public func resolve(explicit: MCPProjectReference?, roots: [String]?, workingDirectory: String) throws -> MCPProjectContext {
         try context(of: select(explicit: explicit, roots: roots, workingDirectory: workingDirectory))
     }
 
@@ -105,20 +106,25 @@ public struct MCPProjectContextResolver: Sendable {
     /// `.linkedProjectNotFound`, `.unconfigured` carries the directory
     /// holding the link file. Otherwise it carries the working directory only
     /// when the working directory was the input that failed; explicit and
-    /// roots failures report nil. Throws when the store cannot be read.
+    /// roots failures report nil. An explicit project that cannot be
+    /// selected never falls back to the other inputs: a name that no project
+    /// has is `.explicitProjectNotFound`, and one that several projects share
+    /// is `.ambiguousProjects`. Throws when the store cannot be read.
     ///
     /// A workspace with a link file is decided by that file alone: the link
     /// is never skipped in favour of the workspace's registered roots, so
     /// what it says is what is served.
-    public func select(explicit: UUID?, roots: [String]?, workingDirectory: String) throws -> MCPSelectionOutcome {
+    public func select(explicit: MCPProjectReference?, roots: [String]?, workingDirectory: String) throws -> MCPSelectionOutcome {
         let projects = try loadProjects()
 
         if let explicit {
             switch selector.select(explicit: explicit, projects: projects) {
             case .selected(let id):
                 return .project(id, source: .explicit, workspace: nil)
-            case .noMatch, .ambiguous:
+            case .noMatch:
                 return .unconfigured(.explicitProjectNotFound, workspace: nil)
+            case .ambiguous:
+                return .unconfigured(.ambiguousProjects, workspace: nil)
             }
         }
 
@@ -191,7 +197,7 @@ public struct MCPProjectContextResolver: Sendable {
                 invalidLinkDirectory = invalidLinkDirectory ?? directory
             case let .found(directory, name):
                 matched = projects
-                    .filter { MCPRepositoryLink.matches(projectName: $0.name, linkedName: name) }
+                    .filter { MCPProjectSelector.namesMatch($0.name, name) }
                     .map(\.id)
                 if matched.isEmpty {
                     unknownLink = unknownLink ?? (name, directory)

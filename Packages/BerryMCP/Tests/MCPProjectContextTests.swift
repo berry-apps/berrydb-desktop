@@ -31,7 +31,7 @@ struct MCPProjectContextTests {
     }
 
     @Test func explicitWinsOverRootsAndWorkingDirectory() throws {
-        let context = try resolver(projects: [a, b]).resolve(explicit: b.id, roots: ["file:///work/a"], workingDirectory: "/work/a")
+        let context = try resolver(projects: [a, b]).resolve(explicit: .id(b.id), roots: ["file:///work/a"], workingDirectory: "/work/a")
         guard case .selected(let verified, .explicit, _) = context else { Issue.record("\(context)"); return }
         #expect(verified.project.id == b.id)
     }
@@ -101,11 +101,13 @@ struct MCPProjectContextTests {
             selector: MCPProjectSelector(canonicalize: { $0 }),
             findLink: { links[$0] ?? .none }
         )
-        let unconfigured: [(MCPUnconfiguredReason, UUID?, [String]?, String)] = [
+        let unconfigured: [(MCPUnconfiguredReason, MCPProjectReference?, [String]?, String)] = [
             (.noMatchingProject, nil, nil, "/elsewhere"),
             (.ambiguousProjects, nil, ["file:///work/a", "file:///work/b"], "/elsewhere"),
             (.ambiguousProjects, nil, nil, "/work/shared"),
-            (.explicitProjectNotFound, UUID(), nil, "/work/a"),
+            (.explicitProjectNotFound, .id(UUID()), nil, "/work/a"),
+            (.explicitProjectNotFound, .name("Nope"), nil, "/work/a"),
+            (.ambiguousProjects, .name("b"), nil, "/work/a"),
             (.invalidLinkFile, nil, nil, "/work/invalid"),
             (.linkedProjectNotFound, nil, nil, "/work/unknown"),
         ]
@@ -132,8 +134,48 @@ struct MCPProjectContextTests {
     }
 
     @Test func unknownExplicitProject() throws {
-        #expect(try resolver(projects: [a]).resolve(explicit: UUID(), roots: nil, workingDirectory: "/work/a")
+        #expect(try resolver(projects: [a]).resolve(explicit: .id(UUID()), roots: nil, workingDirectory: "/work/a")
             == .unconfigured(.explicitProjectNotFound, workspace: nil))
+    }
+
+    // MARK: Explicit project by name
+
+    @Test func explicitNameSelectsTheProjectWithThatNameOverRootsAndWorkingDirectory() throws {
+        let spaced = MCPProject(name: "  Shop Ops ", isEnabled: true, workspaceRoots: [])
+        let reference = try #require(MCPProjectReference(argument: " sHOP oPS\n"))
+        let context = try resolver(projects: [a, b, spaced])
+            .resolve(explicit: reference, roots: ["file:///work/a"], workingDirectory: "/work/b")
+        #expect(context == .selected(
+            MCPVerifiedProject(project: spaced, liveReadProfileIDs: [], projectTagValid: true),
+            source: .explicit, workspace: nil
+        ))
+    }
+
+    @Test func explicitNameNoProjectHasIsNotFoundAndNeverFallsBack() throws {
+        let context = try resolver(projects: [a, b])
+            .resolve(explicit: .name("Ledger"), roots: ["file:///work/a"], workingDirectory: "/work/b")
+        #expect(context == .unconfigured(.explicitProjectNotFound, workspace: nil))
+    }
+
+    /// Possible only in a store edited outside the app, since the settings
+    /// pane refuses a second project with a matching name.
+    @Test func explicitNameSeveralProjectsShareIsAmbiguousAndNeverFallsBack() throws {
+        let twin = MCPProject(name: "a ", isEnabled: true, workspaceRoots: [])
+        let context = try resolver(projects: [a, b, twin])
+            .resolve(explicit: .name("A"), roots: ["file:///work/b"], workingDirectory: "/work/b")
+        #expect(context == .unconfigured(.ambiguousProjects, workspace: nil))
+    }
+
+    /// A value shaped like a UUID is only ever an ID, so it never selects a
+    /// project whose name happens to be that text.
+    @Test func uuidShapedArgumentIsOnlyAnID() throws {
+        let text = "6f9619ff-8b86-d011-b42d-00c04fc964ff"
+        let namedLikeAnID = MCPProject(name: text, isEnabled: true, workspaceRoots: [])
+        let reference = try #require(MCPProjectReference(argument: text.uppercased()))
+        #expect(reference == .id(UUID(uuidString: text)!))
+        let context = try resolver(projects: [a, namedLikeAnID])
+            .resolve(explicit: reference, roots: nil, workingDirectory: "/work/a")
+        #expect(context == .unconfigured(.explicitProjectNotFound, workspace: nil))
     }
 
     @Test func privateTmpSpellingMatchesTmpRoot() throws {
@@ -293,7 +335,7 @@ struct MCPProjectContextTests {
         let links: [String: MCPRepositoryLink.Lookup] = ["/repo/app": .found(directory: "/repo", projectName: "B")]
         let resolver = resolver(projects: [a, b], links: links)
 
-        let explicit = try resolver.resolve(explicit: b.id, roots: ["file:///work/a"], workingDirectory: "/work/a")
+        let explicit = try resolver.resolve(explicit: .id(b.id), roots: ["file:///work/a"], workingDirectory: "/work/a")
         #expect(workspace(explicit) == .some(nil))
         let root = try resolver.resolve(explicit: nil, roots: ["file:///elsewhere", "file:///work/b/src"], workingDirectory: "/work/a")
         #expect(workspace(root) == "/work/b/src")
@@ -361,7 +403,7 @@ struct MCPProjectContextTests {
 
     @Test func explicitProjectWinsOverALink() throws {
         let context = try resolver(projects: [a, b], links: link("B", at: "/work/a"))
-            .resolve(explicit: a.id, roots: ["file:///work/a"], workingDirectory: "/work/a")
+            .resolve(explicit: .id(a.id), roots: ["file:///work/a"], workingDirectory: "/work/a")
         guard case .selected(let verified, .explicit, _) = context else { Issue.record("\(context)"); return }
         #expect(verified.project.id == a.id)
     }

@@ -741,7 +741,7 @@
 "Disabled" = "Đang tắt";
 "Not verified — save to confirm" = "Chưa xác minh — lưu để xác nhận";
 "This project opened disabled because its saved settings could not be verified. Turn Enabled on and save to confirm them." = "Dự án này được mở ở trạng thái tắt vì không thể xác minh các thiết lập đã lưu. Hãy bật “Đang bật” rồi lưu để xác nhận.";
-"Repositories linked to “%@” stop selecting this project until they are linked again." = "Các repository đang liên kết với “%@” sẽ không còn chọn dự án này cho đến khi được liên kết lại.";
+"Agent entries that name “%@” stop selecting this project until they use the new name." = "Các mục agent ghi tên “%@” sẽ không còn chọn dự án này cho đến khi chuyển sang tên mới.";
 "New MCP Project" = "Dự án MCP mới";
 "Edit MCP Project" = "Sửa dự án MCP";
 "Delete…" = "Xóa…";
@@ -765,7 +765,7 @@
 "A workspace root cannot be the whole disk." = "Thư mục làm việc không thể là toàn bộ ổ đĩa.";
 "BerryDB could not read its MCP access key from the Keychain. Nothing was changed." = "BerryDB không thể đọc khóa truy cập MCP từ Keychain. Chưa có thay đổi nào.";
 "BerryDB could not update its MCP access key in the Keychain. Nothing was changed." = "BerryDB không thể cập nhật khóa truy cập MCP trong Keychain. Chưa có thay đổi nào.";
-"Another project already uses this name. Repository links select projects by name." = "Một dự án khác đã dùng tên này. Liên kết repository chọn dự án theo tên.";
+"Another project already uses this name. Agent entries can select a project by its name." = "Một dự án khác đã dùng tên này. Mục agent có thể chọn dự án theo tên.";
 "Another project already uses the workspace folder %@. Agents working there would get neither project." = "Một dự án khác đã dùng thư mục làm việc %@. Agent làm việc ở đó sẽ không nhận được dự án nào.";
 "Repository Links" = "Liên kết repository";
 "Writes .berrydb.json naming this project. Commit it so clones and teammates select a project with the same name in their BerryDB, or add it to .gitignore to keep it local." = "Ghi tệp .berrydb.json mang tên dự án này. Commit tệp này để mọi bản clone và đồng đội chọn dự án cùng tên trong BerryDB của họ, hoặc thêm nó vào .gitignore để chỉ dùng trên máy này.";
