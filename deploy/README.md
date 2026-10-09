@@ -111,7 +111,7 @@ Place `deploy/icon-1024.png` (1024x1024) in the deploy directory. `scripts/make_
 
 ## 8. Release Announcements
 
-When a tag-pushed Release run succeeds, `.github/workflows/announce-release.yml` posts the release to a Telegram channel and to a Facebook Page, once a person approves. X is posted by hand. Facebook Groups and personal profiles are not covered: Meta's API does not post to them.
+When a tag-pushed Release run succeeds, `.github/workflows/announce-release.yml` posts the release to a Telegram channel and to a Facebook Page, once a person approves. X is posted by hand. Facebook Groups and personal profiles are posted by hand too; the workflow posts only to a Page.
 
 Two cases are not announced automatically; announce them by running **Announce Release** by hand (below):
 
@@ -153,7 +153,7 @@ Run **Announce Release** from the Actions tab, on `main`, with:
 - `tag`: the release tag, for example `v1.0.8`;
 - `channels`: `telegram,facebook` (the default), or one of them. The same selection is the script's `--only` option.
 
-If one channel failed, start a new manual run naming only that channel, for example `facebook`, rather than using *Re-run failed jobs*, which posts to every configured channel again, including one that already succeeded. A channel that is named but has no complete pair of secrets posts nothing, and the log says so. A manual run from another branch still renders the preview, but its `post` job is expected to be refused by the environment's branch rule (setup step 3).
+If one channel failed, start a new manual run naming only that channel, for example `facebook`, rather than using *Re-run failed jobs*, which posts to every configured channel again, including one that already succeeded. A named channel without a complete pair of secrets posts nothing; the log says so only when none of the named channels is configured. Runs for the same tag share one concurrency group: a manual run started while another run for that tag waits for approval stays pending behind it, and a third run for that tag cancels the pending one. A manual run from another branch still renders the preview, but its `post` job is expected to be refused by the environment's branch rule (setup step 3).
 
 ### One-time setup
 
