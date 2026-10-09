@@ -239,6 +239,14 @@ on macOS 26.6.2, a release build packaged this way loaded `libsybdb`,
 Homebrew (`DYLD_PRINT_LIBRARIES=1`), and answered `initialize` and
 `tools/list` over standard input and output.
 
+**Version.** An executable in `Contents/Helpers` has no `Info.plist` of
+its own, so the helper reports to hosts the `CFBundleShortVersionString`
+of the app around it, read from `Contents/Info.plist` after resolving
+symbolic links. Packaged by `scripts/make_app.sh`, it reported the
+version written there (`0.1.0` when `BERRYDB_VERSION` is unset), also
+when started through a symbolic link. A build run from `.build` still
+reports `dev`.
+
 **Signing.** The helper is signed by the release pipeline's one
 `codesign --force --deep --options runtime --timestamp` step over the
 whole bundle, not separately: `--force --deep` re-signs nested code with
@@ -620,10 +628,6 @@ Not implemented:
   app adding the helper's designated requirement to the item's access
   list; closing the Keychain key-planting gap noted above (deleting or
   pre-creating the key item).
-- A server version from a packaged helper: an executable in
-  `Contents/Helpers` has no `Info.plist` of its own, so the packaged
-  helper reports `dev` to hosts, as a build run from `.build` does
-  (observed on 2026-10-09).
 - Verification of Developer ID signing and notarization of a bundle that
   contains the helper, and of the Keychain dialog with such a helper.
 - Any Cursor verification.
