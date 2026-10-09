@@ -107,10 +107,10 @@ public final class MCPProjectsSettingsModel: ObservableObject {
 
     /// Saves `draft` under a newly rotated key. Returns false with
     /// `errorMessage` set when a root is invalid or is also a root of
-    /// another project, another project already uses the name, the key
-    /// cannot be read or written, or the store refuses the write. Roots and
-    /// the name are checked before the key is read, so an invalid draft
-    /// changes nothing.
+    /// another project, the name has the form of a project ID or another
+    /// project already uses it, the key cannot be read or written, or the
+    /// store refuses the write. Roots and the name are checked before the
+    /// key is read, so an invalid draft changes nothing.
     ///
     /// A connection deleted since the draft was made is dropped from it
     /// before the key is read, since deleting a connection removes its
@@ -120,6 +120,12 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     public func save(_ draft: Draft) -> Bool {
         if let invalidRoot = draft.workspaceRoots.lazy.compactMap(Self.validateRoot).first {
             return fail(invalidRoot)
+        }
+        // The helper reads a `--project` value that parses as a UUID as an
+        // ID, never as a name, so an agent entry naming such a project could
+        // never select it, and could select another project with that ID.
+        if case .id = MCPProjectReference(argument: draft.name) {
+            return fail(L("A project name cannot have the form of a project ID."))
         }
         let others: [MCPProject]
         let savedProfileIDs: Set<UUID>

@@ -716,6 +716,38 @@ struct MCPProjectsSettingsModelTests {
         #expect(try store.mcpProject(id: billing.id)?.name == "BILLING")
     }
 
+    /// The helper reads a `--project` value shaped like a UUID as an ID, so
+    /// an agent entry naming such a project could never select it, and
+    /// could select another project whose ID that is.
+    @Test func aNameShapedLikeAProjectIDIsRefusedBeforeTheKeyIsTouched() throws {
+        let (store, _, _) = try makeStore()
+        let box = KeyBox()
+        let model = makeModel(store, box)
+        var billing = model.draftForNewProject()
+        billing.name = "Billing"
+        #expect(model.save(billing))
+        let keyBefore = try #require(box.data)
+        let writesBefore = box.writeCount
+        let message = L("A project name cannot have the form of a project ID.")
+
+        var shapedLikeAnID = model.draftForNewProject()
+        shapedLikeAnID.name = " 6f9619ff-8b86-d011-b42d-00c04fc964ff\n"
+        #expect(model.save(shapedLikeAnID) == false)
+        #expect(model.errorMessage == message)
+        var renamed = try #require(model.draft(for: billing.id))
+        renamed.name = "6F9619FF-8B86-D011-B42D-00C04FC964FF"
+        #expect(model.save(renamed) == false)
+        #expect(model.errorMessage == message)
+
+        #expect(try store.mcpProjects().map(\.name) == ["Billing"])
+        #expect(box.data == keyBefore)
+        #expect(box.writeCount == writesBefore)
+
+        var almost = model.draftForNewProject()
+        almost.name = "6F9619FF-8B86-D011-B42D"
+        #expect(model.save(almost))
+    }
+
     @Test func aNameIsSavedTrimmed() throws {
         let (store, _, _) = try makeStore()
         let model = makeModel(store, KeyBox())

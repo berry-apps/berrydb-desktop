@@ -769,6 +769,7 @@
 "A workspace root cannot be the whole disk." = "Thư mục làm việc không thể là toàn bộ ổ đĩa.";
 "BerryDB could not read its MCP access key from the Keychain. Nothing was changed." = "BerryDB không thể đọc khóa truy cập MCP từ Keychain. Chưa có thay đổi nào.";
 "BerryDB could not update its MCP access key in the Keychain. Nothing was changed." = "BerryDB không thể cập nhật khóa truy cập MCP trong Keychain. Chưa có thay đổi nào.";
+"A project name cannot have the form of a project ID." = "Tên dự án không được có dạng ID của dự án.";
 "Another project already uses this name. Agent entries can select a project by its name." = "Một dự án khác đã dùng tên này. Mục agent có thể chọn dự án theo tên.";
 "Another project already uses the workspace folder %@. Agents working there would get neither project." = "Một dự án khác đã dùng thư mục làm việc %@. Agent làm việc ở đó sẽ không nhận được dự án nào.";
 

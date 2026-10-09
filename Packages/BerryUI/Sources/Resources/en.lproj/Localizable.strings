@@ -769,6 +769,7 @@
 "A workspace root cannot be the whole disk." = "A workspace root cannot be the whole disk.";
 "BerryDB could not read its MCP access key from the Keychain. Nothing was changed." = "BerryDB could not read its MCP access key from the Keychain. Nothing was changed.";
 "BerryDB could not update its MCP access key in the Keychain. Nothing was changed." = "BerryDB could not update its MCP access key in the Keychain. Nothing was changed.";
+"A project name cannot have the form of a project ID." = "A project name cannot have the form of a project ID.";
 "Another project already uses this name. Agent entries can select a project by its name." = "Another project already uses this name. Agent entries can select a project by its name.";
 "Another project already uses the workspace folder %@. Agents working there would get neither project." = "Another project already uses the workspace folder %@. Agents working there would get neither project.";
 
