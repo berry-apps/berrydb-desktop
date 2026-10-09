@@ -5,26 +5,8 @@ import Combine
 import CryptoKit
 import Foundation
 
-/// What linking one chosen folder did. Each case carries the path of that
-/// folder's link file, `<folder>/.berrydb.json`.
-public enum MCPRepositoryLinkResult: Equatable, Sendable {
-    /// The file now holds the link naming the project.
-    case written(String)
-    /// The file already selects the project, by the name rule the helper
-    /// applies, and was not rewritten.
-    case unchanged(String)
-    /// Something else is there and was left as it is; linking again with
-    /// `overwrite` replaces it. `existingProject` is the name a regular file
-    /// of the user's holds; nil when that file names none or cannot be
-    /// parsed, and for a symbolic link or a file another user owns, neither
-    /// of which is read.
-    case needsOverwrite(String, existingProject: String?)
-    /// Nothing was written, for the ready-to-show `reason`.
-    case rejected(String, reason: String)
-}
-
 /// Creates, edits and deletes the MCP projects that coding agents reach
-/// through the `berrydb-mcp` helper, and links repositories to them.
+/// through the `berrydb-mcp` helper.
 ///
 /// Every save and delete rotates the access key in one fixed order: read
 /// the stored key (abort if the Keychain refuses), build the value from the
@@ -66,12 +48,6 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     private let store: BerryStore
     private let keyStore: MCPAccessKeyStore
     private let helperURL: URL?
-    /// Writes one link file. The app uses `atomicLinkWrite`, which replaces
-    /// the file in one step. Tests replace it to refuse every write their
-    /// case must not make, so a regression in the checks before it fails the
-    /// test instead of writing outside its temporary folders, at the disk
-    /// root for one.
-    var linkWriter: (Data, URL) throws -> Void = MCPProjectsSettingsModel.atomicLinkWrite
 
     /// `keyStore` defaults to the Keychain item the helper reads; the
     /// helper path is looked up once, inside the running app's bundle.
@@ -227,19 +203,6 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         projects.contains { $0.id == projectID }
     }
 
-    /// Nil when repositories can be linked to the project `draft` edits;
-    /// otherwise the reason to show. Linking writes the saved name, so it is
-    /// offered only for a saved project whose name field still holds that
-    /// name once trimmed, as saving would store it: a link written while a
-    /// rename is pending would name a project the editor no longer shows.
-    public func repositoryLinkUnavailableReason(for draft: Draft) -> String? {
-        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard projects.contains(where: { $0.id == draft.id && $0.name == name }) else {
-            return Self.saveBeforeLinking
-        }
-        return nil
-    }
-
     /// A notice to show under the name field, or nil. An agent entry can
     /// name a project with `--project <name>`, so renaming a saved project
     /// leaves every entry naming the old name selecting nothing. A change of
@@ -252,28 +215,6 @@ public final class MCPProjectsSettingsModel: ObservableObject {
               !MCPProjectSelector.namesMatch(saved.name, draft.name)
         else { return nil }
         return L("Agent entries that name “\(saved.name)” stop selecting this project until they use the new name.")
-    }
-
-    /// Links each folder of `folders` to the saved project `projectID` by
-    /// writing `MCPRepositoryLink.contents(projectName:)` for its saved name
-    /// to `.berrydb.json` at the folder's top, and returns one result per
-    /// folder in the same order.
-    ///
-    /// Nothing else is written: no other file, no git configuration and no
-    /// `.gitignore`. A project not saved as of the last `reload()` links
-    /// nothing. A regular file of the user's that already selects the
-    /// project is left untouched, whatever its formatting, extra keys or
-    /// capitalization. A symbolic link is never followed and a file another
-    /// user owns is never read, even when either names the project; like
-    /// any other entry of that name, they are replaced only when `overwrite`
-    /// is true. Replacing writes a regular file and leaves a link's target
-    /// untouched. A folder of that name is never replaced. The disk's root
-    /// and anything that is not a folder are rejected.
-    public func linkRepositories(_ folders: [URL], projectID: UUID, overwrite: Bool) -> [MCPRepositoryLinkResult] {
-        guard let project = projects.first(where: { $0.id == projectID }) else {
-            return folders.map { .rejected(Self.linkFilePath(in: $0), reason: Self.saveBeforeLinking) }
-        }
-        return folders.map { Self.link($0, projectName: project.name, overwrite: overwrite, write: linkWriter) }
     }
 
     /// A localized reason `path` cannot be a workspace root, or nil. A root
@@ -407,103 +348,6 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     private static let keyWriteFailure = L(
         "BerryDB could not update its MCP access key in the Keychain. Nothing was changed."
     )
-    private static let saveBeforeLinking = L("Save the project before linking repositories.")
-
-    /// A warning to show under a result that left a link file in the home
-    /// directory itself, or nil. The helper takes the nearest link file at or
-    /// above a workspace before it looks at registered workspace folders, so
-    /// a link at home selects this project for every folder inside it that
-    /// has no nearer link, including other projects' workspace folders.
-    /// Linking there stays allowed, as a home workspace folder does.
-    nonisolated public static func homeFolderLinkWarning(for result: MCPRepositoryLinkResult) -> String? {
-        let path: String
-        switch result {
-        case let .written(file), let .unchanged(file):
-            path = file
-        case .needsOverwrite, .rejected:
-            return nil
-        }
-        guard isHomeDirectory((path as NSString).deletingLastPathComponent) else { return nil }
-        return L("This links your home folder: every folder inside it without a nearer .berrydb.json selects this project, even another project’s workspace folder.")
-    }
-
-    nonisolated static func atomicLinkWrite(_ contents: Data, to file: URL) throws {
-        try contents.write(to: file, options: .atomic)
-    }
-
-    nonisolated private static func linkFilePath(in folder: URL) -> String {
-        folder.appendingPathComponent(MCPRepositoryLink.fileName).path
-    }
-
-    /// Links `folder` to the project called `projectName`, following the
-    /// rules `linkRepositories` states.
-    ///
-    /// The existing entry is read with the helper's own bounded reader, so a
-    /// folder counts as linked exactly when the helper would select the
-    /// project from it. A regular file of the user's that selects the
-    /// project by the helper's name rule, not only one whose bytes match, is
-    /// left untouched: repositories that reformat JSON on commit would
-    /// otherwise be offered a replacement on every clone, and replacing would
-    /// drop extra keys. Every other entry is replaced only with `overwrite`:
-    /// - a file naming another project or none, reported with that name;
-    /// - a symbolic link, which the reader never follows, so the name its
-    ///   target holds is neither read nor reported;
-    /// - a file another user owns, which the reader ignores as if absent;
-    ///   it is still never replaced without confirmation, and its name is
-    ///   not reported.
-    /// The reader never blocks on a FIFO.
-    ///
-    /// The root is refused because the helper never reads a link file there.
-    /// An atomic write writes an auxiliary file and then replaces the entry
-    /// with it
-    /// (https://developer.apple.com/documentation/foundation/nsdata/writingoptions/atomic).
-    /// Observed with Foundation on macOS 26.6: a symbolic link is replaced by
-    /// the new file and its target is left as it was, and a folder of that
-    /// name makes the write fail. A folder is therefore reported as in the
-    /// way rather than offered for replacement.
-    ///
-    /// - Parameter owner: The user whose link files are trusted; the current
-    ///   user unless replaced.
-    nonisolated static func link(
-        _ folder: URL, projectName: String, overwrite: Bool, write: (Data, URL) throws -> Void,
-        owner: uid_t = getuid()
-    ) -> MCPRepositoryLinkResult {
-        let contents = MCPRepositoryLink.contents(projectName: projectName)
-        let file = folder.appendingPathComponent(MCPRepositoryLink.fileName)
-        let path = file.path
-        guard canonicalRoot(folder.path) != "/" else {
-            return .rejected(path, reason: L("The whole disk cannot be linked to a project."))
-        }
-        var isFolder: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isFolder), isFolder.boolValue else {
-            return .rejected(path, reason: L("Only a folder can be linked to a project."))
-        }
-        let existing = MCPRepositoryLink.readBounded(path, owner: owner)
-        let existingProject = existing.flatMap(MCPRepositoryLink.projectName(in:))
-        if let existing {
-            let selectsProject = existingProject.map {
-                MCPProjectSelector.namesMatch(projectName, $0)
-            } == true
-            if existing == contents || selectsProject {
-                return .unchanged(path)
-            }
-        }
-        var entry = stat()
-        if lstat(path, &entry) == 0 {
-            if entry.st_mode & S_IFMT == S_IFDIR {
-                return .rejected(path, reason: L("A folder named .berrydb.json is in the way."))
-            }
-            if !overwrite {
-                return .needsOverwrite(path, existingProject: existingProject)
-            }
-        }
-        do {
-            try write(contents, file)
-        } catch {
-            return .rejected(path, reason: L("The link file could not be written: \(error.localizedDescription)"))
-        }
-        return .written(path)
-    }
 
     /// The value to seal: the verified editing copy of a stored project, or
     /// a new project, with the draft applied. A profile kept from the stored

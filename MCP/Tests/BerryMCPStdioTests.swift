@@ -1,4 +1,6 @@
+import BerryMCP
 import BerryStore
+import CryptoKit
 import Foundation
 import GRDB
 import SQLite3
@@ -7,8 +9,11 @@ import Testing
 /// The stdio contract of the built `berrydb-mcp` executable, exercised as a
 /// subprocess the way a host runs it.
 ///
-/// Every store here has no MCP projects, so selection never reaches project
-/// verification and no test reads the Keychain.
+/// Selection in every test here chooses no project: the store has no
+/// projects, the projects it has tie for the only folder they match, or
+/// `--project` names a project the store does not have. Selection therefore
+/// never reaches project verification, which reads the integrity key from
+/// the login Keychain, and no test reads the Keychain.
 @Suite(.serialized)
 struct BerryMCPStdioTests {
     @Test
@@ -160,15 +165,33 @@ struct BerryMCPStdioTests {
 
     /// A request sent before `initialize` is answered from the working
     /// directory, and that selection is not kept: once the host has
-    /// initialized with the roots capability, its roots decide. Both link
-    /// files name projects the store does not have, so the status names the
-    /// deciding folder and link without verifying any project.
+    /// initialized with the roots capability, its roots decide. The working
+    /// directory matches no project, and the root is the folder of two
+    /// projects, which tie there; the two outcomes differ, and neither
+    /// verifies a project.
     @Test
     func selectionBeforeInitializeGivesWayToRoots() async throws {
         let store = try TemporaryStore()
         defer { store.remove() }
-        let workingDirectory = try store.folder("working", linkedTo: "Alpha")
-        let root = try store.folder("root", linkedTo: "Beta")
+        let workingDirectory = try store.folder("working")
+        let root = try store.folder("root")
+        try store.addProjects(named: ["Alpha", "Beta"], sharingFolder: root)
+        let rootURI = URL(fileURLWithPath: root, isDirectory: true).absoluteString
+        // The helper selects with this resolver over the same store. Should
+        // either input select a project here, the helper would read the
+        // Keychain, so the test stops before starting it.
+        let preflight = MCPProjectContextResolver(
+            loadProjects: { try BerryStore.openReadOnly(path: store.path).mcpProjects() },
+            verify: { _ in nil }
+        )
+        try #require(
+            try preflight.select(explicit: nil, roots: nil, workingDirectory: workingDirectory)
+                == .unconfigured(.noMatchingProject, workspace: workingDirectory)
+        )
+        try #require(
+            try preflight.select(explicit: nil, roots: [rootURI], workingDirectory: workingDirectory)
+                == .unconfigured(.ambiguousProjects, workspace: nil)
+        )
         let helper = try HelperProcess(
             arguments: ["--store-path", store.path], workingDirectory: URL(fileURLWithPath: workingDirectory)
         )
@@ -176,8 +199,7 @@ struct BerryMCPStdioTests {
 
         try helper.send(Self.callStatus(id: 1))
         let early = try await Self.status(helper.response(id: 1))
-        #expect(early["reason"] as? String == "linked_project_not_found")
-        #expect(early["linked_project"] as? String == "Alpha")
+        #expect(early["reason"] as? String == "no_matching_project")
         #expect(early["workspace"] as? String == workingDirectory)
 
         try helper.send(
@@ -194,13 +216,11 @@ struct BerryMCPStdioTests {
         }
         #expect(next["method"] as? String == "roots/list", "the host's roots were never requested")
         if next["method"] as? String == "roots/list", let request = next["id"] {
-            let uri = URL(fileURLWithPath: root, isDirectory: true).absoluteString
-            try helper.send(["jsonrpc": "2.0", "id": request, "result": ["roots": [["uri": uri, "name": "root"]]]])
+            try helper.send(["jsonrpc": "2.0", "id": request, "result": ["roots": [["uri": rootURI, "name": "root"]]]])
         }
         let late = try await Self.status(helper.response(id: 3))
-        #expect(late["reason"] as? String == "linked_project_not_found")
-        #expect(late["linked_project"] as? String == "Beta")
-        #expect(late["workspace"] as? String == root)
+        #expect(late["reason"] as? String == "ambiguous_projects")
+        #expect(late["workspace"] is NSNull)
 
         try helper.closeInput()
         #expect(try await helper.termination().status == 0)
@@ -450,7 +470,7 @@ private final class StoreLock {
 }
 
 /// A store file created by this build's `BerryStore` in its own temporary
-/// directory, with no MCP projects.
+/// directory, with no MCP projects unless `addProjects` saves some.
 private struct TemporaryStore {
     let directory: URL
     let path: String
@@ -478,17 +498,27 @@ private struct TemporaryStore {
         try handle.write(contentsOf: bytes)
     }
 
-    /// Creates the folder `name` beside the store with a `.berrydb.json`
-    /// naming `project`, and returns its path with symbolic links resolved,
-    /// the form the helper reports a link's folder in.
-    func folder(_ name: String, linkedTo project: String) throws -> String {
+    /// Creates the folder `name` beside the store and returns its path with
+    /// symbolic links resolved, the form the helper reports a working
+    /// directory in.
+    func folder(_ name: String) throws -> String {
         let folder = directory.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let link = try JSONSerialization.data(withJSONObject: ["project": project])
-        try link.write(to: folder.appendingPathComponent(".berrydb.json"))
         guard let resolved = realpath(folder.path, nil) else { throw CocoaError(.fileNoSuchFile) }
         defer { free(resolved) }
         return String(cString: resolved)
+    }
+
+    /// Saves one enabled project per name, each with `folder` as its only
+    /// workspace folder, sealed under a throwaway key that is stored
+    /// nowhere. Projects sharing a folder tie for every workspace inside it.
+    func addProjects(named names: [String], sharingFolder folder: String) throws {
+        let store = try BerryStore(path: path)
+        let key = SymmetricKey(size: .bits256)
+        for name in names {
+            let project = MCPProject(name: name, isEnabled: true, workspaceRoots: [folder])
+            try store.saveMCPProject(project, sealingKey: key, previousKey: key)
+        }
     }
 
     func remove() {

@@ -748,14 +748,14 @@
 "Delete this MCP project?" = "Delete this MCP project?";
 "Coding agents working in its folders will no longer find a project." = "Coding agents working in its folders will no longer find a project.";
 "Workspace Folders" = "Workspace Folders";
-"Add every folder whose code uses these connections. Subfolders and worktrees inside a folder are included, unless a .berrydb.json in or above them decides first." = "Add every folder whose code uses these connections. Subfolders and worktrees inside a folder are included, unless a .berrydb.json in or above them decides first.";
-"This is your home folder: every repository inside it selects this project, unless a .berrydb.json or another project’s more specific folder decides first." = "This is your home folder: every repository inside it selects this project, unless a .berrydb.json or another project’s more specific folder decides first.";
+"Add every folder whose code uses these connections. Subfolders and worktrees inside a folder are included." = "Add every folder whose code uses these connections. Subfolders and worktrees inside a folder are included.";
+"This is your home folder: every repository inside it selects this project unless another project has a more specific folder." = "This is your home folder: every repository inside it selects this project unless another project has a more specific folder.";
 "Add Folder…" = "Add Folder…";
 "No saved connections yet." = "No saved connections yet.";
 "Schema and graph metadata of these connections becomes visible to coding agents you configure, and to their model providers." = "Schema and graph metadata of these connections becomes visible to coding agents you configure, and to their model providers.";
 "Agent Setup" = "Agent Setup";
 "Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder." = "Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder.";
-"An entry marked “always this project” serves this project in every folder the agent works in, whatever .berrydb.json or workspace folders would select." = "An entry marked “always this project” serves this project in every folder the agent works in, whatever .berrydb.json or workspace folders would select.";
+"An entry marked “always this project” serves this project in every folder the agent works in, whatever workspace folders would select." = "An entry marked “always this project” serves this project in every folder the agent works in, whatever workspace folders would select.";
 "The berrydb-mcp helper is not bundled in this build." = "The berrydb-mcp helper is not bundled in this build.";
 "%@, always this project" = "%@, always this project";
 "MCP projects could not be loaded: %@" = "MCP projects could not be loaded: %@";
@@ -767,24 +767,6 @@
 "BerryDB could not update its MCP access key in the Keychain. Nothing was changed." = "BerryDB could not update its MCP access key in the Keychain. Nothing was changed.";
 "Another project already uses this name. Agent entries can select a project by its name." = "Another project already uses this name. Agent entries can select a project by its name.";
 "Another project already uses the workspace folder %@. Agents working there would get neither project." = "Another project already uses the workspace folder %@. Agents working there would get neither project.";
-"Repository Links" = "Repository Links";
-"Writes .berrydb.json naming this project. Commit it so clones and teammates select a project with the same name in their BerryDB, or add it to .gitignore to keep it local." = "Writes .berrydb.json naming this project. Commit it so clones and teammates select a project with the same name in their BerryDB, or add it to .gitignore to keep it local.";
-"Any repository whose .berrydb.json names this project, including one cloned from someone else, selects it for agents working there." = "Any repository whose .berrydb.json names this project, including one cloned from someone else, selects it for agents working there.";
-"Link Repository…" = "Link Repository…";
-"Save the project before linking repositories." = "Save the project before linking repositories.";
-"Replace existing link files?" = "Replace existing link files?";
-"Replace" = "Replace";
-"These files will be replaced:" = "These files will be replaced:";
-"%@ (names “%@”)" = "%@ (names “%@”)";
-"%@ (could not be read as a link file)" = "%@ (could not be read as a link file)";
-"Wrote %@" = "Wrote %@";
-"%@ already links this project" = "%@ already links this project";
-"%@ was not replaced" = "%@ was not replaced";
-"The whole disk cannot be linked to a project." = "The whole disk cannot be linked to a project.";
-"Only a folder can be linked to a project." = "Only a folder can be linked to a project.";
-"A folder named .berrydb.json is in the way." = "A folder named .berrydb.json is in the way.";
-"The link file could not be written: %@" = "The link file could not be written: %@";
-"This links your home folder: every folder inside it without a nearer .berrydb.json selects this project, even another project’s workspace folder." = "This links your home folder: every folder inside it without a nearer .berrydb.json selects this project, even another project’s workspace folder.";
 
 /* Local store failed to open at launch */
 "BerryDB could not open its data store." = "BerryDB could not open its data store.";

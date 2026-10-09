@@ -58,12 +58,10 @@ struct BerryMCPServerFactoryTests {
         )
     }
 
-    /// The projects the resolver reads, whether reading them fails, and the
-    /// link file lookup of each workspace that has one.
+    /// The projects the resolver reads, and whether reading them fails.
     struct Store: Sendable {
         var projects: [MCPProject]
         var unreadable = false
-        var links: [String: MCPRepositoryLink.Lookup] = [:]
     }
 
     fileprivate func resolver(_ store: Locked<Store>) -> MCPProjectContextResolver {
@@ -80,8 +78,7 @@ struct BerryMCPServerFactoryTests {
                     MCPVerifiedProject(project: $0, liveReadProfileIDs: [])
                 }
             },
-            selector: MCPProjectSelector(canonicalize: { $0 }),
-            findLink: { store.value.links[$0] ?? .none }
+            selector: MCPProjectSelector(canonicalize: { $0 })
         )
     }
 
@@ -256,53 +253,38 @@ struct BerryMCPServerFactoryTests {
         #expect(requests.value == 0)
     }
 
-    /// The link sits above the host's root, and its directory is reported
-    /// on every request, including once the project is gone.
-    @Test func linkedProjectIsKeptForTheConnectionAndVerifiedOnEveryRequest() async throws {
-        let store = Locked(Store(
-            projects: [projectA, projectB], links: ["/work/a/src": .found(directory: "/work/a", projectName: "b")]
-        ))
+    /// A project selected by name is kept for the connection by its ID, so
+    /// a rename in the app does not end the session's selection; deleting
+    /// the project does, on the next request.
+    @Test func explicitNameSelectionIsKeptForTheConnectionAndVerifiedOnEveryRequest() async throws {
+        let store = Locked(Store(projects: [projectA, projectB]))
         let requests = Locked(0)
-        let linked = projectB.id
-        try await withSession(store: store, roots: .declared(["file:///work/a/src"]), rootsRequests: requests) { client in
+        let named = projectB.id
+        try await withSession(
+            store: store, roots: .declared(["file:///work/a"]), explicitProject: .name("b"), rootsRequests: requests
+        ) { client in
             let first = try await Self.status(client)
-            #expect(first["selected_by"] == "linked_repository")
-            #expect(Self.projectID(first) == linked.uuidString)
-            #expect(first["workspace"] == "/work/a")
+            #expect(first["selected_by"] == "explicit")
+            #expect(Self.projectID(first) == named.uuidString)
             #expect(try await client.listTools().tools.count == 6)
 
             store.update { state in
                 state.projects = state.projects.map { project in
                     var copy = project
-                    if copy.id == linked { copy.name = "Billing" }
+                    if copy.id == named { copy.name = "Billing" }
                     return copy
                 }
             }
             let renamed = try await Self.status(client)
-            #expect(renamed["selected_by"] == "linked_repository")
-            #expect(Self.projectID(renamed) == linked.uuidString)
-            #expect(renamed["workspace"] == "/work/a")
+            #expect(renamed["selected_by"] == "explicit")
+            #expect(Self.projectID(renamed) == named.uuidString)
 
-            store.update { $0.projects.removeAll { $0.id == linked } }
+            store.update { $0.projects.removeAll { $0.id == named } }
             let deleted = try await Self.status(client)
             #expect(deleted["reason"] == "no_matching_project")
-            #expect(deleted["workspace"] == "/work/a")
+            #expect(deleted["workspace"] == .null)
         }
-        #expect(requests.value == 1)
-    }
-
-    @Test func linkNamingAnUnknownProjectIsReportedWithItsName() async throws {
-        let store = Locked(Store(
-            projects: [projectA, projectB], links: ["/work/a": .found(directory: "/work/a", projectName: "Ledger")]
-        ))
-        try await withSession(store: store, roots: .undeclared([])) { client in
-            #expect(try await client.listTools().tools.map(\.name) == ["berrydb_status"])
-            let status = try await Self.status(client)
-            #expect(status["state"] == "unconfigured")
-            #expect(status["reason"] == "linked_project_not_found")
-            #expect(status["linked_project"] == "Ledger")
-            #expect(status["workspace"] == "/work/a")
-        }
+        #expect(requests.value == 0)
     }
 
     // MARK: Tools and resources over the wire

@@ -7,7 +7,6 @@ public enum MCPSelectionSource: String, Codable, Sendable {
     case explicit
     case roots
     case workingDirectory = "working_directory"
-    case linkedRepository = "linked_repository"
 }
 
 /// Why a session serves no project. The raw values are reported verbatim by
@@ -18,20 +17,15 @@ public enum MCPUnconfiguredReason: String, Codable, Sendable {
     case explicitProjectNotFound = "explicit_project_not_found"
     case projectDisabled = "project_disabled"
     case integrityUnavailable = "integrity_unavailable"
-    case linkedProjectNotFound = "linked_project_not_found"
-    case invalidLinkFile = "invalid_link_file"
 }
 
 /// The project a session serves, or the reason it serves none.
 public enum MCPProjectContext: Equatable, Sendable {
-    /// `workspace` is the location that decided the selection: the directory
-    /// holding the link file, or the host root or working directory that a
-    /// registered folder matched; nil for an explicit project.
+    /// `workspace` is the location that decided the selection: the host
+    /// root or working directory that a registered folder matched; nil for
+    /// an explicit project.
     case selected(MCPVerifiedProject, source: MCPSelectionSource, workspace: String?)
-    /// `linkedProject` is the name a link file gave when no project has it
-    /// (`.linkedProjectNotFound`), so the status can show which project to
-    /// create; nil for every other reason.
-    case unconfigured(MCPUnconfiguredReason, workspace: String?, linkedProject: String? = nil)
+    case unconfigured(MCPUnconfiguredReason, workspace: String?)
 }
 
 /// The outcome of selection before verification: the project chosen and by
@@ -45,52 +39,43 @@ public enum MCPSelectionOutcome: Equatable, Sendable {
     /// verification finds the project disabled or missing.
     case project(UUID, source: MCPSelectionSource, workspace: String?)
     /// Carries the same values as `MCPProjectContext.unconfigured`.
-    case unconfigured(MCPUnconfiguredReason, workspace: String?, linkedProject: String? = nil)
+    case unconfigured(MCPUnconfiguredReason, workspace: String?)
 }
 
 /// Decides which project a host session serves, independent of any wire
 /// protocol: an explicit project, named by its ID or its name, wins, then
-/// the host's workspace roots, then the process working directory. Each of
-/// those workspaces is decided on its own by its repository link file
-/// (`MCPRepositoryLink`) when it has one, otherwise by the workspace roots
+/// the host's workspace roots, then the process working directory. Roots
+/// and the working directory are matched against the workspace folders
 /// registered in the app.
 ///
 /// Selection is a convenience, not authorization: verification of the
 /// selected project decides what is served. An unverifiable integrity tag
 /// removes live reads but not selection: schema and graph metadata expose
 /// nothing beyond what the store file already holds, so the resolved context
-/// carries `projectTagValid` for the caller to report instead. A link file
-/// comes from an untrusted repository and can name any project, which is why
-/// it too only selects.
+/// carries `projectTagValid` for the caller to report instead.
 ///
-/// Roots that name different projects, through link files, registered roots
-/// or a mix of both, are ambiguous and are never resolved by falling back to
-/// the working directory. Roots with neither a link file nor a registered
-/// match do fall back, since a host may open a folder BerryDB does not know
-/// about.
+/// Roots that match different projects, or a root that ties between
+/// projects, are ambiguous and are never resolved by falling back to the
+/// working directory. Roots without a registered match do fall back, since
+/// a host may open a folder BerryDB does not know about.
 public struct MCPProjectContextResolver: Sendable {
     private let loadProjects: @Sendable () throws -> [MCPProject]
     private let verify: @Sendable (UUID) throws -> MCPVerifiedProject?
     private let selector: MCPProjectSelector
-    private let findLink: @Sendable (String) -> MCPRepositoryLink.Lookup
 
     /// - Parameters:
     ///   - loadProjects: Reads the stored projects used for matching.
     ///   - verify: Returns the verified view of one project, or nil when it
     ///     no longer exists.
     ///   - selector: How workspaces are matched to projects.
-    ///   - findLink: Looks up the link file for a workspace path; reads the
-    ///     file system through `MCPRepositoryLink.find` unless replaced.
     public init(
         loadProjects: @escaping @Sendable () throws -> [MCPProject],
         verify: @escaping @Sendable (UUID) throws -> MCPVerifiedProject?,
-        selector: MCPProjectSelector = MCPProjectSelector(),
-        findLink: @escaping @Sendable (String) -> MCPRepositoryLink.Lookup = { MCPRepositoryLink.find(from: $0) }
+        selector: MCPProjectSelector = MCPProjectSelector()
     ) {
         self.loadProjects = loadProjects
         self.verify = verify
         self.selector = selector
-        self.findLink = findLink
     }
 
     /// Selects and verifies the project for one session in a single step;
@@ -102,18 +87,13 @@ public struct MCPProjectContextResolver: Sendable {
     /// Selects the project for one session without verifying it. `roots`
     /// are file-URI strings from `roots/list`, nil when the host has no
     /// roots capability. A selected project carries the location that
-    /// decided it as `workspace`. For `.invalidLinkFile` and
-    /// `.linkedProjectNotFound`, `.unconfigured` carries the directory
-    /// holding the link file. Otherwise it carries the working directory only
-    /// when the working directory was the input that failed; explicit and
-    /// roots failures report nil. An explicit project that cannot be
-    /// selected never falls back to the other inputs: a name that no project
-    /// has is `.explicitProjectNotFound`, and one that several projects share
-    /// is `.ambiguousProjects`. Throws when the store cannot be read.
-    ///
-    /// A workspace with a link file is decided by that file alone: the link
-    /// is never skipped in favour of the workspace's registered roots, so
-    /// what it says is what is served.
+    /// decided it as `workspace`. `.unconfigured` carries the working
+    /// directory only when the working directory was the input that failed;
+    /// explicit and roots failures report nil. An explicit project that
+    /// cannot be selected never falls back to the other inputs: a name that
+    /// no project has is `.explicitProjectNotFound`, and one that several
+    /// projects share is `.ambiguousProjects`. Throws when the store cannot
+    /// be read.
     public func select(explicit: MCPProjectReference?, roots: [String]?, workingDirectory: String) throws -> MCPSelectionOutcome {
         let projects = try loadProjects()
 
@@ -142,8 +122,8 @@ public struct MCPProjectContextResolver: Sendable {
         switch selection {
         case let .project(id, source, workspace):
             return try verified(id: id, source: source, workspace: workspace)
-        case let .unconfigured(reason, workspace, linkedProject):
-            return .unconfigured(reason, workspace: workspace, linkedProject: linkedProject)
+        case let .unconfigured(reason, workspace):
+            return .unconfigured(reason, workspace: workspace)
         }
     }
 
@@ -163,79 +143,41 @@ public struct MCPProjectContextResolver: Sendable {
     }
 
     /// The outcome for the workspaces of one input, the host's roots or the
-    /// working directory, or nil when none of them has a link file or a
-    /// registered match, so the next input decides.
+    /// working directory, or nil when none of them has a registered match,
+    /// so the next input decides.
     ///
-    /// Each workspace contributes on its own: through its nearest link file
-    /// when it has one, otherwise through the registered roots that contain
-    /// it. Problems in a single workspace are reported before conflicts
-    /// between workspaces: an invalid link file, then a linked name no
-    /// project has, then a tie between registered roots, a name several
-    /// projects share, or workspaces naming different projects, all of which
-    /// are ambiguous. The selection is attributed to the link file when any
-    /// contributing workspace used one, and keeps the directory of the first
-    /// such file; otherwise it keeps the first workspace a registered root
-    /// matched.
+    /// Each workspace is matched on its own against the registered roots
+    /// that contain it. A tie between registered roots, or workspaces that
+    /// match different projects, is ambiguous. A selection keeps the first
+    /// workspace that matched.
     ///
     /// - Parameter workingDirectory: Set when the input is the working
     ///   directory, nil for the roots. It tells the two sources of a
-    ///   registered-root selection apart and is the workspace reported for
-    ///   an ambiguity, which no single location decided.
+    ///   selection apart and is the workspace reported for an ambiguity,
+    ///   which no single location decided.
     private func decide(
         _ workspaces: [String], projects: [MCPProject], workingDirectory: String?
     ) -> MCPSelectionOutcome? {
-        var invalidLinkDirectory: String?
-        var unknownLink: (name: String, directory: String)?
-        var registeredTie = false
-        var linkDirectory: String?
-        var registeredWorkspace: String?
+        var tie = false
+        var matchedWorkspace: String?
         var ids: [UUID] = []
         for workspace in workspaces {
-            var matched: [UUID] = []
-            switch findLink(workspace) {
-            case let .invalid(directory):
-                invalidLinkDirectory = invalidLinkDirectory ?? directory
-            case let .found(directory, name):
-                matched = projects
-                    .filter { MCPProjectSelector.namesMatch($0.name, name) }
-                    .map(\.id)
-                if matched.isEmpty {
-                    unknownLink = unknownLink ?? (name, directory)
-                } else {
-                    linkDirectory = linkDirectory ?? directory
-                }
-            case .none:
-                switch selector.select(workspace: workspace, projects: projects) {
-                case .selected(let id):
-                    matched = [id]
-                    registeredWorkspace = registeredWorkspace ?? workspace
-                case .ambiguous: registeredTie = true
-                case .noMatch: break
-                }
-            }
-            for id in matched where !ids.contains(id) {
-                ids.append(id)
+            switch selector.select(workspace: workspace, projects: projects) {
+            case .selected(let id):
+                if !ids.contains(id) { ids.append(id) }
+                matchedWorkspace = matchedWorkspace ?? workspace
+            case .ambiguous:
+                tie = true
+            case .noMatch:
+                break
             }
         }
-        // The directory holding a link file is reported in place of the
-        // workspace so the user knows which file decided, or which to fix;
-        // it comes from the walk up from the user's own workspace and names
-        // no project.
-        if let invalidLinkDirectory {
-            return .unconfigured(.invalidLinkFile, workspace: invalidLinkDirectory)
-        }
-        if let unknownLink {
-            return .unconfigured(.linkedProjectNotFound, workspace: unknownLink.directory, linkedProject: unknownLink.name)
-        }
-        if registeredTie || ids.count > 1 {
+        if tie || ids.count > 1 {
             return .unconfigured(.ambiguousProjects, workspace: workingDirectory)
         }
         guard let id = ids.first else { return nil }
-        if let linkDirectory {
-            return .project(id, source: .linkedRepository, workspace: linkDirectory)
-        }
         let source: MCPSelectionSource = workingDirectory == nil ? .roots : .workingDirectory
-        return .project(id, source: source, workspace: registeredWorkspace)
+        return .project(id, source: source, workspace: matchedWorkspace)
     }
 
     /// The decoded path of a `file:` URI; nil for any other scheme or an
