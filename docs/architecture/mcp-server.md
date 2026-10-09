@@ -85,8 +85,8 @@ structured content
 | Tool | Arguments | Returns |
 |---|---|---|
 | `berrydb_status` | none | Which project the session serves, or why none (see [Status](#status)). Always listed. |
-| `berrydb_list_connections` | none | The project's connections: ID, name, driver, `environment` (`production` or `unlabeled`), capabilities and `graph_harvested_at`, when the graph was last harvested or null if never. |
-| `berrydb_get_schema` | `connection_id`; optional `object_names` (at most 50), `detail` (`overview` or `full`) | Tables and views, at most 200 per call with an `omitted_count`; `full` adds columns, indexes and foreign keys. |
+| `berrydb_list_connections` | none | The project's connections: ID, name, driver, `environment` (`production` or `unlabeled`), capabilities and `graph_harvested_at`: the time of the last harvest that changed the graph's structure (a harvest that only refreshes statistics does not move it), or null when the connection was never harvested or its latest harvest found no tables or views. |
+| `berrydb_get_schema` | `connection_id`; optional `object_names` (at most 50), `detail` (`overview` or `full`) | Tables and views, at most 200 per call with an `omitted_count` and `harvested_at`, which means the same as `graph_harvested_at`; `full` adds columns, indexes and foreign keys. |
 | `berrydb_search_schema` | `connection_id`, `query` (1–200 characters); optional `limit` (1–200, default 50) | Case-insensitive substring matches over table, view, column and index names. |
 | `berrydb_graph_query` | `connection_id`, `operation`; `node` for `neighbors` and `blast_radius`, `from` and `to` for `path`, optional `limit` (1–50) for `top_centrality` | The dependency-graph answer. The name lists of `neighbors`, `blast_radius` and `circular_dependencies` are capped at 500; a `path` is returned whole, bounded only by the 1 MiB result ceiling. `circular_dependencies` takes no further argument. |
 | `berrydb_get_graph_stats` | `connection_id`; optional `object` | Harvested statistics (rows, size, scans) for every table, or for one table and its indexes; at most 500 tables and 500 unused index names. |
@@ -95,7 +95,12 @@ With no project selected, `tools/list` returns only `berrydb_status` and
 every other tool answers that no project is selected; nothing about any
 project is revealed. A `connection_id` that does not exist and one that
 exists but is not assigned to the project produce the identical error text,
-`Unknown connection for this project`. An unknown tool, or (while a project
+`Unknown connection for this project`. A graph name that matches several
+nodes is an `isError` result that lists at most 50 tables or views. Each is
+named so that it resolves to that one node: its `database.name`, or its
+stable id (for example `table:shop.orders`) when that name is shared. A
+count of the rest follows. A name that matches only columns or indexes is
+told to pass a table or view name. An unknown tool, or (while a project
 is selected) an argument that breaks the input schema, is a JSON-RPC
 invalid-params error (`-32602`) whose message names the argument but never
 echoes its value. This departs from
@@ -109,7 +114,7 @@ result larger than 1 MiB is replaced by an `isError` result,
 returns a fixed text, never SQLite's message, which can contain a path.
 
 Resources: `berrydb://project` (the project and its connections) and, for
-each connection whose graph has been harvested,
+each connection with a non-null `graph_harvested_at`,
 `berrydb://connections/<connection-id>/graph` (harvested table and index
 statistics). An unconfigured session lists no resources, and any unknown,
 malformed or out-of-project URI gets the identical `Unknown resource`
@@ -164,10 +169,12 @@ character removes the question.
    **Enabled**, choose its connections, and either add **Workspace
    Folders** (every folder below one is included, unless a `.berrydb.json`
    in or above it decides first) or use **Link Repository…**, which writes
-   `.berrydb.json` naming the project into the chosen repository.
-   Committing that file lets every clone and worktree select a project of
-   the same name in the BerryDB of whoever opens it; adding it to
-   `.gitignore` keeps it local.
+   `.berrydb.json` naming the project into the chosen repository. A
+   `.berrydb.json` that is a symbolic link or belongs to another user is
+   offered for replacement rather than counted as linked. Committing that
+   file lets every clone and worktree select a project of the same name in
+   the BerryDB of whoever opens it; adding it to `.gitignore` keeps it
+   local.
 3. **Each host, once.** Run one command per host, each adding a
    user-level entry named `berrydb`. Once the helper is bundled, the pane's
    **Agent Setup** section shows these commands with the bundled path
@@ -225,8 +232,10 @@ own:
   surrounding whitespace, and the settings pane refuses two projects whose
   names match this way. A file larger than 4 KiB, one that is not a JSON
   object with a non-empty `project` string, or an entry that cannot be read
-  as a regular file is invalid; it is reported, never skipped, so a link
-  does not silently give way to another input. Other keys are ignored.
+  as a regular file, including a symbolic link (never followed), is
+  invalid; it is reported, never skipped, so a link does not silently give
+  way to another input. A regular file owned by another user is ignored as
+  if absent, and the walk continues upward. Other keys are ignored.
 - **Otherwise by registered workspace folders.** A workspace matches a
   project when it equals or is contained in one of the project's workspace
   folders, compared on path components after resolving symlinks and the
@@ -314,12 +323,17 @@ workspace folders registered in the app, so it also wins inside a folder
 registered for another project. The settings pane states this where it
 offers repository links. A link only selects; live reads, once they exist,
 still require the sealed per-profile opt-in made in the app. The walk up
-from a workspace also crosses ownership boundaries: a `.berrydb.json` that
-another local user leaves in a shared ancestor such as `/private/tmp` or
-`/Users/Shared` applies to workspaces below it that have no nearer link. A
-link in the home folder applies to every folder inside it without a nearer
-link, including another project's workspace folders; the settings pane
-warns when it writes one there.
+from a workspace also passes folders other users can write to, such as
+`/private/tmp` or `/Users/Shared`. A `.berrydb.json` file another local
+user owns there is ignored, as git refuses to read the configuration of a
+repository another user owns
+([`safe.directory`](https://git-scm.com/docs/git-config#Documentation/git-config.txt-safedirectory)),
+so it selects nothing. Another user can still leave a folder or a symbolic
+link of that name there, which reads as `invalid_link_file` for workspaces
+below it with no nearer link: a denial, not a selection. A link in the home
+folder applies to every folder inside it without a nearer link, including
+another project's workspace folders; the settings pane warns when it writes
+one there.
 
 ## Per-profile access and integrity
 
