@@ -314,9 +314,11 @@ let package = Package(
             // only). BerryTunnel: connectDataSource/connectKeyValue need
             // SSHTunnel directly (BerryCore's ConnectionManager.prepareEndpoint
             // has no DataSourceDriver/KeyValueDriver equivalent to reuse).
-            // BerryMCP: MCP project settings canonicalize workspace roots with
-            // the function the berrydb-mcp helper selects projects by; it adds
-            // no module the UI did not already link.
+            // BerryMCP: MCP project settings canonicalize workspace roots and
+            // read and match repository link files with the same functions
+            // the berrydb-mcp helper selects projects by, and encode the link
+            // files they write with the same type; it adds no module the UI
+            // did not already link.
             dependencies: [
                 "BerryCore", "BerryCredentials", "BerryStore", "BerryLicense", "BerryAI", "BerryGraph",
                 "BerryDataSourceKit", "BerryKeyValueKit", "BerryTunnel", "BerryMCP",
@@ -344,7 +346,8 @@ let package = Package(
             path: "Packages/BerryMCP/Sources"
         ),
         // MCP wire layer: stdio transport, tool/resource catalog and session context.
-        // BerryMCP stays protocol-independent; only this target imports the SDK.
+        // BerryMCP stays protocol-independent; the SDK is imported only here and
+        // by the berrydb-mcp executable, which stops the server on a signal.
         .target(
             name: "BerryMCPServer",
             dependencies: [

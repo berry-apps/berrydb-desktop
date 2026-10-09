@@ -116,7 +116,17 @@ This is development evidence, not packaged-release size. The fixture linked only
 
 Cursor is outside the current authenticated acceptance scope because no Cursor account is available. Its partial evidence remains recorded above, but this PASS does not claim Cursor desktop or authenticated Cursor Agent compatibility. Cursor support requires a separate authenticated list-and-call and desktop verification gate.
 
-## G3 Privilege checks
+## Design gates
+
+Four design questions were each settled by a test before the code that
+depends on them was written, and are referred to by these labels
+elsewhere: G1, whether a separate helper can read the app's Keychain
+items; G2, how each host tells a server its workspace; G3, whether a
+database session that could write can be rejected before any query
+runs; G4, whether the existing harvester produces a usable graph for
+DynamoDB. Each section below records one of them.
+
+### G3 Privilege checks
 
 Question: can the helper reject a database session whose role could write,
 before running any agent query? Tested on 2026-09-28 against PostgreSQL
@@ -124,7 +134,7 @@ before running any agent query? Tested on 2026-09-28 against PostgreSQL
 available; its `rds_superuser` role was simulated by a plain role of that
 name, so RDS-specific role behavior remains unverified.
 
-### PostgreSQL
+#### PostgreSQL
 
 The check runs as the connected role and rejects the session when any row
 is returned: superuser; membership in `rds_superuser`; ownership of any
@@ -163,7 +173,7 @@ Read-only transaction behavior (`BEGIN READ ONLY`), observed:
   followed by a write, and `pg_advisory_lock()` (a session-level lock that
   outlives the transaction).
 
-### MySQL
+#### MySQL
 
 `SHOW GRANTS FOR CURRENT_USER()` includes privileges of active roles,
 including nested ones, but not of roles granted and not yet active. The
@@ -190,7 +200,7 @@ Read-only transaction behavior (`START TRANSACTION READ ONLY`), observed:
 blocked `INSERT` and `UPDATE` after `SET ROLE ALL`; not blocked:
 `COMMIT` followed by a write, `GET_LOCK()`, `SLEEP()`.
 
-### Conclusion
+#### Conclusion
 
 Both dialects: **rigorous** for the tested fixtures; no attestation
 fallback is needed. The layers depend on each other:
@@ -206,7 +216,7 @@ fallback is needed. The layers depend on each other:
    read-only transaction. `SECURITY DEFINER` functions are covered only
    by layer 1 and by the function allowlist.
 
-### Exact checks used
+#### Exact checks used
 
 PostgreSQL (one row per failed condition; empty result passes):
 
@@ -239,7 +249,7 @@ UNION ALL SELECT 'setrole_writer' WHERE EXISTS (SELECT 1 FROM pg_auth_members m 
 
 MySQL: after `SET ROLE ALL`, for every `SHOW GRANTS FOR CURRENT_USER()` line matching `GRANT <privileges> ON `, split `<privileges>` on commas outside parentheses, drop any column list, uppercase, and reject if any name is outside the allowlist or the line ends with `WITH GRANT OPTION`. Role-membership lines (`GRANT <role> TO`) are skipped because `SET ROLE ALL` has already folded their privileges into the output.
 
-## G4 DynamoDB harvest
+### G4 DynamoDB harvest
 
 Question: does the existing `SchemaHarvester` produce a usable schema graph
 for a DynamoDB profile? Tested on 2026-09-28 against `amazon/dynamodb-local`
@@ -271,7 +281,7 @@ DynamoDB Local keeps a separate database per access key and region unless
 started with `-sharedDb`; fixtures must be created with the same credentials
 the driver uses.
 
-## G2 Workspace discovery
+### G2 Workspace discovery
 
 Question: how does each host tell a stdio server which workspace it serves?
 Tested on 2026-09-28 by registering a transparent wrapper around the
@@ -298,7 +308,7 @@ then the working directory) is viable. The two hosts spell the same directory
 differently (`/tmp/…` versus `/private/tmp/…`), so selection must compare
 symlink-resolved paths.
 
-## G1 Keychain sharing
+### G1 Keychain sharing
 
 Question: can a separate helper executable read database secrets that the
 BerryDB app stored in Keychain, without weakening their access control?
@@ -364,16 +374,17 @@ For the linked folder the helper was launched as
 `/usr/bin/sandbox-exec -f <profile> <helper> --store-path <store>`, where
 the profile is `(allow default)` plus `deny mach-lookup` of
 `com.apple.SecurityServer`, `com.apple.securityd.xpc`, `com.apple.secd`
-and `com.apple.security.agent`. Once a project is selected the helper
-loads its integrity key from the login Keychain on every request; the
+and `com.apple.security.agent`. Once selection has chosen a project,
+enabled or not, the helper loads its integrity key from the login
+Keychain on every request; the
 sandbox kept that read from reaching the Keychain or raising an approval
 dialog, and the system log recorded the denials for every run
 (`Sandbox: berrydb-mcp(<pid>) deny(1) mach-lookup com.apple.SecurityServer`
 and `… com.apple.securityd.xpc`). With no key, or with a tag sealed by
 another key, the project still selects and reports `integrity:
 "unavailable"`, which is the expected result here. The empty-store runs
-launched the helper directly: with no project selected the helper never
-reads the Keychain.
+launched the helper directly: selection chose no project there, so the
+helper never read the Keychain.
 
 Each host was asked to note the tools of the server, call
 `berrydb_status` once with no arguments, and print the tool names and the

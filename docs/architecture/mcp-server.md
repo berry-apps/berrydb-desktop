@@ -16,8 +16,9 @@ SQL read policy parser and a byte-exact result limiter. No tool reads live
 data yet, and the helper is not packaged with the app (see
 [Implemented and planned](#implemented-and-planned)). See
 [`../mcp-server-compatibility.md`](../mcp-server-compatibility.md) for the
-protocol gate, the host checks and gates G1–G4; none of it establishes
-Cursor support.
+protocol gate, the host checks and
+[design gates G1–G4](../mcp-server-compatibility.md#design-gates); none of
+it establishes Cursor support.
 
 ## Purpose and difference from the in-app MCP client
 
@@ -94,9 +95,10 @@ With no project selected, `tools/list` returns only `berrydb_status` and
 every other tool answers that no project is selected; nothing about any
 project is revealed. A `connection_id` that does not exist and one that
 exists but is not assigned to the project produce the identical error text,
-`Unknown connection for this project`. An unknown tool or an argument that
-breaks the input schema is a JSON-RPC invalid-params error (`-32602`) whose
-message names the argument but never echoes its value. This departs from
+`Unknown connection for this project`. An unknown tool, or (while a project
+is selected) an argument that breaks the input schema, is a JSON-RPC
+invalid-params error (`-32602`) whose message names the argument but never
+echoes its value. This departs from
 the specification's suggestion to report input validation failures as tool
 results with `isError: true`
 ([Error Handling](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#error-handling));
@@ -134,26 +136,38 @@ character removes the question.
    `swift build --show-bin-path` prints; the executable
    `<that folder>/berrydb-mcp` is the `<helper>` in the commands below.
    Such a build is not signed by BerryDB's team, so it is not in the
-   access list of the integrity key's Keychain item, and the helper reads
-   that key on every request that serves a selected project. Expect a
-   Keychain dialog on those reads: gate G1 saw one when an ad-hoc signed
-   probe read an app-created item. Choose **Always Allow** for a
-   source-built helper; it adds the build to the item's access list,
-   pinned to its code hash, so the dialog returns only after a rebuild.
-   **Allow** grants that one read and **Deny** refuses it
+   access list of the integrity key's Keychain item. Once a session has
+   chosen a project, the helper reads that key on every `tools/list`,
+   `tools/call`, `resources/list` and `resources/read` request. That
+   includes requests where the project has since been disabled
+   (`project_disabled`) or deleted (`no_matching_project`), because the
+   key is read before the project row. A session whose selection chose no
+   project never reads it. Expect a Keychain dialog on those reads:
+   [gate G1](../mcp-server-compatibility.md#g1-keychain-sharing) saw one
+   when an ad-hoc signed probe read an app-created item. Choose **Always
+   Allow** for a source-built helper; it adds the build to the item's
+   access list, pinned to its code hash, so the dialog returns only after
+   a rebuild. **Allow** grants that one read and **Deny** refuses it
    ([If you're asked for access to your keychain](https://support.apple.com/guide/keychain-access/if-youre-asked-for-access-to-your-keychain-kyca1243/mac)
    calls the one-time choice "Allow Once"), so the next request asks
    again; each request waits while its dialog is open, and a refused read
    serves that request with `integrity: "unavailable"`. The helper itself
-   was not observed being prompted. A helper read that never shows a
-   dialog is planned with packaging.
+   was not observed being prompted. **Always Allow** puts that unsigned
+   build on the access list of the key that seals project settings, so
+   any process able to run that binary can read the key without a dialog.
+   Remove the entry when you are done with the source build: in Keychain
+   Access, open the item `dev.berrydb.mcp.access-key`, choose **Access
+   Control** and remove `berrydb-mcp` from the applications allowed to
+   access it. A helper read that never shows a dialog is planned with
+   packaging.
 2. **A project.** In **Settings → AI Agents**, create a project, turn on
    **Enabled**, choose its connections, and either add **Workspace
-   Folders** (every folder below one is included) or use **Link
-   Repository…**, which writes `.berrydb.json` naming the project into the
-   chosen repository. Committing that file lets every clone and worktree
-   select a project of the same name in the BerryDB of whoever opens it;
-   adding it to `.gitignore` keeps it local.
+   Folders** (every folder below one is included, unless a `.berrydb.json`
+   in or above it decides first) or use **Link Repository…**, which writes
+   `.berrydb.json` naming the project into the chosen repository.
+   Committing that file lets every clone and worktree select a project of
+   the same name in the BerryDB of whoever opens it; adding it to
+   `.gitignore` keeps it local.
 3. **Each host, once.** Run one command per host, each adding a
    user-level entry named `berrydb`. Once the helper is bundled, the pane's
    **Agent Setup** section shows these commands with the bundled path
@@ -171,9 +185,11 @@ character removes the question.
    default scope, `local`, applies to the current project only; the `--`
    keeps any later `-`-prefixed argument an argument of the helper, which
    `agy mcp add --help` (1.3.1) requires. For a saved project the pane
-   also shows "this project only" variants that append `--project <uuid>`
-   and serve that project from any folder. Both variants are named
-   `berrydb`, so a host is set up with one or the other.
+   also shows "always this project" variants that append
+   `--project <uuid>`; they are installed at the same user level and serve
+   that project from every folder, whatever its link file or workspace
+   folders would select. Both variants are named `berrydb`, so a host is
+   set up with one or the other.
 
 The helper accepts two optional arguments and rejects any other:
 `--project <uuid>` and `--store-path <absolute path>`, the latter for a
@@ -260,6 +276,15 @@ the settings pane says so.
 | `live_reads` | always `not_available` in this version |
 | `integrity` | when selected: `verified` if the project row's tag verifies under the stored key, `unavailable` if it does not or no key could be read; when unconfigured: `unavailable` for `integrity_unavailable` (the store could not be read), null for every other reason |
 
+The project row's tag covers the project's ID, its enabled flag and its
+workspace folders, and nothing else. It does not cover the project's name,
+which link files select by, and a connection's access row is checked only
+when it claims live reads: the connections a project lists, and serves
+metadata for, are taken from the stored rows whether or not their tags
+verify. `verified` therefore says that the ID, enabled flag and workspace
+folders are as the app last saved them, not that the name or the list of
+connections is.
+
 A project whose tag does not verify is still selected and served metadata:
 schema and graph metadata expose nothing a same-user process cannot read
 from the store file directly. What the tag gates is live reads.
@@ -275,10 +300,14 @@ misuse. The capabilities available once a project is selected — whether
 verified independently through row integrity (below), not through how the
 project was chosen.
 
-A link file comes from the repository, which is untrusted: a cloned
-repository can name any project on the machine, and opening it in a coding
+A link file comes from the repository, which is untrusted: any repository
+whose `.berrydb.json` names a project, including one cloned from someone
+else, selects that project on the machine, and opening it in a coding
 agent then exposes that project's schema and graph metadata to the agent
-and to its model provider. It only selects; live reads, once they exist,
+and to its model provider. The file decides its workspace before the
+workspace folders registered in the app, so it also wins inside a folder
+registered for another project. The settings pane states this where it
+offers repository links. A link only selects; live reads, once they exist,
 still require the sealed per-profile opt-in made in the app. The walk up
 from a workspace also crosses ownership boundaries: a `.berrydb.json` that
 another local user leaves in a shared ancestor such as `/private/tmp` or
@@ -381,8 +410,8 @@ Known limitation: with legacy file-keychain items, a same-user process able
 to delete or pre-create the HMAC key item could choose the key, and with it
 sign access settings BerryDB never wrote. Closing this needs a
 data-protection Keychain access group or an app-written ACL on the key item,
-which is packaging work (gate G1, see
-[`../mcp-server-compatibility.md`](../mcp-server-compatibility.md)).
+which is packaging work (see
+[gate G1](../mcp-server-compatibility.md#g1-keychain-sharing)).
 
 ## Read-only enforcement layers
 
@@ -391,8 +420,9 @@ exists today: the SQL policy parser (layer 3), and a connection coordinator
 that no tool uses, which admits only SQLite sessions, sets `PRAGMA
 query_only` on them, and rejects every other driver because its read-only
 session is not implemented. The PostgreSQL and MySQL read-only sessions and
-the least-privilege check (layers 1 and 2, whose queries gate G3 verified)
-and DynamoDB access (layer 4) are not implemented.
+the least-privilege check (layers 1 and 2, whose queries
+[gate G3](../mcp-server-compatibility.md#g3-privilege-checks) verified) and
+DynamoDB access (layer 4) are not implemented.
 
 `DangerGuard`, `QueryToolExecutor.isReadOnly`, and `dangerPreconfirmed: true`
 are never used in MCP code. Enforcement is layered; the database session and
@@ -481,7 +511,8 @@ Implemented:
 Not implemented:
 
 - Live reads: `berrydb_execute_read_query` for PostgreSQL and MySQL
-  (session read-only plus the least-privilege check, gate G3) and SQLite
+  (session read-only plus the least-privilege check,
+  [gate G3](../mcp-server-compatibility.md#g3-privilege-checks)) and SQLite
   (sessions opened with `SQLITE_OPEN_READONLY`), and `berrydb_dynamodb_query`
   (`Query` only, never `Scan`); the live-read switch and the production
   consent in the settings pane; the production-labeled limits.

@@ -15,7 +15,7 @@ private enum MCPSettingsLayout {
 }
 
 /// The "AI Agents" settings tab: the MCP projects that coding agents reach
-/// through the bundled `berrydb-mcp` helper. Opens its own store connection
+/// through the `berrydb-mcp` helper. Opens its own store connection
 /// the first time the tab appears; the store file allows several
 /// connections, the same way the AI panel keeps its own.
 public struct MCPProjectsSettingsView: View {
