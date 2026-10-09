@@ -249,17 +249,25 @@ reports `dev`.
 
 **Signing.** The helper is signed by the release pipeline's one
 `codesign --force --deep --options runtime --timestamp` step over the
-whole bundle, not separately: `--force --deep` re-signs nested code with
-the outer options and replaces any signature made before it. Signed that
-way with a non-ad-hoc identity on macOS 26.6.2, the helper carried the
-hardened runtime flag, a secure timestamp, the outer identity and the
-identifier `berrydb-mcp`, which is what its designated requirement, and
-so a Keychain **Always Allow** entry, is tied to. An ad-hoc signature,
-as development builds get, appends a per-build suffix to that
-identifier. `deploy/release.sh` then fails the release unless the
-helper's signature has the hardened runtime flag, a timestamp and the
-team ID. Signing with the Developer ID identity and notarizing a bundle
-that contains the helper have not been verified yet.
+whole bundle, not separately: `man codesign` (macOS 26.6) lists
+`Contents/Helpers` among the places `--deep` signs and says every
+signing option, the (empty) entitlements included, applies to nested
+code, and `--force --deep` replaces any signature made before it. That
+command was run on a copy of the bundle with a throwaway self-signed
+code-signing certificate, the only non-ad-hoc identity used: the helper
+carried the hardened runtime flag, a secure timestamp, that certificate
+as authority and the identifier `berrydb-mcp`, which is what its
+designated requirement, and so a Keychain **Always Allow** entry, is
+tied to. An ad-hoc signature, as development builds get, appends a
+per-build suffix to that identifier. That a Developer ID signature keeps
+the same identifier, and with the team the same designated requirement,
+from one release to the next is inferred from that experiment, not
+observed. `deploy/release.sh` then fails the release unless the helper's
+signature has the hardened runtime flag, a timestamp and the team ID. A
+self-signed certificate has no team, so that last check has not yet run
+against a signature that should pass. Signing with the Developer ID
+identity and notarizing a bundle that contains the helper have not been
+verified yet.
 
 **Guard.** `scripts/check-size.sh` fails a bundle whose helper is
 missing, links anything but system libraries, the Swift runtime and

@@ -352,11 +352,15 @@ evaluated.
 
 The app now bundles the helper at `Contents/Helpers/berrydb-mcp` without
 that ACL change. The deep sign of the bundle gives it the identifier
-`berrydb-mcp` rather than the probe's `dev.berrydb.mcp`; with a
-non-ad-hoc identity no per-build suffix is added, so its designated
-requirement stays the same across releases (observed with codesign on
-macOS 26.6.2, see
+`berrydb-mcp` rather than the probe's `dev.berrydb.mcp`. Signed by the
+release command with a throwaway self-signed code-signing certificate on
+macOS 26.6.2, the helper got exactly that identifier; only an ad-hoc
+signature appended a per-build suffix (see
 [Packaging and signing](architecture/mcp-server.md#packaging-and-signing)).
+That a Developer ID signature keeps the identifier, and so the designated
+requirement, the same from one release to the next is inferred from that
+experiment, not observed; a self-signed certificate also has no team, so
+the team part of the requirement was not exercised.
 By the result above, the bundled helper's first read of the one item the
 metadata tools need, the integrity key `dev.berrydb.mcp.access-key`,
 prompts once, and **Always Allow** ends the prompts. The app rotates that
@@ -456,8 +460,7 @@ linked folder while the process ran in the temporary root, selection was
   its configured `always-proceed` permission mode) called the tool without
   an approval step.
 - **Setup commands.** The `--help` of the same versions matches the
-  commands the AI Agents settings pane shows once the helper is bundled
-  (until then it shows none):
+  commands the AI Agents settings pane shows for the bundled helper:
   `codex mcp add <NAME> -- <COMMAND>...`;
   `claude mcp add [options] <name> <commandOrUrl> [args...]` with
   `--scope` defaulting to `local` (the current project only), hence
