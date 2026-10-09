@@ -20,6 +20,8 @@ if [ -n "${SKIP_BUILD:-}" ]; then
 else
     echo "==> Building release + packaging"
     swift build -c "$CONFIG" --product BerryApp
+    # make_app.sh requires the helper; --product above builds only the app.
+    swift build -c "$CONFIG" --product berrydb-mcp
     sh scripts/make_app.sh "$CONFIG"
 fi
 

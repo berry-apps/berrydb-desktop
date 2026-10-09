@@ -1,5 +1,6 @@
 #!/bin/sh
-# Package dist/BerryDB.app from the SwiftPM binary.
+# Package dist/BerryDB.app from the SwiftPM binaries: the app and the
+# berrydb-mcp helper.
 # Version/build and the Sparkle feed come from the environment so the release
 # pipeline (deploy/release.sh) can stamp them; signing + notarization happen in
 # deploy/release.sh.
@@ -7,7 +8,13 @@ set -eu
 
 CONFIG="${1:-release}"
 BIN=".build/${CONFIG}/BerryApp"
+# The stdio MCP server coding agents launch. The settings pane offers agent
+# setup only when it finds this executable at Contents/Helpers/berrydb-mcp, so
+# a bundle without it ships a pane that cannot connect any agent; it is
+# required for every configuration.
+HELPER_BIN=".build/${CONFIG}/berrydb-mcp"
 APP="dist/BerryDB.app"
+HELPER="$APP/Contents/Helpers/berrydb-mcp"
 
 # Release identity — overridable from .env / the environment.
 VERSION="${BERRYDB_VERSION:-0.1.0}"
@@ -18,10 +25,17 @@ SU_FEED_URL="${SU_FEED_URL:-https://download-db.berryhub.app/appcast.xml}"
 SU_PUBLIC_ED_KEY="${SU_PUBLIC_ED_KEY:-}"
 
 [ -x "$BIN" ] || { echo "Not built yet: run 'swift build -c ${CONFIG}' first" >&2; exit 1; }
+# Checked before the old bundle is removed, so a build that skipped the
+# helper (`swift build --product BerryApp`) fails without deleting anything.
+[ -x "$HELPER_BIN" ] || {
+    echo "berrydb-mcp not built yet: run 'swift build -c ${CONFIG}' without --product, or add 'swift build -c ${CONFIG} --product berrydb-mcp'" >&2
+    exit 1
+}
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$BIN" "$APP/Contents/MacOS/BerryDB"
+cp "$HELPER_BIN" "$HELPER"
 
 BIN_DIR="$(dirname "$BIN")"
 
@@ -102,17 +116,28 @@ embed_nonsystem_dep() {
     done
 }
 
+# Embeds every Homebrew dylib the executable $1 links and repoints $1's own
+# references at @rpath. The helper links the same drivers as the main binary,
+# so its pass usually finds every dylib already embedded and only rewrites
+# its references; any dylib only the helper links is embedded here too.
+embed_deps_of() {
+    local bin="$1"
+    local dep deps
+    deps="$(otool -L "$bin" | tail -n +2 | awk '{print $1}')"
+    for dep in $deps; do
+        case "$dep" in
+            /opt/homebrew/*|/usr/local/*)
+                embed_nonsystem_dep "$dep"
+                quiet_install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$bin"
+                ;;
+        esac
+    done
+}
+
 EMBEDDED_FREETDS=0
 EMBEDDED_OPENSSL=0
-top_level_deps="$(otool -L "$APP/Contents/MacOS/BerryDB" | tail -n +2 | awk '{print $1}')"
-for dep in $top_level_deps; do
-    case "$dep" in
-        /opt/homebrew/*|/usr/local/*)
-            embed_nonsystem_dep "$dep"
-            quiet_install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$APP/Contents/MacOS/BerryDB"
-            ;;
-    esac
-done
+embed_deps_of "$APP/Contents/MacOS/BerryDB"
+embed_deps_of "$HELPER"
 
 # LGPL/attribution NOTICE for whatever got embedded above — only when it
 # actually applies to this build (a version without FreeTDS linked ships
@@ -289,6 +314,15 @@ PLIST
 
 # Ensure @loader_path/../Frameworks is in the executable's LC_RPATH so dyld locates embedded frameworks
 quiet_install_name_tool -add_rpath "@loader_path/../Frameworks" "$APP/Contents/MacOS/BerryDB" 2>/dev/null || true
+
+# The helper's @rpath references must resolve to Contents/Frameworks as well.
+# Unlike the line above, a failure here stops packaging: the helper's own
+# rpaths (/usr/lib/swift, @loader_path, the toolchain's) find no libsybdb, so
+# without this one it does not start. Added only when missing, because
+# install_name_tool refuses a duplicate rpath.
+if ! otool -l "$HELPER" | grep -qF 'path @executable_path/../Frameworks '; then
+    quiet_install_name_tool -add_rpath "@executable_path/../Frameworks" "$HELPER"
+fi
 
 # Re-sign the app bundle ad-hoc so code signature remains valid for local dev
 codesign --force --deep -s - "$APP" 2>/dev/null || true
