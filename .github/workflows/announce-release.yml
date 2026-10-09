@@ -12,11 +12,13 @@ name: Announce Release
 #    would never fire. workflow_run is triggered by the Release run completing:
 #    https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow
 #  - release.yml serialises its runs with `concurrency: berrydb-release`. A job
-#    there that waits for an approval keeps its run unfinished, and GitHub keeps
-#    one running run per concurrency group and holds the others pending
-#    (https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
-#    Here the approval wait belongs to this workflow's own run, so the next
-#    release is never queued behind it.
+#    there that waits for an approval keeps its run unfinished. GitHub allows at
+#    most one running run per concurrency group; a run queued behind it is
+#    pending, and by default a newly queued run replaces (cancels) the run
+#    already pending (https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+#    So an unanswered approval could stall the next release, and a third release
+#    would cancel the second. Here the approval wait belongs to this workflow's
+#    own run.
 #  - A failed announcement fails this run only. The Release run, and the
 #    release it published, stay green.
 #
@@ -44,8 +46,11 @@ on:
         default: "telegram,facebook"
         type: string
 
-# One announcement at a time per tag, and never cancel one that is waiting for
-# approval. Its own group: release.yml's `berrydb-release` must stay free.
+# Its own group, never release.yml's `berrydb-release`, and one per tag so that
+# announcements of different tags do not wait on, or cancel, each other.
+# `cancel-in-progress: false` keeps a run that is waiting for approval alive when
+# another run for the same tag is queued; the queued run is then the one pending
+# run of the group, and a third would replace it.
 concurrency:
   group: berrydb-release-announcement-${{ github.event.workflow_run.head_branch || inputs.tag }}
   cancel-in-progress: false
@@ -53,19 +58,30 @@ concurrency:
 jobs:
   preview:
     name: "Render the announcement"
-    # On workflow_run, announce only a Release run that succeeded and was started
-    # by a tag push. gh run list --workflow release.yml on berry-apps/berrydb-desktop
-    # (checked 2026-10-09) shows tag-pushed runs as event=push headBranch=v1.0.8
-    # (likewise v1.0.7 and v1.0.4) and a manually dispatched run as
-    # event=workflow_dispatch headBranch=main, so head_branch is the tag. A
-    # dispatched release, a dry run included, is not announced automatically: run
-    # this workflow by hand for a dispatched real release. The post job needs this
-    # one, so it is skipped whenever this one is.
+    # On workflow_run, announce only a Release run that:
+    #  - succeeded;
+    #  - was started by a tag push (event 'push'), whose head_branch is then the
+    #    tag, and that tag starts with v;
+    #  - ran the file .github/workflows/release.yml. `workflows: ["Release"]`
+    #    matches by workflow name, not by file, so any other workflow named
+    #    Release would also trigger this one.
+    # gh run list --workflow release.yml on berry-apps/berrydb-desktop and
+    # gh api repos/berry-apps/berrydb-desktop/actions/runs/<id> (checked
+    # 2026-10-09) show tag-pushed runs as event=push head_branch=v1.0.8 (likewise
+    # v1.0.7, v1.0.4), a manually dispatched run as event=workflow_dispatch
+    # head_branch=main, and all of them with path .github/workflows/release.yml.
+    # That is the REST run object; the field has not yet been seen in a live
+    # workflow_run event payload. If the payload lacked `path` this condition
+    # would be false and nothing would be announced automatically.
+    # A dispatched release, a dry run included, is not announced automatically:
+    # run this workflow by hand for a dispatched real release. The post job needs
+    # this one, so it is skipped whenever this one is.
     if: >-
       github.repository == 'berry-apps/berrydb-desktop'
       && (github.event_name == 'workflow_dispatch'
       || (github.event.workflow_run.conclusion == 'success'
       && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.path == '.github/workflows/release.yml'
       && startsWith(github.event.workflow_run.head_branch, 'v')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -102,10 +118,19 @@ jobs:
     if: github.repository == 'berry-apps/berrydb-desktop'
     # The approval gate. The release-announcement environment holds the required
     # reviewers and the four channel secrets, so this job does not start, and
-    # the secrets are not released to it, until a reviewer approves. The reviewer
-    # reads the preview job's summary first. A workflow_run job runs on the
-    # default branch, so a deployment-branch rule limiting the environment to it
-    # applies.
+    # the environment's secrets are not released to it, until a reviewer
+    # approves. The reviewer reads the preview job's summary first.
+    #
+    # The environment has to be set up before this workflow is merged, in the
+    # order given in deploy/README.md (Release Announcements). GitHub creates a
+    # referenced environment that does not exist, with no protection rules and
+    # no secrets, and anyone who can edit workflows can cause that:
+    # https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments
+    # Its deployment branches and tags must be limited to `main`. This file is
+    # editable on any branch, and a branch's copy that keeps `environment:` would
+    # otherwise receive the secrets once a reviewer approved that run. A run of
+    # this workflow from another branch still renders the preview, and this job
+    # is then refused by that rule.
     environment: release-announcement
     runs-on: ubuntu-latest
     timeout-minutes: 5
