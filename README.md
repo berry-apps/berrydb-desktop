@@ -4,7 +4,7 @@
 
 # BerryDB 🫐
 
-### The Ultra-Fast, Native Database Client Built Exclusively for macOS Speed
+### A Native Database Client Built for macOS
 
 [![GitHub Stars](https://img.shields.io/github/stars/berry-apps/berrydb-desktop?style=for-the-badge&logo=github&color=gold)](https://github.com/berry-apps/berrydb-desktop/stargazers)
 [![Homebrew](https://img.shields.io/badge/brew-berry--apps%2Ftap%2Fberrydb-orange?style=for-the-badge&logo=homebrew)](https://github.com/berry-apps/homebrew-tap)
@@ -15,7 +15,7 @@
 [![Donate via Ko-fi](https://img.shields.io/badge/Donate-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/dautay)
 
 <p align="center">
-  <b>Cold start under 1s</b> • <b>1M rows streamed for ~6MB</b> • <b>AI SQL Copilot</b> • <b>Apple Keychain Security</b>
+  <b>Swift 6 + AppKit</b> • <b>9 database engines</b> • <b>AI SQL assistant</b> • <b>Apache 2.0</b>
 </p>
 
 <p align="center">
@@ -35,7 +35,7 @@
 
 ## 📖 Overview
 
-**BerryDB** is an ultra-fast, lightweight, and modern database management tool crafted specifically for macOS developers, data engineers, and DBAs. Built 100% natively using **Swift 6, SwiftUI, and AppKit**, BerryDB completely eliminates the bloat, sluggishness, and high memory footprint of Electron-based clients.
+**BerryDB** is a native database client for macOS developers, data engineers, and DBAs. It is built with **Swift 6, AppKit, and SwiftUI**, with no Electron: the data grid is an AppKit `NSTableView`.
 
 Whether you're querying production PostgreSQL databases, inspecting Redis caches, managing MongoDB collections, exploring Qdrant vector spaces, or querying SQLite files locally, BerryDB keeps the grid responsive and every credential in the macOS Keychain.
 
@@ -43,65 +43,68 @@ Whether you're querying production PostgreSQL databases, inspecting Redis caches
 
 ## ✨ Key Features
 
-### ⚡ Pure Native Speed (Zero Electron Bloat)
+### ⚡ Native, No Electron
 - **Fast Launch**: A window is on screen about 0.85s after a cold start — no Chromium runtime, no NodeJS backend overhead.
-- **Memory That Does Not Grow With Your Data**: streaming 1,000,000 rows costs about 5.5MB of peak memory — the same as 200,000 rows.
-- **AppKit Virtualized Data Grid**: A native `NSTableView` engine that scrolls and streams **1,000,000+ rows** without holding them all in memory.
+- **Streaming Data Grid**: A view-based AppKit `NSTableView`. Rows arrive in batches while the query is still running, and only the rows on screen get cell views.
+- **Bounded by Default**: Results are capped at 1,000 rows; raise the limit or turn it off when you need more. Every row you load is kept in memory.
 
-> Measured on an Apple M1 (16GB, macOS 26.6.2) with a release build. Run `scripts/measure-performance.sh` to reproduce them on your own machine — it reports process spawn and first window separately, because they are not the same number.
+> Launch time measured on an Apple M1 (16GB, macOS 26.6.2) with a release build. Run `scripts/measure-performance.sh` to reproduce it on your own machine — it reports process spawn and first window separately, because they are not the same number.
 
 ### 🗄️ Multi-Engine Database Support
 Connect to SQL, NoSQL, Key-Value, and Vector databases all in a unified native workspace:
 - **Relational / SQL**:
   - **PostgreSQL**: Native wire protocol (`PostgresNIO`), query cancellation via `pg_cancel_backend`, SSL/TLS.
-  - **MySQL & MariaDB**: Native driver (`MySQLNIO`), full support for `caching_sha2_password` and `mysql_native_password`, SSL/TLS, `KILL QUERY`.
-  - **SQLite**: Direct embedded driver via `libsqlite3`, WAL mode support, instant file inspection.
-  - **Microsoft SQL Server**: High-compatibility TDS protocol bridge via dynamically linked FreeTDS (`libsybdb`).
+  - **MySQL & MariaDB**: Native driver (`MySQLNIO`), `caching_sha2_password` (with TLS on) and `mysql_native_password`, SSL/TLS, `KILL QUERY`.
+  - **SQLite**: Direct embedded driver via `libsqlite3`, opens WAL-mode databases.
+  - **Microsoft SQL Server**: TDS protocol via dynamically linked FreeTDS (`libsybdb`).
 - **In-Memory & Key-Value**:
-  - **Redis & Valkey**: High-speed Valkey-Swift driver, key browser, real-time TTL inspection, and interactive viewers for Strings, Hashes, Lists, Sets, and Sorted Sets.
+  - **Redis & Valkey**: Valkey-Swift driver, key browser, TTL inspection, and viewers for Strings, Hashes, Lists, Sets, Sorted Sets, and Streams.
 - **Document & Cloud NoSQL**:
   - **MongoDB**: Collection browser, JSON document editor, custom filter syntax, and Replica Set support.
   - **AWS DynamoDB**: Query via PartiQL syntax, item inspection, and AWS SigV4 authentication.
 - **Vector & Full-Text Search**:
-  - **Elasticsearch**: Cluster health monitoring, indices browser, and search query execution.
+  - **Elasticsearch**: Index browser, search query execution, and JSON document insert/edit/delete.
   - **Qdrant**: Vector collections browser and distance metric inspector.
 
 ### 🔒 Keychain & Connection Security
-- **Keychain-only secrets**: All passwords, tokens, and SSH keys are stored in the macOS Keychain. No plaintext credentials on disk.
+- **Keychain secrets**: Passwords, API keys, SSH passwords, and SSH key passphrases are stored in the macOS Keychain. SSH private keys stay in their own files; BerryDB stores only the path.
 - **Built-in SSH Tunneling**: Powered by Citadel (pure Swift SSH client) for secure bastion jump hosts without relying on external terminal sessions.
-- **TLS/SSL Encryption**: Full encryption support with custom CA, client certificate, and verification options.
+- **TLS/SSL Encryption**: Verify modes, a custom CA, and client certificates for PostgreSQL and MySQL; TLS on/off with system trust for MongoDB, Redis, Elasticsearch, Qdrant, and DynamoDB.
 
 ### 🤖 Intelligent AI SQL Copilot
-- **Context-Aware SQL Generation**: Turn natural language into optimized SQL queries with automatic database schema injection.
-- **Query Explanation & Tuning**: Instant `EXPLAIN` analysis, bottleneck detection, and index recommendations.
+- **Context-Aware SQL Generation**: Turn natural language into SQL; the assistant reads your schema through tools.
+- **Query Explanation & Tuning**: `EXPLAIN` analysis, bottleneck detection, and index recommendations.
 - **Chat with Your Database**: Ask questions about your schema, tables, and relationships directly inside the integrated AI panel.
-- **Where the AI runs**: On a Mac with Apple Intelligence, the assistant can run fully on-device with no network call. Otherwise it uses BerryDB's AI service (free trial, then a paid plan): your questions, the database type, and your schema (table and column names) are sent to that service. Row data is never sent unless you turn on sample rows, and any SQL the assistant proposes runs only after you approve it.
+- **Where the AI runs**: In cloud mode (free trial, then a paid plan), your questions, the database type, your schema (table and column names), and the results of queries the assistant runs (up to 100 rows each) are sent to BerryDB's AI service; table sample rows are shared only if you turn that on. On macOS 26 with Apple Intelligence you can switch to Apple's on-device model for free; the conversation text is still sent to BerryDB's service to index your chat history for search.
+- **What runs without asking**: Read-only queries the assistant writes run automatically unless you turn off *Auto-run safe SELECTs*; anything that changes data needs your approval. AI is off by default on connections marked as production.
 
 ### 📊 Database Intelligence & ER Diagrams
-- **Mermaid.js ER Diagrams**: Automatically generate interactive visual Entity-Relationship diagrams from your database schema.
-- **Table Analytics & Health**: Real-time table sizing, index usage statistics, and row count estimations.
-- **Persistent Query History**: Searchable query log with execution duration, row counts, and one-click re-run.
+- **Mermaid Diagrams**: The AI assistant can draw Mermaid diagrams, such as an ER diagram of your schema, and open them in a tab.
+- **Table Analytics & Health**: On-demand table sizing, index usage statistics, and row count estimations.
+- **Persistent Query History**: Searchable query log with execution duration, row counts, and one click to open a statement in a new SQL tab.
 
 ### ✏️ Pro Query Editor & Inline Data Editing
-- **Atomic Inline Editing**: Edit table cells directly in the grid with staged diff reviews and atomic commits.
-- **Code Editor**: SQL syntax highlighting, keyword autocomplete, line numbering, and multiple tab sessions.
-- **Query Cancellation**: Safely cancel long-running queries without hanging or crashing your application.
+- **Atomic Inline Editing**: Edit cells directly in the grid (the result needs a primary key); staged edits are written in one transaction when you apply them.
+- **Code Editor**: SQL syntax highlighting, completion for keywords, tables, columns, and aliases, and multiple editor tabs.
+- **Query Cancellation**: Cancel long-running queries (PostgreSQL, MySQL, SQLite).
 
 ---
 
 ## 📊 Database Compatibility Matrix
 
-| Database Engine | Driver / Protocol | Direct Connection | SSH Tunnel | Inline Grid Edit | Schema / ERD |
+| Database Engine | Driver / Protocol | Direct Connection | SSH Tunnel | Inline Grid Edit | Schema Browser |
 | :--- | :--- | :---: | :---: | :---: | :---: |
-| **PostgreSQL** (12–16+) | Pure Swift (`PostgresNIO`) | ✅ | ✅ | ✅ | ✅ |
-| **MySQL / MariaDB** (5.7, 8.x) | Pure Swift (`MySQLNIO`) | ✅ | ✅ | ✅ | ✅ |
+| **PostgreSQL** | Pure Swift (`PostgresNIO`) | ✅ | ✅ | ✅ | ✅ |
+| **MySQL / MariaDB** | Pure Swift (`MySQLNIO`) | ✅ | ✅ | ✅ | ✅ |
 | **SQLite** (3.x) | Embedded (`libsqlite3`) | ✅ | N/A | ✅ | ✅ |
-| **Microsoft SQL Server** (2017+) | FreeTDS (`libsybdb`) | ✅ | ✅ | ✅ | ✅ |
-| **Redis / Valkey** (6.x–8.x) | Pure Swift (`valkey-swift`) | ✅ | ✅ | ✅ (KV Editor) | ✅ (Keyspace) |
-| **MongoDB** (5.x–7.x) | Pure Swift (`MongoWireClient`) | ✅ | ✅ | ✅ (JSON Edit) | ✅ (Collections) |
-| **AWS DynamoDB** | AWS REST + SigV4 | ✅ | ✅ | ✅ | ✅ (Tables) |
-| **Elasticsearch** (7.x–8.x) | REST Client | ✅ | ✅ | 👁️ (Read/Search) | ✅ (Indices) |
-| **Qdrant** | REST Client | ✅ | ✅ | 👁️ (Read/Search) | ✅ (Collections) |
+| **Microsoft SQL Server** | FreeTDS (`libsybdb`) | ✅ | ✅ | ✅ | ✅ |
+| **Redis / Valkey** | Pure Swift (`valkey-swift`) | ✅ | ✅ | ✅ (KV Editor) | ✅ (Keyspace) |
+| **MongoDB** | Pure Swift (`MongoWireClient`) | ✅ | ✅ | ✅ (JSON Edit) | ✅ (Collections) |
+| **AWS DynamoDB** | AWS REST + SigV4 | ✅ | Self-hosted endpoint only | ✅ | ✅ (Tables) |
+| **Elasticsearch** | REST Client | ✅ | ✅ | ✅ (JSON Edit) | ✅ (Indices) |
+| **Qdrant** | REST Client | ✅ | ✅ | ✅ (JSON Edit) | ✅ (Collections) |
+
+Integration tests target PostgreSQL 16, MySQL 8.4, SQL Server 2022, MongoDB 7, Elasticsearch 9.5, Qdrant 1.10, and dynamodb-local 3.3 (see `Tests/docker/compose.yml`). Other versions may work but are not tested.
 
 ---
 
@@ -165,7 +168,7 @@ make run
 ## 🎯 User Guide
 
 ### 1. Adding a Database Connection
-1. Click **New Connection** (⌘N) or select the `+` button in the sidebar.
+1. Click **New Connection** (⇧⌘N) or select the `+` button in the sidebar.
 2. Choose your database type (PostgreSQL, MySQL, SQLite, Redis, MongoDB, SQL Server, etc.).
 3. Enter your connection credentials (Host, Port, User, Password, Database).
    - *Optional*: Toggle **SSH Tunnel** to route traffic through a jump server.
@@ -173,19 +176,19 @@ make run
 4. Click **Test Connection** to verify connectivity, then click **Save**. Passwords are encrypted securely in your macOS Keychain.
 
 ### 2. Navigating Schema & ER Diagrams
-- Use the sidebar schema tree to browse tables, views, columns, keys, and indexes.
-- Right-click any table and select **Show ER Diagram** to inspect foreign key relationships rendered via Mermaid.js.
+- Use the sidebar schema tree to browse tables, views, functions, procedures, and triggers; **Edit Table…** and **Show DDL** show columns, keys, and indexes.
+- Right-click a table for **Open Data**, **Edit Table…**, **Show DDL**, or **Quick Info…**.
 
 ### 3. Writing Queries & Using the AI Copilot
 - Press **⌘T** to open a new query editor tab.
 - Type SQL queries with keyword completion, then press **⌘Return** to execute.
 - Open the **AI Assistant** panel (or press **⌘J**):
   - Type a natural language prompt, e.g. *"Show top 10 customers by revenue this month"* or *"Find slow queries and suggest index optimization"*.
-  - Review generated SQL and click **Run** or **Insert to Editor**.
+  - The assistant writes proposed SQL into the active editor tab. Before running a statement itself, it asks you to **Run** or **Deny**; read-only queries run automatically unless you turn off *Auto-run safe SELECTs*.
 
 ### 4. Editing Data Directly in the Grid
-- Double-click any cell in the `NSTableView` data grid to edit values inline.
-- Edited rows are highlighted in amber. Click **Apply Changes** to commit them atomically or **Discard** to revert.
+- Double-click a cell in the data grid to edit it inline (the result needs a primary key).
+- Edited values show in orange and deleted rows are dimmed. Use the **Apply** (✓) or **Discard** button in the status bar to commit them in one transaction or revert.
 
 ---
 
