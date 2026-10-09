@@ -130,30 +130,44 @@ def markdown_to_text(markdown: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-# The two lines GitHub's generated release notes add to every entry. Observed in
-# this repository's releases v1.0.3, v1.0.4, v1.0.7 and v1.0.8; GitHub documents
-# only that generated notes list merged pull requests, contributors and a link
-# to the full changelog:
+# The lines GitHub's note generator adds. Observed in this repository's releases
+# v1.0.3, v1.0.4, v1.0.7 and v1.0.8; GitHub documents only that generated notes
+# list merged pull requests, contributors and a link to the full changelog:
 # https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes
 #   * <pull request title> by @<author> in https://github.com/<owner>/<repo>/pull/<n>
+#   * @<author> made their first contribution in https://github.com/<owner>/<repo>/pull/<n>
 #   **Full Changelog**: https://github.com/<owner>/<repo>/compare/<tag>...<tag>
-# Both patterns are anchored to the whole line and to those exact shapes, so a
-# hand-written sentence that merely mentions "by @someone" is left alone.
-_GENERATED_ATTRIBUTION = re.compile(
-    r"^(\s*[*+-]\s+.+?)\s+by @[\w-]+(?:\[bot\])? in https://github\.com/[\w.-]+/[\w.-]+/pull/\d+\s*$"
-)
-_GENERATED_CHANGELOG = re.compile(r"^\*\*Full Changelog\*\*: https://github\.com/[\w.-]+/[\w.-]+/compare/\S+\s*$")
+# plus the "## New Contributors" heading over the second kind. Each pattern is
+# anchored to the whole line and to this repository's own URLs, so a hand-written
+# sentence that merely mentions "by @someone", or a link to another repository's
+# pull request, is left alone.
+_NEW_CONTRIBUTORS_HEADING = re.compile(r"^## New Contributors\s*$")
 
 
-def strip_generated_boilerplate(markdown: str) -> str:
-    """Release notes without the attribution suffix and the changelog line that
-    GitHub's note generator adds, which read as repository bookkeeping in an
-    announcement. The bullet's title is kept."""
-    kept = []
+def strip_generated_boilerplate(markdown: str, repo: str) -> str:
+    """Release notes without GitHub's generated bookkeeping, which reads badly in
+    an announcement: the attribution suffix of each entry (its title is kept),
+    the first-contribution bullets, the "New Contributors" heading once nothing
+    is left under it, and the changelog line."""
+    slug = re.escape(repo)
+    attribution = re.compile(rf"^(\s*[*+-]\s+.+?)\s+by @[\w-]+(?:\[bot\])? in https://github\.com/{slug}/pull/\d+\s*$")
+    contribution = re.compile(rf"^\s*[*+-]\s+@[\w-]+(?:\[bot\])? made their first contribution in https://github\.com/{slug}/pull/\d+\s*$")
+    changelog = re.compile(rf"^\*\*Full Changelog\*\*: https://github\.com/{slug}/compare/\S+\s*$")
     # A body edited in the web UI comes back with CRLF line ends.
-    for line in markdown.replace("\r\n", "\n").split("\n"):
-        if not _GENERATED_CHANGELOG.match(line):
-            kept.append(_GENERATED_ATTRIBUTION.sub(r"\1", line))
+    lines = [
+        attribution.sub(r"\1", line)
+        for line in markdown.replace("\r\n", "\n").split("\n")
+        if not (changelog.match(line) or contribution.match(line))
+    ]
+    kept, i = [], 0
+    while i < len(lines):
+        if _NEW_CONTRIBUTORS_HEADING.match(lines[i]):
+            end = next((j for j in range(i + 1, len(lines)) if lines[j].startswith("#")), len(lines))
+            if not any(line.strip() for line in lines[i + 1 : end]):
+                i = end
+                continue
+        kept.append(lines[i])
+        i += 1
     return "\n".join(kept)
 
 
@@ -337,7 +351,7 @@ def fetch_release(repo: str, tag: str, token: str, opener: Opener) -> Release:
         raise RequestError("the release has no html_url")
     return Release(
         name=data.get("name") or data.get("tag_name") or tag,
-        body=markdown_to_text(strip_generated_boilerplate(data.get("body") or "")),
+        body=markdown_to_text(strip_generated_boilerplate(data.get("body") or "", repo)),
         url=url,
     )
 

@@ -202,24 +202,30 @@ class MarkdownToTextTests(unittest.TestCase):
         self.assertEqual(announce.markdown_to_text(""), "")
 
 
+def strip(markdown, repo=REPO):
+    return announce.strip_generated_boilerplate(markdown, repo)
+
+
 class GeneratedBoilerplateTests(unittest.TestCase):
-    PR = "https://github.com/berry-apps/berrydb-desktop/pull/23"
+    PR = f"https://github.com/{REPO}/pull/23"
+    OTHER_PR = "https://github.com/someone/else/pull/5"
+    CONTRIBUTOR = f"* @alice made their first contribution in https://github.com/{REPO}/pull/5"
 
     def test_a_generated_bullet_loses_its_attribution_suffix_and_keeps_its_title(self):
         md = f"* feat: add a tree view by @quangtaned in {self.PR}"
-        self.assertEqual(announce.strip_generated_boilerplate(md), "* feat: add a tree view")
+        self.assertEqual(strip(md), "* feat: add a tree view")
 
     def test_a_bot_author_is_stripped_too(self):
         md = f"* Bump swift-nio from 2.1 to 2.2 by @dependabot[bot] in {self.PR}"
-        self.assertEqual(announce.strip_generated_boilerplate(md), "* Bump swift-nio from 2.1 to 2.2")
+        self.assertEqual(strip(md), "* Bump swift-nio from 2.1 to 2.2")
 
     def test_only_the_trailing_attribution_goes_when_the_title_has_one_too(self):
         md = f"* Fix lookup by @alias in tables by @bob in {self.PR}"
-        self.assertEqual(announce.strip_generated_boilerplate(md), "* Fix lookup by @alias in tables")
+        self.assertEqual(strip(md), "* Fix lookup by @alias in tables")
 
     def test_the_full_changelog_line_is_dropped(self):
         md = "* a\n\n**Full Changelog**: https://github.com/berry-apps/berrydb-desktop/compare/v1.0.7...v1.0.8"
-        self.assertEqual(announce.strip_generated_boilerplate(md).strip(), "* a")
+        self.assertEqual(strip(md).strip(), "* a")
 
     def test_hand_written_by_at_someone_text_is_kept(self):
         for line in (
@@ -229,11 +235,11 @@ class GeneratedBoilerplateTests(unittest.TestCase):
             "Thanks to everyone, especially work by @alice.",
             "by @alice in https://example.com/pull/9",
         ):
-            self.assertEqual(announce.strip_generated_boilerplate(line), line)
+            self.assertEqual(strip(line), line)
 
     def test_a_line_that_is_not_a_bullet_is_kept_even_if_it_ends_like_one(self):
         line = f"Merged by @alice in {self.PR}"
-        self.assertEqual(announce.strip_generated_boilerplate(line), line)
+        self.assertEqual(strip(line), line)
 
     def test_a_hand_written_changelog_mention_is_kept(self):
         for line in (
@@ -241,23 +247,58 @@ class GeneratedBoilerplateTests(unittest.TestCase):
             "Full Changelog: https://github.com/berry-apps/berrydb-desktop/compare/v1.0.7...v1.0.8",
             "See the **Full Changelog**: https://example.com/changes",
         ):
-            self.assertEqual(announce.strip_generated_boilerplate(line), line)
+            self.assertEqual(strip(line), line)
 
-    def test_the_new_contributors_line_is_left_alone(self):
-        line = f"* @alice made their first contribution in {self.PR}"
-        self.assertEqual(announce.strip_generated_boilerplate(line), line)
+    def test_attribution_and_changelog_of_another_repository_are_kept(self):
+        # A hand-written bullet can end the same way for a pull request that is
+        # not this repository's; only this repository's own generated shape goes.
+        for line in (
+            f"* Fixed by @alice in {self.OTHER_PR}",
+            "**Full Changelog**: https://github.com/someone/else/compare/v1...v2",
+            f"* @alice made their first contribution in {self.OTHER_PR}",
+        ):
+            self.assertEqual(strip(line), line)
+
+    def test_the_repository_name_is_matched_literally_not_as_a_pattern(self):
+        line = "* Fixed by @alice in https://github.com/aXb/c/pull/5"
+        self.assertEqual(strip(line, "a.b/c"), line)
+        self.assertEqual(strip("* Fixed by @alice in https://github.com/a.b/c/pull/5", "a.b/c"), "* Fixed")
+
+    def test_a_generated_new_contributors_section_goes_with_its_heading(self):
+        md = f"## What's Changed\n* a by @x in {self.PR}\n\n## New Contributors\n{self.CONTRIBUTOR}\n* @bob made their first contribution in {self.PR}\n\n**Full Changelog**: https://github.com/{REPO}/compare/v1...v2"
+        self.assertEqual(announce.markdown_to_text(strip(md)), "What's Changed\n• a")
+
+    def test_a_section_that_is_not_last_loses_only_its_own_lines(self):
+        md = f"## New Contributors\n{self.CONTRIBUTOR}\n\n## Upgrade notes\nRun the migration first."
+        self.assertEqual(announce.markdown_to_text(strip(md)), "Upgrade notes\nRun the migration first.")
+
+    def test_a_hand_written_new_contributors_section_stays(self):
+        md = "## New Contributors\nWelcome to everyone who joined this month!"
+        self.assertEqual(strip(md), md)
+
+    def test_a_hand_written_section_keeps_its_own_lines_when_a_generated_one_is_removed(self):
+        md = f"## New Contributors\n{self.CONTRIBUTOR}\nThanks to all of you."
+        self.assertEqual(strip(md), "## New Contributors\nThanks to all of you.")
+
+    def test_a_section_with_another_repositorys_contributor_keeps_its_heading(self):
+        md = f"## New Contributors\n* @alice made their first contribution in {self.OTHER_PR}"
+        self.assertEqual(strip(md), md)
+
+    def test_a_heading_of_another_name_is_not_touched(self):
+        md = "## Contributors\n* alice\n\n### New Contributors\n"
+        self.assertEqual(strip(md), md)
 
     def test_a_whole_generated_body_reads_as_an_announcement(self):
-        text = announce.markdown_to_text(announce.strip_generated_boilerplate(GENERATED_BODY))
+        text = announce.markdown_to_text(strip(GENERATED_BODY))
         self.assertEqual(text, ANNOUNCED_BODY)
 
     def test_crlf_line_ends_do_not_hide_the_generated_lines(self):
-        md = f"* a by @x in {self.PR}\r\n\r\n**Full Changelog**: https://github.com/o/r/compare/v1...v2\r\n"
-        self.assertEqual(announce.markdown_to_text(announce.strip_generated_boilerplate(md)), "• a")
+        md = f"* a by @x in {self.PR}\r\n\r\n**Full Changelog**: https://github.com/{REPO}/compare/v1...v2\r\n"
+        self.assertEqual(announce.markdown_to_text(strip(md)), "• a")
 
     def test_nothing_to_strip_is_returned_unchanged(self):
         md = "## Highlights\n* faster grids\n* a new tree view"
-        self.assertEqual(announce.strip_generated_boilerplate(md), md)
+        self.assertEqual(strip(md), md)
 
 
 class BuildMessageTests(unittest.TestCase):
@@ -446,6 +487,11 @@ class FetchReleaseTests(unittest.TestCase):
         self.assertEqual(sent.url, f"https://api.github.com/repos/{REPO}/releases/tags/{TAG}")
         self.assertEqual(sent.headers["authorization"], f"Bearer {GH_TOKEN}")
         self.assertEqual(release, announce.Release("BerryDB 1.0.8", ANNOUNCED_BODY, RELEASE_URL))
+
+    def test_only_this_repositorys_generated_lines_are_stripped(self):
+        body = f"* kept by @alice in {GeneratedBoilerplateTests.OTHER_PR}\n* dropped by @bob in {GeneratedBoilerplateTests.PR}"
+        release = announce.fetch_release(REPO, TAG, GH_TOKEN, FakeOpener(release={**RELEASE_JSON, "body": body}))
+        self.assertEqual(release.body, f"• kept by @alice in {GeneratedBoilerplateTests.OTHER_PR}\n• dropped")
 
     def test_untitled_release_falls_back_to_the_tag(self):
         opener = FakeOpener(release={**RELEASE_JSON, "name": None, "body": None})
