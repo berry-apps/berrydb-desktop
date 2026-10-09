@@ -25,8 +25,12 @@ SU_FEED_URL="${SU_FEED_URL:-https://download-db.berryhub.app/appcast.xml}"
 SU_PUBLIC_ED_KEY="${SU_PUBLIC_ED_KEY:-}"
 
 [ -x "$BIN" ] || { echo "Not built yet: run 'swift build -c ${CONFIG}' first" >&2; exit 1; }
-# Checked before the old bundle is removed, so a build that skipped the
-# helper (`swift build --product BerryApp`) fails without deleting anything.
+# Checked before the old bundle is removed, so a missing helper fails without
+# deleting anything. Only absence is caught: a helper left in .build by an
+# earlier build is packaged without complaint, even when a later
+# `swift build --product BerryApp` rebuilt only the app. Release packaging is
+# not exposed to that: deploy/release.sh builds every product, and the
+# release workflow runs `swift package clean` before it.
 [ -x "$HELPER_BIN" ] || {
     echo "berrydb-mcp not built yet: run 'swift build -c ${CONFIG}' without --product, or add 'swift build -c ${CONFIG} --product berrydb-mcp'" >&2
     exit 1
@@ -319,9 +323,18 @@ quiet_install_name_tool -add_rpath "@loader_path/../Frameworks" "$APP/Contents/M
 # Unlike the line above, a failure here stops packaging: the helper's own
 # rpaths (/usr/lib/swift, @loader_path, the toolchain's) find no libsybdb, so
 # without this one it does not start. Added only when missing, because
-# install_name_tool refuses a duplicate rpath.
+# install_name_tool refuses a duplicate rpath. Called directly rather than
+# through quiet_install_name_tool, whose failing command substitution ends the
+# script under `set -e` before the error is printed.
 if ! otool -l "$HELPER" | grep -qF 'path @executable_path/../Frameworks '; then
-    quiet_install_name_tool -add_rpath "@executable_path/../Frameworks" "$HELPER"
+    if ! rpath_output="$(install_name_tool -add_rpath "@executable_path/../Frameworks" "$HELPER" 2>&1)"; then
+        printf '%s\n' "$rpath_output" >&2
+        echo "FAIL: could not add LC_RPATH @executable_path/../Frameworks to $HELPER" >&2
+        exit 1
+    fi
+    if [ -n "$rpath_output" ]; then
+        printf '%s\n' "$rpath_output" | grep -v 'invalidate the code signature' >&2 || true
+    fi
 fi
 
 # Re-sign the app bundle ad-hoc so code signature remains valid for local dev
