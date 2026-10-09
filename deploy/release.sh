@@ -61,25 +61,31 @@ fi
 
 echo "▸ Codesigning (hardened runtime, deep)…"
 # Sign nested code first (frameworks/dylibs), then the app — deep + runtime.
+# --deep applies every option here, the entitlements included, to nested code
+# such as the berrydb-mcp helper (`man codesign`); the file is an empty dict.
 codesign --force --deep --options runtime --timestamp \
   --entitlements "$ENTITLEMENTS" \
   --sign "$SIGNING_IDENTITY" "$APP"
 codesign --verify --strict --verbose=2 "$APP"
 
 # The berrydb-mcp helper in Contents/Helpers is signed by the --deep sign above
-# and nowhere else: --force --deep re-signs nested code with the outer options
-# and replaces any signature made before it (observed with codesign on macOS
-# 26.6, where a helper signed first with its own identifier came out with the
-# derived one). Signed that way, with a non-ad-hoc identity, it was observed
-# carrying the hardened runtime flag, a secure timestamp, the outer identity
-# and the identifier "berrydb-mcp". Checked here so a change to the sign step
-# fails the release, naming the helper, before a notarization round-trip.
-HELPER_SIGNATURE="$(codesign -dvv "$APP/Contents/Helpers/berrydb-mcp" 2>&1)"
+# and nowhere else: `man codesign` (macOS 26.6) lists Contents/Helpers among
+# the places --deep signs, and --force --deep replaces every signature in the
+# bundle, which was observed: a helper signed first with its own identifier
+# came out with the derived one. Signed by this command with a throwaway
+# self-signed code-signing certificate, it carried the hardened runtime flag,
+# a secure timestamp, that certificate as authority and the identifier
+# "berrydb-mcp". A self-signed certificate has no team, so that experiment
+# never ran the TeamIdentifier check below against a signature that should
+# pass. Checked here so a change to the sign step fails the release, naming
+# the helper, before a notarization round-trip.
+HELPER_SIGNATURE="$(codesign -dvv "$APP/Contents/Helpers/berrydb-mcp" 2>&1)" \
+  || { echo "✗ cannot read the signature of Contents/Helpers/berrydb-mcp" >&2; exit 1; }
 grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]+\([^)]*runtime' <<<"$HELPER_SIGNATURE" \
   || { echo "✗ Contents/Helpers/berrydb-mcp is not signed with the hardened runtime" >&2; exit 1; }
 grep -q '^Timestamp=' <<<"$HELPER_SIGNATURE" \
   || { echo "✗ Contents/Helpers/berrydb-mcp carries no secure timestamp" >&2; exit 1; }
-grep -qx "TeamIdentifier=${APPLE_TEAM_ID}" <<<"$HELPER_SIGNATURE" \
+grep -qxF "TeamIdentifier=${APPLE_TEAM_ID}" <<<"$HELPER_SIGNATURE" \
   || { echo "✗ Contents/Helpers/berrydb-mcp is not signed by APPLE_TEAM_ID" >&2; exit 1; }
 
 echo "▸ Zipping app for notarization…"
