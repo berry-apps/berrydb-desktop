@@ -64,7 +64,7 @@ git tag v1.0.3
 git push --tags
 ```
 
-`.github/workflows/release.yml` then builds, signs, notarizes, checks the app size, publishes the DMG and appcast to R2, creates a GitHub Release, updates the website's version and, once a reviewer approves, announces the release on Telegram and a Facebook Page (see section 8). Credentials come from GitHub Secrets, not from `deploy/.env`.
+`.github/workflows/release.yml` then builds, signs, notarizes, checks the app size, publishes the DMG and appcast to R2, creates a GitHub Release and updates the website's version. Credentials come from GitHub Secrets, not from `deploy/.env`. A separate workflow then announces a tag-pushed release on Telegram and a Facebook Page once a reviewer approves (see section 8).
 
 To rehearse without publishing, run the workflow manually from the Actions tab with `dry_run` enabled: it builds, signs and notarizes, then stops before R2 and before creating the Release, and attaches the DMG as a workflow artifact.
 
@@ -111,28 +111,45 @@ Place `deploy/icon-1024.png` (1024x1024) in the deploy directory. `scripts/make_
 
 ## 8. Release Announcements
 
-After a real release is published, `.github/workflows/announce-release.yml` posts it to a Telegram channel and to a Facebook Page, once a person approves. A dry run announces nothing. X is posted by hand. Facebook Groups and personal profiles are not covered: Meta's API does not post to them.
+When a tag-pushed Release run succeeds, `.github/workflows/announce-release.yml` posts the release to a Telegram channel and to a Facebook Page, once a person approves. X is posted by hand. Facebook Groups and personal profiles are not covered: Meta's API does not post to them.
+
+A release started with *Run workflow* on the Release workflow, a dry run included, is not announced automatically. To announce a dispatched real release, run **Announce Release** by hand (below).
 
 ### What is posted, and when
 
-`release.yml` calls the workflow after the GitHub Release exists. It does not listen for the `release` event, because the Release is created with the workflow's `GITHUB_TOKEN`, and events caused by `GITHUB_TOKEN` do not start new workflow runs ([GitHub docs](https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow)). The workflow has two jobs:
+The announcement is its own workflow, triggered by the Release run completing (`workflow_run`), for three reasons:
+
+- `release.yml` creates the GitHub Release with the workflow's `GITHUB_TOKEN`, and events caused by `GITHUB_TOKEN` do not start new workflow runs, so an `on: release` workflow would never fire ([GitHub docs](https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow)).
+- The wait for approval belongs to the announcement's own run. Inside `release.yml` it would keep that run unfinished, and its `berrydb-release` concurrency group would hold the next release run pending ([GitHub docs](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)).
+- A failed announcement fails only its own run. The Release run and the release it published stay green.
+
+On `workflow_run` the announcement runs only for a Release run that succeeded, was started by a tag push, and whose `head_branch` starts with `v`; for tag pushes `head_branch` is the tag. Other Release runs, such as dispatched or failed ones, start an Announce Release run whose jobs are skipped. GitHub runs a `workflow_run` workflow from the default branch and only triggers it when the workflow file is on the default branch ([GitHub docs](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)), so a change to this workflow takes effect once merged, and a branch is tried by running it by hand.
+
+The workflow has two jobs:
 
 1. `preview` renders the exact message for each channel into the run's job summary. It posts nothing and receives no channel secret.
 2. `post` is bound to the `release-announcement` environment, so it waits for a reviewer before it starts. The reviewer reads the preview's summary, then approves or rejects. The release notes are read again when `post` runs, so editing the Release before approving changes what is posted.
 
 The messages:
 
-- **Telegram**: the release name, the release notes as plain text (headings without `#`, list items as bullets, bold markers removed, links kept), and the release page URL last. Telegram limits a message to 4096 characters ([Bot API](https://core.telegram.org/bots/api#sendmessage)), so a long body is shortened with an ellipsis and the URL is never cut. No `parse_mode` is sent, so release text cannot trip Telegram's Markdown parser.
+- **Telegram**: the release name, the release notes as plain text (headings without `#`, list items as bullets, bold markers removed, links kept), and the release page URL last. Telegram limits a message to 4096 characters ([Bot API](https://core.telegram.org/bots/api#sendmessage)), so a long body is shortened with an ellipsis and the URL is never cut. No `parse_mode` is sent, so release text cannot trip Telegram's Markdown parser. The link preview card is set to the release page with `link_preview_options` ([Bot API](https://core.telegram.org/bots/api#linkpreviewoptions)); without it Telegram previews the first URL in the text.
 - **Facebook Page**: the same name and notes as the post text, with the release page attached as the post's link.
 
-To announce or re-announce a tag by hand, run **Announce Release** from the Actions tab with the tag (for example `v1.0.8`). A failed run is retried with *Re-run failed jobs*, which posts to every configured channel again, including one that already succeeded.
+GitHub's generated release notes lose two lines of bookkeeping first: the ` by @author in <pull request URL>` ending of each entry, which keeps its title, and the `**Full Changelog**: ...` line. Hand-written text is left alone.
 
-A Release run that is waiting for approval has not finished, so a later Release run stays pending in the same concurrency group (`berrydb-release`) until it does ([GitHub docs](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)). Approve or reject promptly.
+### Announcing by hand, and retrying one channel
+
+Run **Announce Release** from the Actions tab with:
+
+- `tag`: the release tag, for example `v1.0.8`;
+- `channels`: `telegram,facebook` (the default), or one of them. The same selection is the script's `--only` option.
+
+If one channel failed, start a new manual run naming only that channel, for example `facebook`, rather than using *Re-run failed jobs*, which posts to every configured channel again, including one that already succeeded. A channel that is named but has no complete pair of secrets posts nothing, and the log says so.
 
 ### One-time setup
 
-1. **Create the environment.** Settings, Environments, New environment, named exactly `release-announcement`. Add yourself under *Required reviewers*. Optionally restrict *Deployment branches and tags* ([GitHub docs](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)).
-2. **Add the secrets to that environment**, under *Environment secrets*, not as repository secrets. GitHub releases an environment's secrets only to a job that uses it, and only after its protection rules pass, so nothing can post before the environment is configured. A repository secret with the same name would be passed to the workflow as well; the environment's value takes precedence in `post`, but there is no reason to create one.
+1. **Create the environment.** Settings, Environments, New environment, named exactly `release-announcement`. Add yourself under *Required reviewers*. Optionally restrict *Deployment branches and tags* to the default branch: a `workflow_run` job runs on it, and a manual run runs on the branch chosen in the Actions tab ([GitHub docs](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)).
+2. **Add the secrets to that environment**, under *Environment secrets*, not as repository secrets. GitHub releases an environment's secrets only to a job that uses it, and only after its protection rules pass, so nothing can post before the environment is configured.
 
 | Secret | Value |
 | :--- | :--- |
@@ -141,7 +158,7 @@ A Release run that is waiting for approval has not finished, so a later Release 
 | `FACEBOOK_PAGE_ID` | The Page's id |
 | `FACEBOOK_PAGE_ACCESS_TOKEN` | A Page access token, see below |
 
-A channel is posted to only when both of its secrets are set. Setting one without the other fails the run before anything is posted; setting neither skips that channel, so the two channels can be enabled independently. `release.yml` passes the four secrets to the workflow by name. A called workflow only receives an environment secret when its caller passes it, even when the secret exists only in the environment ([GitHub docs](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)).
+A channel is posted to only when both of its secrets are set. Setting one without the other fails the run before anything is posted; setting neither skips that channel, so the two channels can be enabled independently.
 
 ### Telegram
 
@@ -156,4 +173,4 @@ A channel is posted to only when both of its secrets are set. Setting one withou
 3. Exchange that short-lived user token for a long-lived one, then request the Page's token with `GET /{user-id}/accounts` ([long-lived tokens](https://developers.facebook.com/docs/facebook-login/guides/access-tokens/get-long-lived)). Meta documents that a Page access token obtained from a long-lived user token has no expiration date, and that it can still be invalidated under certain conditions. When posting starts failing with an OAuth error, generate a new token and replace the secret.
 4. Set `FACEBOOK_PAGE_ID` to the Page's id and `FACEBOOK_PAGE_ACCESS_TOKEN` to the Page token. The Graph API version is the `GRAPH_API_VERSION` constant in `deploy/announce-release.py`.
 
-The script's tests run with `python3 -m unittest deploy/test_announce_release.py` and never touch the network. To see what the next announcement would look like without posting anything: `GH_TOKEN=$(gh auth token) GITHUB_REPOSITORY=berry-apps/berrydb-desktop python3 deploy/announce-release.py --tag v1.0.8 --preview`.
+The script's tests run with `python3 -m unittest deploy/test_announce_release.py` and never touch the network. To see what the next announcement would look like without posting anything: `GH_TOKEN=$(gh auth token) GITHUB_REPOSITORY=berry-apps/berrydb-desktop python3 deploy/announce-release.py --tag v1.0.8 --preview`, optionally with `--only telegram` or `--only facebook`.
