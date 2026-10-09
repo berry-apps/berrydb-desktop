@@ -357,11 +357,13 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// A saved project then gets one per-repository entry for Claude Code
     /// and one for Codex, each passing `--project <name>` with the saved
     /// name, so a file committed to the repository selects a project of
-    /// that name in every clone and for every teammate. Both hosts gate
-    /// configuration a repository defines behind the user's trust.
+    /// that name in every clone and for every teammate. In interactive use
+    /// both hosts gate configuration a repository defines behind the user's
+    /// trust.
     /// - Claude Code asks for approval in an interactive session before it
-    ///   uses a server from `.mcp.json`, and loads it without asking in a
-    ///   `claude -p` run (https://code.claude.com/docs/en/mcp#project-scope).
+    ///   uses a server from `.mcp.json`, and loads it without asking in
+    ///   `claude -p` runs, Agent SDK sessions and cloud sessions
+    ///   (https://code.claude.com/docs/en/mcp#project-scope).
     ///   Observed with Claude Code 2.1.295 and a throwaway home directory:
     ///   `claude mcp add --scope project` wrote `.mcp.json` in the current
     ///   folder with the arguments as given, and `claude mcp list` showed the
@@ -395,7 +397,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             AgentSetupEntry(
                 host: L("\("Claude Code"), this repository"),
                 text: "claude mcp add --scope project berrydb -- \(helper) --project \(Self.shellQuoted(saved.name))",
-                caption: L("Run it in the repository’s top folder. It writes .mcp.json there, which can be committed. Once you approve the entry in Claude Code, Claude Code uses it in this repository instead of a user-level berrydb entry; until then, it uses the user-level entry.")
+                caption: L("Run it in the repository’s top folder. It writes .mcp.json there, which can be committed. Once you approve the entry in an interactive Claude Code session, Claude Code uses it in this repository instead of a user-level berrydb entry; until then, it uses the user-level entry.")
             ),
             AgentSetupEntry(
                 host: L("\("Codex"), this repository"),

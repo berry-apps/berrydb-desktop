@@ -531,7 +531,7 @@ struct MCPProjectsSettingsModelTests {
 
     // MARK: Per-repository entries
 
-    private static let claudeRepositoryCaption = L("Run it in the repository’s top folder. It writes .mcp.json there, which can be committed. Once you approve the entry in Claude Code, Claude Code uses it in this repository instead of a user-level berrydb entry; until then, it uses the user-level entry.")
+    private static let claudeRepositoryCaption = L("Run it in the repository’s top folder. It writes .mcp.json there, which can be committed. Once you approve the entry in an interactive Claude Code session, Claude Code uses it in this repository instead of a user-level berrydb entry; until then, it uses the user-level entry.")
     private static let codexRepositoryCaption = L("Add it to .codex/config.toml in the repository. Codex reads that file only once the project is trusted, and there it takes precedence over the user-level berrydb entry.")
 
     /// The entries name the project by its saved name, so a committed file

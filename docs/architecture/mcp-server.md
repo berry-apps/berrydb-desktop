@@ -61,7 +61,7 @@ this user's files or Keychain), a compromised BerryDB binary.
 | Helper-side capability policy (read-only, limits, no `Scan`) | Yes | Enforced in signed code the agent cannot modify. |
 | Database session read-only + least-privilege DB user | Yes | Enforced by the database itself. |
 | Per-profile live-read setting and project settings | Yes, via integrity check | Stored in a user-writable file; an HMAC keyed from Keychain is what stops the agent from enabling itself. |
-| Project selection (which project a process serves) | No | A process can pass `--project` with any project ID or name it can read from the store, and a repository's agent configuration, once the user trusts that repository, can name any project. Selection prevents mistakes and limits exposure; it does not stop a hostile agent or repository from reaching another project's already-enabled capabilities. |
+| Project selection (which project a process serves) | No | A process can pass `--project` with any project ID or name it can read from the store, and a repository's own agent configuration can name any project. An interactive Claude Code session asks before it uses a repository's `.mcp.json` and Codex reads a repository's `.codex/config.toml` only for a trusted project, but `claude -p` runs, Agent SDK sessions and cloud sessions load a repository's `.mcp.json` without asking ([Project scope](https://code.claude.com/docs/en/mcp#project-scope)). Selection prevents mistakes and limits exposure; it does not stop a hostile agent or repository from reaching another project's already-enabled capabilities. |
 | Audit log | No (visibility only) | The agent can edit it. |
 
 Every guarantee this document calls a boundary holds for any project a
@@ -212,11 +212,12 @@ echoes the value given.
 A repository can carry its own agent entry that passes `--project <name>`,
 so every clone selects the project of that name without registering a
 folder in the app. Use the name, not the ID: an ID differs in every store,
-while a name also matches a teammate's project of the same name. The
-hosts that support this gate configuration a repository defines behind
-the user's trust; the helper adds no gate of its own. For a saved project,
-and once the helper is bundled, the pane's **Agent Setup** section shows
-these entries with the helper path and the name filled in.
+while a name also matches a teammate's project of the same name. In
+interactive use, the hosts that support this gate configuration a
+repository defines behind the user's trust (details below); the helper
+adds no gate of its own. For a saved project, and once the helper is
+bundled, the pane's **Agent Setup** section shows these entries with the
+helper path and the name filled in.
 
 The pane single-quotes the helper path and the project name in every
 command it shows, writing an embedded `'` as `'\''`. Inside POSIX single
@@ -233,7 +234,8 @@ Codex entry writes both values as TOML basic strings instead.
 
   This writes `.mcp.json` in that folder, which can be committed. Claude
   Code asks for approval in an interactive session before it uses a server
-  from `.mcp.json`, and loads it without asking in `claude -p` runs
+  from `.mcp.json`, and loads it without asking in `claude -p` runs, Agent
+  SDK sessions and cloud sessions
   ([Project scope](https://code.claude.com/docs/en/mcp#project-scope)).
   Once approved, the repository's entry takes precedence over a user-level
   `berrydb` entry, which the documentation ranks below project scope
@@ -381,14 +383,22 @@ project was chosen.
 A repository's own agent configuration can name a project with
 `--project <name>` (see
 [Per-repository agent configuration](#per-repository-agent-configuration)).
-Once the user's agent accepts that configuration, the repository selects
-that project as surely as a registered folder would, including a
-repository cloned from someone else that happens to name one of the
-user's projects, and opening it in the agent then exposes that project's
-schema and graph metadata to the agent and its model provider. The
-agent's trust gate is what decides whether the configuration is used;
-selection by name, like any selection, never turns on live reads, which
-still require the sealed per-profile opt-in made in the app.
+Once the agent uses that configuration, the repository selects that
+project as surely as a registered folder would, including a repository
+cloned from someone else that happens to name one of the user's projects,
+and opening it in the agent then exposes that project's schema and graph
+metadata to the agent and its model provider. Whether the agent uses it
+depends on the host and how it runs. An interactive Claude Code session
+asks before it uses a server from a repository's `.mcp.json`, and Codex
+reads a repository's `.codex/config.toml` only for a trusted project.
+`claude -p` runs, Agent SDK sessions and cloud sessions load a
+repository's `.mcp.json` without asking
+([Project scope](https://code.claude.com/docs/en/mcp#project-scope)); in
+those modes the repository can already start any command the user can
+run, so naming a BerryDB project in it reaches nothing beyond what running
+an agent in that repository already grants. Selection by name, like any
+selection, never turns on live reads, which still require the sealed
+per-profile opt-in made in the app.
 
 ### Withdrawn before release: repository link files
 
@@ -398,12 +408,19 @@ workspace, ahead of the registered workspace folders, and which the
 settings pane could write into a chosen repository. It was removed before
 any release shipped it. A file inside the repository selected one of the
 user's projects with no prompt, so any cloned repository naming a project
-the user has got that project's schema metadata. Coding agents already
-gate repository-defined MCP configuration behind a trust prompt: Claude
-Code asks before it starts a server from a repository's `.mcp.json`, and
-Codex reads a repository's `.codex/config.toml` only for a trusted
-project. A per-repository entry that passes `--project <name>` gets the
-same convenience behind that gate. A file in the repository that the
+the user has got that project's schema metadata, even in an interactive
+Claude Code session that would have asked before starting a server the
+repository defines. A per-repository agent entry that passes
+`--project <name>` goes through the host's own handling of repository
+configuration instead: an interactive Claude Code session asks before it
+uses a server from a repository's `.mcp.json`, and Codex reads a
+repository's `.codex/config.toml` only for a trusted project. `claude -p`
+runs, Agent SDK sessions and cloud sessions load a repository's
+`.mcp.json` without asking
+([Project scope](https://code.claude.com/docs/en/mcp#project-scope)), but
+there the repository can already start any command the user can run, so
+naming a BerryDB project in it adds nothing beyond what running an agent
+in that repository already grants. A file in the repository that the
 helper reads on its own should not come back without a gate of its own.
 
 ## Per-profile access and integrity

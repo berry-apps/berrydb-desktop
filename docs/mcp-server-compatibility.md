@@ -479,17 +479,19 @@ repository entry.
 | Antigravity | 1.3.1 | `.agents/mcp_config.json` and `.agent/mcp_config.json` in the folder, each with a server named `berrydb-ws` | `agy mcp list` inside the folder listed only the user-level server. The CLI's embedded documentation names only `~/.gemini/config/mcp_config.json` and `plugins/<name>/mcp_config.json`. |
 
 Claude Code's documentation says an interactive session asks for approval
-before it uses a server from `.mcp.json`, while `claude -p` runs load it
-without asking ([Project scope](https://code.claude.com/docs/en/mcp#project-scope)),
+before it uses a server from `.mcp.json`, while `claude -p` runs, Agent
+SDK sessions and cloud sessions load it without asking
+([Project scope](https://code.claude.com/docs/en/mcp#project-scope)),
 and ranks project scope above user scope
 ([Scope hierarchy and precedence](https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence)),
 which matches the approved state above.
 
 Conclusion: Claude Code and Codex take a per-repository entry that names
-the project, each behind its own trust step, and once trusted that entry
-replaces the shared user-level `berrydb` entry in the repository;
-Antigravity 1.3.1 takes none. The settings pane offers the two entries and
-says which entry applies before and after approval. Not covered: an
+the project, each behind its own trust step in interactive use (Claude
+Code's non-interactive modes above load it without asking), and once
+trusted that entry replaces the shared user-level `berrydb` entry in the
+repository; Antigravity 1.3.1 takes none. The settings pane offers the two
+entries and says which entry applies before and after approval. Not covered: an
 interactive Claude Code session's approval prompt itself (the approval
 was written into `~/.claude.json` directly), and a host session that
 started `berrydb-mcp` through a repository entry.

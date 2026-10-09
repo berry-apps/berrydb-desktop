@@ -302,11 +302,11 @@ private struct MCPProjectEditorSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text(L("Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder."))
+                Text(L("Each user-level command adds an entry named berrydb to the agent’s user configuration; run one of them once per agent. The shared entry works in every repository and selects the project from the agent’s folder."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if model.isSaved(draft.id) {
-                    Text(L("An entry marked “always this project” serves this project in every folder the agent works in, whatever workspace folders would select."))
+                    Text(L("An entry marked “always this project” serves this project in every folder the agent works in, whatever workspace folders would select, except in a repository with its own entry."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
