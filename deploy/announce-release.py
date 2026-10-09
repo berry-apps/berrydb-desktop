@@ -337,10 +337,21 @@ def fetch_release(repo: str, tag: str, token: str, opener: Opener) -> Release:
     )
 
 
-def post_telegram(opener: Opener, token: str, chat_id: str, text: str) -> str:
+def post_telegram(opener: Opener, token: str, chat_id: str, text: str, preview_url: str) -> str:
     """No `parse_mode`: release text goes out as plain text, so a stray `_` or
-    `*` in the notes can never make Telegram's Markdown parser reject it."""
-    request = _form_post(f"{TELEGRAM_API}/bot{token}/sendMessage", {"chat_id": chat_id, "text": text})
+    `*` in the notes can never make Telegram's Markdown parser reject it.
+
+    `link_preview_options` is a JSON-serialized LinkPreviewOptions object. Its
+    `url` is "URL to use for the link preview. If empty, then the first URL found
+    in the message text will be used", and the first URL in hand-written notes is
+    rarely the release page: https://core.telegram.org/bots/api#linkpreviewoptions
+    """
+    fields = {
+        "chat_id": chat_id,
+        "text": text,
+        "link_preview_options": json.dumps({"url": preview_url}, separators=(",", ":")),
+    }
+    request = _form_post(f"{TELEGRAM_API}/bot{token}/sendMessage", fields)
     data = _send(opener, request, [token])
     if data.get("ok") is not True:
         raise RequestError(_scrub(f"Telegram refused the message: {data.get('description', 'no description')}", [token]))
@@ -388,6 +399,7 @@ def render_preview(release: Release) -> str:
         f"\n"
         f"== Telegram ({_telegram_note(release)}) ==\n"
         f"{telegram_text(release)}\n"
+        f"link preview: {release.url}\n"
         f"\n"
         f"== Facebook Page (message, with the release page as the link) ==\n"
         f"link: {release.url}\n"
@@ -403,7 +415,7 @@ def render_summary(release: Release) -> str:
         f"Nothing has been posted yet. The post job waits for approval in the "
         f"`release-announcement` environment. The release notes are read again "
         f"when that job runs, so an edit made before approving is what gets posted.\n\n"
-        f"### Telegram\n\n{_telegram_note(release)}\n\n{_fence(telegram_text(release))}\n\n"
+        f"### Telegram\n\n{_telegram_note(release)}\n\n{_fence(telegram_text(release))}\n\nlink preview: {release.url}\n\n"
         f"### Facebook Page\n\nThe release page is attached as the post's link.\n\n"
         f"link: {release.url}\n\n{_fence(facebook_message(release))}\n"
     )
@@ -473,7 +485,7 @@ def main(
     if telegram:
         print("▸ Posting to Telegram", file=out)
         try:
-            print(f"✓ Telegram: {post_telegram(opener, *telegram, telegram_text(release))}", file=out)
+            print(f"✓ Telegram: {post_telegram(opener, *telegram, telegram_text(release), release.url)}", file=out)
         except RequestError as exc:
             print(f"✗ Telegram: {exc}", file=err)
             failed += 1

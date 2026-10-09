@@ -386,14 +386,24 @@ class FetchReleaseTests(unittest.TestCase):
 class PostTests(unittest.TestCase):
     def test_telegram_request_shape(self):
         opener = FakeOpener()
-        result = announce.post_telegram(opener, BOT_TOKEN, CHAT_ID, "hello\n\nhttps://example.com")
+        result = announce.post_telegram(opener, BOT_TOKEN, CHAT_ID, "hello\n\nhttps://example.com", RELEASE_URL)
         (sent,) = opener.requests
         self.assertEqual(sent.method, "POST")
         self.assertEqual(sent.url, f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage")
-        self.assertEqual(sent.form(), {"chat_id": CHAT_ID, "text": "hello\n\nhttps://example.com"})
+        self.assertEqual(sent.form()["chat_id"], CHAT_ID)
+        self.assertEqual(sent.form()["text"], "hello\n\nhttps://example.com")
         self.assertNotIn("parse_mode", sent.form())
+        self.assertEqual(set(sent.form()), {"chat_id", "text", "link_preview_options"})
         self.assertEqual(sent.headers["content-type"], "application/x-www-form-urlencoded")
         self.assertIn("77", result)
+
+    def test_telegram_link_preview_points_at_the_release_page_not_the_first_url_in_the_text(self):
+        # Without link_preview_options Telegram previews the first URL in the
+        # text, which in hand-written notes is rarely the release page.
+        opener = FakeOpener()
+        announce.post_telegram(opener, BOT_TOKEN, CHAT_ID, "see https://example.com/first\n\n" + RELEASE_URL, RELEASE_URL)
+        options = json.loads(opener.requests[0].form()["link_preview_options"])
+        self.assertEqual(options, {"url": RELEASE_URL})
 
     def test_facebook_request_shape_keeps_the_token_out_of_the_url(self):
         opener = FakeOpener()
@@ -413,7 +423,7 @@ class PostTests(unittest.TestCase):
     def test_telegram_ok_false_is_a_failure_even_on_http_200(self):
         opener = FakeOpener(telegram={"ok": False, "description": "Bad Request: chat not found"})
         with self.assertRaises(announce.RequestError) as ctx:
-            announce.post_telegram(opener, BOT_TOKEN, CHAT_ID, "x")
+            announce.post_telegram(opener, BOT_TOKEN, CHAT_ID, "x", RELEASE_URL)
         self.assertIn("chat not found", str(ctx.exception))
 
     def test_facebook_response_without_an_id_is_a_failure(self):
@@ -426,7 +436,7 @@ class PostTests(unittest.TestCase):
         body = {"ok": False, "error_code": 401, "description": f"Unauthorized (token {BOT_TOKEN})"}
         opener = FakeOpener(telegram=http_error(url, 401, body))
         with self.assertRaises(announce.RequestError) as ctx:
-            announce.post_telegram(opener, BOT_TOKEN, CHAT_ID, "x")
+            announce.post_telegram(opener, BOT_TOKEN, CHAT_ID, "x", RELEASE_URL)
         self.assertIn("401", str(ctx.exception))
         self.assertIn("Unauthorized", str(ctx.exception))
         self.assertNotIn(BOT_TOKEN, str(ctx.exception))
@@ -444,7 +454,7 @@ class PostTests(unittest.TestCase):
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         opener = FakeOpener(telegram=urllib.error.URLError(f"cannot reach {url}"))
         with self.assertRaises(announce.RequestError) as ctx:
-            announce.post_telegram(opener, BOT_TOKEN, CHAT_ID, "x")
+            announce.post_telegram(opener, BOT_TOKEN, CHAT_ID, "x", RELEASE_URL)
         self.assertNotIn(BOT_TOKEN, str(ctx.exception))
         self.assertNotIn(BOT_TOKEN.split(":")[0], str(ctx.exception))
 
@@ -453,14 +463,14 @@ class PostTests(unittest.TestCase):
         quoted = f"/bot{BOT_TOKEN}/sendMessage"
         opener = FakeOpener(telegram=InvalidURL(f"URL can't contain control characters. {quoted!r}"))
         with self.assertRaises(announce.RequestError) as ctx:
-            announce.post_telegram(opener, BOT_TOKEN, CHAT_ID, "x")
+            announce.post_telegram(opener, BOT_TOKEN, CHAT_ID, "x", RELEASE_URL)
         self.assertNotIn(BOT_TOKEN, str(ctx.exception))
 
     def test_percent_encoded_token_is_scrubbed_too(self):
         quoted = quote(BOT_TOKEN, safe="")
         opener = FakeOpener(telegram=urllib.error.URLError(f"bad /bot{quoted}/sendMessage"))
         with self.assertRaises(announce.RequestError) as ctx:
-            announce.post_telegram(opener, BOT_TOKEN, CHAT_ID, "x")
+            announce.post_telegram(opener, BOT_TOKEN, CHAT_ID, "x", RELEASE_URL)
         self.assertNotIn(quoted, str(ctx.exception))
 
     def test_redirects_are_not_followed(self):
@@ -495,6 +505,7 @@ class MainTests(unittest.TestCase):
         _, out, _ = run_main(["--tag", TAG, "--preview"], dict(BASE_ENV), opener)
         release = announce.fetch_release(REPO, TAG, GH_TOKEN, FakeOpener())
         self.assertIn(announce.telegram_text(release), out)
+        self.assertIn(f"link preview: {RELEASE_URL}", out)
         self.assertIn(announce.facebook_message(release), out)
         self.assertIn(f"link: {RELEASE_URL}", out)
 
@@ -544,6 +555,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(len(opener.to("graph.facebook.com")), 1)
         telegram = opener.to("api.telegram.org")[0].form()
         self.assertTrue(telegram["text"].endswith(RELEASE_URL))
+        self.assertEqual(json.loads(telegram["link_preview_options"]), {"url": RELEASE_URL})
         facebook = opener.to("graph.facebook.com")[0].form()
         self.assertEqual(facebook["link"], RELEASE_URL)
         self.assertNotIn(RELEASE_URL, facebook["message"])
