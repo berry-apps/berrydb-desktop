@@ -776,7 +776,7 @@
 "Replace" = "Replace";
 "These files will be replaced:" = "These files will be replaced:";
 "%@ (names “%@”)" = "%@ (names “%@”)";
-"%@ (names no project)" = "%@ (names no project)";
+"%@ (could not be read as a link file)" = "%@ (could not be read as a link file)";
 "Wrote %@" = "Wrote %@";
 "%@ already links this project" = "%@ already links this project";
 "%@ was not replaced" = "%@ was not replaced";

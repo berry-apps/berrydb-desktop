@@ -434,7 +434,7 @@ private struct MCPProjectEditorSheet: View {
     private var replaceMessage: String {
         let files = linkResults.compactMap { result -> String? in
             guard case let .needsOverwrite(path, existingProject) = result else { return nil }
-            guard let existingProject else { return L("\(path) (names no project)") }
+            guard let existingProject else { return L("\(path) (could not be read as a link file)") }
             return L("\(path) (names “\(existingProject)”)")
         }
         return ([L("These files will be replaced:")] + files).joined(separator: "\n")

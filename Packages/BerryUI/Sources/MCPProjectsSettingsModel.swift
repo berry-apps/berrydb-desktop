@@ -14,8 +14,10 @@ public enum MCPRepositoryLinkResult: Equatable, Sendable {
     /// applies, and was not rewritten.
     case unchanged(String)
     /// Something else is there and was left as it is; linking again with
-    /// `overwrite` replaces it. `existingProject` is the name it holds, or
-    /// nil when it names no project.
+    /// `overwrite` replaces it. `existingProject` is the name a regular file
+    /// of the user's holds; nil when that file names none or cannot be
+    /// parsed, and for a symbolic link or a file another user owns, neither
+    /// of which is read.
     case needsOverwrite(String, existingProject: String?)
     /// Nothing was written, for the ready-to-show `reason`.
     case rejected(String, reason: String)
@@ -262,12 +264,14 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     ///
     /// Nothing else is written: no other file, no git configuration and no
     /// `.gitignore`. A project not saved as of the last `reload()` links
-    /// nothing. A file that already selects the project is left untouched,
-    /// whatever its formatting, extra keys or capitalization, and so is a
-    /// symbolic link to such a file. Any other entry of that name is
-    /// replaced only when `overwrite` is true, and a folder of that name
-    /// never is. The disk's root and anything that is not a folder are
-    /// rejected.
+    /// nothing. A regular file of the user's that already selects the
+    /// project is left untouched, whatever its formatting, extra keys or
+    /// capitalization. A symbolic link is never followed and a file another
+    /// user owns is never read, even when either names the project; like
+    /// any other entry of that name, they are replaced only when `overwrite`
+    /// is true. Replacing writes a regular file and leaves a link's target
+    /// untouched. A folder of that name is never replaced. The disk's root
+    /// and anything that is not a folder are rejected.
     public func linkRepositories(_ folders: [URL], projectID: UUID, overwrite: Bool) -> [MCPRepositoryLinkResult] {
         guard let project = projects.first(where: { $0.id == projectID }) else {
             return folders.map { .rejected(Self.linkFilePath(in: $0), reason: Self.saveBeforeLinking) }

@@ -776,7 +776,7 @@
 "Replace" = "Thay thế";
 "These files will be replaced:" = "Các tệp sau sẽ bị thay thế:";
 "%@ (names “%@”)" = "%@ (đang ghi tên “%@”)";
-"%@ (names no project)" = "%@ (không ghi tên dự án nào)";
+"%@ (could not be read as a link file)" = "%@ (không đọc được dưới dạng tệp liên kết)";
 "Wrote %@" = "Đã ghi %@";
 "%@ already links this project" = "%@ đã liên kết với dự án này";
 "%@ was not replaced" = "%@ chưa được thay thế";
