@@ -478,6 +478,44 @@ class ChannelSelectionTests(unittest.TestCase):
         self.assertNotIn("Telegram", text)
 
 
+class WorkflowCommandTests(unittest.TestCase):
+    """The runner reads workflow commands (`::warning::`, `::set-env`, ...) from
+    a step's stdout, and a release's text is whatever its author typed."""
+
+    NOTES = "::warning::injected\n::error::also injected\nplain line"
+
+    def preview(self, notes=NOTES, name="::error::name"):
+        opener = FakeOpener(release={**RELEASE_JSON, "body": notes, "name": name})
+        code, out, err = run_main(["--tag", TAG, "--preview"], dict(BASE_ENV), opener)
+        self.assertEqual(code, 0, err)
+        return out
+
+    def test_release_text_is_printed_between_stop_commands_markers(self):
+        lines = self.preview().splitlines()
+        self.assertRegex(lines[0], r"^::stop-commands::[0-9a-f]{32}$")
+        token = lines[0].split("::")[2]
+        self.assertEqual(lines[-1], f"::{token}::")
+        inside = lines[1:-1]
+        self.assertIn("::warning::injected", inside)
+        self.assertIn("::error::also injected", inside)
+        self.assertFalse([line for line in inside if line.startswith("::stop-commands::") or line == f"::{token}::"])
+
+    def test_the_token_is_random_per_run_and_never_part_of_the_release_text(self):
+        first, second = self.preview(), self.preview()
+        token_of = lambda out: out.splitlines()[0].split("::")[2]
+        self.assertNotEqual(token_of(first), token_of(second))
+        self.assertNotIn(token_of(first), self.NOTES)
+
+    def test_the_summary_file_is_not_wrapped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = pathlib.Path(tmp) / "summary.md"
+            opener = FakeOpener(release={**RELEASE_JSON, "body": self.NOTES})
+            run_main(["--tag", TAG, "--preview", "--summary-file", str(summary)], dict(BASE_ENV), opener)
+            text = summary.read_text()
+        self.assertIn("::warning::injected", text)
+        self.assertNotIn("::stop-commands::", text)
+
+
 class FetchReleaseTests(unittest.TestCase):
     def test_reads_the_release_by_tag_with_a_bearer_token(self):
         opener = FakeOpener()

@@ -33,6 +33,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from typing import Callable, Mapping, NamedTuple, Optional, Sequence, TextIO
 
 GITHUB_API = "https://api.github.com"
@@ -433,6 +434,17 @@ def render_summary(release: Release, channels: Sequence[str] = CHANNELS) -> str:
     return "\n".join(parts)
 
 
+def _inert(text: str) -> str:
+    """`text` between stop-commands markers. The Actions runner executes a
+    workflow command (`::warning::`, `::add-mask::`, ...) found at the start of
+    a stdout line, and release notes are free text. GitHub requires the end
+    token to be random and unique to each run:
+    https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands#stopping-and-starting-workflow-commands
+    """
+    token = uuid.uuid4().hex
+    return f"::stop-commands::{token}\n{text.rstrip()}\n::{token}::"
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -488,7 +500,7 @@ def main(
         except (ConfigError, RequestError) as exc:
             print(f"✗ {exc}", file=err)
             return 1
-        print(render_summary(release, args.only), file=out)
+        print(_inert(render_summary(release, args.only)), file=out)
         if args.summary_file:
             with open(args.summary_file, "a", encoding="utf-8") as summary:
                 summary.write(render_summary(release, args.only))
