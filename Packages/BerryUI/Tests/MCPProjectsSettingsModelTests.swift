@@ -670,29 +670,75 @@ struct MCPProjectsSettingsModelTests {
         let model = makeModel(store, KeyBox())
         let billing = try savedDraft(named: "Billing", in: model)
         let formatted = try makeFolder()
-        let symlinked = try makeFolder()
-        let outside = try makeFolder()
-        defer {
-            for folder in [formatted, symlinked, outside] {
-                try? FileManager.default.removeItem(at: folder)
-            }
-        }
+        defer { try? FileManager.default.removeItem(at: formatted) }
         // Reformatted, re-cased and carrying another key: the helper still
         // selects Billing from it.
         let existing = Data(#"{ "project": " billing ", "comment": "x" }"#.utf8)
         try existing.write(to: linkFile(in: formatted))
-        let target = outside.appendingPathComponent("shared.json")
-        try MCPRepositoryLink.contents(projectName: "BILLING").write(to: target)
-        try FileManager.default.createSymbolicLink(at: linkFile(in: symlinked), withDestinationURL: target)
 
         for overwrite in [false, true] {
-            #expect(model.linkRepositories([formatted, symlinked], projectID: billing.id, overwrite: overwrite)
-                == [.unchanged(linkFile(in: formatted).path), .unchanged(linkFile(in: symlinked).path)])
+            #expect(model.linkRepositories([formatted], projectID: billing.id, overwrite: overwrite)
+                == [.unchanged(linkFile(in: formatted).path)])
         }
 
         #expect(try Data(contentsOf: linkFile(in: formatted)) == existing)
-        let type = try FileManager.default.attributesOfItem(atPath: linkFile(in: symlinked).path)[.type] as? FileAttributeType
-        #expect(type == .typeSymbolicLink)
+    }
+
+    /// The helper never follows a symbolic link named `.berrydb.json`, so one
+    /// that points at a file naming the project does not link the folder: it
+    /// is offered for replacement, and replacing it leaves its target alone.
+    @Test func aSymbolicLinkToAFileNamingTheProjectStillNeedsReplacing() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        let billing = try savedDraft(named: "Billing", in: model)
+        let folder = try makeFolder()
+        let outside = try makeFolder()
+        defer {
+            try? FileManager.default.removeItem(at: folder)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let target = outside.appendingPathComponent("shared.json")
+        let targetBytes = MCPRepositoryLink.contents(projectName: "Billing")
+        try targetBytes.write(to: target)
+        let file = linkFile(in: folder)
+        try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
+
+        #expect(model.linkRepositories([folder], projectID: billing.id, overwrite: false)
+            == [.needsOverwrite(file.path, existingProject: nil)])
+        let unchangedType = try FileManager.default.attributesOfItem(atPath: file.path)[.type] as? FileAttributeType
+        #expect(unchangedType == .typeSymbolicLink)
+
+        model.linkWriter = MCPProjectsSettingsModel.atomicLinkWrite
+        #expect(model.linkRepositories([folder], projectID: billing.id, overwrite: true) == [.written(file.path)])
+        #expect(try Data(contentsOf: target) == targetBytes)
+        let type = try FileManager.default.attributesOfItem(atPath: file.path)[.type] as? FileAttributeType
+        #expect(type == .typeRegular)
+    }
+
+    /// A link file another user owns is never read, so even one that names
+    /// the project is not taken as linked, and it is never replaced without
+    /// confirmation. A file of the user's own stands in for it, with the
+    /// owner the reader trusts set to someone else.
+    @Test func aFileOwnedByAnotherUserIsReplacedOnlyWhenOverwriteIsConfirmed() throws {
+        let folder = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = linkFile(in: folder)
+        let existing = MCPRepositoryLink.contents(projectName: "Billing")
+        try existing.write(to: file)
+        let someoneElse = getuid() &+ 1
+
+        for projectName in ["Billing", "Ledger"] {
+            #expect(MCPProjectsSettingsModel.link(
+                folder, projectName: projectName, overwrite: false, write: Self.refuseWrites, owner: someoneElse
+            ) == .needsOverwrite(file.path, existingProject: nil))
+        }
+        #expect(try Data(contentsOf: file) == existing)
+
+        #expect(MCPProjectsSettingsModel.link(
+            folder, projectName: "Ledger", overwrite: true, write: MCPProjectsSettingsModel.atomicLinkWrite,
+            owner: someoneElse
+        ) == .written(file.path))
+        #expect(try Data(contentsOf: file) == MCPRepositoryLink.contents(projectName: "Ledger"))
     }
 
     @Test func aSymbolicLinkIsReplacedWithoutWritingThroughIt() throws {
@@ -711,8 +757,9 @@ struct MCPProjectsSettingsModelTests {
         let file = linkFile(in: folder)
         try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
 
+        // The link is not followed, so the name its target holds is unknown.
         #expect(model.linkRepositories([folder], projectID: billing.id, overwrite: false)
-            == [.needsOverwrite(file.path, existingProject: "Ledger")])
+            == [.needsOverwrite(file.path, existingProject: nil)])
         model.linkWriter = MCPProjectsSettingsModel.atomicLinkWrite
         #expect(model.linkRepositories([folder], projectID: billing.id, overwrite: true) == [.written(file.path)])
 

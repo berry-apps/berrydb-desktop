@@ -4,11 +4,18 @@ import Foundation
 /// repository uses, so every clone and worktree selects that project without
 /// registering its path in the app.
 ///
-/// The file belongs to the repository, which is untrusted: it can name any
-/// project, so it only chooses which project is offered, and verification of
-/// that project decides what is served. Its content is bounded and any file
-/// that cannot be used is reported as invalid rather than skipped, so a link
-/// never silently gives way to another selection input.
+/// The file belongs to the repository, which is untrusted. It can name any
+/// of the user's projects, matched by name, and for every workspace at or
+/// below it that choice takes precedence over the folders registered in the
+/// app. The named project's metadata is then served whenever the project
+/// exists and its stored enabled flag is on, whether or not its integrity tag
+/// verifies; the tag gates live reads only. A link cannot create a project,
+/// enable one, assign it a connection or change any other project setting.
+///
+/// Its content is bounded. A file owned by another user is ignored as if
+/// absent; any other file that cannot be used, a symbolic link included, is
+/// reported as invalid rather than skipped, so a link never silently gives
+/// way to another selection input.
 public enum MCPRepositoryLink {
     /// The link file's name, looked up in a workspace and its ancestors.
     public static let fileName = ".berrydb.json"
@@ -37,10 +44,11 @@ public enum MCPRepositoryLink {
     /// not, and never consults `/`: a file there would name a project for
     /// every workspace on the machine.
     ///
-    /// - Parameter read: Returns a file's bytes, or nil when nothing exists
-    ///   at the path; `readBounded` unless replaced.
+    /// - Parameter read: Returns a file's bytes, or nil when the walk goes on
+    ///   past the path because there is no link file there to trust;
+    ///   `readBounded` unless replaced.
     public static func find(
-        from workspace: String, read: @Sendable (String) -> Data? = MCPRepositoryLink.readBounded
+        from workspace: String, read: @Sendable (String) -> Data? = { MCPRepositoryLink.readBounded($0) }
     ) -> Lookup {
         var directory = MCPProjectSelector.canonicalPath(workspace)
         while directory.hasPrefix("/"), directory != "/" {
@@ -56,31 +64,45 @@ public enum MCPRepositoryLink {
     /// The first `maximumBytes + 1` bytes of the regular file at `path`, so
     /// the caller can tell a file over the limit without reading all of it.
     ///
-    /// Returns nil only when nothing exists at `path`. An entry that exists
-    /// but is not a readable regular file, such as a directory, a file
-    /// without read permission or a symbolic link to nothing, returns empty
-    /// data, which no link parses from, so it is reported as invalid instead
-    /// of letting the walk continue past it. Any other failure to open, such
-    /// as EACCES or EPERM, fails closed the same way: whether a link exists
-    /// there cannot be known, and skipping it could select another project.
+    /// Returns nil when nothing exists at `path`, and for a regular file
+    /// that `owner` does not own: a file another account could plant, such
+    /// as one in a shared or world-writable folder above the workspace, is
+    /// not trusted to name a project, the rule git applies to repositories
+    /// it does not own (https://git-scm.com/docs/git-config#Documentation/git-config.txt-safedirectory).
+    /// The owner is that of the opened descriptor, so it cannot change
+    /// between the check and the read.
     ///
-    /// The file is opened with `O_NONBLOCK` because opening a FIFO for
-    /// reading otherwise waits for a writer (open(2)); observed on macOS with
-    /// a FIFO made by mkfifo, where the blocking open never returned and the
-    /// non-blocking one returned at once.
-    public static func readBounded(_ path: String) -> Data? {
-        let descriptor = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+    /// Any other entry that is not a readable regular file, such as a
+    /// directory, a symbolic link or a file without read permission, returns
+    /// empty data, which no link parses from, so it is reported as invalid
+    /// instead of letting the walk continue past it. Any other failure to
+    /// open, such as EACCES or EPERM, fails closed the same way: whether a
+    /// link exists there cannot be known, and skipping it could select
+    /// another project.
+    ///
+    /// The open flags keep a file the repository controls from reaching
+    /// anything but the one regular file (open(2)):
+    /// - `O_NOFOLLOW`: a symbolic link, which git stores and a clone
+    ///   recreates, is never followed. It fails with ELOOP, observed on macOS
+    ///   26.6 for links to a file and to nothing alike.
+    /// - `O_NOCTTY`: a terminal device is never made the controlling one.
+    /// - `O_NONBLOCK`: opening a FIFO for reading otherwise waits for a
+    ///   writer; observed on macOS with a FIFO made by mkfifo, where the
+    ///   blocking open never returned and the non-blocking one returned at
+    ///   once.
+    ///
+    /// - Parameter owner: The user whose files are trusted; the current user
+    ///   unless replaced.
+    public static func readBounded(_ path: String, owner: uid_t = getuid()) -> Data? {
+        let descriptor = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW | O_NOCTTY)
         guard descriptor >= 0 else {
             let failure = errno
-            guard failure == ENOENT || failure == ENOTDIR else { return Data() }
-            // `open` follows symbolic links, so a link to nothing fails with
-            // ENOENT although the entry itself exists.
-            var entry = stat()
-            return lstat(path, &entry) == 0 ? Data() : nil
+            return failure == ENOENT || failure == ENOTDIR ? nil : Data()
         }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         var status = stat()
         guard fstat(descriptor, &status) == 0, status.st_mode & S_IFMT == S_IFREG else { return Data() }
+        guard status.st_uid == owner else { return nil }
         return (try? handle.read(upToCount: maximumBytes + 1)) ?? Data()
     }
 

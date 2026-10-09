@@ -394,24 +394,35 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// Links `folder` to the project called `projectName`, following the
     /// rules `linkRepositories` states.
     ///
-    /// An existing file counts as linked when it selects the project by the
-    /// helper's own name rule, not only when its bytes match. Repositories
-    /// that reformat JSON on commit would otherwise be offered a replacement
-    /// on every clone, and replacing would drop extra keys and turn a
-    /// symbolic link into a plain file, while the helper already selects
-    /// the project from it.
+    /// The existing entry is read with the helper's own bounded reader, so a
+    /// folder counts as linked exactly when the helper would select the
+    /// project from it. A regular file of the user's that selects the
+    /// project by the helper's name rule, not only one whose bytes match, is
+    /// left untouched: repositories that reformat JSON on commit would
+    /// otherwise be offered a replacement on every clone, and replacing would
+    /// drop extra keys. Every other entry is replaced only with `overwrite`:
+    /// - a file naming another project or none, reported with that name;
+    /// - a symbolic link, which the reader never follows, so the name its
+    ///   target holds is neither read nor reported;
+    /// - a file another user owns, which the reader ignores as if absent;
+    ///   it is still never replaced without confirmation, and its name is
+    ///   not reported.
+    /// The reader never blocks on a FIFO.
     ///
     /// The root is refused because the helper never reads a link file there.
-    /// An existing entry is read with the helper's own bounded reader, which
-    /// follows a symbolic link and never blocks on a FIFO. An atomic write
-    /// writes an auxiliary file and then replaces the entry with it
+    /// An atomic write writes an auxiliary file and then replaces the entry
+    /// with it
     /// (https://developer.apple.com/documentation/foundation/nsdata/writingoptions/atomic).
     /// Observed with Foundation on macOS 26.6: a symbolic link is replaced by
     /// the new file and its target is left as it was, and a folder of that
     /// name makes the write fail. A folder is therefore reported as in the
     /// way rather than offered for replacement.
-    nonisolated private static func link(
-        _ folder: URL, projectName: String, overwrite: Bool, write: (Data, URL) throws -> Void
+    ///
+    /// - Parameter owner: The user whose link files are trusted; the current
+    ///   user unless replaced.
+    nonisolated static func link(
+        _ folder: URL, projectName: String, overwrite: Bool, write: (Data, URL) throws -> Void,
+        owner: uid_t = getuid()
     ) -> MCPRepositoryLinkResult {
         let contents = MCPRepositoryLink.contents(projectName: projectName)
         let file = folder.appendingPathComponent(MCPRepositoryLink.fileName)
@@ -423,16 +434,19 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isFolder), isFolder.boolValue else {
             return .rejected(path, reason: L("Only a folder can be linked to a project."))
         }
-        if let existing = MCPRepositoryLink.readBounded(path) {
-            let existingProject = MCPRepositoryLink.projectName(in: existing)
+        let existing = MCPRepositoryLink.readBounded(path, owner: owner)
+        let existingProject = existing.flatMap(MCPRepositoryLink.projectName(in:))
+        if let existing {
             let selectsProject = existingProject.map {
                 MCPRepositoryLink.matches(projectName: projectName, linkedName: $0)
             } == true
             if existing == contents || selectsProject {
                 return .unchanged(path)
             }
-            var entry = stat()
-            if lstat(path, &entry) == 0, entry.st_mode & S_IFMT == S_IFDIR {
+        }
+        var entry = stat()
+        if lstat(path, &entry) == 0 {
+            if entry.st_mode & S_IFMT == S_IFDIR {
                 return .rejected(path, reason: L("A folder named .berrydb.json is in the way."))
             }
             if !overwrite {

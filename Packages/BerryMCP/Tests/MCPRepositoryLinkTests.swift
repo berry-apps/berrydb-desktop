@@ -236,6 +236,51 @@ struct MCPRepositoryLinkTests {
         }
     }
 
+    /// A repository can commit a symbolic link; following it would let the
+    /// repository make the helper open any path, including a device.
+    @Test func symbolicLinkIsInvalidAndNeverFollowed() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let outside = root.appendingPathComponent("outside")
+        try writeLink(#"{"project":"Shop"}"#, in: outside)
+        let repository = root.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        let file = repository.appendingPathComponent(MCPRepositoryLink.fileName)
+        try FileManager.default.createSymbolicLink(
+            at: file, withDestinationURL: outside.appendingPathComponent(MCPRepositoryLink.fileName)
+        )
+
+        #expect(MCPRepositoryLink.readBounded(file.path) == Data())
+        #expect(MCPRepositoryLink.find(from: repository.path)
+            == .invalid(directory: MCPProjectSelector.canonicalPath(repository.path)))
+    }
+
+    /// A link file owned by another account, such as one in a shared or
+    /// world-writable folder above the workspace, is not the user's to
+    /// trust: it reads as absent and the walk goes on upward.
+    @Test func fileOwnedByAnotherUserIsSkipped() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let shared = root.appendingPathComponent("shared")
+        let workspace = shared.appendingPathComponent("repo")
+        try writeLink(#"{"project":"Outer"}"#, in: root)
+        try writeLink(#"{"project":"Planted"}"#, in: shared)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let planted = shared.appendingPathComponent(MCPRepositoryLink.fileName).path
+        let someoneElse = getuid() &+ 1
+
+        #expect(MCPRepositoryLink.readBounded(planted, owner: someoneElse) == nil)
+        #expect(MCPRepositoryLink.readBounded(planted) == Data(#"{"project":"Planted"}"#.utf8))
+        // The walk reads canonical paths, which resolve the temporary
+        // folder's symbolic link.
+        let walked = (MCPProjectSelector.canonicalPath(shared.path) as NSString)
+            .appendingPathComponent(MCPRepositoryLink.fileName)
+        let lookup = MCPRepositoryLink.find(from: workspace.path) { path in
+            MCPRepositoryLink.readBounded(path, owner: path == walked ? someoneElse : getuid())
+        }
+        #expect(lookup == .found(directory: MCPProjectSelector.canonicalPath(root.path), projectName: "Outer"))
+    }
+
     @Test func fifoIsInvalidWithoutWaitingForAWriter() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
