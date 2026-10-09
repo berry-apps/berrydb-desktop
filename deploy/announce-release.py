@@ -48,6 +48,9 @@ GRAPH_API_VERSION = "v25.0"
 # https://core.telegram.org/bots/api#sendmessage
 TELEGRAM_MAX_CHARS = 4096
 
+# The channels an announcement can go to, in the order they are shown and posted.
+CHANNELS = ("telegram", "facebook")
+
 ELLIPSIS = "…"
 REQUEST_TIMEOUT = 30  # seconds, per request
 
@@ -392,33 +395,43 @@ def _telegram_note(release: Release) -> str:
     return f"{utf16_length(text)} of {TELEGRAM_MAX_CHARS} characters, {state}"
 
 
-def render_preview(release: Release) -> str:
-    return (
-        f"Release: {release.name}\n"
-        f"Page: {release.url}\n"
-        f"\n"
-        f"== Telegram ({_telegram_note(release)}) ==\n"
-        f"{telegram_text(release)}\n"
-        f"link preview: {release.url}\n"
-        f"\n"
-        f"== Facebook Page (message, with the release page as the link) ==\n"
-        f"link: {release.url}\n"
-        f"\n"
-        f"{facebook_message(release)}\n"
-    )
+def render_preview(release: Release, channels: Sequence[str] = CHANNELS) -> str:
+    sections = [f"Release: {release.name}\nPage: {release.url}\n"]
+    if "telegram" in channels:
+        sections.append(
+            f"== Telegram ({_telegram_note(release)}) ==\n"
+            f"{telegram_text(release)}\n"
+            f"link preview: {release.url}\n"
+        )
+    if "facebook" in channels:
+        sections.append(
+            f"== Facebook Page (message, with the release page as the link) ==\n"
+            f"link: {release.url}\n"
+            f"\n"
+            f"{facebook_message(release)}\n"
+        )
+    return "\n".join(sections)
 
 
-def render_summary(release: Release) -> str:
-    return (
+def render_summary(release: Release, channels: Sequence[str] = CHANNELS) -> str:
+    parts = [
         f"## Release announcement preview\n\n"
         f"**{release.name}**: {release.url}\n\n"
         f"Nothing has been posted yet. The post job waits for approval in the "
         f"`release-announcement` environment. The release notes are read again "
-        f"when that job runs, so an edit made before approving is what gets posted.\n\n"
-        f"### Telegram\n\n{_telegram_note(release)}\n\n{_fence(telegram_text(release))}\n\nlink preview: {release.url}\n\n"
-        f"### Facebook Page\n\nThe release page is attached as the post's link.\n\n"
-        f"link: {release.url}\n\n{_fence(facebook_message(release))}\n"
-    )
+        f"when that job runs, so an edit made before approving is what gets posted.\n"
+    ]
+    if "telegram" in channels:
+        parts.append(
+            f"### Telegram\n\n{_telegram_note(release)}\n\n{_fence(telegram_text(release))}\n\n"
+            f"link preview: {release.url}\n"
+        )
+    if "facebook" in channels:
+        parts.append(
+            f"### Facebook Page\n\nThe release page is attached as the post's link.\n\n"
+            f"link: {release.url}\n\n{_fence(facebook_message(release))}\n"
+        )
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -426,10 +439,28 @@ def render_summary(release: Release) -> str:
 # ---------------------------------------------------------------------------
 
 
+def parse_channels(value: str) -> tuple[str, ...]:
+    """A comma-separated channel list, as the --only option and the manual
+    workflow input take it, in canonical order without duplicates."""
+    names = [name.strip().lower() for name in value.split(",") if name.strip()]
+    unknown = [name for name in names if name not in CHANNELS]
+    if not names or unknown:
+        shown = ", ".join(unknown) if unknown else repr(value)
+        raise argparse.ArgumentTypeError(f"unknown or empty channel selection {shown}; choose from {', '.join(CHANNELS)}")
+    return tuple(channel for channel in CHANNELS if channel in names)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Announce a published release on Telegram and a Facebook Page.")
     parser.add_argument("--tag", required=True, help="release tag including the leading v, e.g. v1.0.8")
     parser.add_argument("--preview", action="store_true", help="print the messages and post nothing")
+    parser.add_argument(
+        "--only",
+        type=parse_channels,
+        default=CHANNELS,
+        help="comma-separated channels to preview or post to (default: telegram,facebook); a retry after a "
+        "partial failure names the channel that failed",
+    )
     parser.add_argument("--summary-file", help="with --preview, append a Markdown version here (the Actions job summary)")
     return parser
 
@@ -458,21 +489,24 @@ def main(
         except (ConfigError, RequestError) as exc:
             print(f"✗ {exc}", file=err)
             return 1
-        print(render_preview(release), file=out)
+        print(render_preview(release, args.only), file=out)
         if args.summary_file:
             with open(args.summary_file, "a", encoding="utf-8") as summary:
-                summary.write(render_summary(release))
+                summary.write(render_summary(release, args.only))
         return 0
 
-    # Configuration is checked in full before anything is posted: a retry after
-    # fixing a half-set pair must not repost the channel that was fine.
+    # Configuration of the selected channels is checked in full before anything
+    # is posted: a retry after fixing a half-set pair must not repost the channel
+    # that was fine. A channel that was not selected is not looked at, so a retry
+    # of one channel is never blocked by another's configuration.
     try:
-        telegram, facebook = telegram_config(env), facebook_config(env)
+        telegram = telegram_config(env) if "telegram" in args.only else None
+        facebook = facebook_config(env) if "facebook" in args.only else None
     except ConfigError as exc:
         print(f"✗ {exc}", file=err)
         return 1
     if not telegram and not facebook:
-        print("• No announcement channel is configured (no complete secret pair); nothing to post.", file=out)
+        print(f"• No announcement channel is configured for {', '.join(args.only)} (no complete secret pair); nothing to post.", file=out)
         return 0
 
     try:

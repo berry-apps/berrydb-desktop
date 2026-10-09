@@ -8,6 +8,8 @@ Run: python3 -m unittest deploy/test_announce_release.py
 The hyphen in the script's file name makes it unimportable by name, so it is
 loaded by path, the same way test_upload_release.py loads upload-release.py.
 """
+import argparse
+import contextlib
 import importlib.util
 import io
 import json
@@ -347,6 +349,92 @@ class ConfigurationTests(unittest.TestCase):
         # character into the request URL.
         env = {"TELEGRAM_BOT_TOKEN": BOT_TOKEN + "\n", "TELEGRAM_CHAT_ID": " " + CHAT_ID + " "}
         self.assertEqual(announce.telegram_config(env), (BOT_TOKEN, CHAT_ID))
+
+
+class ChannelSelectionTests(unittest.TestCase):
+    BOTH = {**BASE_ENV, **TELEGRAM_ENV, **FACEBOOK_ENV}
+
+    def test_a_single_channel_is_selected(self):
+        self.assertEqual(announce.parse_channels("telegram"), ("telegram",))
+        self.assertEqual(announce.parse_channels("facebook"), ("facebook",))
+
+    def test_selection_is_normalised_to_canonical_order_without_duplicates(self):
+        self.assertEqual(announce.parse_channels("facebook,telegram"), ("telegram", "facebook"))
+        self.assertEqual(announce.parse_channels(" Facebook , TELEGRAM, telegram,"), ("telegram", "facebook"))
+
+    def test_an_unknown_or_empty_selection_is_rejected(self):
+        for bad in ("x", "telegram,x", "", ",", "twitter"):
+            with self.assertRaises(argparse.ArgumentTypeError, msg=bad) as ctx:
+                announce.parse_channels(bad)
+            self.assertIn("telegram", str(ctx.exception))
+            self.assertIn("facebook", str(ctx.exception))
+
+    def test_a_bad_only_value_is_a_usage_error(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
+            announce.main(["--tag", TAG, "--only", "twitter"], environ=dict(BASE_ENV), opener=FakeOpener())
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("twitter", err.getvalue())
+
+    def test_only_facebook_leaves_telegram_alone_even_though_it_is_configured(self):
+        opener = FakeOpener()
+        code, _, err = run_main(["--tag", TAG, "--only", "facebook"], dict(self.BOTH), opener)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(opener.to("api.telegram.org"), [])
+        self.assertEqual(len(opener.to("graph.facebook.com")), 1)
+
+    def test_only_telegram_leaves_facebook_alone_even_though_it_is_configured(self):
+        opener = FakeOpener()
+        code, _, err = run_main(["--tag", TAG, "--only", "telegram"], dict(self.BOTH), opener)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(opener.to("graph.facebook.com"), [])
+        self.assertEqual(len(opener.to("api.telegram.org")), 1)
+
+    def test_without_only_every_configured_channel_posts(self):
+        opener = FakeOpener()
+        code, _, err = run_main(["--tag", TAG], dict(self.BOTH), opener)
+        self.assertEqual(code, 0, err)
+        self.assertEqual((len(opener.to("api.telegram.org")), len(opener.to("graph.facebook.com"))), (1, 1))
+
+    def test_a_half_set_pair_of_an_unselected_channel_is_not_an_error(self):
+        # Retrying only Telegram must not be blocked by Facebook's configuration.
+        opener = FakeOpener()
+        env = {**BASE_ENV, **TELEGRAM_ENV, "FACEBOOK_PAGE_ID": PAGE_ID}
+        code, _, err = run_main(["--tag", TAG, "--only", "telegram"], env, opener)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(opener.to("api.telegram.org")), 1)
+
+    def test_a_half_set_pair_of_a_selected_channel_still_fails(self):
+        opener = FakeOpener()
+        env = {**BASE_ENV, **TELEGRAM_ENV, "FACEBOOK_PAGE_ID": PAGE_ID}
+        code, out, err = run_main(["--tag", TAG, "--only", "facebook"], env, opener)
+        self.assertEqual(code, 1)
+        self.assertEqual(opener.requests, [])
+        self.assertIn("FACEBOOK_PAGE_ACCESS_TOKEN", out + err)
+
+    def test_a_selected_channel_without_secrets_is_a_notice_naming_it_and_posts_nothing(self):
+        opener = FakeOpener()
+        code, out, err = run_main(["--tag", TAG, "--only", "facebook"], {**BASE_ENV, **TELEGRAM_ENV}, opener)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(opener.requests, [])
+        self.assertIn("No announcement channel is configured for facebook", out)
+
+    def test_preview_shows_only_the_selected_channel(self):
+        _, out, _ = run_main(["--tag", TAG, "--preview", "--only", "telegram"], dict(BASE_ENV), FakeOpener())
+        self.assertIn("== Telegram", out)
+        self.assertNotIn("Facebook", out)
+        _, out, _ = run_main(["--tag", TAG, "--preview", "--only", "facebook"], dict(BASE_ENV), FakeOpener())
+        self.assertIn("== Facebook Page", out)
+        self.assertNotIn("Telegram", out)
+
+    def test_summary_shows_only_the_selected_channel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = pathlib.Path(tmp) / "summary.md"
+            run_main(["--tag", TAG, "--preview", "--only", "facebook", "--summary-file", str(summary)],
+                     dict(BASE_ENV), FakeOpener())
+            text = summary.read_text()
+        self.assertIn("### Facebook Page", text)
+        self.assertNotIn("Telegram", text)
 
 
 class FetchReleaseTests(unittest.TestCase):
