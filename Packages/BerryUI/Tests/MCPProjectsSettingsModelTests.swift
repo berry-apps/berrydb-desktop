@@ -1,4 +1,3 @@
-import BerryMCP
 import CryptoKit
 import Foundation
 import Testing
