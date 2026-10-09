@@ -479,7 +479,7 @@ struct MCPProjectsSettingsModelTests {
 
         let snippets = model.configurationSnippets(project: draft.id)
 
-        let quoted = #""/Applications/Berry DB.app/Contents/Helpers/berrydb-mcp""#
+        let quoted = "'/Applications/Berry DB.app/Contents/Helpers/berrydb-mcp'"
         let explicit = " --project 6f9619ff-8b86-d011-b42d-00c04fc964ff"
         #expect(Array(snippets.map(\.text).prefix(6)) == [
             "claude mcp add --scope user berrydb -- \(quoted)",
@@ -516,14 +516,18 @@ struct MCPProjectsSettingsModelTests {
         #expect(saved.filter { $0.text.hasSuffix("--project \(draft.id.uuidString.lowercased())") }.count == 3)
     }
 
-    @Test func snippetsEscapeShellCharactersInsideTheQuotes() throws {
+    /// Inside POSIX single quotes every character is literal, including
+    /// `"`, `\`, `$`, a backtick and the `!` that bash and zsh expand inside
+    /// double quotes in an interactive shell; only `'` itself has to close
+    /// the quotes, be escaped, and reopen them.
+    @Test func snippetsQuoteTheHelperPathInSingleQuotes() throws {
         let (store, _, _) = try makeStore()
-        let helper = URL(fileURLWithPath: #"/Users/a"b/$HOME/`x`/back\slash/berrydb-mcp"#)
+        let helper = URL(fileURLWithPath: #"/Users/a"b/$HOME/`x`/it's!!/back\slash/berrydb-mcp"#)
         let model = makeModel(store, KeyBox(), helperURL: helper)
 
         let first = try #require(model.configurationSnippets(project: UUID()).first)
 
-        #expect(first.text == #"claude mcp add --scope user berrydb -- "/Users/a\"b/\$HOME/\`x\`/back\\slash/berrydb-mcp""#)
+        #expect(first.text == #"claude mcp add --scope user berrydb -- '/Users/a"b/$HOME/`x`/it'\''s!!/back\slash/berrydb-mcp'"#)
     }
 
     // MARK: Per-repository entries
@@ -545,7 +549,7 @@ struct MCPProjectsSettingsModelTests {
         #expect(entries == [
             MCPProjectsSettingsModel.AgentSetupEntry(
                 host: L("\("Claude Code"), this repository"),
-                text: #"claude mcp add --scope project berrydb -- "/Applications/Berry DB.app/Contents/Helpers/berrydb-mcp" --project "Billing API""#,
+                text: "claude mcp add --scope project berrydb -- '/Applications/Berry DB.app/Contents/Helpers/berrydb-mcp' --project 'Billing API'",
                 caption: Self.claudeRepositoryCaption
             ),
             MCPProjectsSettingsModel.AgentSetupEntry(
@@ -561,22 +565,22 @@ struct MCPProjectsSettingsModelTests {
     }
 
     /// The name and the helper path are written as given, inside the
-    /// quoting each format needs: a POSIX shell's double quotes for the
-    /// command, TOML basic strings for the Codex file.
+    /// quoting each format needs: POSIX single quotes for the command, TOML
+    /// basic strings for the Codex file.
     @Test func perRepositoryEntriesQuoteTheNameForTheShellAndForTOML() throws {
         let (store, _, _) = try makeStore()
-        let helper = URL(fileURLWithPath: #"/Users/a"b/back\slash/berrydb-mcp"#)
+        let helper = URL(fileURLWithPath: #"/Users/a"b/it's!/back\slash/berrydb-mcp"#)
         let model = makeModel(store, KeyBox(), helperURL: helper)
-        let draft = try savedDraft(named: "a\"b\\c $HOME `x` y\nz", in: model)
+        let draft = try savedDraft(named: "a\"b\\c $HOME `x` it's !! y\nz", in: model)
 
         let entries = model.configurationSnippets(project: draft.id).suffix(2).map(\.text)
 
-        #expect(entries.first == #"claude mcp add --scope project berrydb -- "/Users/a\"b/back\\slash/berrydb-mcp" --project "a\"b\\c \$HOME \`x\` y"#
-            + "\n" + #"z""#)
+        #expect(entries.first == #"claude mcp add --scope project berrydb -- '/Users/a"b/it'\''s!/back\slash/berrydb-mcp' --project 'a"b\c $HOME `x` it'\''s !! y"#
+            + "\n" + #"z'"#)
         #expect(entries.last == #"""
             [mcp_servers.berrydb]
-            command = "/Users/a\"b/back\\slash/berrydb-mcp"
-            args = ["--project", "a\"b\\c $HOME `x` y\nz"]
+            command = "/Users/a\"b/it's!/back\\slash/berrydb-mcp"
+            args = ["--project", "a\"b\\c $HOME `x` it's !! y\nz"]
             """#)
     }
 

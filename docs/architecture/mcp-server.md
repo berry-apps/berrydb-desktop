@@ -180,9 +180,9 @@ character removes the question.
    executable as `<helper>`:
 
    ```sh
-   claude mcp add --scope user berrydb -- "<helper>"
-   codex mcp add berrydb -- "<helper>"
-   agy mcp add berrydb -- "<helper>"
+   claude mcp add --scope user berrydb -- '<helper>'
+   codex mcp add berrydb -- '<helper>'
+   agy mcp add berrydb -- '<helper>'
    ```
 
    One shared entry serves every repository; the helper picks the project
@@ -216,13 +216,19 @@ while a name also matches a teammate's project of the same name. The
 hosts that support this gate configuration a repository defines behind
 the user's trust; the helper adds no gate of its own. For a saved project,
 and once the helper is bundled, the pane's **Agent Setup** section shows
-these entries with the helper path and the name filled in, quoted for the
-shell and as TOML strings.
+these entries with the helper path and the name filled in.
+
+The pane single-quotes the helper path and the project name in every
+command it shows, writing an embedded `'` as `'\''`. Inside POSIX single
+quotes every character is literal; inside double quotes an interactive
+bash or zsh still expands `!`, so `"it!!s"` would paste in the previous
+command (observed with /bin/bash 3.2.57 and zsh 5.9 on macOS 26.6.2). The
+Codex entry writes both values as TOML basic strings instead.
 
 - **Claude Code.** Run in the repository's top folder:
 
   ```sh
-  claude mcp add --scope project berrydb -- "<helper>" --project "<name>"
+  claude mcp add --scope project berrydb -- '<helper>' --project '<name>'
   ```
 
   This writes `.mcp.json` in that folder, which can be committed. Claude

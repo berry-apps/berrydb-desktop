@@ -344,8 +344,9 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// An unsaved project gets none, since its ID means nothing to the
     /// helper yet. The `--` before the helper keeps `--project` an argument
     /// of the helper: `agy mcp add --help` (1.3.1) requires `--` before
-    /// arguments that begin with `-`. The helper path is double-quoted for a
-    /// POSIX shell so an install path with spaces stays one argument.
+    /// arguments that begin with `-`. The helper path, and a project name
+    /// below, are single-quoted for a POSIX shell (`shellQuoted`), so a path
+    /// or name with spaces or shell characters stays one literal argument.
     ///
     /// A saved project then gets one per-repository entry for Claude Code
     /// and one for Codex, each passing `--project <name>` with the saved
@@ -457,21 +458,17 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         return false
     }
 
-    /// Wraps `value` in double quotes, escaping the four characters a POSIX
-    /// shell still interprets inside them (`"`, `\`, `$`, backtick), per
-    /// https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html#tag_19_02_03.
-    /// Interactive history expansion of `!` in bash and zsh is outside POSIX
-    /// and not escaped; an app bundle path or a project name containing `!`
-    /// would need editing.
+    /// Wraps `value` in single quotes, inside which a POSIX shell keeps
+    /// every character literal and a single quote cannot occur
+    /// (https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html#tag_19_02_02),
+    /// so each `'` is written as `'\''`: close the quotes, an escaped quote,
+    /// reopen them. Double quotes are not enough: an interactive bash or zsh
+    /// still expands `!` inside them, and escaping it there does not help
+    /// in bash, which keeps the backslash. Observed with /bin/bash 3.2.57
+    /// and zsh 5.9 on macOS 26.6.2 reading commands interactively:
+    /// `"it!!s"` became the previous command spliced in, bash printed
+    /// `"a\!b"` as `a\!b`, and `'it!!s'` stayed as written in both.
     private static func shellQuoted(_ value: String) -> String {
-        var quoted = "\""
-        for character in value {
-            if "\"\\$`".contains(character) {
-                quoted.append("\\")
-            }
-            quoted.append(character)
-        }
-        quoted.append("\"")
-        return quoted
+        "'" + value.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 }
