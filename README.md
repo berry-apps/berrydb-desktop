@@ -37,7 +37,7 @@
 
 **BerryDB** is an ultra-fast, lightweight, and modern database management tool crafted specifically for macOS developers, data engineers, and DBAs. Built 100% natively using **Swift 6, SwiftUI, and AppKit**, BerryDB completely eliminates the bloat, sluggishness, and high memory footprint of Electron-based clients.
 
-Whether you're querying production PostgreSQL databases, inspecting Redis caches, managing MongoDB collections, exploring Qdrant vector spaces, or querying SQLite files locally, BerryDB delivers instantaneous responsiveness with Apple Keychain enclave security.
+Whether you're querying production PostgreSQL databases, inspecting Redis caches, managing MongoDB collections, exploring Qdrant vector spaces, or querying SQLite files locally, BerryDB keeps the grid responsive and every credential in the macOS Keychain.
 
 ---
 
@@ -66,8 +66,8 @@ Connect to SQL, NoSQL, Key-Value, and Vector databases all in a unified native w
   - **Elasticsearch**: Cluster health monitoring, indices browser, and search query execution.
   - **Qdrant**: Vector collections browser and distance metric inspector.
 
-### 🔒 Apple Keychain Enclave & Enterprise Security
-- **Hardware Enclave**: All passwords, tokens, and SSH keys are stored directly in macOS Keychain. No plaintext credentials on disk.
+### 🔒 Keychain & Connection Security
+- **Keychain-only secrets**: All passwords, tokens, and SSH keys are stored in the macOS Keychain. No plaintext credentials on disk.
 - **Built-in SSH Tunneling**: Powered by Citadel (pure Swift SSH client) for secure bastion jump hosts without relying on external terminal sessions.
 - **TLS/SSL Encryption**: Full encryption support with custom CA, client certificate, and verification options.
 
@@ -75,6 +75,7 @@ Connect to SQL, NoSQL, Key-Value, and Vector databases all in a unified native w
 - **Context-Aware SQL Generation**: Turn natural language into optimized SQL queries with automatic database schema injection.
 - **Query Explanation & Tuning**: Instant `EXPLAIN` analysis, bottleneck detection, and index recommendations.
 - **Chat with Your Database**: Ask questions about your schema, tables, and relationships directly inside the integrated AI panel.
+- **Where the AI runs**: On a Mac with Apple Intelligence, the assistant can run fully on-device with no network call. Otherwise it uses BerryDB's AI service (free trial, then a paid plan): your questions, the database type, and your schema (table and column names) are sent to that service. Row data is never sent unless you turn on sample rows, and any SQL the assistant proposes runs only after you approve it.
 
 ### 📊 Database Intelligence & ER Diagrams
 - **Mermaid.js ER Diagrams**: Automatically generate interactive visual Entity-Relationship diagrams from your database schema.
@@ -190,7 +191,7 @@ make run
 
 ## ☕ Support the Project (Donate)
 
-BerryDB is completely free and open-source for all local database management capabilities. If BerryDB saves you time, enhances your workflow, or replaces expensive subscription tools, consider buying the creators a coffee:
+BerryDB is completely free and open-source for all local database management capabilities; only the cloud AI service is paid. If BerryDB saves you time, enhances your workflow, or replaces expensive subscription tools, consider buying the creators a coffee:
 
 <div align="center">
 

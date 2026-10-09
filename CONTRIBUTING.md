@@ -65,7 +65,7 @@ make test
 
 1. **Pure Native & Lightweight**: BerryDB avoids Electron or web wrappers for its desktop client core. Code should be written in clean, idiomatic Swift 6 using SwiftUI and AppKit.
 2. **Strict Concurrency**: The codebase complies with Swift 6 strict concurrency checks (`Sendable`, `@MainActor`, actors). Avoid unsafe concurrency workarounds.
-3. **Hardware Enclave Security**: Never store raw credentials, passwords, or private keys on disk. Use the macOS Keychain via `BerryCore` / `BerryTunnel`.
+3. **Keychain-Only Secrets**: Never store raw credentials, passwords, or private keys on disk. Use the macOS Keychain via `BerryCore` / `BerryTunnel`.
 4. **Performance First**: Virtualized lists (`NSTableView`), lazy loading, and streaming data feeds are preferred over loading massive datasets directly into memory.
 
 ### Git & Pull Request Workflow
