@@ -205,7 +205,7 @@ public struct MCPMetadataService: Sendable {
         if let objectNames, objectNames.count > Self.maximumObjectNames {
             throw MCPMetadataError.invalidArgument("At most \(Self.maximumObjectNames) object names")
         }
-        return try mappingErrors {
+        return try mappingErrors(connectionID) {
             try graph.schema(
                 profileID: connectionID, objectNames: objectNames, detail: detail,
                 limit: Self.schemaObjectLimit
@@ -226,7 +226,7 @@ public struct MCPMetadataService: Sendable {
             throw MCPMetadataError.invalidArgument("Query must be 1 to \(Self.maximumQueryLength) characters")
         }
         let cap = min(max(limit, 1), Self.maximumSearchResults)
-        let graph = try mappingErrors { try loadGraph(connectionID) }
+        let graph = try mappingErrors(connectionID) { try loadGraph(connectionID) }
         guard graph.nodeCount > 0 else { throw MCPMetadataError.noSnapshot }
 
         var ownerByColumn: [String: String] = [:]
@@ -262,7 +262,7 @@ public struct MCPMetadataService: Sendable {
         in project: MCPVerifiedProject, connectionID: UUID, operation: MCPGraphOperation
     ) throws -> MCPGraphResult {
         try requireAssigned(connectionID, in: project)
-        return try mappingErrors {
+        return try mappingErrors(connectionID) {
             switch operation {
             case let .neighbors(node):
                 let found = try graph.neighbors(profileID: connectionID, node: node, resolution: .strict)
@@ -299,7 +299,7 @@ public struct MCPMetadataService: Sendable {
         in project: MCPVerifiedProject, connectionID: UUID, object: String?
     ) throws -> MCPGraphStats {
         try requireAssigned(connectionID, in: project)
-        return try mappingErrors {
+        return try mappingErrors(connectionID) {
             if let object {
                 return .table(try graph.statistics(profileID: connectionID, table: object, resolution: .strict))
             }
@@ -317,17 +317,52 @@ public struct MCPMetadataService: Sendable {
         }
     }
 
-    private func mappingErrors<T>(_ body: () throws -> T) throws -> T {
+    /// Maps graph query errors to agent-facing ones. An ambiguous name is
+    /// answered from the graph read again, because the graph service's own
+    /// message lists every match, unbounded, by a qualified name that can
+    /// itself be ambiguous: three thousand tables with an `id` column give
+    /// three thousand copies of `public.id`.
+    private func mappingErrors<T>(_ connectionID: UUID, _ body: () throws -> T) throws -> T {
         do {
             return try body()
         } catch let error as BerryGraphQueryService.QueryError {
             switch error {
             case .noSnapshot:
                 throw MCPMetadataError.noSnapshot
-            case .nodeNotFound, .ambiguousNode:
+            case .nodeNotFound:
                 throw MCPMetadataError.notFound(error.localizedDescription)
+            case let .ambiguousNode(name, _):
+                let graph = try loadGraph(connectionID)
+                throw MCPMetadataError.notFound(Self.ambiguityMessage(for: name, in: graph))
             }
         }
+    }
+
+    /// What to tell the agent when `name` matched several nodes: the tables
+    /// and views it matched, each by a name that resolves to that one node
+    /// alone, at most `maximumDiagnosticNames` of them and a count of the
+    /// rest. A qualified name is offered when it resolves to its node alone,
+    /// otherwise the node's stable id, which always does; no two suggestions
+    /// are therefore alike. Columns and indexes are never offered, since
+    /// graph operations and statistics work on tables and views; a name that
+    /// matched only those (the only other kinds a harvested graph holds) is
+    /// answered with that rule instead.
+    static func ambiguityMessage(for name: String, in graph: SchemaGraph) -> String {
+        let lookup = StrictLookup(graph)
+        let candidates = lookup.matches(name)
+            .filter { $0.kind == .table || $0.kind == .view }
+            .sorted { (StrictLookup.qualifiedName($0), $0.id) < (StrictLookup.qualifiedName($1), $1.id) }
+        guard !candidates.isEmpty else {
+            return "Node '\(name)' names columns or indexes, not a table or view. Pass a table or view name."
+        }
+        let offered = candidates.map { node in
+            let qualified = StrictLookup.qualifiedName(node)
+            return lookup.matches(qualified) == [node] ? qualified : node.id
+        }
+        let listed = offered.prefix(BerryGraphQueryService.maximumDiagnosticNames)
+        let rest = offered.count - listed.count
+        let more = rest > 0 ? ", and \(rest) more" : ""
+        return "Node '\(name)' is ambiguous. Use one of: \(listed.joined(separator: ", "))\(more)"
     }
 
     private static func searchRank(of kind: NodeKind) -> Int? {
@@ -351,5 +386,56 @@ public struct MCPMetadataService: Sendable {
             remaining -= kept.count
         }
         return result
+    }
+}
+
+/// The nodes a name matches under the graph service's strict resolution,
+/// indexed once so that checking every suggestion stays linear in the graph.
+///
+/// Mirrors the order `BerryGraphQueryService` resolves a name in: the name
+/// trimmed as an exact stable id, then as a qualified `database.name`, then
+/// as a table or view name, then as any node name, the last three ignoring
+/// letter case. The first step with a match decides, and more than one match
+/// there is ambiguous. The tests check every suggestion against the service
+/// itself, so a change to that order shows up there.
+private struct StrictLookup {
+    private let graph: SchemaGraph
+    private let byQualifiedName: [String: [GraphNode]]
+    private let tablesAndViewsByName: [String: [GraphNode]]
+    private let byName: [String: [GraphNode]]
+
+    init(_ graph: SchemaGraph) {
+        self.graph = graph
+        var byQualifiedName: [String: [GraphNode]] = [:]
+        var tablesAndViewsByName: [String: [GraphNode]] = [:]
+        var byName: [String: [GraphNode]] = [:]
+        for node in graph.nodes.values {
+            let name = node.name.lowercased()
+            if let database = node.database {
+                byQualifiedName["\(database).\(node.name)".lowercased(), default: []].append(node)
+            }
+            if node.kind == .table || node.kind == .view {
+                tablesAndViewsByName[name, default: []].append(node)
+            }
+            byName[name, default: []].append(node)
+        }
+        self.byQualifiedName = byQualifiedName
+        self.tablesAndViewsByName = tablesAndViewsByName
+        self.byName = byName
+    }
+
+    /// The nodes of the first resolution step that `raw` matches; empty
+    /// when it matches none.
+    func matches(_ raw: String) -> [GraphNode] {
+        let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let exact = graph.nodes[query] { return [exact] }
+        let key = query.lowercased()
+        return byQualifiedName[key] ?? tablesAndViewsByName[key] ?? byName[key] ?? []
+    }
+
+    /// `database.name`, or the bare name of a node without a database, as
+    /// the graph service lists matches.
+    static func qualifiedName(_ node: GraphNode) -> String {
+        node.database.map { "\($0).\(node.name)" } ?? node.name
     }
 }

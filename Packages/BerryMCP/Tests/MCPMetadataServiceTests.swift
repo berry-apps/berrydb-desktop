@@ -373,6 +373,106 @@ struct MCPMetadataServiceTests {
         }
     }
 
+    /// The suggestions an ambiguity message offers: the comma-separated names
+    /// after "Use one of: ", without a trailing "and N more".
+    func suggestions(in message: String) -> [String] {
+        guard let range = message.range(of: "Use one of: ") else { return [] }
+        return message[range.upperBound...]
+            .components(separatedBy: ", ")
+            .filter { !$0.hasPrefix("and ") }
+    }
+
+    /// The message of the `notFound` error `body` throws, or nil.
+    func notFoundMessage(_ body: () throws -> Any) -> String? {
+        do {
+            _ = try body()
+            return nil
+        } catch let MCPMetadataError.notFound(message) {
+            return message
+        } catch {
+            return nil
+        }
+    }
+
+    /// Three thousand tables in one schema, each with an `id` column, as the
+    /// harvester names them.
+    @Test func aColumnNameSharedByManyTablesGetsABoundedAnswer() throws {
+        var graph = SchemaGraph()
+        for index in 0 ..< 3000 {
+            let table = String(format: "t%04d", index)
+            graph.addNode(GraphNode(id: "table:public.\(table)", kind: .table, name: table, database: "public"))
+            graph.addNode(GraphNode(id: "column:public.\(table).id", kind: .column, name: "id", database: "public"))
+            graph.addEdge(GraphEdge(src: "table:public.\(table)", dst: "column:public.\(table).id", kind: .hasColumn))
+        }
+        let service = try makeService(graph: graph)
+
+        for name in ["id", "public.id", "ID"] {
+            let messages = [
+                notFoundMessage { try service.graphQuery(in: project, connectionID: production.id, operation: .neighbors(node: name)) },
+                notFoundMessage { try service.graphQuery(in: project, connectionID: production.id, operation: .blastRadius(node: name)) },
+                notFoundMessage {
+                    try service.graphQuery(in: project, connectionID: production.id, operation: .path(from: name, to: "t0001"))
+                },
+                notFoundMessage { try service.graphStats(in: project, connectionID: production.id, object: name) },
+            ]
+            for message in messages {
+                let text = try #require(message)
+                #expect(text.count < 300, "\(text.prefix(300))")
+                #expect(text.contains("table or view name"))
+                #expect(suggestions(in: text).isEmpty)
+            }
+        }
+    }
+
+    /// A table name present in 120 schemas: at most fifty suggestions, each
+    /// distinct, each resolving to exactly one table, and a count of the rest.
+    @Test func manyTablesOfOneNameGetAtMostFiftyDistinctSuggestions() throws {
+        var graph = SchemaGraph()
+        for index in 0 ..< 120 {
+            let schema = String(format: "s%03d", index)
+            graph.addNode(GraphNode(id: "table:\(schema).users", kind: .table, name: "users", database: schema))
+        }
+        let service = try makeService(graph: graph)
+
+        let message = try #require(notFoundMessage {
+            try service.graphQuery(in: project, connectionID: production.id, operation: .neighbors(node: "users"))
+        })
+        let offered = suggestions(in: message)
+        #expect(offered.count == 50)
+        #expect(Set(offered).count == offered.count)
+        #expect(message.hasSuffix(", and 70 more"))
+        for suggestion in offered {
+            #expect(throws: Never.self, "\(suggestion)") {
+                try service.graphQuery(in: project, connectionID: production.id, operation: .neighbors(node: suggestion))
+            }
+        }
+    }
+
+    /// A table and a view sharing a qualified name, plus a column carrying
+    /// that name in the same schema: the qualified name itself is ambiguous,
+    /// so it is never offered; each table and view is offered by its stable
+    /// id instead, and columns are not offered at all.
+    @Test func aSuggestionThatIsItselfAmbiguousIsNeverOffered() throws {
+        var graph = SchemaGraph()
+        graph.addNode(GraphNode(id: "table:shop.orders", kind: .table, name: "orders", database: "shop"))
+        graph.addNode(GraphNode(id: "view:shop.orders", kind: .view, name: "orders", database: "shop"))
+        graph.addNode(GraphNode(id: "table:shop.audit", kind: .table, name: "audit", database: "shop"))
+        graph.addNode(GraphNode(id: "column:shop.audit.orders", kind: .column, name: "orders", database: "shop"))
+        let service = try makeService(graph: graph)
+
+        for name in ["orders", "shop.orders"] {
+            let message = try #require(notFoundMessage {
+                try service.graphQuery(in: project, connectionID: production.id, operation: .neighbors(node: name))
+            })
+            #expect(suggestions(in: message) == ["table:shop.orders", "view:shop.orders"], "\(message)")
+            for suggestion in suggestions(in: message) {
+                #expect(throws: Never.self, "\(suggestion)") {
+                    try service.graphQuery(in: project, connectionID: production.id, operation: .neighbors(node: suggestion))
+                }
+            }
+        }
+    }
+
     @Test func topCentralityLimitIsClampedToFifty() throws {
         var graph = SchemaGraph()
         for index in 0 ..< 80 {
