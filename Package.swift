@@ -314,11 +314,12 @@ let package = Package(
             // only). BerryTunnel: connectDataSource/connectKeyValue need
             // SSHTunnel directly (BerryCore's ConnectionManager.prepareEndpoint
             // has no DataSourceDriver/KeyValueDriver equivalent to reuse).
-            // BerryMCP: MCP project settings canonicalize workspace roots and
-            // read and match repository link files with the same functions
-            // the berrydb-mcp helper selects projects by, and encode the link
-            // files they write with the same type; it adds no module the UI
-            // did not already link.
+            // BerryMCP: MCP project settings canonicalize workspace roots,
+            // compare project names and recognize a name the helper would
+            // read as a project ID with the same functions the berrydb-mcp
+            // helper selects projects by (`MCPProjectSelector.canonicalPath`,
+            // `MCPProjectSelector.namesMatch`, `MCPProjectReference`); it adds
+            // no module the UI did not already link.
             dependencies: [
                 "BerryCore", "BerryCredentials", "BerryStore", "BerryLicense", "BerryAI", "BerryGraph",
                 "BerryDataSourceKit", "BerryKeyValueKit", "BerryTunnel", "BerryMCP",
@@ -522,13 +523,11 @@ let package = Package(
             // BerryKeyValueKit/BerryDriverRedis: the Redis workspace wiring
  // has its own Docker/local-server-gated
             // conformance suite here too, same pattern as Mongo/Qdrant above.
-            // BerryMCP: link files written by the MCP settings model are read
-            // back with the lookup the berrydb-mcp helper uses.
             dependencies: [
                 "BerryUI", "BerryCore", "BerryCredentials", "BerryStore", "BerryGraph", "BerryAI",
                 "BerryDriverKit", "BerryDriverSQLite",
                 "BerryDataSourceKit", "BerryDriverMongo", "BerryDriverQdrant", "BerryDriverTestKit",
-                "BerryKeyValueKit", "BerryDriverRedis", "BerryMCP",
+                "BerryKeyValueKit", "BerryDriverRedis",
             ],
             path: "Packages/BerryUI/Tests"
         ),
@@ -561,9 +560,10 @@ let package = Package(
         .testTarget(
             name: "BerryDBMCPTests",
             // BerryStore/GRDB: the stdio tests write the store files the
-            // helper subprocess reads.
+            // helper subprocess reads. BerryMCP: `HelperArguments` returns
+            // its `MCPProjectReference`.
             dependencies: [
-                "BerryDBMCP", "BerryDriverBootstrap", "BerryStore",
+                "BerryDBMCP", "BerryDriverBootstrap", "BerryMCP", "BerryStore",
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "MCP/Tests"

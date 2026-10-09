@@ -1,4 +1,5 @@
 import BerryDBMCP
+import BerryMCP
 import Foundation
 import Testing
 
@@ -12,7 +13,7 @@ struct HelperArgumentsTests {
 
     @Test
     func projectAndStorePathAreParsedInEitherOrder() throws {
-        let expected = HelperArguments(project: project, storePath: "/tmp/store.sqlite")
+        let expected = HelperArguments(project: .id(project), storePath: "/tmp/store.sqlite")
 
         #expect(
             try HelperArguments.parse(["--project", project.uuidString, "--store-path", "/tmp/store.sqlite"])
@@ -28,7 +29,7 @@ struct HelperArgumentsTests {
     func eachFlagIsOptional() throws {
         #expect(
             try HelperArguments.parse(["--project", project.uuidString.lowercased()])
-                == HelperArguments(project: project, storePath: nil)
+                == HelperArguments(project: .id(project), storePath: nil)
         )
         #expect(
             try HelperArguments.parse(["--store-path", "/var/store.sqlite"])
@@ -88,17 +89,47 @@ struct HelperArgumentsTests {
         #expect(throws: HelperArgumentsError.repeated("--project")) {
             try HelperArguments.parse(["--project", project.uuidString, "--project", UUID().uuidString])
         }
+        #expect(throws: HelperArgumentsError.repeated("--project")) {
+            try HelperArguments.parse(["--project", "Billing", "--project", "Ledger"])
+        }
+        #expect(throws: HelperArgumentsError.repeated("--project")) {
+            try HelperArguments.parse(["--project", "Billing", "--project", project.uuidString])
+        }
         #expect(throws: HelperArgumentsError.repeated("--store-path")) {
             try HelperArguments.parse(["--store-path", "/a.sqlite", "--store-path", "/b.sqlite"])
         }
     }
 
+    /// A value `UUID(uuidString:)` accepts is an ID, in either case and
+    /// with surrounding whitespace; anything else is a name, trimmed.
     @Test
-    func projectMustBeAUUID() {
+    func projectIsAnIDWhenItParsesAsAUUIDAndANameOtherwise() throws {
+        func parsed(_ value: String) throws -> MCPProjectReference? {
+            try HelperArguments.parse(["--project", value]).project
+        }
+        #expect(try parsed(project.uuidString) == .id(project))
+        #expect(try parsed(project.uuidString.lowercased()) == .id(project))
+        #expect(try parsed(" \(project.uuidString)\n") == .id(project))
+        #expect(try parsed("shop") == .name("shop"))
+        #expect(try parsed("  Shop Ops \n") == .name("Shop Ops"))
+        #expect(try parsed("6F9619FF-8B86-D011-B42D") == .name("6F9619FF-8B86-D011-B42D"))
+    }
+
+    @Test
+    func projectNameMustNotBeBlank() {
         #expect(throws: HelperArgumentsError.invalidProject) {
-            try HelperArguments.parse(["--project", "shop"])
+            try HelperArguments.parse(["--project", ""])
         }
         #expect(throws: HelperArgumentsError.invalidProject) {
+            try HelperArguments.parse(["--project", " \t\n"])
+        }
+    }
+
+    /// The value after `--project` is taken as given, even when it looks
+    /// like a flag; what follows it is then rejected as a stray argument.
+    @Test
+    func aFlagAfterProjectIsTakenAsItsValue() {
+        #expect(throws: HelperArgumentsError.positional) {
             try HelperArguments.parse(["--project", "--store-path", "/tmp/store.sqlite"])
         }
     }
@@ -122,7 +153,7 @@ struct HelperArgumentsTests {
         #expect(HelperArgumentsError.positional.description == "unexpected positional argument")
         #expect(HelperArgumentsError.missingValue("--project").description == "missing value for --project")
         #expect(HelperArgumentsError.repeated("--project").description == "--project given more than once")
-        #expect(HelperArgumentsError.invalidProject.description == "--project expects a project UUID")
+        #expect(HelperArgumentsError.invalidProject.description == "--project expects a project UUID or name")
         #expect(HelperArgumentsError.relativeStorePath.description == "--store-path expects an absolute path")
     }
 }

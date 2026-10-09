@@ -45,7 +45,7 @@ swift build --product berrydb-mcp
 swift test --filter 'HostCompatibleStdioTransportTests|BerryMCPStdioTests'
 ```
 
-On 2026-10-09 this ran 15 tests in 2 suites, all passing. The fixture's protocol-cancellation test was not carried over to the helper.
+On 2026-10-09 this ran 16 tests in 2 suites, all passing. The fixture's protocol-cancellation test was not carried over to the helper.
 
 ## Evidence
 
@@ -352,23 +352,30 @@ access groups were not evaluated.
 ## Metadata tools host check
 
 Question: do current coding hosts list and call the metadata tools of the
-real `berrydb-mcp` helper, report why no project is selected, and select a
-project through a repository's `.berrydb.json`? Tested on 2026-10-09 on
-macOS 26.6.2 with a debug build (`swift build --product berrydb-mcp`, which
-reports server version `dev`).
+real `berrydb-mcp` helper, report why no project is selected, and serve a
+selected project? Tested on 2026-10-09 on macOS 26.6.2 with a debug build
+(`swift build --product berrydb-mcp`, which reports server version `dev`).
+
+**Withdrawn mechanism.** The runs with a selected project chose it through
+a repository link file, a selection mechanism removed before any release
+([Withdrawn before release: repository link files](architecture/mcp-server.md#withdrawn-before-release-repository-link-files)).
+They remain as a record of each host listing and calling the tools of a
+selected project, not as a description of how a project is selected now:
+that comes from `--project` or a registered workspace folder, and the runs
+were not repeated that way.
 
 ### Fixtures
 
 Everything ran inside one fresh `mktemp -d` folder; no ancestor of it held
-a `.berrydb.json`. Two stores were created there by a throwaway program
-calling `BerryStore(path:)` and `saveMCPProject`, the calls the app makes:
+a link file. Two stores were created there by a throwaway program calling
+`BerryStore(path:)` and `saveMCPProject`, the calls the app makes:
 
 - **Empty store, empty folder.** A store with no projects; the host started
   in an empty folder.
 - **Linked folder.** A store with one enabled project named `smoke`, no
   workspace folders and no connections, sealed with a throwaway key that
-  was never stored anywhere; the host started in a folder holding
-  `.berrydb.json` with `{"project": "smoke"}`.
+  was never stored anywhere; the host started in a folder holding a link
+  file naming `smoke`.
 
 For the linked folder the helper was launched as
 `/usr/bin/sandbox-exec -f <profile> <helper> --store-path <store>`, where
@@ -401,9 +408,9 @@ Antigravity, which has no per-invocation MCP configuration:
 
 | Host | Version | Empty store: tools listed | Empty store: `berrydb_status` | Linked folder: tools listed | Linked folder: `berrydb_status` |
 |---|---|---|---|---|---|
-| Codex CLI | 0.157.1 | `berrydb_status` only | called; `state: "unconfigured"`, `reason: "no_matching_project"` | all six | called; `state: "selected"`, `selected_by: "linked_repository"`, `integrity: "unavailable"` |
-| Claude Code | 2.1.294 | `berrydb_status` only | called; `unconfigured`, `no_matching_project` | all six | called; `selected`, `linked_repository`, `unavailable` |
-| Antigravity | 1.3.1 | `berrydb_status` only | called; `unconfigured`, `no_matching_project` | all six | called; `selected`, `linked_repository`, `unavailable` |
+| Codex CLI | 0.157.1 | `berrydb_status` only | called; `state: "unconfigured"`, `reason: "no_matching_project"` | all six | called; `state: "selected"`, `selected_by` naming the withdrawn link-file source, `integrity: "unavailable"` |
+| Claude Code | 2.1.294 | `berrydb_status` only | called; `unconfigured`, `no_matching_project` | all six | called; `selected`, link-file source, `unavailable` |
+| Antigravity | 1.3.1 | `berrydb_status` only | called; `unconfigured`, `no_matching_project` | all six | called; `selected`, link-file source, `unavailable` |
 
 "Tools listed" is what each model reported from its own tool list; Claude
 Code's `init` event listed the same names. The empty-store result also
@@ -417,8 +424,8 @@ spelled `/private/var/folders/…` although the hosts started in
 The same stores were also driven without a host by a stdio script that
 sends initialize, `tools/list` and `tools/call`: identical results, and,
 with the roots capability declared and `roots/list` answered with the
-linked folder while the process ran in the temporary root, selection was
-`linked_repository` through the root as well.
+linked folder while the process ran in the temporary root, selection went
+through that root's link file as well.
 
 ### Host behavior observed
 
@@ -449,7 +456,42 @@ linked folder while the process ran in the temporary root, selection was
   `agy mcp add [flags] <name> <commandOrUrl> [args...]`, flags before the
   name and `--` before arguments that begin with `-`.
 
-Conclusion: **pass** for listing, calling, the unconfigured reason and
-selection by link file on all three hosts. Not covered: an integrity tag
-verified with the app's real key through a host, live reads (not
-implemented), a packaged and signed helper, and Cursor.
+Conclusion: **pass** for listing, calling and the unconfigured reason on
+all three hosts, and for serving a selected project, there selected by the
+since-withdrawn link file. Not covered: a project selected through a host
+by `--project` or a registered workspace folder, an integrity tag verified
+with the app's real key through a host, live reads (not implemented), a
+packaged and signed helper, and Cursor.
+
+### Per-repository configuration
+
+Question: can a repository carry its own agent entry that passes
+`--project <name>`, and does the host gate it? Checked on 2026-10-09 with
+a throwaway `HOME` for each host; nothing was installed into a real host
+configuration. The runs read each host's configuration back through its
+`mcp` subcommands; no agent session served `berrydb-mcp` through a
+repository entry.
+
+| Host | Version | Repository entry | Observed |
+|---|---|---|---|
+| Claude Code | 2.1.295 | `.mcp.json` written by `claude mcp add --scope project berrydb -- /usr/bin/true --project "repo pinned"` | The file held `"args": ["--project", "repo pinned"]`, and `claude mcp list` showed the entry as ``⏸ Pending approval (run `claude` to approve)``; writing `enabledMcpjsonServers` into the folder's `.claude/settings.local.json` did not approve it. With a user-level `berrydb` entry also present, `claude mcp list` and `claude mcp get berrydb` used the user-level entry while the project entry was pending, and the project entry once the approval was recorded in `~/.claude.json` under `projects["<folder>"]` (`enabledMcpjsonServers: ["berrydb"]`, `hasTrustDialogAccepted: true`); in that run the project entry was `/bin/cat --project repo-pinned`, which `claude mcp get berrydb` reported with `Scope: Project config (shared via .mcp.json)`. `claude mcp list` printed a `[Conflicting scopes]` diagnostic for `berrydb` in both states. |
+| Codex CLI | 0.157.1 | `[mcp_servers.berrydb]` with `args = ["--project", "repo-pinned"]` in the repository's `.codex/config.toml`, beside a user-level entry with `args = []` | `codex mcp get berrydb` inside the repository showed `args: --project repo-pinned` when the user `config.toml` marked the folder `trust_level = "trusted"`, and `args: -` in an untrusted folder. |
+| Antigravity | 1.3.1 | `.agents/mcp_config.json` and `.agent/mcp_config.json` in the folder, each with a server named `berrydb-ws` | `agy mcp list` inside the folder listed only the user-level server. The CLI's embedded documentation names only `~/.gemini/config/mcp_config.json` and `plugins/<name>/mcp_config.json`. |
+
+Claude Code's documentation says an interactive session asks for approval
+before it uses a server from `.mcp.json`, while `claude -p` runs, Agent
+SDK sessions and cloud sessions load it without asking
+([Project scope](https://code.claude.com/docs/en/mcp#project-scope)),
+and ranks project scope above user scope
+([Scope hierarchy and precedence](https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence)),
+which matches the approved state above.
+
+Conclusion: Claude Code and Codex take a per-repository entry that names
+the project, each behind its own trust step in interactive use (Claude
+Code's non-interactive modes above load it without asking), and once
+trusted that entry replaces the shared user-level `berrydb` entry in the
+repository; Antigravity 1.3.1 takes none. The settings pane offers the two
+entries and says which entry applies before and after approval. Not covered: an
+interactive Claude Code session's approval prompt itself (the approval
+was written into `~/.claude.json` directly), and a host session that
+started `berrydb-mcp` through a repository entry.

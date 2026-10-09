@@ -65,12 +65,37 @@ public struct MCPProjectSelector: Sendable {
         }
     }
 
-    /// Selects `id` when it names one of `projects`, regardless of its
+    /// Selects the project `reference` names, regardless of its
     /// `workspaceRoots` or `isEnabled` state — an explicit choice bypasses
-    /// workspace matching entirely. The resolver is what reports
-    /// `projectDisabled` for a disabled project selected this way.
-    public func select(explicit id: UUID, projects: [MCPProject]) -> MCPProjectSelection {
-        projects.contains { $0.id == id } ? .selected(id) : .noMatch
+    /// workspace matching entirely. An ID selects the project that has it.
+    /// A name selects the one project whose name matches by `namesMatch`;
+    /// several such projects, which the app's settings refuse to save but a
+    /// store edited outside the app can hold, are `.ambiguous`. The resolver
+    /// is what reports `projectDisabled` for a disabled project selected
+    /// this way.
+    public func select(explicit reference: MCPProjectReference, projects: [MCPProject]) -> MCPProjectSelection {
+        switch reference {
+        case .id(let id):
+            return projects.contains { $0.id == id } ? .selected(id) : .noMatch
+        case .name(let name):
+            let matched = projects.filter { Self.namesMatch($0.name, name) }.map(\.id)
+            switch matched.count {
+            case 0: return .noMatch
+            case 1: return .selected(matched[0])
+            default: return .ambiguous(matched)
+            }
+        }
+    }
+
+    /// Whether two project names are the same name: compared without letter
+    /// case after trimming surrounding whitespace, so an agent entry naming
+    /// a project survives a change of capitalization on either side. The
+    /// app's settings refuse to save a project whose name matches another
+    /// project's by this rule, so that a name selects one project.
+    public static func namesMatch(_ name: String, _ other: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let otherTrimmed = other.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.caseInsensitiveCompare(otherTrimmed) == .orderedSame
     }
 
     /// Resolves symlinks and asks the file system for its canonical spelling,
