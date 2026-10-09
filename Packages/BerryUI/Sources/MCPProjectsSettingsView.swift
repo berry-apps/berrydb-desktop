@@ -321,7 +321,22 @@ private struct MCPProjectEditorSheet: View {
                         Text(snippet.text)
                             .font(.system(.caption, design: .monospaced))
                             .textSelection(.enabled)
+                        if let caption = snippet.caption {
+                            Text(caption)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
+                }
+                // The model's per-repository entries cover Claude Code and
+                // Codex only; `configurationSnippets` records why Antigravity
+                // has none.
+                if model.isSaved(draft.id) {
+                    Text(L("Antigravity has no per-repository entry: version 1.3.1 reads MCP servers only from its user configuration and plugins."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

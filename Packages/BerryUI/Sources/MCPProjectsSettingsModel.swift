@@ -253,6 +253,23 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         )
     }
 
+    /// One entry of the Agent Setup section: what to run, or what to add
+    /// to a configuration file, for one host.
+    public struct AgentSetupEntry: Equatable {
+        public var host: String
+        /// The command or configuration text, copied as shown.
+        public var text: String
+        /// Where the text goes and what the host does with it, when the
+        /// section's general captions do not already say so.
+        public var caption: String?
+
+        init(host: String, text: String, caption: String? = nil) {
+            self.host = host
+            self.text = text
+            self.caption = caption
+        }
+    }
+
     /// The outcome of adding folders chosen in the open panel to a draft.
     public struct RootAddition: Equatable {
         /// The draft's roots after the addition.
@@ -329,17 +346,86 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// of the helper: `agy mcp add --help` (1.3.1) requires `--` before
     /// arguments that begin with `-`. The helper path is double-quoted for a
     /// POSIX shell so an install path with spaces stays one argument.
-    public func configurationSnippets(project: UUID) -> [(host: String, text: String)] {
+    ///
+    /// A saved project then gets one per-repository entry for Claude Code
+    /// and one for Codex, each passing `--project <name>` with the saved
+    /// name, so a file committed to the repository selects a project of
+    /// that name in every clone and for every teammate. Both hosts gate
+    /// configuration a repository defines behind the user's trust.
+    /// - Claude Code asks for approval in an interactive session before it
+    ///   uses a server from `.mcp.json`, and loads it without asking in a
+    ///   `claude -p` run (https://code.claude.com/docs/en/mcp#project-scope).
+    ///   Observed with Claude Code 2.1.295 and a throwaway home directory:
+    ///   `claude mcp add --scope project` wrote `.mcp.json` in the current
+    ///   folder with the arguments as given. With a user-level `berrydb`
+    ///   entry also present and the repository's entry approved,
+    ///   `claude mcp get` and `claude mcp list` used the user-level entry and
+    ///   `mcp list` reported conflicting scopes, although that page ranks
+    ///   project scope above user scope
+    ///   (https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence);
+    ///   the caption therefore says to remove the user-level entry.
+    /// - codex-cli 0.157.1, observed with a throwaway home directory:
+    ///   `[mcp_servers.berrydb]` in a repository's `.codex/config.toml`
+    ///   replaced the user-level entry for `codex mcp get` run inside the
+    ///   repository only while the user configuration marked the folder
+    ///   trusted, and was ignored otherwise.
+    /// - Antigravity gets no such entry: agy 1.3.1 listed only its user-level
+    ///   server inside a folder holding `.agents/mcp_config.json`, and its
+    ///   embedded documentation names only `~/.gemini/config/mcp_config.json`
+    ///   and plugin configuration.
+    public func configurationSnippets(project: UUID) -> [AgentSetupEntry] {
         guard let helperURL else { return [] }
         let helper = Self.shellQuoted(helperURL.path)
         let commands = [
-            (host: "Claude Code", text: "claude mcp add --scope user berrydb -- \(helper)"),
-            (host: "Codex", text: "codex mcp add berrydb -- \(helper)"),
-            (host: "Antigravity", text: "agy mcp add berrydb -- \(helper)"),
+            AgentSetupEntry(host: "Claude Code", text: "claude mcp add --scope user berrydb -- \(helper)"),
+            AgentSetupEntry(host: "Codex", text: "codex mcp add berrydb -- \(helper)"),
+            AgentSetupEntry(host: "Antigravity", text: "agy mcp add berrydb -- \(helper)"),
         ]
-        guard isSaved(project) else { return commands }
+        guard let saved = projects.first(where: { $0.id == project }) else { return commands }
         let pinned = " --project \(project.uuidString.lowercased())"
-        return commands + commands.map { (host: L("\($0.host), always this project"), text: $0.text + pinned) }
+        let repository = [
+            AgentSetupEntry(
+                host: L("\("Claude Code"), this repository"),
+                text: "claude mcp add --scope project berrydb -- \(helper) --project \(Self.shellQuoted(saved.name))",
+                caption: L("Run it in the repository’s top folder. It writes .mcp.json there, which can be committed; Claude Code asks before an interactive session starts a server that a repository defines. If a user-level berrydb entry also exists, Claude Code uses that one and reports conflicting scopes, so remove it with claude mcp remove berrydb -s user.")
+            ),
+            AgentSetupEntry(
+                host: L("\("Codex"), this repository"),
+                text: """
+                [mcp_servers.berrydb]
+                command = \(Self.tomlQuoted(helperURL.path))
+                args = ["--project", \(Self.tomlQuoted(saved.name))]
+                """,
+                caption: L("Add it to .codex/config.toml in the repository. Codex reads that file only once the project is trusted, and there it takes precedence over the user-level berrydb entry.")
+            ),
+        ]
+        return commands
+            + commands.map { AgentSetupEntry(host: L("\($0.host), always this project"), text: $0.text + pinned) }
+            + repository
+    }
+
+    /// `value` as a TOML basic string: in double quotes, with `"` and `\`
+    /// escaped and every control character written as an escape, the short
+    /// form where TOML 1.0 has one and `\uXXXX` otherwise
+    /// (https://toml.io/en/v1.0.0#string). Scalars are escaped one by one,
+    /// so a CR LF pair, which Swift counts as one character, becomes `\r\n`.
+    nonisolated static func tomlQuoted(_ value: String) -> String {
+        var quoted = "\""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\"": quoted += "\\\""
+            case "\\": quoted += "\\\\"
+            case "\u{08}": quoted += "\\b"
+            case "\t": quoted += "\\t"
+            case "\n": quoted += "\\n"
+            case "\u{0C}": quoted += "\\f"
+            case "\r": quoted += "\\r"
+            case "\u{00}" ... "\u{1F}", "\u{7F}": quoted += String(format: "\\u%04X", scalar.value)
+            default: quoted.unicodeScalars.append(scalar)
+            }
+        }
+        quoted += "\""
+        return quoted
     }
 
     private static let keyReadFailure = L(
@@ -374,7 +460,8 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// shell still interprets inside them (`"`, `\`, `$`, backtick), per
     /// https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html#tag_19_02_03.
     /// Interactive history expansion of `!` in bash and zsh is outside POSIX
-    /// and not escaped; an app bundle path containing `!` would need editing.
+    /// and not escaped; an app bundle path or a project name containing `!`
+    /// would need editing.
     private static func shellQuoted(_ value: String) -> String {
         var quoted = "\""
         for character in value {

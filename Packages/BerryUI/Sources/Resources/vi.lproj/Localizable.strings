@@ -758,6 +758,10 @@
 "An entry marked “always this project” serves this project in every folder the agent works in, whatever workspace folders would select." = "Mục có ghi “luôn dùng dự án này” phục vụ dự án này ở mọi thư mục mà agent làm việc, bất kể các thư mục làm việc sẽ chọn dự án nào.";
 "The berrydb-mcp helper is not bundled in this build." = "Bản build này không kèm helper berrydb-mcp.";
 "%@, always this project" = "%@, luôn dùng dự án này";
+"%@, this repository" = "%@, repository này";
+"Run it in the repository’s top folder. It writes .mcp.json there, which can be committed; Claude Code asks before an interactive session starts a server that a repository defines. If a user-level berrydb entry also exists, Claude Code uses that one and reports conflicting scopes, so remove it with claude mcp remove berrydb -s user." = "Chạy lệnh này ở thư mục gốc của repository. Lệnh ghi tệp .mcp.json tại đó, có thể commit tệp này; Claude Code sẽ hỏi trước khi một phiên tương tác khởi động server do repository định nghĩa. Nếu cấu hình người dùng cũng có mục berrydb, Claude Code dùng mục đó và báo xung đột phạm vi, vì vậy hãy xóa nó bằng claude mcp remove berrydb -s user.";
+"Add it to .codex/config.toml in the repository. Codex reads that file only once the project is trusted, and there it takes precedence over the user-level berrydb entry." = "Thêm đoạn này vào .codex/config.toml trong repository. Codex chỉ đọc tệp đó khi dự án đã được tin cậy, và khi đó nó được ưu tiên hơn mục berrydb trong cấu hình người dùng.";
+"Antigravity has no per-repository entry: version 1.3.1 reads MCP servers only from its user configuration and plugins." = "Antigravity không có mục riêng cho từng repository: phiên bản 1.3.1 chỉ đọc MCP server từ cấu hình người dùng và plugin.";
 "MCP projects could not be loaded: %@" = "Không thể tải các dự án MCP: %@";
 "The MCP project could not be saved: %@" = "Không thể lưu dự án MCP: %@";
 "The MCP project could not be deleted: %@" = "Không thể xóa dự án MCP: %@";

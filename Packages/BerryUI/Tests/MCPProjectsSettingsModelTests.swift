@@ -481,7 +481,7 @@ struct MCPProjectsSettingsModelTests {
 
         let quoted = #""/Applications/Berry DB.app/Contents/Helpers/berrydb-mcp""#
         let explicit = " --project 6f9619ff-8b86-d011-b42d-00c04fc964ff"
-        #expect(snippets.map(\.text) == [
+        #expect(Array(snippets.map(\.text).prefix(6)) == [
             "claude mcp add --scope user berrydb -- \(quoted)",
             "codex mcp add berrydb -- \(quoted)",
             "agy mcp add berrydb -- \(quoted)",
@@ -492,8 +492,9 @@ struct MCPProjectsSettingsModelTests {
         #expect(Array(snippets.map(\.host).prefix(3)) == ["Claude Code", "Codex", "Antigravity"])
         // The pinned entries are installed at the same user scope, so their
         // label must not read as a narrower scope.
-        #expect(Array(snippets.map(\.host).suffix(3))
+        #expect(Array(snippets.map(\.host)[3 ..< 6])
             == ["Claude Code", "Codex", "Antigravity"].map { L("\($0), always this project") })
+        #expect(Array(snippets.map(\.caption).prefix(6)) == Array(repeating: nil, count: 6))
     }
 
     @Test func pinnedSnippetsOnlyForASavedProject() throws {
@@ -511,7 +512,7 @@ struct MCPProjectsSettingsModelTests {
         #expect(model.save(draft))
         #expect(model.isSaved(draft.id))
         let saved = model.configurationSnippets(project: draft.id)
-        #expect(saved.count == 6)
+        #expect(saved.count == 8)
         #expect(saved.filter { $0.text.hasSuffix("--project \(draft.id.uuidString.lowercased())") }.count == 3)
     }
 
@@ -523,6 +524,72 @@ struct MCPProjectsSettingsModelTests {
         let first = try #require(model.configurationSnippets(project: UUID()).first)
 
         #expect(first.text == #"claude mcp add --scope user berrydb -- "/Users/a\"b/\$HOME/\`x\`/back\\slash/berrydb-mcp""#)
+    }
+
+    // MARK: Per-repository entries
+
+    private static let claudeRepositoryCaption = L("Run it in the repository’s top folder. It writes .mcp.json there, which can be committed; Claude Code asks before an interactive session starts a server that a repository defines. If a user-level berrydb entry also exists, Claude Code uses that one and reports conflicting scopes, so remove it with claude mcp remove berrydb -s user.")
+    private static let codexRepositoryCaption = L("Add it to .codex/config.toml in the repository. Codex reads that file only once the project is trusted, and there it takes precedence over the user-level berrydb entry.")
+
+    /// The entries name the project by its saved name, so a committed file
+    /// keeps working in every clone and for a teammate whose project has
+    /// the same name.
+    @Test func aSavedProjectGetsPerRepositoryEntriesThatNameIt() throws {
+        let (store, _, _) = try makeStore()
+        let helper = URL(fileURLWithPath: "/Applications/Berry DB.app/Contents/Helpers/berrydb-mcp")
+        let model = makeModel(store, KeyBox(), helperURL: helper)
+        let billing = try savedDraft(named: "  Billing API ", in: model)
+
+        let entries = Array(model.configurationSnippets(project: billing.id).suffix(2))
+
+        #expect(entries == [
+            MCPProjectsSettingsModel.AgentSetupEntry(
+                host: L("\("Claude Code"), this repository"),
+                text: #"claude mcp add --scope project berrydb -- "/Applications/Berry DB.app/Contents/Helpers/berrydb-mcp" --project "Billing API""#,
+                caption: Self.claudeRepositoryCaption
+            ),
+            MCPProjectsSettingsModel.AgentSetupEntry(
+                host: L("\("Codex"), this repository"),
+                text: #"""
+                [mcp_servers.berrydb]
+                command = "/Applications/Berry DB.app/Contents/Helpers/berrydb-mcp"
+                args = ["--project", "Billing API"]
+                """#,
+                caption: Self.codexRepositoryCaption
+            ),
+        ])
+    }
+
+    /// The name and the helper path are written as given, inside the
+    /// quoting each format needs: a POSIX shell's double quotes for the
+    /// command, TOML basic strings for the Codex file.
+    @Test func perRepositoryEntriesQuoteTheNameForTheShellAndForTOML() throws {
+        let (store, _, _) = try makeStore()
+        let helper = URL(fileURLWithPath: #"/Users/a"b/back\slash/berrydb-mcp"#)
+        let model = makeModel(store, KeyBox(), helperURL: helper)
+        let draft = try savedDraft(named: "a\"b\\c $HOME `x` y\nz", in: model)
+
+        let entries = model.configurationSnippets(project: draft.id).suffix(2).map(\.text)
+
+        #expect(entries.first == #"claude mcp add --scope project berrydb -- "/Users/a\"b/back\\slash/berrydb-mcp" --project "a\"b\\c \$HOME \`x\` y"#
+            + "\n" + #"z""#)
+        #expect(entries.last == #"""
+            [mcp_servers.berrydb]
+            command = "/Users/a\"b/back\\slash/berrydb-mcp"
+            args = ["--project", "a\"b\\c $HOME `x` y\nz"]
+            """#)
+    }
+
+    /// TOML 1.0 basic strings escape `"` and `\` and every control
+    /// character, with the short form where one exists
+    /// (https://toml.io/en/v1.0.0#string).
+    @Test func tomlQuotingEscapesQuotesBackslashesAndControlCharacters() {
+        #expect(MCPProjectsSettingsModel.tomlQuoted("Billing API") == #""Billing API""#)
+        #expect(MCPProjectsSettingsModel.tomlQuoted(#"a"b\c $x `y`"#) == #""a\"b\\c $x `y`""#)
+        #expect(MCPProjectsSettingsModel.tomlQuoted("\u{08}\t\n\u{0C}\r") == #""\b\t\n\f\r""#)
+        #expect(MCPProjectsSettingsModel.tomlQuoted("a\r\nb") == #""a\r\nb""#)
+        #expect(MCPProjectsSettingsModel.tomlQuoted("\u{00}\u{1B}\u{1F}\u{7F}") == #""\u0000\u001B\u001F\u007F""#)
+        #expect(MCPProjectsSettingsModel.tomlQuoted("Café ☕") == #""Café ☕""#)
     }
 
     @Test func checklistRowShowsDriverAndGroupSoSameNamedProfilesDiffer() {
