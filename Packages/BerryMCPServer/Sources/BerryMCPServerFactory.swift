@@ -48,12 +48,23 @@ public enum BerryMCPServerFactory {
     public static func makeServer(
         _ dependencies: Dependencies
     ) async -> (server: Server, start: @Sendable (any Transport) async throws -> Void) {
+        // The default configuration, not `.strict`. Under `.strict`,
+        // swift-sdk 0.12.1 sends no response at all to a request other than
+        // `initialize` or `ping` that arrives before initialization:
+        // `handleRequest` throws before any handler runs and the receive loop
+        // discards the error (`start` and `handleRequest` in Server.swift), so
+        // the client waits until its own timeout, as observed with this
+        // helper and a `tools/call` sent before `initialize`. Under the
+        // default configuration such a request is served, without roots (see
+        // `MCPSessionContext`), and a method the server lacks, such as the
+        // `server/discover` probe, gets `-32601`.
         let server = Server(
             name: serverName,
             version: dependencies.version,
             capabilities: .init(resources: .init(), tools: .init())
         )
         let rootsDeclared = Flag()
+        let initialized = Flag()
         // The SDK's `listRoots()` checks the client's roots capability only
         // in strict mode (`validateClientCapability` in Server.swift of
         // swift-sdk 0.12.1), so the capability recorded at initialization is
@@ -67,6 +78,7 @@ public enum BerryMCPServerFactory {
                 guard rootsDeclared.isSet, let server else { return nil }
                 return try await server.listRoots().map(\.uri)
             },
+            initialized: { initialized.isSet },
             diagnostics: dependencies.diagnostics
         )
         let router = MCPToolRouter(metadata: dependencies.metadata)
@@ -90,16 +102,21 @@ public enum BerryMCPServerFactory {
             )
         }
 
+        // The hook runs inside the SDK's initialize handler, before the
+        // initialize response is sent (`registerDefaultHandlers` in
+        // Server.swift of swift-sdk 0.12.1), so a request the host sends
+        // after that response always sees both flags.
         let start: @Sendable (any Transport) async throws -> Void = { transport in
             try await server.start(transport: transport) { _, capabilities in
                 if capabilities.roots != nil { rootsDeclared.set() }
+                initialized.set()
             }
         }
         return (server, start)
     }
 
-    /// Whether the client declared the roots capability; written once by the
-    /// initialize hook and read by later requests on other tasks.
+    /// A fact about the connection written once by the initialize hook and
+    /// read by later requests on other tasks.
     private final class Flag: Sendable {
         private let value = Mutex(false)
 

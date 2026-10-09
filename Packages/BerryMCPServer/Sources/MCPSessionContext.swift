@@ -4,14 +4,20 @@ import Synchronization
 
 /// The project context of one host connection.
 ///
-/// Selection runs lazily, on the first request that needs a context, because
-/// a server may send `roots/list` only after the client has finished
-/// initialization
+/// Selection runs lazily, on the first request after `initialize` that needs
+/// a context, because a server may send `roots/list` only after the client
+/// has finished initialization
 /// (https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization).
 /// `roots/list` is requested at most once per connection, and
 /// the selection outcome (which project and by which input, or why none) is
 /// kept for the connection's lifetime: a project created or re-mapped in the
 /// app is picked up by the next host session, not mid-session.
+///
+/// A request served before `initialize`, which the same section asks
+/// clients not to send, is selected without roots, from the explicit
+/// project or the working directory, and that selection is not remembered.
+/// The host's roots are unknown at that point, so keeping it would let one
+/// early request fix the project for the whole connection.
 ///
 /// Verification of the selected project is repeated on every request, which
 /// re-reads the project row and the integrity key each time. A project deleted
@@ -56,6 +62,7 @@ public actor MCPSessionContext {
     private let explicitProject: UUID?
     private let workingDirectory: String
     private let listRoots: @Sendable () async throws -> [String]?
+    private let initialized: @Sendable () -> Bool
     private let diagnostics: @Sendable (String) -> Void
     private let rootsTimeout: Duration
     private var roots: Task<[String]?, Never>?
@@ -70,6 +77,9 @@ public actor MCPSessionContext {
     ///   - listRoots: Asks the host for its workspace roots as file URIs; nil
     ///     when the host has no roots capability. A thrown error is treated
     ///     like nil, so selection falls back to the working directory.
+    ///   - initialized: Whether the server has accepted the host's
+    ///     `initialize` request. While false, selection runs on every request
+    ///     without roots and is not kept. Always true unless replaced.
     ///   - diagnostics: Receives the store-unavailable line; standard error
     ///     unless replaced.
     ///   - rootsTimeout: How long the roots request may take before selection
@@ -81,6 +91,7 @@ public actor MCPSessionContext {
         explicitProject: UUID?,
         workingDirectory: String,
         listRoots: @escaping @Sendable () async throws -> [String]?,
+        initialized: @escaping @Sendable () -> Bool = { true },
         diagnostics: @escaping @Sendable (String) -> Void = MCPSessionContext.standardError,
         rootsTimeout: Duration = .seconds(5)
     ) {
@@ -88,6 +99,7 @@ public actor MCPSessionContext {
         self.explicitProject = explicitProject
         self.workingDirectory = workingDirectory
         self.listRoots = listRoots
+        self.initialized = initialized
         self.diagnostics = diagnostics
         self.rootsTimeout = rootsTimeout
     }
@@ -97,6 +109,10 @@ public actor MCPSessionContext {
     public func context() async -> MCPProjectContext {
         do {
             if let selection { return try resolver.context(of: selection) }
+            guard initialized() else {
+                let early = try resolver.select(explicit: explicitProject, roots: nil, workingDirectory: workingDirectory)
+                return try resolver.context(of: early)
+            }
             let roots = explicitProject == nil ? await workspaceRoots() : nil
             // A concurrent request may have completed selection while this
             // one waited for the roots.

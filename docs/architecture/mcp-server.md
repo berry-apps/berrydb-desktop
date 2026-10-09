@@ -197,12 +197,17 @@ store other than the app's.
 
 ## Project selection and why it is not a boundary
 
-Selection happens on the first request that needs it (the first
-`tools/list`, `tools/call`, `resources/list` or `resources/read`), not at
-`initialize`, because a server should send no request other than pings and
-logging before the client's `initialized` notification
+Selection happens on the first request after `initialize` that needs it
+(the first `tools/list`, `tools/call`, `resources/list` or
+`resources/read`), not at `initialize`, because a server should send no
+request other than pings and logging before the client's `initialized`
+notification
 ([Lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization)),
-and `roots/list` is a request. The inputs are tried in this order:
+and `roots/list` is a request. A request sent before `initialize`, which
+the same section asks clients not to send, is answered with a selection
+made without roots, from `--project` or the working directory, and that
+selection is not kept, so one early request cannot fix the project before
+the host's roots are known. The inputs are tried in this order:
 
 1. `--project <uuid>` if given; roots are then never requested.
 2. Else the workspace roots from MCP `roots/list`, if the host declared the

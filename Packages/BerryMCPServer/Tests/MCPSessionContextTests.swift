@@ -27,15 +27,33 @@ private final class Recorder: Sendable {
     }
 }
 
+/// A switch shared with `@Sendable` closures, off until turned on.
+private final class Switch: Sendable {
+    private let state = Mutex(false)
+
+    var isOn: Bool {
+        state.withLock { $0 }
+    }
+
+    func turnOn() {
+        state.withLock { $0 = true }
+    }
+}
+
 @Suite("MCP session context")
 struct MCPSessionContextTests {
     let projectA = MCPProject(name: "A", isEnabled: true, workspaceRoots: ["/work/a"])
     let projectB = MCPProject(name: "B", isEnabled: true, workspaceRoots: ["/work/b"])
 
-    func resolver() -> MCPProjectContextResolver {
+    /// - Parameter selections: Counts the selections made; each one reads the
+    ///   stored projects once, and verifying a selection never does.
+    fileprivate func resolver(selections: Recorder = Recorder()) -> MCPProjectContextResolver {
         let projects = [projectA, projectB]
         return MCPProjectContextResolver(
-            loadProjects: { projects },
+            loadProjects: {
+                selections.call()
+                return projects
+            },
             verify: { id in
                 projects.first { $0.id == id }.map { MCPVerifiedProject(project: $0, liveReadProfileIDs: []) }
             },
@@ -110,5 +128,30 @@ struct MCPSessionContextTests {
         signalStarted.finish()
         #expect(recorder.calls == 1)
         #expect(results.map { selectedID($0, by: .roots) } == [projectB.id, projectB.id])
+    }
+
+    @Test func requestsBeforeInitializeAreSelectedWithoutRootsAndNotKept() async throws {
+        let selections = Recorder()
+        let rootsRequests = Recorder()
+        let initialized = Switch()
+        let session = MCPSessionContext(
+            resolver: resolver(selections: selections), explicitProject: nil, workingDirectory: "/work/a",
+            listRoots: {
+                rootsRequests.call()
+                return ["file:///work/b"]
+            },
+            initialized: { initialized.isOn }
+        )
+
+        let early = [await session.context(), await session.context()]
+        #expect(early.map { selectedID($0, by: .workingDirectory) } == [projectA.id, projectA.id])
+        #expect(rootsRequests.calls == 0)
+        #expect(selections.calls == 2, "a selection made before initialize was kept")
+
+        initialized.turnOn()
+        let late = try await withDeadline(.seconds(10)) { [await session.context(), await session.context()] }
+        #expect(late.map { selectedID($0, by: .roots) } == [projectB.id, projectB.id])
+        #expect(rootsRequests.calls == 1)
+        #expect(selections.calls == 3)
     }
 }

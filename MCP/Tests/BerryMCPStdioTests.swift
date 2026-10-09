@@ -122,6 +122,56 @@ struct BerryMCPStdioTests {
         Self.expectOnlyJSONRPC(helper.stdout, messages: 3)
     }
 
+    /// A request sent before `initialize` is answered from the working
+    /// directory, and that selection is not kept: once the host has
+    /// initialized with the roots capability, its roots decide. Both link
+    /// files name projects the store does not have, so the status names the
+    /// deciding folder and link without verifying any project.
+    @Test
+    func selectionBeforeInitializeGivesWayToRoots() async throws {
+        let store = try TemporaryStore()
+        defer { store.remove() }
+        let workingDirectory = try store.folder("working", linkedTo: "Alpha")
+        let root = try store.folder("root", linkedTo: "Beta")
+        let helper = try HelperProcess(
+            arguments: ["--store-path", store.path], workingDirectory: URL(fileURLWithPath: workingDirectory)
+        )
+        defer { helper.stop() }
+
+        try helper.send(Self.callStatus(id: 1))
+        let early = try await Self.status(helper.response(id: 1))
+        #expect(early["reason"] as? String == "linked_project_not_found")
+        #expect(early["linked_project"] as? String == "Alpha")
+        #expect(early["workspace"] as? String == workingDirectory)
+
+        try helper.send(
+            Self.initialize(id: 2, protocolVersion: "2025-11-25", client: "berrydb-tests", capabilities: ["roots": [:]])
+        )
+        _ = try await helper.response(id: 2)
+        try helper.send(["jsonrpc": "2.0", "method": "notifications/initialized"])
+        try helper.send(Self.callStatus(id: 3))
+
+        // A selection kept from the first request answers without asking for
+        // roots, so whichever message comes first tells the two apart.
+        let next = try await helper.message("roots/list or JSON-RPC response 3") {
+            $0["method"] as? String == "roots/list" || (($0["id"] as? Int) == 3 && $0["method"] == nil)
+        }
+        #expect(next["method"] as? String == "roots/list", "the host's roots were never requested")
+        if next["method"] as? String == "roots/list", let request = next["id"] {
+            let uri = URL(fileURLWithPath: root, isDirectory: true).absoluteString
+            try helper.send(["jsonrpc": "2.0", "id": request, "result": ["roots": [["uri": uri, "name": "root"]]]])
+        }
+        let late = try await Self.status(helper.response(id: 3))
+        #expect(late["reason"] as? String == "linked_project_not_found")
+        #expect(late["linked_project"] as? String == "Beta")
+        #expect(late["workspace"] as? String == root)
+
+        try helper.closeInput()
+        #expect(try await helper.termination().status == 0)
+        try await helper.outputFinished()
+        Self.expectOnlyJSONRPC(helper.stdout, messages: 4)
+    }
+
     @Test
     func missingStoreExitsWithStderrOnly() async throws {
         let store = try TemporaryStore()
@@ -284,13 +334,14 @@ struct BerryMCPStdioTests {
     // MARK: Messages
 
     private static func initialize(
-        id: Int, protocolVersion: String, client: String, version: String = "1.0"
+        id: Int, protocolVersion: String, client: String, version: String = "1.0",
+        capabilities: [String: Any] = [:]
     ) -> [String: Any] {
         [
             "jsonrpc": "2.0", "id": id, "method": "initialize",
             "params": [
                 "protocolVersion": protocolVersion,
-                "capabilities": [:],
+                "capabilities": capabilities,
                 "clientInfo": ["name": client, "version": version],
             ],
         ]
@@ -310,10 +361,14 @@ struct BerryMCPStdioTests {
     }
 
     private static func statusReason(_ response: [String: Any]) throws -> String? {
+        try status(response)["reason"] as? String
+    }
+
+    /// The structured result of a `berrydb_status` call.
+    private static func status(_ response: [String: Any]) throws -> [String: Any] {
         let result = try #require(response["result"] as? [String: Any])
         #expect(result["isError"] as? Bool != true)
-        let structured = try #require(result["structuredContent"] as? [String: Any])
-        return structured["reason"] as? String
+        return try #require(result["structuredContent"] as? [String: Any])
     }
 
     /// Every stdout line is one JSON-RPC 2.0 object, the last line is
@@ -385,6 +440,19 @@ private struct TemporaryStore {
         defer { try? handle.close() }
         try handle.truncate(atOffset: 0)
         try handle.write(contentsOf: bytes)
+    }
+
+    /// Creates the folder `name` beside the store with a `.berrydb.json`
+    /// naming `project`, and returns its path with symbolic links resolved,
+    /// the form the helper reports a link's folder in.
+    func folder(_ name: String, linkedTo project: String) throws -> String {
+        let folder = directory.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let link = try JSONSerialization.data(withJSONObject: ["project": project])
+        try link.write(to: folder.appendingPathComponent(".berrydb.json"))
+        guard let resolved = realpath(folder.path, nil) else { throw CocoaError(.fileNoSuchFile) }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     func remove() {

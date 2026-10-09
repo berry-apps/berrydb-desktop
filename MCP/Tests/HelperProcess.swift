@@ -76,17 +76,25 @@ final class HelperProcess: @unchecked Sendable {
 
     /// The first stdout message whose `id` is `id`.
     func response(id: Int) async throws -> [String: Any] {
-        let line = try await Self.within("JSON-RPC response \(id)") { [stdout] in
+        try await message("JSON-RPC response \(id)") { ($0["id"] as? Int) == id && $0["method"] == nil }
+    }
+
+    /// The first stdout message, already written or still to come, that
+    /// `matches`; `operation` names it in a timeout error.
+    func message(
+        _ operation: String, where matches: @escaping @Sendable ([String: Any]) -> Bool
+    ) async throws -> [String: Any] {
+        let line = try await Self.within(operation) { [stdout] in
             await stdout.first { line in
                 guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
                     return false
                 }
-                return (object["id"] as? Int) == id && object["method"] == nil
+                return matches(object)
             }
         }
-        guard let line else { throw HarnessError.outputClosed("JSON-RPC response \(id)") }
+        guard let line else { throw HarnessError.outputClosed(operation) }
         guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
-            throw HarnessError.outputClosed("JSON-RPC response \(id)")
+            throw HarnessError.outputClosed(operation)
         }
         return object
     }
