@@ -4,8 +4,10 @@ import BerryStore
 import Foundation
 import MCP
 
-/// The tools the server offers. Raw values use `[a-z0-9_]` only because model
-/// APIs reject other characters, such as `.`, in tool names.
+/// The tools the server offers. Raw values use `[a-z0-9_]` only: a host hands
+/// the name to its model API, and the Claude API requires
+/// `^[a-zA-Z0-9_-]{1,128}$`, rejecting `.`
+/// (https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools).
 public enum MCPToolName: String, CaseIterable, Sendable {
     case status = "berrydb_status"
     case listConnections = "berrydb_list_connections"

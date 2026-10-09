@@ -6,7 +6,9 @@ import Synchronization
 ///
 /// Selection runs lazily, on the first request that needs a context, because
 /// a server may send `roots/list` only after the client has finished
-/// initialization. `roots/list` is requested at most once per connection, and
+/// initialization
+/// (https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization).
+/// `roots/list` is requested at most once per connection, and
 /// the selection outcome (which project and by which input, or why none) is
 /// kept for the connection's lifetime: a project created or re-mapped in the
 /// app is picked up by the next host session, not mid-session.
