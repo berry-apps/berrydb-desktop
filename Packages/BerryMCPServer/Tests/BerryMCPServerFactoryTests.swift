@@ -342,6 +342,8 @@ struct BerryMCPServerFactoryTests {
         #expect(requests.value == 1)
     }
 
+    /// The root that selected the project is still reported once the
+    /// project is gone, so the status says which workspace lost it.
     @Test func deletedProjectIsUnconfiguredOnTheNextRequest() async throws {
         let store = Locked(Store(projects: [projectA, projectB]))
         let requests = Locked(0)
@@ -353,6 +355,7 @@ struct BerryMCPServerFactoryTests {
             let second = try await Self.status(client)
             #expect(second["state"] == "unconfigured")
             #expect(second["reason"] == "no_matching_project")
+            #expect(second["workspace"] == "/work/b")
         }
         #expect(requests.value == 1)
     }
