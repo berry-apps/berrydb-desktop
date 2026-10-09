@@ -1,27 +1,52 @@
-import CoreFoundation
 import Foundation
+import Logging
 import MCP
 
-/// Compatibility boundary for host messages that swift-sdk 0.12.1 cannot
-/// process correctly while this server remains on legacy MCP 2025-11-25.
-actor HostCompatibleStdioTransport: Transport {
+/// The SDK's `StdioTransport` with one compatibility rule for a host message
+/// that swift-sdk 0.12.1 cannot decode, and with outgoing messages written
+/// one at a time.
+///
+/// The rule is `sanitizeIncomingMessage`, which keeps the `initialize`
+/// request of Codex 0.154.0 decodable
+/// (https://github.com/modelcontextprotocol/swift-sdk/issues/262).
+///
+/// A second rule used to answer the `server/discover` probe of MCP
+/// 2026-07-28 with `-32601` here. The host compatibility gate needed it
+/// because its fixture ran `.strict`, under which the SDK sends no response
+/// to any request but `initialize` and `ping` before initialization. This
+/// server runs the default configuration, under which the SDK answers a
+/// method it has no handler for with `-32601` itself (`handleRequest` in
+/// Server.swift), so the rule only repeated that answer and was removed.
+/// `BerryMCPStdioTests.serverDiscoverFallsBackToInitialize` pins the reply
+/// that lets a dual-era client such as Antigravity 1.2.11 fall back to
+/// `initialize`.
+///
+/// Every outgoing message is written whole before the next one starts. The
+/// wrapped `StdioTransport.send` writes in a loop and, whenever standard
+/// output is full (EAGAIN), sleeps 10 ms with its actor free (`send` in
+/// StdioTransport.swift of swift-sdk 0.12.1), and the SDK server sends each
+/// response from its own task, so without this order a second message could
+/// be written into the middle of a first one larger than the pipe.
+public actor HostCompatibleStdioTransport: Transport {
     private let base: StdioTransport
     private let stream: AsyncThrowingStream<Data, Swift.Error>
     private let continuation: AsyncThrowingStream<Data, Swift.Error>.Continuation
     private var receiveTask: Task<Void, Never>?
+    /// The most recently queued write; the next one starts after it ends.
+    private var lastWrite: Task<Void, Swift.Error>?
 
     // Transport requires a nonisolated logger. The wrapped transport keeps its
     // own no-op logger; this second no-op instance is used only for conformance.
-    nonisolated let logger = StdioTransport().logger
+    public nonisolated let logger = StdioTransport().logger
 
-    init(base: StdioTransport = StdioTransport()) {
+    public init(base: StdioTransport = StdioTransport()) {
         self.base = base
         var continuation: AsyncThrowingStream<Data, Swift.Error>.Continuation!
         self.stream = AsyncThrowingStream { continuation = $0 }
         self.continuation = continuation
     }
 
-    func connect() async throws {
+    public func connect() async throws {
         try await base.connect()
         let base = self.base
         let continuation = self.continuation
@@ -29,10 +54,6 @@ actor HostCompatibleStdioTransport: Transport {
             do {
                 let upstream = await base.receive()
                 for try await message in upstream {
-                    if let response = Self.legacyDiscoveryFallbackResponse(for: message) {
-                        try await base.send(response)
-                        continue
-                    }
                     continuation.yield(Self.sanitizeIncomingMessage(message))
                 }
                 continuation.finish()
@@ -42,56 +63,34 @@ actor HostCompatibleStdioTransport: Transport {
         }
     }
 
-    func disconnect() async {
+    public func disconnect() async {
         receiveTask?.cancel()
         receiveTask = nil
         continuation.finish()
         await base.disconnect()
     }
 
-    func send(_ data: Data) async throws {
-        try await base.send(data)
-    }
-
-    func receive() -> AsyncThrowingStream<Data, Swift.Error> {
-        stream
-    }
-
-    /// `server/discover` is a 2026-07-28 probe. The pinned SDK applies its
-    /// pre-initialize state guard first and returns `-32600`, which prevents
-    /// dual-era clients such as Antigravity 1.2.11 from falling back. Replying
-    /// `-32601` truthfully says this legacy server does not implement discovery.
-    static func legacyDiscoveryFallbackResponse(for data: Data) -> Data? {
-        guard
-            let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            envelope["jsonrpc"] as? String == "2.0",
-            envelope["method"] as? String == "server/discover",
-            let id = envelope["id"],
-            Self.isValidRequestID(id)
-        else {
-            return nil
+    /// Writes `data` once every earlier message has been written or has
+    /// failed; a failed write never holds back the ones queued after it.
+    public func send(_ data: Data) async throws {
+        let previous = lastWrite
+        let base = self.base
+        let write = Task {
+            _ = await previous?.result
+            try await base.send(data)
         }
-
-        let response: [String: Any] = [
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": ["code": -32601, "message": "Method not found"],
-        ]
-        return try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
+        lastWrite = write
+        try await write.value
     }
 
-    private static func isValidRequestID(_ value: Any) -> Bool {
-        if value is String { return true }
-        guard let number = value as? NSNumber else { return false }
-        // JSONSerialization bridges both JSON numbers and Booleans through
-        // NSNumber. JSON-RPC request IDs permit numbers, never Booleans.
-        return CFGetTypeID(number) != CFBooleanGetTypeID()
+    public func receive() -> AsyncThrowingStream<Data, Swift.Error> {
+        stream
     }
 
     /// swift-sdk 0.12.1 decodes `Client.Capabilities.experimental` as
     /// `[String: String]`, while Codex 0.154.0 sends object-valued entries.
     /// Retain decodable strings and remove only unsupported values.
-    static func sanitizeIncomingMessage(_ data: Data) -> Data {
+    public static func sanitizeIncomingMessage(_ data: Data) -> Data {
         guard
             var envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             envelope["method"] as? String == "initialize",

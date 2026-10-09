@@ -74,15 +74,22 @@ public struct BerryGraphQueryService: Sendable {
     }
 
     /// Direct dependencies of one node in both directions, by name, sorted.
-    public struct Neighbors: Equatable, Sendable {
+    public struct Neighbors: Equatable, Sendable, Codable {
         public let node: String
         public let dependsOn: [String]
         public let dependedOnBy: [String]
+
+        /// Creates a neighbors result from already-sorted name lists.
+        public init(node: String, dependsOn: [String], dependedOnBy: [String]) {
+            self.node = node
+            self.dependsOn = dependsOn
+            self.dependedOnBy = dependedOnBy
+        }
     }
 
     /// The shortest dependency chain from one node to another; `path` is
     /// in traversal order and empty when `reachable` is false.
-    public struct Path: Equatable, Sendable {
+    public struct Path: Equatable, Sendable, Codable {
         public let from: String
         public let to: String
         public let reachable: Bool
@@ -90,10 +97,17 @@ public struct BerryGraphQueryService: Sendable {
     }
 
     /// Every node that transitively depends on one node, by name, sorted.
-    public struct BlastRadius: Equatable, Sendable {
+    public struct BlastRadius: Equatable, Sendable, Codable {
         public let node: String
         public let impacted: [String]
         public let count: Int
+
+        /// Creates a blast radius result; `count` is the caller's to keep as the full count.
+        public init(node: String, impacted: [String], count: Int) {
+            self.node = node
+            self.impacted = impacted
+            self.count = count
+        }
     }
 
     /// Dependency cycles as components of node names, in a deterministic
@@ -101,10 +115,15 @@ public struct BerryGraphQueryService: Sendable {
     public struct CircularDependencies: Equatable, Sendable {
         public let components: [[String]]
         public var hasCycles: Bool { !components.isEmpty }
+
+        /// Creates a result from components in their final order.
+        public init(components: [[String]]) {
+            self.components = components
+        }
     }
 
     /// One node and how many dependency edges point at it.
-    public struct CentralityEntry: Equatable, Sendable {
+    public struct CentralityEntry: Equatable, Sendable, Codable {
         public let node: String
         public let inDegree: Int
     }
@@ -112,26 +131,32 @@ public struct BerryGraphQueryService: Sendable {
     /// Harvested statistics of one table or index, limited to the
     /// statistic keys (`rows`, `size_bytes`, `seq_scan`, `idx_scan`,
     /// `unused`) so other node attributes are never surfaced.
-    public struct NodeStatistics: Equatable, Sendable {
+    public struct NodeStatistics: Equatable, Sendable, Codable {
         public let name: String
         public let fields: [String: String]
     }
 
     /// Statistics of one table and of each of its indexes.
-    public struct TableStatistics: Equatable, Sendable {
+    public struct TableStatistics: Equatable, Sendable, Codable {
         public let table: String
         public let fields: [String: String]
         public let indexes: [NodeStatistics]
     }
 
     /// Statistics of every table plus the names of indexes marked unused.
-    public struct StatisticsSummary: Equatable, Sendable {
+    public struct StatisticsSummary: Equatable, Sendable, Codable {
         public let tables: [NodeStatistics]
         public let unusedIndexes: [String]
+
+        /// Creates a summary from already-ordered tables and unused index names.
+        public init(tables: [NodeStatistics], unusedIndexes: [String]) {
+            self.tables = tables
+            self.unusedIndexes = unusedIndexes
+        }
     }
 
     /// Level of detail requested from `schema(...)`.
-    public enum SchemaDetail: Sendable {
+    public enum SchemaDetail: String, Sendable, Codable {
         /// Object name and kind only — no columns, indexes, or foreign keys.
         case overview
         /// Full column, index, and foreign key detail per object.
@@ -140,10 +165,10 @@ public struct BerryGraphQueryService: Sendable {
 
     /// One table or view surfaced by `schema(...)`. Under `.overview` detail,
     /// `columns`, `indexes`, and `foreignKeys` are always empty.
-    public struct SchemaObject: Equatable, Sendable {
+    public struct SchemaObject: Equatable, Sendable, Codable {
         /// One column of the object, as harvested by `SchemaGraphBuilder`
         /// from a `.hasColumn` node's attrs.
-        public struct Column: Equatable, Sendable {
+        public struct Column: Equatable, Sendable, Codable {
             public let name: String
             public let type: String
             public let nullable: Bool
@@ -160,7 +185,7 @@ public struct BerryGraphQueryService: Sendable {
         /// One index on the object, as harvested by `SchemaGraphBuilder`
         /// from a `.hasIndex` node's attrs. `columns` preserves harvest order
         /// (the key order for a composite index), not alphabetical order.
-        public struct Index: Equatable, Sendable {
+        public struct Index: Equatable, Sendable, Codable {
             public let name: String
             public let columns: [String]
             public let unique: Bool
@@ -176,7 +201,7 @@ public struct BerryGraphQueryService: Sendable {
         /// `SchemaGraphBuilder` onto the `.references` edge to the parent
         /// table. `referencedDatabase` is the parent table's database, which
         /// can differ from the child's for a cross-database reference.
-        public struct ForeignKey: Equatable, Sendable {
+        public struct ForeignKey: Equatable, Sendable, Codable {
             public let column: String
             public let referencedDatabase: String?
             public let referencedTable: String
@@ -216,7 +241,7 @@ public struct BerryGraphQueryService: Sendable {
     /// Result of `schema(...)`: the objects within `limit`, how many matching
     /// objects were cut by it, and when the underlying graph was last
     /// harvested (`nil` when the store can't report a snapshot time).
-    public struct SchemaListing: Equatable, Sendable {
+    public struct SchemaListing: Equatable, Sendable, Codable {
         public let objects: [SchemaObject]
         public let omittedCount: Int
         public let harvestedAt: Date?
@@ -499,5 +524,27 @@ public struct BerryGraphQueryService: Sendable {
 
     private func lexicographicallyPrecedes(_ lhs: [String], _ rhs: [String]) -> Bool {
         lhs.lexicographicallyPrecedes(rhs)
+    }
+}
+
+/// Wire form of `CircularDependencies`: `components` plus the derived
+/// `hasCycles` flag, so a client can branch on one boolean without inspecting
+/// the list. Decoding reads `components` only, because `hasCycles` is computed
+/// and a stored copy could never disagree with it.
+extension BerryGraphQueryService.CircularDependencies: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case components
+        case hasCycles
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(components: try container.decode([[String]].self, forKey: .components))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(components, forKey: .components)
+        try container.encode(hasCycles, forKey: .hasCycles)
     }
 }
