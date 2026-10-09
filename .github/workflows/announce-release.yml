@@ -1,0 +1,97 @@
+name: Announce Release
+
+# Posts a published release to a Telegram channel and a Facebook Page, after a
+# person approves. release.yml calls this workflow once the GitHub Release
+# exists. It is also runnable by hand, to announce or re-announce a tag.
+#
+# Why release.yml calls it instead of this file listening for `on: release`:
+# that Release is created with `github.token`, and an event caused by GITHUB_TOKEN
+# does not start a new workflow run. See "Triggering a workflow from a workflow":
+# https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to announce, with the leading v (e.g. v1.0.8)"
+        required: true
+        type: string
+    # An environment secret is only delivered to a called workflow if the caller
+    # passes it by name, even when it exists solely in the environment; a secret
+    # the caller does not pass resolves to an empty string with no error. The job
+    # that sets `environment:` then receives the environment's own value, which
+    # takes precedence over a repository secret of the same name. All four are
+    # optional: a channel with no complete pair is skipped by the script.
+    # https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows
+    secrets:
+      TELEGRAM_BOT_TOKEN:
+        required: false
+      TELEGRAM_CHAT_ID:
+        required: false
+      FACEBOOK_PAGE_ID:
+        required: false
+      FACEBOOK_PAGE_ACCESS_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to announce, with the leading v (e.g. v1.0.8)"
+        required: true
+        type: string
+
+jobs:
+  preview:
+    name: "Render the announcement"
+    if: github.repository == 'berry-apps/berrydb-desktop'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: "Checkout source"
+        uses: actions/checkout@v4
+        with:
+          # Nothing here pushes, so the token does not need to stay on disk.
+          persist-credentials: false
+
+      - name: "Render the exact messages into the job summary"
+        # No channel secret is mapped into this job, and the script never posts
+        # in --preview mode. The tag goes through the environment, not into the
+        # script text, because a manually dispatched tag is free-form input.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: python3 deploy/announce-release.py --tag "$TAG" --preview --summary-file "$GITHUB_STEP_SUMMARY"
+
+  post:
+    name: "Post the announcement"
+    needs: preview
+    if: github.repository == 'berry-apps/berrydb-desktop'
+    # The approval gate. The release-announcement environment holds the required
+    # reviewers and the four channel secrets, so this job does not start, and
+    # the secrets are not released to it, until a reviewer approves. The reviewer
+    # reads the preview job's summary first.
+    environment: release-announcement
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: "Checkout source"
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: "Post to the configured channels"
+        # The script reads the release again, so edits made to the release
+        # notes while this job waited for approval are what gets posted.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
+          FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
+        run: python3 deploy/announce-release.py --tag "$TAG"
