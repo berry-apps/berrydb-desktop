@@ -224,6 +224,7 @@
           <div class="space-y-1 pl-2">
             <a href="#datagrid" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Streaming DataGrid</a>
             <a href="#ai-copilot" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">AI SQL Copilot</a>
+            <a href="#coding-agents" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Coding Agents (MCP)</a>
             <a href="#connection-manager" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Connection Profiles & SSH</a>
             <a href="#schema-designer" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Visual Schema Designer</a>
             <a href="#explain-plan" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Visual EXPLAIN Plan</a>
@@ -269,6 +270,7 @@
             <ul class="space-y-1">
               <li><a href="#datagrid" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Streaming DataGrid</a></li>
               <li><a href="#ai-copilot" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">AI SQL Copilot</a></li>
+              <li><a href="#coding-agents" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Coding Agents (MCP)</a></li>
               <li><a href="#connection-manager" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Connection & SSH Profiles</a></li>
               <li><a href="#schema-designer" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Visual Schema & Table Editor</a></li>
               <li><a href="#explain-plan" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Visual EXPLAIN Query Plan</a></li>
@@ -409,6 +411,191 @@
               Figure 3: AI SQL Copilot Assistant side panel generating complex multi-table JOINs and query fixes.
             </div>
           </div>
+        </section>
+
+
+        <!-- SECTION: CODING AGENTS (MCP) -->
+        <section id="coding-agents" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="terminal" class="w-5 h-5 text-indigo-500"></i>
+            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Coding Agents (MCP)</h2>
+          </div>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            Claude Code, Codex and Antigravity can read the database schema BerryDB has already cached. They do it through <code class="font-mono text-xs">berrydb-mcp</code>, a small helper inside BerryDB.app that the agent starts itself and talks to over standard input and output (an MCP stdio server). The helper answers from the schema metadata BerryDB cached for the connections you add to an <strong>MCP project</strong>: tables, columns, keys, indexes, relationships and the schema graph. It opens BerryDB's local store read-only, never connects to a database and never reads connection passwords.
+          </p>
+
+          <!-- Stacked rows rather than a table: at phone width a two-column table squeezed the descriptions to a few words per line. -->
+          <div class="rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden divide-y divide-slate-200 dark:divide-slate-800 bg-white dark:bg-[#0E1424] text-xs sm:text-sm text-slate-700 dark:text-slate-300">
+            <div class="hidden sm:flex sm:gap-4 py-3 px-4 bg-slate-100 dark:bg-slate-900 font-bold text-slate-900 dark:text-white">
+              <span class="sm:w-52 sm:shrink-0">Tool</span>
+              <span>What it returns</span>
+            </div>
+            <div class="py-3 px-4 sm:flex sm:gap-4">
+              <code class="block sm:w-52 sm:shrink-0 font-mono text-xs text-indigo-600 dark:text-indigo-400">berrydb_status</code>
+              <p class="mt-1 sm:mt-0">Which project this session serves, or why none. Always available; agents are told to call it first.</p>
+            </div>
+            <div class="py-3 px-4 sm:flex sm:gap-4">
+              <code class="block sm:w-52 sm:shrink-0 font-mono text-xs text-indigo-600 dark:text-indigo-400">berrydb_list_connections</code>
+              <p class="mt-1 sm:mt-0">The project's connections: name, driver, whether it is marked as production, and when its cached schema last changed.</p>
+            </div>
+            <div class="py-3 px-4 sm:flex sm:gap-4">
+              <code class="block sm:w-52 sm:shrink-0 font-mono text-xs text-indigo-600 dark:text-indigo-400">berrydb_get_schema</code>
+              <p class="mt-1 sm:mt-0">Tables and views of one connection, up to 200 per call; full detail adds columns, indexes and foreign keys.</p>
+            </div>
+            <div class="py-3 px-4 sm:flex sm:gap-4">
+              <code class="block sm:w-52 sm:shrink-0 font-mono text-xs text-indigo-600 dark:text-indigo-400">berrydb_search_schema</code>
+              <p class="mt-1 sm:mt-0">Case-insensitive search over table, view, column and index names.</p>
+            </div>
+            <div class="py-3 px-4 sm:flex sm:gap-4">
+              <code class="block sm:w-52 sm:shrink-0 font-mono text-xs text-indigo-600 dark:text-indigo-400">berrydb_graph_query</code>
+              <p class="mt-1 sm:mt-0">Questions about the schema graph: a table's neighbors, the path between two tables, the blast radius of a change, circular dependencies, the most central tables.</p>
+            </div>
+            <div class="py-3 px-4 sm:flex sm:gap-4">
+              <code class="block sm:w-52 sm:shrink-0 font-mono text-xs text-indigo-600 dark:text-indigo-400">berrydb_get_graph_stats</code>
+              <p class="mt-1 sm:mt-0">Cached statistics (rows, size, scans) for every table, or for one table and its indexes.</p>
+            </div>
+          </div>
+
+          <div class="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60">
+            <h4 class="font-bold text-sm text-amber-900 dark:text-amber-200 flex items-center gap-2"><i data-lucide="eye" class="w-4 h-4"></i> What leaves your Mac</h4>
+            <p class="text-xs sm:text-sm text-amber-900/90 dark:text-amber-100/90 mt-1 leading-relaxed">
+              Whatever a tool returns goes to the agent, and from there to that agent's model provider. Running the helper locally does not keep the schema on your Mac. Only add connections whose schema and table statistics you are willing to share with that provider.
+            </p>
+          </div>
+
+          <h3 class="font-bold text-base text-slate-900 dark:text-white pt-3">Before you start</h3>
+          <ul class="list-disc pl-5 space-y-2 text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            <li><strong>Run BerryDB from the Applications folder.</strong> Every setup command points at the helper inside the app by its full path. When BerryDB runs from a read-only location such as the mounted disk image, Settings shows <em>“Move BerryDB to the Applications folder and open it from there to set up agents.”</em> instead of commands.</li>
+            <li><strong>Open each connection once in BerryDB.</strong> Connecting caches its schema, and <strong>Database → Refresh Schema</strong> updates the cache after the schema changes. Agents see the schema as of that moment, not the live database.</li>
+            <li><strong>Production connections are never cached.</strong> BerryDB does not cache the schema of a connection while it is marked as production (<strong>Production environment</strong> in the connection settings, the <span class="font-mono text-xs">PROD</span> badge in the sidebar), so agents see no schema for it. A schema cached before the label was set stays.</li>
+            <li><strong>SQL and DynamoDB only.</strong> PostgreSQL, MySQL/MariaDB, SQLite, SQL Server and DynamoDB connections are cached. MongoDB, Redis/Valkey, Elasticsearch and Qdrant connections are not, so agents see no schema for them.</li>
+          </ul>
+
+          <h3 class="font-bold text-base text-slate-900 dark:text-white pt-3">Set up a project</h3>
+          <ol class="list-decimal pl-5 space-y-2 text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            <li>Open <strong>Settings</strong> (<kbd class="kbd-tag px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 font-mono text-xs">⌘,</kbd>) and choose the <strong>AI Agents</strong> tab.</li>
+            <li>Click <strong>New Project…</strong>, give the project a name and turn on <strong>Enabled</strong>; new projects start disabled.</li>
+            <li>Under <strong>Workspace Folders</strong>, click <strong>Add Folder…</strong> and choose every folder whose code uses these connections. Subfolders and worktrees inside a folder are included. You can skip this if you name the project per repository (below).</li>
+            <li>Under <strong>Connections</strong>, turn on each connection agents may read.</li>
+            <li>Click <strong>Save</strong>.</li>
+          </ol>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            Project names are matched ignoring letter case and surrounding spaces. Settings refuses a name another project already uses or one that has the form of a project ID, and two projects cannot share a workspace folder.
+          </p>
+
+          <h3 class="font-bold text-base text-slate-900 dark:text-white pt-3">Choose how agents find the project</h3>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            The project's <strong>Agent Setup</strong> section shows ready-to-run entries with the helper's path and your project filled in. <strong>Copy them from there.</strong> The examples below assume BerryDB is in <code class="font-mono text-xs">/Applications</code> and a project named <code class="font-mono text-xs">Shop API</code>. Every entry is named <code class="font-mono text-xs">berrydb</code>. The per-repository and “always this project” entries appear once the project is saved: click <strong>Edit…</strong> next to it.
+          </p>
+
+          <div class="space-y-4">
+            <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 space-y-3">
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">1. One shared entry for every repository</h4>
+              <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                <strong>Use it when</strong> you work in several repositories and want each one to get its project from the folders registered in BerryDB. Works with Claude Code, Codex and Antigravity. Run one command once per agent:
+              </p>
+              <pre class="rounded-xl bg-slate-950 p-4 border border-slate-800 text-xs font-mono text-slate-200 overflow-x-auto"><span class="text-slate-500"># Claude Code</span>
+claude mcp add --scope user berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp'
+<span class="text-slate-500"># Codex</span>
+codex mcp add berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp'
+<span class="text-slate-500"># Antigravity</span>
+agy mcp add berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp'</pre>
+              <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                The helper takes the folder the agent works in (the workspace folder the agent reports, or else the folder it was started in) and matches it against every project's <strong>Workspace Folders</strong>; the most specific folder wins.
+              </p>
+            </div>
+
+            <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 space-y-3">
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">2. One repository, pinned by project name</h4>
+              <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                <strong>Use it when</strong> a repository should always use one project without registering its folder, or when you want to commit that choice so every clone, and every teammate whose project has the same name, gets it. The entry also records the helper's path, so it works for teammates who keep BerryDB in the same place.
+              </p>
+              <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">Claude Code: run it in the repository's top folder. It writes <code class="font-mono text-xs">.mcp.json</code> there, which can be committed.</p>
+              <pre class="rounded-xl bg-slate-950 p-4 border border-slate-800 text-xs font-mono text-slate-200 overflow-x-auto">claude mcp add --scope project berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp' --project 'Shop API'</pre>
+              <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">Codex: add it to <code class="font-mono text-xs">.codex/config.toml</code> in the repository.</p>
+              <pre class="rounded-xl bg-slate-950 p-4 border border-slate-800 text-xs font-mono text-slate-200 overflow-x-auto">[mcp_servers.berrydb]
+command = "/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp"
+args = ["--project", "Shop API"]</pre>
+              <ul class="list-disc pl-5 space-y-2 text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                <li><strong>Claude Code</strong> asks in an interactive session before it uses a server from <code class="font-mono text-xs">.mcp.json</code>. Once you approve it, Claude Code uses this entry in that repository instead of your user-level <code class="font-mono text-xs">berrydb</code> entry; until then it uses the user-level one (<a href="https://code.claude.com/docs/en/mcp#project-scope" target="_blank" rel="noopener" class="text-rose-600 dark:text-rose-400 hover:underline">project scope</a>, <a href="https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence" target="_blank" rel="noopener" class="text-rose-600 dark:text-rose-400 hover:underline">scope precedence</a>).</li>
+                <li><strong>Codex</strong> reads <code class="font-mono text-xs">.codex/config.toml</code> only in a trusted project, and there it replaces the user-level entry (observed with Codex CLI 0.157.1).</li>
+                <li><strong>Only open repositories you trust in non-interactive modes.</strong> <code class="font-mono text-xs">claude -p</code> runs, Agent SDK sessions and cloud sessions load a repository's <code class="font-mono text-xs">.mcp.json</code> without asking (<a href="https://code.claude.com/docs/en/mcp#project-scope" target="_blank" rel="noopener" class="text-rose-600 dark:text-rose-400 hover:underline">Claude Code docs</a>), and a repository you did not write can name one of your projects.</li>
+                <li><strong>Antigravity</strong> has no per-repository configuration: version 1.3.1 reads MCP servers only from its user configuration and plugins. Use option 1 or 3 there.</li>
+                <li>Renaming the project stops entries that name the old name from selecting it; Settings warns you when you rename.</li>
+              </ul>
+            </div>
+
+            <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 space-y-3">
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">3. Always this project</h4>
+              <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                <strong>Use it when</strong> you work on one project and want every agent session to use it, wherever the agent runs. The entries marked “always this project” are the option 1 commands followed by <code class="font-mono text-xs whitespace-nowrap">--project</code> and the project's ID, which the pane fills in. Such an entry serves this project in every folder, whatever workspace folders would select, except in a repository with its own entry. It is a user-level entry named <code class="font-mono text-xs">berrydb</code> too, so set up each agent with either option 1 or this one.
+              </p>
+            </div>
+          </div>
+
+          <h3 class="font-bold text-base text-slate-900 dark:text-white pt-3">First use: the Keychain prompt</h3>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            The first time an agent uses BerryDB with a project selected, macOS may ask whether <code class="font-mono text-xs">berrydb-mcp</code> may use a key that BerryDB keeps in your login keychain (<code class="font-mono text-xs">dev.berrydb.mcp.access-key</code>). <strong>Choose Always Allow.</strong> The key lets the helper check that the project's settings are the ones BerryDB saved; it is not a database password. Allowing it once lets that one request through, and macOS asks again on the next (<a href="https://support.apple.com/guide/keychain-access/if-youre-asked-for-access-to-your-keychain-kyca1243/mac" target="_blank" rel="noopener" class="text-rose-600 dark:text-rose-400 hover:underline">Apple's Keychain Access guide</a>). If you deny it, the helper still serves the schema, but <code class="font-mono text-xs">berrydb_status</code> reports <code class="font-mono text-xs">"integrity": "unavailable"</code>.
+          </p>
+
+          <h3 class="font-bold text-base text-slate-900 dark:text-white pt-3">Check that it works</h3>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            Start a new agent session and ask the agent to call <code class="font-mono text-xs">berrydb_status</code>. A working setup answers with <code class="font-mono text-xs">"state": "selected"</code>, your project's name, and <code class="font-mono text-xs">selected_by</code>:
+          </p>
+          <ul class="list-disc pl-5 space-y-2 text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            <li><code class="font-mono text-xs">explicit</code>: the entry names the project with <code class="font-mono text-xs whitespace-nowrap">--project</code> (options 2 and 3).</li>
+            <li><code class="font-mono text-xs">roots</code>: a workspace folder the agent reported is inside one of the project's Workspace Folders.</li>
+            <li><code class="font-mono text-xs">working_directory</code>: the folder the agent started the helper in is inside one of them.</li>
+          </ul>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            <code class="font-mono text-xs">"integrity": "verified"</code> means the project's saved settings check out. <code class="font-mono text-xs">"unavailable"</code> means the key could not be read (see above) or the settings could not be verified; the schema is served either way. If Settings shows <em>“Not verified — save to confirm”</em> next to the project, open it, turn on <strong>Enabled</strong> and save. <code class="font-mono text-xs">live_reads</code> is always <code class="font-mono text-xs">not_available</code>.
+          </p>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            With <code class="font-mono text-xs">"state": "unconfigured"</code>, the agent sees only <code class="font-mono text-xs">berrydb_status</code>, and <code class="font-mono text-xs">reason</code> says why:
+          </p>
+          <div class="rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden divide-y divide-slate-200 dark:divide-slate-800 bg-white dark:bg-[#0E1424] text-xs sm:text-sm text-slate-700 dark:text-slate-300">
+            <div class="hidden md:grid md:grid-cols-12 md:gap-4 py-3 px-4 bg-slate-100 dark:bg-slate-900 font-bold text-slate-900 dark:text-white">
+              <span class="md:col-span-4">reason</span>
+              <span class="md:col-span-4">What it means</span>
+              <span class="md:col-span-4">What to do</span>
+            </div>
+            <div class="py-3 px-4 md:grid md:grid-cols-12 md:gap-4">
+              <code class="block md:col-span-4 font-mono text-xs text-indigo-600 dark:text-indigo-400">no_matching_project</code>
+              <p class="mt-1 md:mt-0 md:col-span-4">No project's Workspace Folders contain the agent's folder, or the selected project was deleted.</p>
+              <p class="mt-1 md:mt-0 md:col-span-4"><span class="font-semibold md:hidden">What to do: </span>Add the repository, or a folder above it, to the project's Workspace Folders, or name the project with <code class="font-mono text-xs whitespace-nowrap">--project</code>.</p>
+            </div>
+            <div class="py-3 px-4 md:grid md:grid-cols-12 md:gap-4">
+              <code class="block md:col-span-4 font-mono text-xs text-indigo-600 dark:text-indigo-400">ambiguous_projects</code>
+              <p class="mt-1 md:mt-0 md:col-span-4">The agent's folders match more than one project.</p>
+              <p class="mt-1 md:mt-0 md:col-span-4"><span class="font-semibold md:hidden">What to do: </span>Open one repository per agent session, or name the project with <code class="font-mono text-xs whitespace-nowrap">--project</code>.</p>
+            </div>
+            <div class="py-3 px-4 md:grid md:grid-cols-12 md:gap-4">
+              <code class="block md:col-span-4 font-mono text-xs text-indigo-600 dark:text-indigo-400">explicit_project_not_found</code>
+              <p class="mt-1 md:mt-0 md:col-span-4">The entry's <code class="font-mono text-xs whitespace-nowrap">--project</code> names a project ID or name that no project in your BerryDB has, for example after a rename, or in a repository whose entry names a project you do not have.</p>
+              <p class="mt-1 md:mt-0 md:col-span-4"><span class="font-semibold md:hidden">What to do: </span>Create or rename a project to match, or change the entry.</p>
+            </div>
+            <div class="py-3 px-4 md:grid md:grid-cols-12 md:gap-4">
+              <code class="block md:col-span-4 font-mono text-xs text-indigo-600 dark:text-indigo-400">project_disabled</code>
+              <p class="mt-1 md:mt-0 md:col-span-4">The project is turned off.</p>
+              <p class="mt-1 md:mt-0 md:col-span-4"><span class="font-semibold md:hidden">What to do: </span>Click <strong>Edit…</strong> on the project, turn on <strong>Enabled</strong> and save.</p>
+            </div>
+            <div class="py-3 px-4 md:grid md:grid-cols-12 md:gap-4">
+              <code class="block md:col-span-4 font-mono text-xs text-indigo-600 dark:text-indigo-400">integrity_unavailable</code>
+              <p class="mt-1 md:mt-0 md:col-span-4">The helper could not read BerryDB's store for that request.</p>
+              <p class="mt-1 md:mt-0 md:col-span-4"><span class="font-semibold md:hidden">What to do: </span>Ask the agent to call the tool again; every request reads the store afresh.</p>
+            </div>
+          </div>
+          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            An agent can keep the tool list it loaded when its session started. If it does not see BerryDB's tools after you change a project in Settings, start a new agent session. A tool that answers <em>“No schema graph has been harvested for this connection.”</em> needs that connection opened in BerryDB first.
+          </p>
+
+          <h3 class="font-bold text-base text-slate-900 dark:text-white pt-3">Limits today</h3>
+          <ul class="list-disc pl-5 space-y-2 text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            <li><strong>Metadata only.</strong> Agents get no rows from your tables and cannot run queries through BerryDB.</li>
+            <li><strong>Cached, not live.</strong> The schema is the one BerryDB cached when it last connected to, or refreshed, each connection.</li>
+            <li><strong>Built from source?</strong> <code class="font-mono text-xs">make run</code> and <code class="font-mono text-xs">make app</code> package the helper into the app. A build that skips that packaging step shows <em>“The berrydb-mcp helper is not bundled in this build.”</em> in Agent Setup.</li>
+            <li><strong>Agents.</strong> The tools were checked with Claude Code 2.1.294, Codex CLI 0.157.1 and Antigravity 1.3.1. Other MCP hosts may work but are not tested.</li>
+          </ul>
         </section>
 
 

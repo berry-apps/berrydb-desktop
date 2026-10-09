@@ -64,7 +64,7 @@ git tag v1.0.3
 git push --tags
 ```
 
-`.github/workflows/release.yml` then builds, signs, notarizes, checks the app size, publishes the DMG and appcast to R2, creates a GitHub Release and updates the website's version. Credentials come from GitHub Secrets, not from `deploy/.env`.
+`.github/workflows/release.yml` then builds, signs, notarizes, checks the app size, publishes the DMG and appcast to R2, creates a GitHub Release and updates the website's version. Credentials come from GitHub Secrets, not from `deploy/.env`. A separate workflow then announces a tag-pushed release on Telegram and a Facebook Page once a reviewer approves (see section 8).
 
 To rehearse without publishing, run the workflow manually from the Actions tab with `dry_run` enabled: it builds, signs and notarizes, then stops before R2 and before creating the Release, and attaches the DMG as a workflow artifact.
 
@@ -109,3 +109,90 @@ Place `deploy/icon-1024.png` (1024x1024) in the deploy directory. `scripts/make_
 
 - BerryDB runs with Apple Hardened Runtime (`deploy/BerryDB.entitlements`).
 - Appcast and release manifest (`releases.json`) are generated automatically during the release pipeline.
+
+## 8. Release Announcements
+
+When a tag-pushed Release run succeeds, `.github/workflows/announce-release.yml` posts the release to a Telegram channel and to a Facebook Page, once a person approves. X is posted by hand. Facebook Groups and personal profiles are posted by hand too; the workflow posts only to a Page.
+
+Two cases are not announced automatically; announce them by running **Announce Release** by hand (below):
+
+- A release started with *Run workflow* on the Release workflow, a dry run included.
+- A tag-pushed Release run that fails after it has published the release, for example in the website step. Re-running the failed job also starts the announcement when the run then succeeds (GitHub documents only the `requested` activity type as not occurring on a re-run), or run **Announce Release** yourself.
+
+### What is posted, and when
+
+The announcement is its own workflow, triggered by the Release run completing (`workflow_run`), for three reasons:
+
+- `release.yml` creates the GitHub Release with the workflow's `GITHUB_TOKEN`, and events caused by `GITHUB_TOKEN` do not start new workflow runs, so an `on: release` workflow would never fire ([GitHub docs](https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow)).
+- The wait for approval belongs to the announcement's own run. Inside `release.yml` it would keep that run unfinished, and GitHub's concurrency rules allow one run in progress per group: the next release run would be pending behind it, and a newly queued run cancels the one already pending ([GitHub docs](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)).
+- A failed announcement fails only its own run. The Release run and the release it published stay green.
+
+On `workflow_run` the announcement runs only for a Release run that:
+
+- succeeded;
+- was started by a tag push (`event` is `push`), and whose `head_branch`, which is then the tag, starts with `v`;
+- ran the file `.github/workflows/release.yml`. `workflow_run` selects a workflow by its name, not its file, so the file's `path` is checked too. The REST run objects of releases v1.0.8 and v1.0.6 and of a dispatched run all carry that path (`gh api repos/<owner>/<repo>/actions/runs/<id>`); it has not been seen in a live `workflow_run` event payload yet.
+
+Other Release runs start an Announce Release run whose jobs are skipped. GitHub runs a `workflow_run` workflow from the default branch and only triggers it when the workflow file is on the default branch ([GitHub docs](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)), so a change to this workflow takes effect once merged.
+
+The workflow has two jobs:
+
+1. `preview` renders the exact message for each channel into the run's job summary. It posts nothing and receives no channel secret.
+2. `post` is bound to the `release-announcement` environment, so it waits for a reviewer before it starts. The reviewer reads the preview's summary, then approves or rejects. The release notes are read again when `post` runs, so editing the Release before approving changes what is posted.
+
+The messages:
+
+- **Telegram**: the release name, the release notes as plain text (headings without `#`, list items as bullets, bold markers removed, links kept), and the release page URL last. Telegram limits a message to 4096 characters ([Bot API](https://core.telegram.org/bots/api#sendmessage)), so a long body is shortened with an ellipsis and the URL is never cut. No `parse_mode` is sent, so release text cannot trip Telegram's Markdown parser. The link preview card is set to the release page with `link_preview_options` ([Bot API](https://core.telegram.org/bots/api#linkpreviewoptions)); without it Telegram previews the first URL in the text.
+- **Facebook Page**: the same name and notes as the post text, with the release page attached as the post's link.
+
+GitHub's generated release notes lose their bookkeeping first: the ` by @author in <pull request URL>` ending of each entry, which keeps its title; the `## New Contributors` section (its `* @author made their first contribution in <pull request URL>` bullets and, once nothing is left under it, the heading); and the `**Full Changelog**: ...` line. Only this repository's own URLs match, and hand-written text is left alone, including a section of that name that has other content.
+
+### Announcing by hand, and retrying one channel
+
+Run **Announce Release** from the Actions tab, on `main`, with:
+
+- `tag`: the release tag, for example `v1.0.8`;
+- `channels`: `telegram,facebook` (the default), or one of them. The same selection is the script's `--only` option.
+
+If one channel failed, start a new manual run naming only that channel, for example `facebook`, rather than using *Re-run failed jobs*, which posts to every configured channel again, including one that already succeeded. A named channel without a complete pair of secrets posts nothing; the log says so only when none of the named channels is configured. Runs for the same tag share one concurrency group: a manual run started while another run for that tag waits for approval stays pending behind it, and a third run for that tag cancels the pending one. A manual run from another branch still renders the preview, but its `post` job is expected to be refused by the environment's branch rule (setup step 3).
+
+### One-time setup
+
+Do these in this order. The order matters because GitHub creates an environment that a workflow references but that does not exist, with no protection rules and no secrets, and anyone who can edit workflows can cause that; only repository admins can configure it afterwards ([GitHub docs](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)). An unprotected `post` job starts without waiting for anyone.
+
+1. **Create the environment** `release-announcement` (Settings, Environments, New environment) before the workflow is merged. The name must match exactly.
+2. **Add required reviewers** to it. The release owner is the reviewer.
+3. **Limit deployment branches and tags** to *Selected branches and tags*, with one rule: the branch `main`. This is required, not optional. The workflow file can be edited on any branch, and a collaborator with write access could dispatch the edited copy from there; if that copy keeps `environment: release-announcement`, its `post` job gets the secrets as soon as someone approves that run. The branch rule makes the environment refuse runs from any other branch. A `workflow_run` job runs on the default branch (GitHub's event table lists the default branch as its `GITHUB_REF`), so the rule is expected to admit it. That GitHub evaluates the rule against the default branch for `workflow_run` runs is not verified; the first real release confirms it, and a refused `post` job says so in the run and posts nothing.
+4. **Only then add the four secrets**, under *Environment secrets* of that environment.
+5. **Never create repository or organization secrets with these names.** GitHub resolves a secret name across organization, repository and environment, and the lowest level takes precedence ([GitHub docs](https://docs.github.com/en/actions/reference/security/secrets)); a workflow in the repository can access its repository secrets, with no environment and no approval involved. A repository or organization secret with one of these names would therefore sit outside the approval gate.
+
+| Secret | Value |
+| :--- | :--- |
+| `TELEGRAM_BOT_TOKEN` | The bot's token |
+| `TELEGRAM_CHAT_ID` | The channel as `@channelusername`, or its numeric id |
+| `FACEBOOK_PAGE_ID` | The Page's id |
+| `FACEBOOK_PAGE_ACCESS_TOKEN` | A Page access token, see below |
+
+A channel is posted to only when both of its secrets are set. Setting one without the other fails the run before anything is posted; setting neither skips that channel, so the two channels can be enabled independently.
+
+What follows from the order: a run before step 4 finds no secrets and posts nothing, and a run after step 4 waits for a reviewer. GitHub releases an environment's secrets only to a job that uses the environment, and only after its protection rules pass.
+
+### Telegram
+
+1. Message [@BotFather](https://t.me/BotFather) to create a bot and receive its token ([Telegram docs](https://core.telegram.org/bots)). Anyone holding the token controls the bot, so it goes only into the environment secret.
+2. Add the bot to the channel as an administrator that is allowed to post messages (`can_post_messages` in the [Bot API](https://core.telegram.org/bots/api#chatmemberadministrator)).
+3. Set `TELEGRAM_CHAT_ID` to `@channelusername` for a public channel. For a private channel use its numeric id, which appears as `chat.id` in the bot's `channel_post` updates ([`getUpdates`](https://core.telegram.org/bots/api#getupdates)) after something is posted in the channel.
+
+### Facebook Page
+
+None of this has been tested against a real Page or app. The statements about Meta's behavior are quoted from its documentation.
+
+1. Create an app on [Meta for Developers](https://developers.facebook.com/). New apps start in Development mode, where the app can only request permissions from role users. Add the person who manages the Page as a role user ([App modes](https://developers.facebook.com/docs/development/build-and-test/app-modes)).
+2. As a person who can manage the Page and has a role on the app, authorize the app through Facebook Login with the `pages_manage_posts` permission, plus the others Meta lists for publishing ([Pages API: posts](https://developers.facebook.com/docs/pages-api/posts)).
+3. Exchange that short-lived user token for a long-lived one, then request the Page's token with `GET /{user-id}/accounts` ([long-lived tokens](https://developers.facebook.com/docs/facebook-login/guides/access-tokens/get-long-lived)). Meta documents that a Page access token obtained from a long-lived user token has no expiration date, and that it can still be invalidated under certain conditions. When posting starts failing with an OAuth error, generate a new token and replace the secret.
+4. Set `FACEBOOK_PAGE_ID` to the Page's id and `FACEBOOK_PAGE_ACCESS_TOKEN` to the Page token. The Graph API version is the `GRAPH_API_VERSION` constant in `deploy/announce-release.py`.
+5. **Switch the app to Live mode once the token works.** Meta's App modes page states that data generated while an app is in Development mode, such as test posts, can only be seen by role users. A post made while the app is in Development mode can therefore report success while the public sees nothing. The same page says that this data becomes visible to non-role users once the app is switched to Live mode, and that app administrators switch modes with the app mode toggle in the App Dashboard toolbar.
+   What Meta documents for Live mode: an app in Live mode can request permissions from anyone, but only permissions approved through App Review; only features approved through App Review are active for app users; and an app should be switched to Live mode only after app development and App Review are complete. For consumer apps the page also separates permissions with Advanced Access, which can be requested from anyone, from those with Standard Access, which can only be requested from role users. Which of these applies to `pages_manage_posts` for this app, and whether App Review is needed here, is not something this document can state; check Meta's documentation for the permission.
+6. **Confirm it is public.** After the first announcement, open the post on the Page in a browser where you are logged out of Facebook, such as a private window. If the post is not visible there, it is not public, whatever the workflow reported.
+
+The script's tests run with `python3 -m unittest deploy/test_announce_release.py` and never touch the network. To see what the next announcement would look like without posting anything: `GH_TOKEN=$(gh auth token) GITHUB_REPOSITORY=berry-apps/berrydb-desktop python3 deploy/announce-release.py --tag v1.0.8 --preview`, optionally with `--only telegram` or `--only facebook`.

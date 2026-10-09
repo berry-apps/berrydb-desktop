@@ -99,7 +99,7 @@ public enum BerryDBMCPComposition {
     /// request, and a session whose selection chose no project never touches
     /// the Keychain.
     static func dependencies(
-        store: BerryStore, explicitProject: UUID?, workingDirectory: String
+        store: BerryStore, explicitProject: MCPProjectReference?, workingDirectory: String
     ) -> BerryMCPServerFactory.Dependencies {
         let metadata = MCPMetadataService(store: store)
         let resolver = MCPProjectContextResolver(

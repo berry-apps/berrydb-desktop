@@ -35,8 +35,34 @@ struct MCPProjectSelectorTests {
     }
 
     @Test func explicitProjectMustExist() {
-        #expect(plain.select(explicit: repoB.id, projects: [repoA, repoB]) == .selected(repoB.id))
-        #expect(plain.select(explicit: UUID(), projects: [repoA]) == .noMatch)
+        #expect(plain.select(explicit: .id(repoB.id), projects: [repoA, repoB]) == .selected(repoB.id))
+        #expect(plain.select(explicit: .id(UUID()), projects: [repoA]) == .noMatch)
+    }
+
+    @Test func explicitNameSelectsTheProjectWithThatName() {
+        let spaced = MCPProject(name: "  Shop Ops ", workspaceRoots: [])
+        #expect(plain.select(explicit: .name("B"), projects: [repoA, repoB]) == .selected(repoB.id))
+        #expect(plain.select(explicit: .name("sHOP oPS"), projects: [repoA, spaced]) == .selected(spaced.id))
+        #expect(plain.select(explicit: .name("Ledger"), projects: [repoA, repoB]) == .noMatch)
+        #expect(plain.select(explicit: .name("A"), projects: [repoANested]) == .noMatch)
+    }
+
+    /// The settings pane refuses a second project with a matching name, but
+    /// a store edited outside the app can hold two; neither is picked.
+    @Test func explicitNameSharedByTwoProjectsIsAmbiguous() {
+        let twin = MCPProject(name: "a ", workspaceRoots: [])
+        guard case .ambiguous(let ids) = plain.select(explicit: .name("A"), projects: [repoA, repoB, twin]) else {
+            Issue.record("expected ambiguous")
+            return
+        }
+        #expect(Set(ids) == [repoA.id, twin.id])
+    }
+
+    @Test func namesMatchWithoutLetterCaseAfterTrimmingSurroundingWhitespace() {
+        #expect(MCPProjectSelector.namesMatch("Shop", " sHOP\n"))
+        #expect(MCPProjectSelector.namesMatch("\tShop Ops ", "shop ops"))
+        #expect(!MCPProjectSelector.namesMatch("Shop Ops", "ShopOps"))
+        #expect(!MCPProjectSelector.namesMatch("Shop", "Shops"))
     }
 
     @Test func symlinkTrailingSlashAndCaseResolveToTheSameProject() throws {

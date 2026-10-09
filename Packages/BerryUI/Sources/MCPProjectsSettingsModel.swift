@@ -5,24 +5,6 @@ import Combine
 import CryptoKit
 import Foundation
 
-/// What linking one chosen folder did. Each case carries the path of that
-/// folder's link file, `<folder>/.berrydb.json`.
-public enum MCPRepositoryLinkResult: Equatable, Sendable {
-    /// The file now holds the link naming the project.
-    case written(String)
-    /// The file already selects the project, by the name rule the helper
-    /// applies, and was not rewritten.
-    case unchanged(String)
-    /// Something else is there and was left as it is; linking again with
-    /// `overwrite` replaces it. `existingProject` is the name a regular file
-    /// of the user's holds; nil when that file names none or cannot be
-    /// parsed, and for a symbolic link or a file another user owns, neither
-    /// of which is read.
-    case needsOverwrite(String, existingProject: String?)
-    /// Nothing was written, for the ready-to-show `reason`.
-    case rejected(String, reason: String)
-}
-
 /// Whether the settings pane can offer setup commands for the `berrydb-mcp`
 /// helper, which the commands launch by absolute path.
 public enum MCPHelperLocation: Equatable, Sendable {
@@ -41,7 +23,7 @@ public enum MCPHelperLocation: Equatable, Sendable {
 }
 
 /// Creates, edits and deletes the MCP projects that coding agents reach
-/// through the `berrydb-mcp` helper, and links repositories to them.
+/// through the `berrydb-mcp` helper.
 ///
 /// Every save and delete rotates the access key in one fixed order: read
 /// the stored key (abort if the Keychain refuses), build the value from the
@@ -87,12 +69,6 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         guard case let .bundled(url) = helperLocation else { return nil }
         return url
     }
-    /// Writes one link file. The app uses `atomicLinkWrite`, which replaces
-    /// the file in one step. Tests replace it to refuse every write their
-    /// case must not make, so a regression in the checks before it fails the
-    /// test instead of writing outside its temporary folders, at the disk
-    /// root for one.
-    var linkWriter: (Data, URL) throws -> Void = MCPProjectsSettingsModel.atomicLinkWrite
 
     /// `keyStore` defaults to the Keychain item the helper reads; the
     /// helper is looked up once, inside the running app's bundle.
@@ -191,10 +167,10 @@ public final class MCPProjectsSettingsModel: ObservableObject {
 
     /// Saves `draft` under a newly rotated key. Returns false with
     /// `errorMessage` set when a root is invalid or is also a root of
-    /// another project, another project already uses the name, the key
-    /// cannot be read or written, or the store refuses the write. Roots and
-    /// the name are checked before the key is read, so an invalid draft
-    /// changes nothing.
+    /// another project, the name has the form of a project ID or another
+    /// project already uses it, the key cannot be read or written, or the
+    /// store refuses the write. Roots and the name are checked before the
+    /// key is read, so an invalid draft changes nothing.
     ///
     /// A connection deleted since the draft was made is dropped from it
     /// before the key is read, since deleting a connection removes its
@@ -205,6 +181,12 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         if let invalidRoot = draft.workspaceRoots.lazy.compactMap(Self.validateRoot).first {
             return fail(invalidRoot)
         }
+        // The helper reads a `--project` value that parses as a UUID as an
+        // ID, never as a name, so an agent entry naming such a project could
+        // never select it, and could select another project with that ID.
+        if case .id = MCPProjectReference(argument: draft.name) {
+            return fail(L("A project name cannot have the form of a project ID."))
+        }
         let others: [MCPProject]
         let savedProfileIDs: Set<UUID>
         do {
@@ -213,14 +195,12 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         } catch {
             return fail(L("The MCP project could not be saved: \(error.localizedDescription)"))
         }
-        // A link file names a project, and the helper selects every project
-        // whose name that link matches; two such projects would make every
-        // link to either one ambiguous.
-        let nameTaken = others.contains {
-            MCPRepositoryLink.matches(projectName: $0.name, linkedName: draft.name)
-        }
+        // An agent entry can name a project with `--project <name>`, and
+        // the helper selects every project whose name matches; two such
+        // projects would leave every entry naming either one ambiguous.
+        let nameTaken = others.contains { MCPProjectSelector.namesMatch($0.name, draft.name) }
         if nameTaken {
-            return fail(L("Another project already uses this name. Repository links select projects by name."))
+            return fail(L("Another project already uses this name. Agent entries can select a project by its name."))
         }
         // Two projects with the same root tie for every workspace inside it,
         // and the helper serves neither of them there. Nested roots stay
@@ -289,54 +269,18 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         projects.contains { $0.id == projectID }
     }
 
-    /// Nil when repositories can be linked to the project `draft` edits;
-    /// otherwise the reason to show. Linking writes the saved name, so it is
-    /// offered only for a saved project whose name field still holds that
-    /// name once trimmed, as saving would store it: a link written while a
-    /// rename is pending would name a project the editor no longer shows.
-    public func repositoryLinkUnavailableReason(for draft: Draft) -> String? {
-        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard projects.contains(where: { $0.id == draft.id && $0.name == name }) else {
-            return Self.saveBeforeLinking
-        }
-        return nil
-    }
-
-    /// A notice to show under the name field, or nil. Link files name a
-    /// project, and the helper decides a workspace with a link file by that
-    /// file alone, so renaming a saved project leaves every repository
-    /// linked to the old name selecting nothing. A change of letter case or
-    /// surrounding whitespace still matches the old name by the link rule
-    /// and gets no notice, and neither does a cleared field, which cannot be
-    /// saved.
-    public func renameLinkNotice(for draft: Draft) -> String? {
+    /// A notice to show under the name field, or nil. An agent entry can
+    /// name a project with `--project <name>`, so renaming a saved project
+    /// leaves every entry naming the old name selecting nothing. A change of
+    /// letter case or surrounding whitespace still matches the old name by
+    /// the helper's name rule and gets no notice, and neither does a cleared
+    /// field, which cannot be saved.
+    public func renameNotice(for draft: Draft) -> String? {
         guard let saved = projects.first(where: { $0.id == draft.id }),
               !draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !MCPRepositoryLink.matches(projectName: saved.name, linkedName: draft.name)
+              !MCPProjectSelector.namesMatch(saved.name, draft.name)
         else { return nil }
-        return L("Repositories linked to “\(saved.name)” stop selecting this project until they are linked again.")
-    }
-
-    /// Links each folder of `folders` to the saved project `projectID` by
-    /// writing `MCPRepositoryLink.contents(projectName:)` for its saved name
-    /// to `.berrydb.json` at the folder's top, and returns one result per
-    /// folder in the same order.
-    ///
-    /// Nothing else is written: no other file, no git configuration and no
-    /// `.gitignore`. A project not saved as of the last `reload()` links
-    /// nothing. A regular file of the user's that already selects the
-    /// project is left untouched, whatever its formatting, extra keys or
-    /// capitalization. A symbolic link is never followed and a file another
-    /// user owns is never read, even when either names the project; like
-    /// any other entry of that name, they are replaced only when `overwrite`
-    /// is true. Replacing writes a regular file and leaves a link's target
-    /// untouched. A folder of that name is never replaced. The disk's root
-    /// and anything that is not a folder are rejected.
-    public func linkRepositories(_ folders: [URL], projectID: UUID, overwrite: Bool) -> [MCPRepositoryLinkResult] {
-        guard let project = projects.first(where: { $0.id == projectID }) else {
-            return folders.map { .rejected(Self.linkFilePath(in: $0), reason: Self.saveBeforeLinking) }
-        }
-        return folders.map { Self.link($0, projectName: project.name, overwrite: overwrite, write: linkWriter) }
+        return L("Agent entries that name “\(saved.name)” stop selecting this project until they use the new name.")
     }
 
     /// A localized reason `path` cannot be a workspace root, or nil. A root
@@ -373,6 +317,23 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             text: group.isEmpty ? profile.driverID : "\(profile.driverID) · \(group)",
             isProduction: profile.envColor == "production"
         )
+    }
+
+    /// One entry of the Agent Setup section: what to run, or what to add
+    /// to a configuration file, for one host.
+    public struct AgentSetupEntry: Equatable {
+        public var host: String
+        /// The command or configuration text, copied as shown.
+        public var text: String
+        /// Where the text goes and what the host does with it, when the
+        /// section's general captions do not already say so.
+        public var caption: String?
+
+        init(host: String, text: String, caption: String? = nil) {
+            self.host = host
+            self.text = text
+            self.caption = caption
+        }
     }
 
     /// The outcome of adding folders chosen in the open panel to a draft.
@@ -450,19 +411,92 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// An unsaved project gets none, since its ID means nothing to the
     /// helper yet. The `--` before the helper keeps `--project` an argument
     /// of the helper: `agy mcp add --help` (1.3.1) requires `--` before
-    /// arguments that begin with `-`. The helper path is double-quoted for a
-    /// POSIX shell so an install path with spaces stays one argument.
-    public func configurationSnippets(project: UUID) -> [(host: String, text: String)] {
+    /// arguments that begin with `-`. The helper path, and a project name
+    /// below, are single-quoted for a POSIX shell (`shellQuoted`), so a path
+    /// or name with spaces or shell characters stays one literal argument.
+    ///
+    /// A saved project then gets one per-repository entry for Claude Code
+    /// and one for Codex, each passing `--project <name>` with the saved
+    /// name, so a file committed to the repository selects a project of
+    /// that name in every clone and for every teammate. In interactive use
+    /// both hosts gate configuration a repository defines behind the user's
+    /// trust.
+    /// - Claude Code asks for approval in an interactive session before it
+    ///   uses a server from `.mcp.json`, and loads it without asking in
+    ///   `claude -p` runs, Agent SDK sessions and cloud sessions
+    ///   (https://code.claude.com/docs/en/mcp#project-scope).
+    ///   Observed with Claude Code 2.1.295 and a throwaway home directory:
+    ///   `claude mcp add --scope project` wrote `.mcp.json` in the current
+    ///   folder with the arguments as given, and `claude mcp list` showed the
+    ///   entry as pending approval. With a user-level `berrydb` entry also
+    ///   present, `claude mcp get` and `claude mcp list` used the user-level
+    ///   entry while the repository's was pending, and the repository's once
+    ///   the approval was recorded in `~/.claude.json`, the order that page
+    ///   gives (https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence).
+    ///   The caption therefore says which entry applies before and after
+    ///   approval rather than asking for the user-level entry's removal.
+    /// - codex-cli 0.157.1, observed with a throwaway home directory:
+    ///   `[mcp_servers.berrydb]` in a repository's `.codex/config.toml`
+    ///   replaced the user-level entry for `codex mcp get` run inside the
+    ///   repository only while the user configuration marked the folder
+    ///   trusted, and was ignored otherwise.
+    /// - Antigravity gets no such entry: agy 1.3.1 listed only its user-level
+    ///   server inside a folder holding `.agents/mcp_config.json`, and its
+    ///   embedded documentation names only `~/.gemini/config/mcp_config.json`
+    ///   and plugin configuration.
+    public func configurationSnippets(project: UUID) -> [AgentSetupEntry] {
         guard let helperURL else { return [] }
         let helper = Self.shellQuoted(helperURL.path)
         let commands = [
-            (host: "Claude Code", text: "claude mcp add --scope user berrydb -- \(helper)"),
-            (host: "Codex", text: "codex mcp add berrydb -- \(helper)"),
-            (host: "Antigravity", text: "agy mcp add berrydb -- \(helper)"),
+            AgentSetupEntry(host: "Claude Code", text: "claude mcp add --scope user berrydb -- \(helper)"),
+            AgentSetupEntry(host: "Codex", text: "codex mcp add berrydb -- \(helper)"),
+            AgentSetupEntry(host: "Antigravity", text: "agy mcp add berrydb -- \(helper)"),
         ]
-        guard isSaved(project) else { return commands }
+        guard let saved = projects.first(where: { $0.id == project }) else { return commands }
         let pinned = " --project \(project.uuidString.lowercased())"
-        return commands + commands.map { (host: L("\($0.host), always this project"), text: $0.text + pinned) }
+        let repository = [
+            AgentSetupEntry(
+                host: L("\("Claude Code"), this repository"),
+                text: "claude mcp add --scope project berrydb -- \(helper) --project \(Self.shellQuoted(saved.name))",
+                caption: L("Run it in the repository’s top folder. It writes .mcp.json there, which can be committed. Once you approve the entry in an interactive Claude Code session, Claude Code uses it in this repository instead of a user-level berrydb entry; until then, it uses the user-level entry.")
+            ),
+            AgentSetupEntry(
+                host: L("\("Codex"), this repository"),
+                text: """
+                [mcp_servers.berrydb]
+                command = \(Self.tomlQuoted(helperURL.path))
+                args = ["--project", \(Self.tomlQuoted(saved.name))]
+                """,
+                caption: L("Add it to .codex/config.toml in the repository. Codex reads that file only once the project is trusted, and there it takes precedence over the user-level berrydb entry.")
+            ),
+        ]
+        return commands
+            + commands.map { AgentSetupEntry(host: L("\($0.host), always this project"), text: $0.text + pinned) }
+            + repository
+    }
+
+    /// `value` as a TOML basic string: in double quotes, with `"` and `\`
+    /// escaped and every control character written as an escape, the short
+    /// form where TOML 1.0 has one and `\uXXXX` otherwise
+    /// (https://toml.io/en/v1.0.0#string). Scalars are escaped one by one,
+    /// so a CR LF pair, which Swift counts as one character, becomes `\r\n`.
+    nonisolated static func tomlQuoted(_ value: String) -> String {
+        var quoted = "\""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\"": quoted += "\\\""
+            case "\\": quoted += "\\\\"
+            case "\u{08}": quoted += "\\b"
+            case "\t": quoted += "\\t"
+            case "\n": quoted += "\\n"
+            case "\u{0C}": quoted += "\\f"
+            case "\r": quoted += "\\r"
+            case "\u{00}" ... "\u{1F}", "\u{7F}": quoted += String(format: "\\u%04X", scalar.value)
+            default: quoted.unicodeScalars.append(scalar)
+            }
+        }
+        quoted += "\""
+        return quoted
     }
 
     private static let keyReadFailure = L(
@@ -471,103 +505,6 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     private static let keyWriteFailure = L(
         "BerryDB could not update its MCP access key in the Keychain. Nothing was changed."
     )
-    private static let saveBeforeLinking = L("Save the project before linking repositories.")
-
-    /// A warning to show under a result that left a link file in the home
-    /// directory itself, or nil. The helper takes the nearest link file at or
-    /// above a workspace before it looks at registered workspace folders, so
-    /// a link at home selects this project for every folder inside it that
-    /// has no nearer link, including other projects' workspace folders.
-    /// Linking there stays allowed, as a home workspace folder does.
-    nonisolated public static func homeFolderLinkWarning(for result: MCPRepositoryLinkResult) -> String? {
-        let path: String
-        switch result {
-        case let .written(file), let .unchanged(file):
-            path = file
-        case .needsOverwrite, .rejected:
-            return nil
-        }
-        guard isHomeDirectory((path as NSString).deletingLastPathComponent) else { return nil }
-        return L("This links your home folder: every folder inside it without a nearer .berrydb.json selects this project, even another project’s workspace folder.")
-    }
-
-    nonisolated static func atomicLinkWrite(_ contents: Data, to file: URL) throws {
-        try contents.write(to: file, options: .atomic)
-    }
-
-    nonisolated private static func linkFilePath(in folder: URL) -> String {
-        folder.appendingPathComponent(MCPRepositoryLink.fileName).path
-    }
-
-    /// Links `folder` to the project called `projectName`, following the
-    /// rules `linkRepositories` states.
-    ///
-    /// The existing entry is read with the helper's own bounded reader, so a
-    /// folder counts as linked exactly when the helper would select the
-    /// project from it. A regular file of the user's that selects the
-    /// project by the helper's name rule, not only one whose bytes match, is
-    /// left untouched: repositories that reformat JSON on commit would
-    /// otherwise be offered a replacement on every clone, and replacing would
-    /// drop extra keys. Every other entry is replaced only with `overwrite`:
-    /// - a file naming another project or none, reported with that name;
-    /// - a symbolic link, which the reader never follows, so the name its
-    ///   target holds is neither read nor reported;
-    /// - a file another user owns, which the reader ignores as if absent;
-    ///   it is still never replaced without confirmation, and its name is
-    ///   not reported.
-    /// The reader never blocks on a FIFO.
-    ///
-    /// The root is refused because the helper never reads a link file there.
-    /// An atomic write writes an auxiliary file and then replaces the entry
-    /// with it
-    /// (https://developer.apple.com/documentation/foundation/nsdata/writingoptions/atomic).
-    /// Observed with Foundation on macOS 26.6: a symbolic link is replaced by
-    /// the new file and its target is left as it was, and a folder of that
-    /// name makes the write fail. A folder is therefore reported as in the
-    /// way rather than offered for replacement.
-    ///
-    /// - Parameter owner: The user whose link files are trusted; the current
-    ///   user unless replaced.
-    nonisolated static func link(
-        _ folder: URL, projectName: String, overwrite: Bool, write: (Data, URL) throws -> Void,
-        owner: uid_t = getuid()
-    ) -> MCPRepositoryLinkResult {
-        let contents = MCPRepositoryLink.contents(projectName: projectName)
-        let file = folder.appendingPathComponent(MCPRepositoryLink.fileName)
-        let path = file.path
-        guard canonicalRoot(folder.path) != "/" else {
-            return .rejected(path, reason: L("The whole disk cannot be linked to a project."))
-        }
-        var isFolder: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isFolder), isFolder.boolValue else {
-            return .rejected(path, reason: L("Only a folder can be linked to a project."))
-        }
-        let existing = MCPRepositoryLink.readBounded(path, owner: owner)
-        let existingProject = existing.flatMap(MCPRepositoryLink.projectName(in:))
-        if let existing {
-            let selectsProject = existingProject.map {
-                MCPRepositoryLink.matches(projectName: projectName, linkedName: $0)
-            } == true
-            if existing == contents || selectsProject {
-                return .unchanged(path)
-            }
-        }
-        var entry = stat()
-        if lstat(path, &entry) == 0 {
-            if entry.st_mode & S_IFMT == S_IFDIR {
-                return .rejected(path, reason: L("A folder named .berrydb.json is in the way."))
-            }
-            if !overwrite {
-                return .needsOverwrite(path, existingProject: existingProject)
-            }
-        }
-        do {
-            try write(contents, file)
-        } catch {
-            return .rejected(path, reason: L("The link file could not be written: \(error.localizedDescription)"))
-        }
-        return .written(path)
-    }
 
     /// The value to seal: the verified editing copy of a stored project, or
     /// a new project, with the draft applied. A profile kept from the stored
@@ -590,20 +527,17 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         return false
     }
 
-    /// Wraps `value` in double quotes, escaping the four characters a POSIX
-    /// shell still interprets inside them (`"`, `\`, `$`, backtick), per
-    /// https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html#tag_19_02_03.
-    /// Interactive history expansion of `!` in bash and zsh is outside POSIX
-    /// and not escaped; an app bundle path containing `!` would need editing.
+    /// Wraps `value` in single quotes, inside which a POSIX shell keeps
+    /// every character literal and a single quote cannot occur
+    /// (https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html#tag_19_02_02),
+    /// so each `'` is written as `'\''`: close the quotes, an escaped quote,
+    /// reopen them. Double quotes are not enough: an interactive bash or zsh
+    /// still expands `!` inside them, and escaping it there does not help
+    /// in bash, which keeps the backslash. Observed with /bin/bash 3.2.57
+    /// and zsh 5.9 on macOS 26.6.2 reading commands interactively:
+    /// `"it!!s"` became the previous command spliced in, bash printed
+    /// `"a\!b"` as `a\!b`, and `'it!!s'` stayed as written in both.
     private static func shellQuoted(_ value: String) -> String {
-        var quoted = "\""
-        for character in value {
-            if "\"\\$`".contains(character) {
-                quoted.append("\\")
-            }
-            quoted.append(character)
-        }
-        quoted.append("\"")
-        return quoted
+        "'" + value.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 }

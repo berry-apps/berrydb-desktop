@@ -13,7 +13,7 @@ public enum BerryMCPServerFactory {
     public struct Dependencies: Sendable {
         let resolver: MCPProjectContextResolver
         let metadata: MCPMetadataService
-        let explicitProject: UUID?
+        let explicitProject: MCPProjectReference?
         let workingDirectory: String
         let version: String
         let diagnostics: @Sendable (String) -> Void
@@ -25,7 +25,7 @@ public enum BerryMCPServerFactory {
         public init(
             resolver: MCPProjectContextResolver,
             metadata: MCPMetadataService,
-            explicitProject: UUID?,
+            explicitProject: MCPProjectReference?,
             workingDirectory: String,
             version: String,
             diagnostics: @escaping @Sendable (String) -> Void = MCPSessionContext.standardError

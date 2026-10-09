@@ -57,8 +57,7 @@ struct MCPSessionContextTests {
             verify: { id in
                 projects.first { $0.id == id }.map { MCPVerifiedProject(project: $0, liveReadProfileIDs: []) }
             },
-            selector: MCPProjectSelector(canonicalize: { $0 }),
-            findLink: { _ in .none }
+            selector: MCPProjectSelector(canonicalize: { $0 })
         )
     }
 
@@ -103,7 +102,13 @@ struct MCPSessionContextTests {
                 for await _ in gate {}
                 return ["file:///work/b"]
             },
-            diagnostics: { recorder.write($0) }
+            diagnostics: { recorder.write($0) },
+            // Longer than every deadline below. With the 5-second default, a
+            // run starved of CPU by parallel builds took the timeout before the
+            // gate opened, fell back to the working directory and reported
+            // [nil, nil] instead of failing at a deadline. The timeout itself
+            // is covered by its own test.
+            rootsTimeout: .seconds(30)
         )
         let first = Task { await session.context() }
         do {

@@ -59,7 +59,7 @@ public actor MCPSessionContext {
     }
 
     private let resolver: MCPProjectContextResolver
-    private let explicitProject: UUID?
+    private let explicitProject: MCPProjectReference?
     private let workingDirectory: String
     private let listRoots: @Sendable () async throws -> [String]?
     private let initialized: @Sendable () -> Bool
@@ -88,7 +88,7 @@ public actor MCPSessionContext {
     ///     connection.
     public init(
         resolver: MCPProjectContextResolver,
-        explicitProject: UUID?,
+        explicitProject: MCPProjectReference?,
         workingDirectory: String,
         listRoots: @escaping @Sendable () async throws -> [String]?,
         initialized: @escaping @Sendable () -> Bool = { true },
