@@ -8,6 +8,20 @@ import Foundation
 final class DynamoDBStubURLProtocol: URLProtocol, @unchecked Sendable {
     typealias Handler = @Sendable (URLRequest, Data?) throws -> (HTTPURLResponse, Data)
 
+    /// Thrown by a handler to leave its request in flight: the protocol neither
+    /// answers nor fails it, and holds no thread while it waits. `onStop` runs
+    /// when the loading system stops the request, which is what cancelling the
+    /// URLSession task does. A handler must not block instead, because every
+    /// handler in the process runs on the one `com.apple.CFNetwork.CustomProtocols`
+    /// thread (observed by logging `Thread.current` in a handler, and by a second
+    /// session's handler starting only after the first one's 1 s `Thread.sleep`
+    /// returned), so a blocked handler stalls every other test that uses a stub.
+    struct Suspend: Error {
+        let onStop: @Sendable () -> Void
+    }
+
+    private var onStop: (@Sendable () -> Void)?
+
     private static let lock = NSLock()
     nonisolated(unsafe) private static var handlers: [String: Handler] = [:]
     nonisolated(unsafe) private static var capturedRequests: [String: [URLRequest]] = [:]
@@ -62,12 +76,16 @@ final class DynamoDBStubURLProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: data)
             client?.urlProtocolDidFinishLoading(self)
+        } catch let suspend as Suspend {
+            onStop = suspend.onStop
         } catch {
             client?.urlProtocol(self, didFailWithError: error)
         }
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        onStop?()
+    }
 
     private static func drain(_ stream: InputStream) -> Data {
         stream.open()

@@ -183,51 +183,57 @@ struct DynamoDBConnectionTests {
     }
     /// Cancellation must abort the in-flight request rather than wait it out.
     ///
-    /// This used to assert a wall-clock deadline, and that deadline kept
-    /// failing on CI: a shared runner measured 843 ms against a 700 ms bound
-    /// while the stub slept 1 s, so cancellation had worked and only its
-    /// propagation was slow. The bound could not simply be raised, because it
-    /// has to stay under the stub's sleep to mean anything, and the sleep
-    /// cannot be lengthened either — `Thread.sleep` blocks a stub thread and
-    /// stalls every other test running in parallel, which is the compromise
-    /// the previous 1 s/700 ms pairing was already navigating.
+    /// Two earlier versions failed on the shared macos-15 runner, which has 3
+    /// vCPUs. The first asserted a wall-clock bound: it measured 843 ms
+    /// against a 700 ms limit while the stub slept 1 s, so cancellation had
+    /// worked and only its propagation was slow. The second asserted that the
+    /// stream threw before the stub finished sleeping, but it still raced a
+    /// clock: a 30 ms `Task.sleep` scheduled the cancel, and under the fully
+    /// parallel suite that task sometimes first ran after the stub's 1 s
+    /// sleep had ended. Both also blocked the stub in `Thread.sleep`, and a
+    /// stub handler runs on the single `com.apple.CFNetwork.CustomProtocols`
+    /// thread shared by every URLSession in the process, so the sleep stalled
+    /// every other test that talks to a stub.
     ///
-    /// So the timing assertion is gone. The stub records when it finishes
-    /// sleeping, and the test asserts the stream threw *before* that happened.
-    /// That is the property the deadline was standing in for, stated directly
-    /// and without a clock: a cancel that silently waited out the request
-    /// fails, however loaded the machine is.
-    @Test func cancelCurrentQueryAbortsAnInFlightSelect() async throws {
-        final class Flag: @unchecked Sendable {
-            private let lock = NSLock()
-            private var raised = false
-            func raise() { lock.lock(); raised = true; lock.unlock() }
-            var isRaised: Bool { lock.lock(); defer { lock.unlock() }; return raised }
-        }
-        let stubFinished = Flag()
+    /// This version has no clock. The stub reports that the select request
+    /// started and then leaves it in flight without blocking a thread. The
+    /// cancel is issued only after that report, so the request is known to be
+    /// in flight, and the stub never answers on its own, so the stream can end
+    /// only because cancellation aborted the request. The stub also reports
+    /// when the loading system stops the request, which shows the abort
+    /// reached the transport instead of the caller merely giving up on it.
+    ///
+    /// A cancel that does nothing leaves the stream open, so the test would
+    /// wait forever; the time limit exists only to turn that hang into a
+    /// failure. With `cancelCurrentQuery` made a no-op the test fails after
+    /// the 60 s limit, and a correct run takes a few seconds at most even
+    /// under a loaded parallel suite.
+    @Test(.timeLimit(.minutes(1)))
+    func cancelCurrentQueryAbortsAnInFlightSelect() async throws {
+        let (started, signalStarted) = AsyncStream.makeStream(of: Void.self)
+        let (stopped, signalStopped) = AsyncStream.makeStream(of: Void.self)
 
         let host = "dynamo-\(UUID().uuidString)".lowercased()
         let connection = try await makeConnection(host: host) { request, _ in
             if Self.target(request) == "DynamoDB_20120810.ListTables" {
                 return (dynamoStubResponse(request.url!, status: 200), dynamoStubJSON(["TableNames": []]))
             }
-            Thread.sleep(forTimeInterval: 1.0)
-            stubFinished.raise()
-            return (dynamoStubResponse(request.url!, status: 200), dynamoStubJSON(["Items": []]))
+            signalStarted.yield()
+            throw DynamoDBStubURLProtocol.Suspend { signalStopped.yield() }
         }
         let stream = connection.execute(#"SELECT * FROM "Music""#)
         Task {
-            try? await Task.sleep(for: .milliseconds(30))
+            for await _ in started { break }
             connection.cancelCurrentQuery()
         }
-        var threw = false
         do {
             for try await _ in stream {}
+            Issue.record("the select finished although its request was never answered")
+        } catch DriverError.cancelled {
         } catch {
-            threw = true
+            Issue.record("cancelling an in-flight query must surface as DriverError.cancelled, got \(error)")
         }
-        #expect(threw, "cancelling an in-flight query must surface as an error")
-        #expect(!stubFinished.isRaised, "cancel waited out the request instead of aborting it")
+        for await _ in stopped { break }
     }
 }
 
