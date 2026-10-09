@@ -27,6 +27,10 @@ on:
       - ".github/workflows/release.yml"
       - "scripts/check-comment-hygiene.sh"
       - "scripts/test-check-comment-hygiene.sh"
+      - "scripts/check-size.sh"
+      - "scripts/test-check-size.sh"
+      - "scripts/check-minos.sh"
+      - "scripts/test-check-minos.sh"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -51,6 +55,13 @@ jobs:
         run: |
           scripts/test-check-comment-hygiene.sh
           scripts/check-comment-hygiene.sh "origin/${{ github.base_ref }}"
+
+      - name: Bundle guard script tests
+        # The release workflow relies on these guards; their tests build tiny
+        # Mach-O fixtures with clang and need no FreeTDS or signing identity.
+        run: |
+          scripts/test-check-size.sh
+          scripts/test-check-minos.sh
 
       - name: Install FreeTDS dependency
         run: |
