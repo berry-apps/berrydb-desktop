@@ -214,28 +214,30 @@ struct MCPToolCatalogTests {
         ) == "Unexpected argument: connectionId")
     }
 
+    /// Messages are pinned exactly, so none can start echoing the value it
+    /// rejects.
     @Test func pathWithoutToIsInvalidParams() {
         let arguments: [String: Value] = ["connection_id": connectionID, "operation": "path", "from": "orders"]
-        #expect(invalidParamsMessage("berrydb_graph_query", arguments)?.contains("to") == true)
+        #expect(invalidParamsMessage("berrydb_graph_query", arguments) == "operation 'path' requires 'to'")
         #expect(invalidParamsMessage(
             "berrydb_graph_query", ["connection_id": connectionID, "operation": "neighbors"]
-        )?.contains("node") == true)
+        ) == "operation 'neighbors' requires 'node'")
         #expect(invalidParamsMessage(
             "berrydb_graph_query", ["connection_id": connectionID, "operation": "blast_radius", "node": "  "]
-        )?.contains("node") == true)
+        ) == "operation 'blast_radius' requires 'node'")
         #expect(invalidParamsMessage(
             "berrydb_graph_query", ["connection_id": connectionID, "operation": "path", "to": "orders"]
-        )?.contains("from") == true)
+        ) == "operation 'path' requires 'from'")
         #expect(invalidParamsMessage(
             "berrydb_graph_query", ["connection_id": connectionID, "operation": "teleport"]
-        )?.contains("operation") == true)
+        ) == "operation must be one of neighbors, path, blast_radius, circular_dependencies, top_centrality")
     }
 
     @Test func badUUIDIsInvalidParams() {
-        #expect(invalidParamsMessage("berrydb_get_schema", ["connection_id": "not-a-uuid"])?.contains("connection_id") == true)
-        #expect(invalidParamsMessage("berrydb_get_schema", ["connection_id": .int(3)])?.contains("connection_id") == true)
-        #expect(invalidParamsMessage("berrydb_get_schema", nil)?.contains("connection_id") == true)
-        #expect(invalidParamsMessage("berrydb_get_schema", [:])?.contains("connection_id") == true)
+        #expect(invalidParamsMessage("berrydb_get_schema", ["connection_id": "not-a-uuid"]) == "connection_id must be a UUID")
+        #expect(invalidParamsMessage("berrydb_get_schema", ["connection_id": .int(3)]) == "connection_id must be a string")
+        #expect(invalidParamsMessage("berrydb_get_schema", nil) == "connection_id is required")
+        #expect(invalidParamsMessage("berrydb_get_schema", [:]) == "connection_id is required")
     }
 
     @Test func wrongTypesAndOutOfRangeValuesAreInvalidParams() {
@@ -252,25 +254,26 @@ struct MCPToolCatalogTests {
                 ["connection_id": id, "operation": "top_centrality"].merging(extra) { $1 }
             )
         }
-        #expect(schema(["detail": "everything"])?.contains("detail") == true)
-        #expect(schema(["detail": .int(1)])?.contains("detail") == true)
-        #expect(schema(["object_names": "orders"])?.contains("object_names") == true)
-        #expect(schema(["object_names": [.string("a"), .int(2)]])?.contains("object_names") == true)
-        #expect(schema(["object_names": .array((0 ... 50).map { .string("t\($0)") })])?.contains("object_names") == true)
+        #expect(schema(["detail": "everything"]) == "detail must be one of overview, full")
+        #expect(schema(["detail": .int(1)]) == "detail must be a string")
+        #expect(schema(["object_names": "orders"]) == "object_names must be an array of strings")
+        #expect(schema(["object_names": [.string("a"), .int(2)]]) == "object_names must be an array of strings")
+        #expect(schema(["object_names": .array((0 ... 50).map { .string("t\($0)") })]) == "object_names accepts at most 50 names")
 
-        #expect(search([:])?.contains("query") == true)
-        #expect(search(["query": ""])?.contains("query") == true)
-        #expect(search(["query": .string(String(repeating: "a", count: 201))])?.contains("query") == true)
-        #expect(search(["query": .int(4)])?.contains("query") == true)
-        #expect(search(["query": "ord", "limit": .int(0)])?.contains("limit") == true)
-        #expect(search(["query": "ord", "limit": .int(201)])?.contains("limit") == true)
-        #expect(search(["query": "ord", "limit": "ten"])?.contains("limit") == true)
-        #expect(search(["query": "ord", "limit": .double(2.5)])?.contains("limit") == true)
+        let queryLength = "query must be 1 to 200 characters"
+        #expect(search([:]) == "query is required")
+        #expect(search(["query": ""]) == queryLength)
+        #expect(search(["query": .string(String(repeating: "a", count: 201))]) == queryLength)
+        #expect(search(["query": .int(4)]) == "query must be a string")
+        #expect(search(["query": "ord", "limit": .int(0)]) == "limit must be between 1 and 200")
+        #expect(search(["query": "ord", "limit": .int(201)]) == "limit must be between 1 and 200")
+        #expect(search(["query": "ord", "limit": "ten"]) == "limit must be an integer")
+        #expect(search(["query": "ord", "limit": .double(2.5)]) == "limit must be an integer")
 
-        #expect(graph(["limit": .int(0)])?.contains("limit") == true)
-        #expect(graph(["limit": .int(51)])?.contains("limit") == true)
-        #expect(graph(["operation": .int(1)])?.contains("operation") == true)
-        #expect(invalidParamsMessage("berrydb_get_graph_stats", ["connection_id": id, "object": .int(1)])?.contains("object") == true)
+        #expect(graph(["limit": .int(0)]) == "limit must be between 1 and 50")
+        #expect(graph(["limit": .int(51)]) == "limit must be between 1 and 50")
+        #expect(graph(["operation": .int(1)]) == "operation must be a string")
+        #expect(invalidParamsMessage("berrydb_get_graph_stats", ["connection_id": id, "object": .int(1)]) == "object must be a string")
     }
 
     @Test func unknownToolIsInvalidParams() {

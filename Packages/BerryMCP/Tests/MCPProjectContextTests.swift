@@ -80,6 +80,57 @@ struct MCPProjectContextTests {
         #expect(try resolver.context(of: selection) == .unconfigured(.projectDisabled, workspace: "/work/d"))
     }
 
+    /// The helper reads the Keychain inside `verify`, so a session whose
+    /// selection chose no project must never call it, neither while
+    /// selecting nor on any later request, and a chosen project calls it
+    /// exactly once per request.
+    @Test func verifyRunsOncePerRequestForAProjectAndNeverOtherwise() throws {
+        let counter = CallCounter()
+        let projects = [a, b, MCPProject(name: "B", isEnabled: true, workspaceRoots: ["/work/b2"])]
+        let links: [String: MCPRepositoryLink.Lookup] = [
+            "/work/invalid": .invalid(directory: "/work/invalid"),
+            "/work/unknown": .found(directory: "/work/unknown", projectName: "Nope"),
+            "/work/shared": .found(directory: "/work/shared", projectName: "B"),
+        ]
+        let resolver = MCPProjectContextResolver(
+            loadProjects: { projects },
+            verify: { id in
+                counter.bump("verify")
+                return projects.first { $0.id == id }.map { MCPVerifiedProject(project: $0, liveReadProfileIDs: []) }
+            },
+            selector: MCPProjectSelector(canonicalize: { $0 }),
+            findLink: { links[$0] ?? .none }
+        )
+        let unconfigured: [(MCPUnconfiguredReason, UUID?, [String]?, String)] = [
+            (.noMatchingProject, nil, nil, "/elsewhere"),
+            (.ambiguousProjects, nil, ["file:///work/a", "file:///work/b"], "/elsewhere"),
+            (.ambiguousProjects, nil, nil, "/work/shared"),
+            (.explicitProjectNotFound, UUID(), nil, "/work/a"),
+            (.invalidLinkFile, nil, nil, "/work/invalid"),
+            (.linkedProjectNotFound, nil, nil, "/work/unknown"),
+        ]
+
+        for (reason, explicit, roots, workingDirectory) in unconfigured {
+            let selection = try resolver.select(explicit: explicit, roots: roots, workingDirectory: workingDirectory)
+            guard case .unconfigured(reason, _, _) = selection else {
+                Issue.record("expected \(reason), got \(selection)")
+                continue
+            }
+            for _ in 0 ..< 3 {
+                _ = try resolver.context(of: selection)
+            }
+            #expect(counter.count("verify") == 0, "\(reason)")
+        }
+
+        let selection = try resolver.select(explicit: nil, roots: nil, workingDirectory: "/work/a")
+        #expect(selection == .project(a.id, source: .workingDirectory, workspace: "/work/a"))
+        #expect(counter.count("verify") == 0)
+        for request in 1 ... 3 {
+            _ = try resolver.context(of: selection)
+            #expect(counter.count("verify") == request)
+        }
+    }
+
     @Test func unknownExplicitProject() throws {
         #expect(try resolver(projects: [a]).resolve(explicit: UUID(), roots: nil, workingDirectory: "/work/a")
             == .unconfigured(.explicitProjectNotFound, workspace: nil))
