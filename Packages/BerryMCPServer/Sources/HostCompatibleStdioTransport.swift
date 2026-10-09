@@ -5,11 +5,21 @@ import MCP
 
 /// Compatibility boundary for host messages that swift-sdk 0.12.1 cannot
 /// process correctly while this server remains on legacy MCP 2025-11-25.
+///
+/// Every outgoing message, the SDK's responses and this transport's own
+/// replies alike, is written whole before the next one starts. The wrapped
+/// `StdioTransport.send` writes in a loop and, whenever standard output is
+/// full (EAGAIN), sleeps 10 ms with its actor free (`send` in
+/// StdioTransport.swift of swift-sdk 0.12.1), and the SDK server sends each
+/// response from its own task, so without this order a second message could
+/// be written into the middle of a first one larger than the pipe.
 public actor HostCompatibleStdioTransport: Transport {
     private let base: StdioTransport
     private let stream: AsyncThrowingStream<Data, Swift.Error>
     private let continuation: AsyncThrowingStream<Data, Swift.Error>.Continuation
     private var receiveTask: Task<Void, Never>?
+    /// The most recently queued write; the next one starts after it ends.
+    private var lastWrite: Task<Void, Swift.Error>?
 
     // Transport requires a nonisolated logger. The wrapped transport keeps its
     // own no-op logger; this second no-op instance is used only for conformance.
@@ -31,7 +41,7 @@ public actor HostCompatibleStdioTransport: Transport {
                 let upstream = await base.receive()
                 for try await message in upstream {
                     if let response = Self.legacyDiscoveryFallbackResponse(for: message) {
-                        try await base.send(response)
+                        try await self.send(response)
                         continue
                     }
                     continuation.yield(Self.sanitizeIncomingMessage(message))
@@ -50,8 +60,17 @@ public actor HostCompatibleStdioTransport: Transport {
         await base.disconnect()
     }
 
+    /// Writes `data` once every earlier message has been written or has
+    /// failed; a failed write never holds back the ones queued after it.
     public func send(_ data: Data) async throws {
-        try await base.send(data)
+        let previous = lastWrite
+        let base = self.base
+        let write = Task {
+            _ = await previous?.result
+            try await base.send(data)
+        }
+        lastWrite = write
+        try await write.value
     }
 
     public func receive() -> AsyncThrowingStream<Data, Swift.Error> {
