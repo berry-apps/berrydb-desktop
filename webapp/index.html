@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BerryDB 🫐 — The Native Database Client Built for macOS Speed</title>
-  <meta name="description" content="Ultra-fast, native macOS database manager built strictly with Swift 6 and AppKit. Zero Electron bloat. Supports PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, Redis, MongoDB, DynamoDB, Elasticsearch, Qdrant and an AI SQL Copilot." />
+  <meta name="description" content="Native macOS database client built with Swift 6 and AppKit. No Electron. Supports PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, Redis, MongoDB, DynamoDB, Elasticsearch, Qdrant and an AI SQL Copilot." />
   <meta name="keywords" content="BerryDB, macOS database client, postgresql mac client, mysql client mac, sqlite viewer mac, redis client mac, native mac database, fast sql editor macos, BerryHub" />
   <meta name="author" content="Berry Apps" />
   <meta name="theme-color" content="#080B13" />
@@ -33,7 +33,7 @@
   <meta property="og:url" content="https://db.berryhub.app" />
   <meta property="og:site_name" content="BerryHub — Native macOS Apps Ecosystem" />
   <meta property="og:title" content="BerryDB 🫐 — The Native Database Client Built for macOS Speed" />
-  <meta property="og:description" content="Cold start under a second, 1M rows streamed for about 6MB, AI SQL Copilot, and Apple Keychain security. Zero Electron." />
+  <meta property="og:description" content="Native macOS database client in Swift 6 and AppKit for SQL, NoSQL and vector databases, with an AI SQL assistant and passwords in the macOS Keychain. No Electron." />
   <meta property="og:image" content="https://db.berryhub.app/public/images/og-preview.png" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
@@ -44,7 +44,7 @@
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:url" content="https://db.berryhub.app" />
   <meta name="twitter:title" content="BerryDB 🫐 — The Native Database Client for macOS" />
-  <meta name="twitter:description" content="Pure Swift 6 & AppKit DataGrid. Streams 1M+ rows without growing memory, zero Electron, AI SQL Copilot, credentials kept in the macOS Keychain." />
+  <meta name="twitter:description" content="Native macOS database client in Swift 6 and AppKit for SQL, NoSQL and vector databases, with an AI SQL assistant and passwords in the macOS Keychain. No Electron." />
   <meta name="twitter:image" content="https://db.berryhub.app/public/images/og-preview.png" />
 
   <!-- Schema.org JSON-LD Structured Data -->
@@ -60,7 +60,7 @@
       "price": "0",
       "priceCurrency": "USD"
     },
-    "description": "Ultra-fast native macOS database client built with Swift 6 and AppKit. Zero Electron.",
+    "description": "Native macOS database client built with Swift 6 and AppKit. No Electron.",
     "url": "https://db.berryhub.app",
     "downloadUrl": "https://download-db.berryhub.app/BerryDB-latest.dmg",
     "image": "https://db.berryhub.app/public/images/berrydb-logo.png",
@@ -225,7 +225,6 @@
         <a href="#features" class="hover:text-berry-600 dark:hover:text-berry-400 transition">Features</a>
         <a href="#engines" class="hover:text-berry-600 dark:hover:text-berry-400 transition">Supported DBs</a>
         <a href="#ai-assistant" class="hover:text-berry-600 dark:hover:text-berry-400 transition">AI Copilot</a>
-        <a href="#benchmarks" class="hover:text-berry-600 dark:hover:text-berry-400 transition">Benchmarks</a>
         <a href="docs.html" class="hover:text-berry-600 dark:hover:text-berry-400 transition flex items-center gap-1 font-semibold text-rose-600 dark:text-rose-400">
           <span>Docs</span>
           <span class="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 font-semibold">New</span>
@@ -281,7 +280,6 @@
         <a href="#features" class="mobile-nav-link p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 font-medium text-slate-700 dark:text-slate-200">Features</a>
         <a href="#engines" class="mobile-nav-link p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 font-medium text-slate-700 dark:text-slate-200">Supported DBs</a>
         <a href="#ai-assistant" class="mobile-nav-link p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 font-medium text-slate-700 dark:text-slate-200">AI Copilot</a>
-        <a href="#benchmarks" class="mobile-nav-link p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 font-medium text-slate-700 dark:text-slate-200">Benchmarks</a>
         <a href="#gallery" class="mobile-nav-link p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 font-medium text-slate-700 dark:text-slate-200">UI Gallery</a>
         <a href="docs.html" class="mobile-nav-link p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950 font-bold text-emerald-600 dark:text-emerald-400">Documentation</a>
       </div>
@@ -326,7 +324,7 @@
 
       <!-- Subtitle -->
       <p class="mt-6 text-base sm:text-xl text-slate-600 dark:text-slate-300 max-w-3xl mx-auto font-normal leading-relaxed">
-        Sub-second launch, streaming <strong>1,000,000+ rows</strong> without growing memory, built-in <strong>AI SQL Copilot</strong>, and credentials kept in the macOS Keychain. Zero Electron bloat.
+        One native window for PostgreSQL, MySQL, SQL Server, SQLite, Redis, MongoDB, DynamoDB, Elasticsearch and Qdrant. Rows stream into an AppKit grid while the query runs, an <strong>AI SQL assistant</strong> is built in, and passwords stay in the macOS Keychain. No Electron.
       </p>
 
       <!-- Primary CTA Actions -->
@@ -374,7 +372,7 @@
             <!-- Live Interactive Badge Overlays -->
             <div class="absolute top-4 left-4 hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/90 dark:bg-[#0E1424]/90 backdrop-blur-md shadow-md border border-slate-200/80 dark:border-slate-700/80 text-xs font-semibold text-slate-800 dark:text-slate-200">
               <i data-lucide="zap" class="w-3.5 h-3.5 text-emerald-500"></i>
-              <span>Virtualized Grid: 1,000,000 Rows @ 60 FPS</span>
+              <span>AppKit NSTableView grid</span>
             </div>
 
             <div class="absolute bottom-4 right-4 flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-950/80 text-white text-xs font-medium backdrop-blur-md border border-white/10 group-hover:bg-emerald-600 transition">
@@ -405,7 +403,7 @@
             </div>
             <div>
               <h4 class="text-xs font-bold text-slate-900 dark:text-white">macOS Keychain</h4>
-              <p class="text-[11px] text-slate-500 dark:text-slate-400">Hardware encrypted credentials & SSH tunnels</p>
+              <p class="text-[11px] text-slate-500 dark:text-slate-400">Keychain-stored passwords & SSH tunnels</p>
             </div>
           </div>
         </div>
@@ -415,20 +413,20 @@
       <!-- Trust Metrics Bar -->
       <div class="mt-16 grid grid-cols-2 md:grid-cols-4 gap-6 max-w-4xl mx-auto pt-8 border-t border-slate-200/80 dark:border-slate-800">
         <div class="text-center">
-          <div class="font-display text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white">&lt; 150ms</div>
-          <div class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">Lightning Cold Launch</div>
+          <div class="font-display text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white">Apache 2.0</div>
+          <div class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">Free &amp; open source</div>
         </div>
         <div class="text-center">
-          <div class="font-display text-2xl sm:text-3xl font-extrabold text-emerald-600 dark:text-emerald-400">&lt; 50 MB</div>
-          <div class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">RAM Footprint (0 Electron)</div>
+          <div class="font-display text-2xl sm:text-3xl font-extrabold text-emerald-600 dark:text-emerald-400">9 Engines</div>
+          <div class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">SQL, NoSQL &amp; vector</div>
         </div>
         <div class="text-center">
-          <div class="font-display text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white">10+ Engines</div>
-          <div class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">Postgres, MySQL, SQLite, Redis...</div>
+          <div class="font-display text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white">Swift 6</div>
+          <div class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">AppKit, no Electron</div>
         </div>
         <div class="text-center">
-          <div class="font-display text-2xl sm:text-3xl font-extrabold text-indigo-600 dark:text-indigo-400">100% Native</div>
-          <div class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">Swift 6 & AppKit Engine</div>
+          <div class="font-display text-2xl sm:text-3xl font-extrabold text-indigo-600 dark:text-indigo-400">macOS 15+</div>
+          <div class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">Apple Silicon, notarized</div>
         </div>
       </div>
 
@@ -448,7 +446,7 @@
           One Native Client for All Your Databases
         </h2>
         <p class="mt-3 text-slate-600 dark:text-slate-400 text-sm sm:text-base">
-          Engineered with modular driver packages conforming to strict performance suites.
+          Engineered with modular driver packages checked by a shared driver conformance test suite.
         </p>
       </div>
 
@@ -460,7 +458,7 @@
             <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"></path><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"></path></svg>
           </div>
           <h3 class="font-bold text-sm text-slate-900 dark:text-white">PostgreSQL</h3>
-          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">v12-16+, Citus, Cockroach</p>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">PostgresNIO, tested on 16</p>
           <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60">Native Driver</span>
         </div>
 
@@ -470,7 +468,7 @@
             <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"></rect><rect width="20" height="8" x="2" y="14" rx="2" ry="2"></rect><line x1="6" x2="6.01" y1="6" y2="6"></line><line x1="6" x2="6.01" y1="18" y2="18"></line></svg>
           </div>
           <h3 class="font-bold text-sm text-slate-900 dark:text-white">MySQL & MariaDB</h3>
-          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">8.4+ caching_sha2</p>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">MySQLNIO, tested on 8.4</p>
           <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/60">KILL Guard</span>
         </div>
 
@@ -480,7 +478,7 @@
             <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="m3 15 2 2 4-4"></path></svg>
           </div>
           <h3 class="font-bold text-sm text-slate-900 dark:text-white">SQLite 3</h3>
-          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">File, Memory, WAL mode</p>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">File, WAL mode</p>
           <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-cyan-50 dark:bg-cyan-950/60 text-cyan-700 dark:text-cyan-300 border border-cyan-200/60 dark:border-cyan-800/60">libsqlite3 C-Direct</span>
         </div>
 
@@ -490,7 +488,7 @@
             <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
           </div>
           <h3 class="font-bold text-sm text-slate-900 dark:text-white">Microsoft SQL Server</h3>
-          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">T-SQL, Azure SQL</p>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">T-SQL via FreeTDS</p>
           <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200/60 dark:border-rose-800/60">Full Schemas</span>
         </div>
 
@@ -541,7 +539,7 @@
           </div>
           <h3 class="font-bold text-sm text-slate-900 dark:text-white">Elasticsearch</h3>
           <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">JSON Indices & Cluster</p>
-          <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-teal-50 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300 border border-teal-200/60 dark:border-teal-800/60">Cluster Status</span>
+          <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-teal-50 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300 border border-teal-200/60 dark:border-teal-800/60">Index Browser</span>
         </div>
 
         <!-- Engine: SSH Tunneling -->
@@ -551,7 +549,7 @@
           </div>
           <h3 class="font-bold text-sm text-slate-900 dark:text-white">SSH Bastion Tunnel</h3>
           <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">Private VPC & Key Auth</p>
-          <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">Zero Leak</span>
+          <span class="mt-3 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">Host Key Pinning</span>
         </div>
 
       </div>
@@ -612,13 +610,13 @@
           <div class="lg:col-span-5 space-y-5 text-left">
             <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 dark:bg-emerald-500/20 border border-emerald-500/20 dark:border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
               <i data-lucide="zap" class="w-3.5 h-3.5"></i>
-              <span>Hardware-Accelerated Grid</span>
+              <span>AppKit NSTableView</span>
             </div>
             <h3 class="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
-              Smooth Scrolling for Millions of Rows
+              A Native Grid for Real Result Sets
             </h3>
             <p class="text-slate-600 dark:text-slate-300 text-sm leading-relaxed">
-              Unlike web-view based clients that freeze when fetching large datasets, BerryDB utilizes pure AppKit <code class="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-mono text-xs">NSTableView</code> view reuse. Load 1,000,000 rows with instantaneous sorting, filtering, inline editing, and binary image inspection.
+              The result grid is a view-based AppKit <code class="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-mono text-xs">NSTableView</code>: rows stream in while the query runs, and only the rows on screen get cell views. Edit cells inline, sort and filter table tabs on the server, and inspect binary and image cells.
             </p>
             <div class="space-y-2.5 text-xs text-slate-600 dark:text-slate-300">
               <div class="flex items-center gap-2">
@@ -627,11 +625,11 @@
               </div>
               <div class="flex items-center gap-2">
                 <i data-lucide="check" class="w-4 h-4 text-emerald-500"></i>
-                <span>Instant column filter, search, and type-aware sorting</span>
+                <span>WHERE filter builder and server-side sorting on table tabs</span>
               </div>
               <div class="flex items-center gap-2">
                 <i data-lucide="check" class="w-4 h-4 text-emerald-500"></i>
-                <span>Multi-format export: CSV, JSON, Parquet, SQL INSERTs</span>
+                <span>Export: CSV, TSV, JSON, NDJSON, SQL INSERT</span>
               </div>
             </div>
           </div>
@@ -658,15 +656,15 @@
             <div class="space-y-2.5 text-xs text-slate-600 dark:text-slate-300">
               <div class="flex items-center gap-2">
                 <i data-lucide="check" class="w-4 h-4 text-purple-500"></i>
-                <span>Strict privacy mode: Only schema metadata is sent, zero table rows</span>
+                <span>AI is off by default on connections marked as production</span>
               </div>
               <div class="flex items-center gap-2">
                 <i data-lucide="check" class="w-4 h-4 text-purple-500"></i>
-                <span>Supports Claude 3.5, OpenAI GPT-4o, and Gemini 2.0</span>
+                <span>Apple's on-device model (macOS 26) or BerryDB's cloud AI service</span>
               </div>
               <div class="flex items-center gap-2">
                 <i data-lucide="check" class="w-4 h-4 text-purple-500"></i>
-                <span>1-click SQL insert into active editor with formatted indentation</span>
+                <span>Writes proposed SQL into the active editor without running it</span>
               </div>
             </div>
           </div>
@@ -688,20 +686,20 @@
               Secure Profiles, SSH Jump Hosts & SSL Certificates
             </h3>
             <p class="text-slate-600 dark:text-slate-300 text-sm leading-relaxed">
-              Organize multiple environments (Production, Staging, Local) into color-coded groups. Passwords and private keys are never stored in plaintext — they live exclusively in the macOS Keychain.
+              Organize connections into groups and mark production ones, so writes and destructive statements ask for confirmation. Passwords and SSH key passphrases are stored in the macOS Keychain, never in plaintext on disk.
             </p>
             <div class="space-y-2.5 text-xs text-slate-600 dark:text-slate-300">
               <div class="flex items-center gap-2">
                 <i data-lucide="check" class="w-4 h-4 text-blue-500"></i>
-                <span>SSH Tunneling with private key, agent, or password auth</span>
+                <span>SSH tunneling with a password or a private key (Ed25519, RSA, ECDSA)</span>
               </div>
               <div class="flex items-center gap-2">
                 <i data-lucide="check" class="w-4 h-4 text-blue-500"></i>
-                <span>Mutual TLS (mTLS) with Root CA and Client Certificates</span>
+                <span>TLS with a custom CA and client certificates (PostgreSQL, MySQL)</span>
               </div>
               <div class="flex items-center gap-2">
                 <i data-lucide="check" class="w-4 h-4 text-blue-500"></i>
-                <span>Safe Production Read-Only mode with dangerous query prompt</span>
+                <span>Production flag: writes and destructive statements ask for confirmation</span>
               </div>
             </div>
           </div>
@@ -723,12 +721,12 @@
               Visual Table Structure & Relationship Editor
             </h3>
             <p class="text-slate-600 dark:text-slate-300 text-sm leading-relaxed">
-              Inspect and alter columns, data types, indexes, foreign keys, triggers, and table partitions. Preview generated DDL migration scripts before committing changes.
+              Inspect and alter columns, data types, indexes and foreign keys. Preview the generated DDL before applying it.
             </p>
             <div class="space-y-2.5 text-xs text-slate-600 dark:text-slate-300">
               <div class="flex items-center gap-2">
                 <i data-lucide="check" class="w-4 h-4 text-amber-500"></i>
-                <span>Visual index creator: B-Tree, GIN, GiST, Fulltext</span>
+                <span>Create unique and non-unique indexes</span>
               </div>
               <div class="flex items-center gap-2">
                 <i data-lucide="check" class="w-4 h-4 text-amber-500"></i>
@@ -763,11 +761,11 @@
             <div class="space-y-2.5 text-xs text-slate-600 dark:text-slate-300">
               <div class="flex items-center gap-2">
                 <i data-lucide="check" class="w-4 h-4 text-rose-500"></i>
-                <span>Cost & Timing breakdown for every execution stage</span>
+                <span>Execution plan as an expandable tree of operator nodes</span>
               </div>
               <div class="flex items-center gap-2">
                 <i data-lucide="check" class="w-4 h-4 text-rose-500"></i>
-                <span>Missing index recommendations powered by AI heuristics</span>
+                <span>Insights flags unused indexes and mostly sequentially scanned tables (PostgreSQL, MySQL)</span>
               </div>
               <div class="flex items-center gap-2">
                 <i data-lucide="check" class="w-4 h-4 text-rose-500"></i>
@@ -800,7 +798,7 @@
           Why Native macOS Matters for Databases
         </h2>
         <p class="mt-4 text-slate-600 dark:text-slate-400 text-base">
-          Built strictly with Swift 6 and AppKit — zero Electron bloat, zero background memory hogging.
+          Built with Swift 6 and AppKit. No Electron, no bundled browser engine.
         </p>
       </div>
 
@@ -814,7 +812,7 @@
             </div>
             <h3 class="text-xl font-bold text-slate-900 dark:text-white">Swift 6 Structured Concurrency</h3>
             <p class="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-              Every query executes in an isolated Actor thread. Heavy analytical queries never freeze your UI or block query editor typing.
+              Each connection runs its queries on its own Swift actor, off the main thread.
             </p>
           </div>
           <div class="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs text-emerald-600 dark:text-emerald-400 font-semibold">
@@ -846,13 +844,13 @@
             <div class="w-12 h-12 rounded-2xl bg-cyan-500/10 dark:bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20 dark:border-cyan-500/30 flex items-center justify-center group-hover:scale-110 transition shadow-sm">
               <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 7h1a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-2"></path><path d="M6 7H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h1"></path><path d="m11 7-3 5h4l-3 5"></path><line x1="22" x2="22" y1="11" y2="13"></line></svg>
             </div>
-            <h3 class="text-xl font-bold text-slate-900 dark:text-white">50MB Tiny Memory Footprint</h3>
+            <h3 class="text-xl font-bold text-slate-900 dark:text-white">No Bundled Runtime</h3>
             <p class="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-              No Chromium rendering engine, no embedded Node.js runtimes. Keep dozens of database connections open without draining your MacBook's battery.
+              No Chromium rendering engine, no embedded Node.js runtime, no JVM.
             </p>
           </div>
           <div class="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs text-cyan-600 dark:text-cyan-400 font-semibold">
-            <span>Battery Efficient</span>
+            <span>Native AppKit</span>
             <i data-lucide="arrow-right" class="w-4 h-4 group-hover:translate-x-1 transition"></i>
           </div>
         </div>
@@ -865,7 +863,7 @@
             </div>
             <h3 class="text-xl font-bold text-slate-900 dark:text-white">Keychain Security</h3>
             <p class="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-              Passwords, connection URLs, and SSH keys are stored in the macOS Keychain. Zero plain-text config files.
+              Passwords, API keys and SSH key passphrases are stored in the macOS Keychain. No secrets in plain-text config files.
             </p>
           </div>
           <div class="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs text-amber-600 dark:text-amber-400 font-semibold">
@@ -880,9 +878,9 @@
             <div class="w-12 h-12 rounded-2xl bg-purple-500/10 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 border border-purple-500/20 dark:border-purple-500/30 flex items-center justify-center group-hover:scale-110 transition shadow-sm">
               <svg class="w-6 h-6 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 16 4-4-4-4"></path><path d="m6 8-4 4 4 4"></path><path d="m14.5 4-5 16"></path></svg>
             </div>
-            <h3 class="text-xl font-bold text-slate-900 dark:text-white">Smart SQL Autocomplete & Linting</h3>
+            <h3 class="text-xl font-bold text-slate-900 dark:text-white">Smart SQL Autocomplete</h3>
             <p class="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-              Type-ahead completions for schemas, tables, columns, aliases, and SQL keywords. Auto-formatting with 1-click customizable dialect rules.
+              Type-ahead completions for schemas, tables, columns, aliases, and SQL keywords. One-key SQL formatting.
             </p>
           </div>
           <div class="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs text-purple-600 dark:text-purple-400 font-semibold">
@@ -908,91 +906,6 @@
           </div>
         </div>
 
-      </div>
-
-    </div>
-  </section>
-
-
-  <!-- ==================== BENCHMARKS COMPARISON SECTION ==================== -->
-  <section id="benchmarks" class="py-20 md:py-28 bg-white/70 dark:bg-[#0B0F1A] border-y border-emerald-100/60 dark:border-slate-800/80 relative">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-      
-      <div class="text-center max-w-3xl mx-auto mb-16">
-        <span class="text-xs font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/80 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-800/80">
-          Performance Benchmarks
-        </span>
-        <h2 class="mt-4 font-display text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white tracking-tight">
-          How BerryDB Compares to Legacy GUI Clients
-        </h2>
-        <p class="mt-4 text-slate-600 dark:text-slate-400 text-sm sm:text-base">
-          Real measurements on Apple Silicon M3 Pro (macOS 14.5).
-        </p>
-      </div>
-
-      <div class="overflow-x-auto rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-md">
-        <table class="w-full text-left text-xs sm:text-sm">
-          <thead class="bg-slate-100/90 dark:bg-[#080B13] text-slate-900 dark:text-white font-bold border-b border-slate-200 dark:border-slate-800">
-            <tr>
-              <th class="py-4 px-5">Metric / Feature</th>
-              <th class="py-4 px-5 text-emerald-600 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/40 border-x border-emerald-200/60 dark:border-emerald-900/60 font-extrabold">BerryDB</th>
-              <th class="py-4 px-5 text-slate-600 dark:text-slate-300">Legacy Cross-Platform</th>
-              <th class="py-4 px-5 text-slate-600 dark:text-slate-300">Java / JVM Tools</th>
-              <th class="py-4 px-5 text-slate-600 dark:text-slate-300">Generic macOS Tools</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-200/70 dark:divide-slate-800/70 bg-white dark:bg-[#0E1424] text-slate-700 dark:text-slate-300">
-            
-            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-              <td class="py-3.5 px-5 font-semibold text-slate-900 dark:text-white">Cold Launch Time</td>
-              <td class="py-3.5 px-5 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50/30 dark:bg-emerald-950/20 border-x border-emerald-200/40 dark:border-emerald-900/40">&lt; 150 ms (Instant)</td>
-              <td class="py-3.5 px-5 text-slate-500">~2,400 ms</td>
-              <td class="py-3.5 px-5 text-slate-500">~5,800 ms (Java JVM)</td>
-              <td class="py-3.5 px-5">~350 ms</td>
-            </tr>
-
-            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-              <td class="py-3.5 px-5 font-semibold text-slate-900 dark:text-white">Idle Memory Usage</td>
-              <td class="py-3.5 px-5 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50/30 dark:bg-emerald-950/20 border-x border-emerald-200/40 dark:border-emerald-900/40">48 MB</td>
-              <td class="py-3.5 px-5 text-slate-500">280 MB</td>
-              <td class="py-3.5 px-5 text-slate-500">850 MB+</td>
-              <td class="py-3.5 px-5">95 MB</td>
-            </tr>
-
-            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-              <td class="py-3.5 px-5 font-semibold text-slate-900 dark:text-white">1M Rows Virtual Scroll</td>
-              <td class="py-3.5 px-5 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50/30 dark:bg-emerald-950/20 border-x border-emerald-200/40 dark:border-emerald-900/40">60 FPS Smooth</td>
-              <td class="py-3.5 px-5 text-slate-500">Laggy / Truncates</td>
-              <td class="py-3.5 px-5 text-slate-500">Out of Memory (OOM)</td>
-              <td class="py-3.5 px-5">55 FPS</td>
-            </tr>
-
-            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-              <td class="py-3.5 px-5 font-semibold text-slate-900 dark:text-white">AI SQL Copilot</td>
-              <td class="py-3.5 px-5 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50/30 dark:bg-emerald-950/20 border-x border-emerald-200/40 dark:border-emerald-900/40"><i data-lucide="check-circle-2" class="w-4 h-4 inline text-emerald-500"></i> Built-in Native</td>
-              <td class="py-3.5 px-5 text-slate-400"><i data-lucide="x" class="w-4 h-4 inline text-slate-400"></i> No</td>
-              <td class="py-3.5 px-5 text-slate-500">Plugin required</td>
-              <td class="py-3.5 px-5 text-slate-400"><i data-lucide="x" class="w-4 h-4 inline text-slate-400"></i> Paid Addon</td>
-            </tr>
-
-            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-              <td class="py-3.5 px-5 font-semibold text-slate-900 dark:text-white">Technology Stack</td>
-              <td class="py-3.5 px-5 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50/30 dark:bg-emerald-950/20 border-x border-emerald-200/40 dark:border-emerald-900/40">Swift 6 + AppKit</td>
-              <td class="py-3.5 px-5 text-slate-500">C++ / Qt</td>
-              <td class="py-3.5 px-5 text-slate-500">Java / Eclipse SWT</td>
-              <td class="py-3.5 px-5">Objective-C / Swift</td>
-            </tr>
-
-            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-              <td class="py-3.5 px-5 font-semibold text-slate-900 dark:text-white">Credential Storage</td>
-              <td class="py-3.5 px-5 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50/30 dark:bg-emerald-950/20 border-x border-emerald-200/40 dark:border-emerald-900/40">macOS Keychain</td>
-              <td class="py-3.5 px-5 text-slate-500">Custom Cipher</td>
-              <td class="py-3.5 px-5 text-slate-500">Plaintext / Master Pass</td>
-              <td class="py-3.5 px-5">macOS Keychain</td>
-            </tr>
-
-          </tbody>
-        </table>
       </div>
 
     </div>
@@ -1116,7 +1029,7 @@
               <h4 class="font-bold text-sm text-slate-900 dark:text-white">Query Execution Profiler</h4>
               <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-300 border border-rose-200 dark:border-rose-800">Profiler</span>
             </div>
-            <p class="text-xs text-slate-600 dark:text-slate-400 mt-1.5 leading-relaxed">Visual stage costs, node execution times, and index hit metrics.</p>
+            <p class="text-xs text-slate-600 dark:text-slate-400 mt-1.5 leading-relaxed">Execution plan as a tree of operator nodes.</p>
           </div>
         </div>
 
@@ -1154,7 +1067,7 @@
             <i data-lucide="play" class="w-5 h-5 text-emerald-500"></i>
           </div>
           <h3 class="font-bold text-base text-slate-900 dark:text-white">Execute Query</h3>
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Run active query block or highlighted SQL statement immediately.</p>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Run the selected SQL, or every statement when nothing is selected.</p>
         </div>
 
         <!-- Shortcut 2 -->
@@ -1166,8 +1079,8 @@
             </div>
             <i data-lucide="command" class="w-5 h-5 text-emerald-500"></i>
           </div>
-          <h3 class="font-bold text-base text-slate-900 dark:text-white">Quick Command Palette</h3>
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Search tables, switch connections, and jump to procedures instantly.</p>
+          <h3 class="font-bold text-base text-slate-900 dark:text-white">Command Palette</h3>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Run any app command from the keyboard.</p>
         </div>
 
         <!-- Shortcut 3 -->
@@ -1187,8 +1100,8 @@
         <div class="p-6 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-lg dark:hover:border-slate-700 transition-all duration-200">
           <div class="flex items-center justify-between mb-4">
             <div class="flex items-center gap-1.5">
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">⌃</kbd>
               <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">⌘</kbd>
-              <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">⌥</kbd>
               <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">F</kbd>
             </div>
             <i data-lucide="align-left" class="w-5 h-5 text-slate-400"></i>
@@ -1215,12 +1128,12 @@
           <div class="flex items-center justify-between mb-4">
             <div class="flex items-center gap-1.5">
               <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">⌘</kbd>
-              <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">.</kbd>
+              <kbd class="kbd-tag px-2.5 py-1.5 bg-slate-100 dark:bg-[#182138] rounded-lg border border-slate-200 dark:border-slate-700 font-mono font-bold text-sm text-slate-800 dark:text-slate-200">P</kbd>
             </div>
-            <i data-lucide="octagon-alert" class="w-5 h-5 text-rose-500"></i>
+            <i data-lucide="search" class="w-5 h-5 text-slate-400"></i>
           </div>
-          <h3 class="font-bold text-base text-slate-900 dark:text-white">Cancel Running Query</h3>
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Send kill signal immediately to release server backend locks.</p>
+          <h3 class="font-bold text-base text-slate-900 dark:text-white">Go to Table</h3>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Jump to a table, view or procedure by name.</p>
         </div>
 
       </div>
@@ -1262,7 +1175,7 @@
       </div>
 
       <div class="text-xs text-slate-400 font-mono pt-2">
-        SHA-256 Verified • Apple Silicon (M1/M2/M3/M4) • Sparkle 2 Auto-Updates
+        Notarized • Apple Silicon (M1/M2/M3/M4) • Sparkle 2 Auto-Updates
       </div>
 
     </div>
@@ -1322,7 +1235,7 @@
             <span class="font-display font-bold text-base text-slate-900 dark:text-white">BerryDB</span>
           </div>
           <p class="text-slate-500 dark:text-slate-400 leading-relaxed">
-            Ultra-fast native macOS database client with Swift 6, AppKit DataGrid, and AI SQL Copilot. Zero Electron.
+            Native macOS database client with Swift 6, an AppKit data grid and an AI SQL assistant. No Electron.
           </p>
           <p class="text-[11px] text-slate-400 dark:text-slate-500">
             Crafted for speed & elegance by <a href="https://github.com/quangtaned" target="_blank" class="hover:text-rose-500 transition font-medium">@quangtaned</a> & <a href="https://github.com/trungdv96" target="_blank" class="hover:text-rose-500 transition font-medium">@trungdv96</a>.

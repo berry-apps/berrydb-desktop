@@ -274,7 +274,7 @@
               <li><a href="#explain-plan" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Visual EXPLAIN Query Plan</a></li>
               <li><a href="#redis-inspector" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Redis Key-Value Browser</a></li>
               <li><a href="#import-export" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Import & Export Wizard</a></li>
-              <li><a href="#query-history" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">History & Performance Audit</a></li>
+              <li><a href="#query-history" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Query History</a></li>
             </ul>
           </div>
 
@@ -282,7 +282,7 @@
             <h3 class="font-display font-bold text-xs uppercase tracking-wider text-slate-900 dark:text-white mb-2">Engines & Security</h3>
             <ul class="space-y-1">
               <li><a href="#drivers" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Database Driver Specs</a></li>
-              <li><a href="#keychain" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Keychain Security</a></li>
+              <li><a href="#connection-manager" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Keychain Security</a></li>
               <li><a href="#shortcuts-ref" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Keyboard Shortcuts</a></li>
               <li><a href="#troubleshooting" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">FAQ & Troubleshooting</a></li>
               <li><a href="#support" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Community & Support</a></li>
@@ -304,21 +304,21 @@
             BerryDB Documentation
           </h1>
           <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">
-            <strong>BerryDB</strong> is a native macOS database management client built with Swift 6 and AppKit. It is architected as an ultra-fast, lightweight alternative to web-wrapped or JVM-based database clients that consumes under 50MB of RAM and launches in under 150ms.
+            <strong>BerryDB</strong> is a native macOS database management client built with Swift 6 and AppKit. It does not bundle a browser engine, Node.js or a JVM.
           </p>
 
           <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
             <div class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 shadow-sm">
-              <h4 class="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2"><i data-lucide="zap" class="w-4 h-4 text-emerald-500"></i> Hardware Grid</h4>
-              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">AppKit NSTableView streaming 1,000,000+ rows with zero frame drops.</p>
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2"><i data-lucide="zap" class="w-4 h-4 text-emerald-500"></i> Native Grid</h4>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">AppKit NSTableView grid; rows stream in while the query runs.</p>
             </div>
             <div class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 shadow-sm">
               <h4 class="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2"><i data-lucide="lock" class="w-4 h-4 text-blue-500"></i> macOS Keychain</h4>
-              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Keychain storage for all database passwords & SSH keys.</p>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Keychain storage for database passwords, API keys and SSH key passphrases.</p>
             </div>
             <div class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 shadow-sm">
               <h4 class="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2"><i data-lucide="sparkles" class="w-4 h-4 text-purple-500"></i> AI SQL Copilot</h4>
-              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Schema-aware natural language query generation; row data is never sent unless you turn on sample rows.</p>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Schema-aware natural language query generation, on Apple's on-device model or BerryDB's cloud AI service.</p>
             </div>
           </div>
         </section>
@@ -379,7 +379,7 @@
             <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Streaming DataGrid</h2>
           </div>
           <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            The AppKit <code class="font-mono text-xs">NSTableView</code> DataGrid delivers hardware-accelerated rendering capable of streaming millions of rows without locking the main thread. Supports inline cell editing, dynamic column sorting, and instant pagination.
+            The AppKit <code class="font-mono text-xs">NSTableView</code> DataGrid shows rows as they stream in and creates cell views only for the rows on screen. It supports inline cell editing, and table tabs sort and filter on the server (1,000 rows by default).
           </p>
 
           <!-- Screenshot Illustration -->
@@ -399,7 +399,7 @@
             <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">AI SQL Copilot & Chat Assistant</h2>
           </div>
           <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Transform plain English prompts into optimized SQL queries for PostgreSQL, MySQL, SQLite, and SQL Server. The assistant understands your schema, foreign key relationships, and data types while ensuring zero row-data leakage.
+            Turn plain English prompts into SQL for PostgreSQL, MySQL, SQLite, and SQL Server. The assistant reads your schema, foreign key relationships, and data types. In cloud mode (free trial, then paid), your questions, the database type, your schema (table and column names) and the results of queries the assistant runs (up to 100 rows each) are sent to BerryDB's AI service; table sample rows are shared only if you turn that on.
           </p>
 
           <!-- Screenshot Illustration -->
@@ -419,7 +419,7 @@
             <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Connection Profiles & SSH Bastion Tunnels</h2>
           </div>
           <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Configure direct connections, SSL/mTLS client certificates, and SSH Jump Hosts with RSA/Ed25519 keys to access private cloud VPC databases safely.
+            Configure direct connections, TLS (with client certificates for PostgreSQL and MySQL), and SSH jump hosts with Ed25519, RSA or ECDSA keys to access private cloud VPC databases safely.
           </p>
 
           <!-- Screenshot Illustration -->
@@ -446,7 +446,7 @@
           <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
             <img src="public/images/Screenshot-C07EBF19-E582-4E57-AC61-7B020C5921B5.png" alt="Table Schema Designer" class="w-full h-auto object-cover" />
             <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-              Figure 5: Table Schema Designer with column types, nullability, auto-increments, and foreign key relations.
+              Figure 5: Table Schema Designer with column types, nullability, defaults, primary keys, and foreign key relations.
             </div>
           </div>
         </section>
@@ -459,14 +459,14 @@
             <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Visual EXPLAIN Query Plan Profiler</h2>
           </div>
           <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Press <kbd class="kbd-tag px-2 py-1 rounded bg-slate-200 dark:bg-slate-800 font-mono text-xs">⌘E</kbd> to inspect the execution plan tree. Spot sequential scans, missing indexes, and expensive hash joins instantly with color-coded node cost tags:
+            Press <kbd class="kbd-tag px-2 py-1 rounded bg-slate-200 dark:bg-slate-800 font-mono text-xs">⌘E</kbd> to inspect the execution plan as an expandable tree of operator nodes:
           </p>
 
           <!-- Screenshot Illustration -->
           <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
             <img src="public/images/Screenshot-47E670EA-CE85-45EA-A846-4B55A9AA58CD.png" alt="Visual EXPLAIN Plan" class="w-full h-auto object-cover" />
             <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-              Figure 6: Visual EXPLAIN Query Plan highlighting high-cost operations, sequential scans, and actual row counts.
+              Figure 6: EXPLAIN query plan shown as a tree.
             </div>
           </div>
         </section>
@@ -479,7 +479,7 @@
             <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Redis Key-Value & Cache Browser</h2>
           </div>
           <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Explore Redis databases (DB 0-15), search keys with wildcard patterns, inspect TTL values, and modify Strings, Hashes, Lists, Sets, and JSON data directly:
+            Explore Redis databases (DB 0-15), search keys with wildcard patterns, inspect TTL values, and modify Strings, Hashes, Lists, Sets, Sorted Sets, and Streams directly:
           </p>
 
           <!-- Screenshot Illustration -->
@@ -499,7 +499,7 @@
             <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Import & Export Wizard</h2>
           </div>
           <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Fast batch imports and exports for CSV, JSON, NDJSON, and raw SQL dumps with automatic delimiter detection and transaction isolation:
+            Import CSV files (column mapping, batch size, one transaction) and SQL files; export CSV, TSV, JSON, NDJSON, or SQL INSERT statements:
           </p>
 
           <!-- Screenshot Illustration -->
@@ -519,14 +519,14 @@
             <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Query Replay, History & Diagnostics</h2>
           </div>
           <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Review past SQL statements with precise execution duration timestamps, rows affected, and one-click query replay:
+            Review past SQL statements with precise execution duration timestamps, rows affected, and one click to open a statement in a new SQL tab:
           </p>
 
           <!-- Screenshot Illustration -->
           <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
             <img src="public/images/Screenshot-566C26C5-CC0E-4B6B-B400-A397634FC76E.png" alt="Query History and Audit Log" class="w-full h-auto object-cover" />
             <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-              Figure 9: Query History and Execution Log with execution timing, status badges, and replay actions.
+              Figure 9: Query History and Execution Log with execution timing and status badges.
             </div>
           </div>
         </section>
@@ -539,11 +539,11 @@
             <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Supported Database Drivers</h2>
           </div>
           <ul class="list-disc list-inside space-y-2 text-xs sm:text-sm text-slate-600 dark:text-slate-300">
-            <li><strong>PostgreSQL 12-16+:</strong> Citus, Timescale, CockroachDB, JSONB operators, real socket cancellation (<code class="font-mono text-xs">pg_cancel_backend</code>).</li>
-            <li><strong>MySQL 8.4+ & MariaDB:</strong> Full support for <code class="font-mono text-xs">caching_sha2_password</code> and <code class="font-mono text-xs">mysql_native_password</code>.</li>
+            <li><strong>PostgreSQL (tested on 16):</strong> JSONB, real socket cancellation (<code class="font-mono text-xs">pg_cancel_backend</code>).</li>
+            <li><strong>MySQL (tested on 8.4) & MariaDB:</strong> <code class="font-mono text-xs">caching_sha2_password</code> (with TLS on) and <code class="font-mono text-xs">mysql_native_password</code>.</li>
             <li><strong>SQLite 3:</strong> Native C <code class="font-mono text-xs">libsqlite3</code> binding, Write-Ahead Logging (WAL), and zero setup file loading.</li>
             <li><strong>Microsoft SQL Server:</strong> T-SQL execution, table alteration, and stored procedure support.</li>
-            <li><strong>Redis:</strong> Key-value cache, TTL management, and JSON manipulation.</li>
+            <li><strong>Redis:</strong> Key browser, TTL, and Strings, Hashes, Lists, Sets, Sorted Sets and Streams.</li>
             <li><strong>DuckDB &amp; ClickHouse:</strong> Planned, not yet implemented — contributions welcome.</li>
           </ul>
         </section>
@@ -583,7 +583,7 @@
                 </tr>
                 <tr>
                   <td class="py-3 px-4 font-medium">Format SQL Statement</td>
-                  <td class="py-3 px-4 font-mono font-bold text-emerald-600 dark:text-emerald-400">⌘ ⌥ F</td>
+                  <td class="py-3 px-4 font-mono font-bold text-emerald-600 dark:text-emerald-400">⌃ ⌘ F</td>
                   <td class="py-3 px-4 text-slate-500">SQL Editor</td>
                 </tr>
                 <tr>
@@ -592,9 +592,9 @@
                   <td class="py-3 px-4 text-slate-500">Workspace</td>
                 </tr>
                 <tr>
-                  <td class="py-3 px-4 font-medium">Cancel Running Query</td>
-                  <td class="py-3 px-4 font-mono font-bold text-rose-600 dark:text-rose-400">⌘ . / ESC</td>
-                  <td class="py-3 px-4 text-slate-500">Active Execution</td>
+                  <td class="py-3 px-4 font-medium">Go to Table</td>
+                  <td class="py-3 px-4 font-mono font-bold text-rose-600 dark:text-rose-400">⌘ P</td>
+                  <td class="py-3 px-4 text-slate-500">Workspace</td>
                 </tr>
               </tbody>
             </table>
@@ -611,16 +611,16 @@
 
           <div class="space-y-4">
             <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800">
-              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Why does BerryDB use under 50MB RAM compared to traditional cross-platform tools (850MB+)?</h4>
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">What is BerryDB built with?</h4>
               <p class="text-xs text-slate-600 dark:text-slate-400 mt-2 leading-relaxed">
-                BerryDB is compiled as a pure native macOS Mach-O binary with Swift 6 and AppKit. It does not bundle Chromium, Node.js, or Java JVM runtimes. Memory is allocated strictly on demand and released promptly.
+                BerryDB is a native macOS binary built with Swift 6 and AppKit. It does not bundle Chromium, Node.js, or a Java runtime.
               </p>
             </div>
 
             <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800">
-              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Is my database data safe when using the AI Copilot?</h4>
+              <h4 class="font-bold text-sm text-slate-900 dark:text-white">What does the AI assistant send, and where?</h4>
               <p class="text-xs text-slate-600 dark:text-slate-400 mt-2 leading-relaxed">
-                Yes. BerryDB only sends table names, column names, and data types (schema metadata) to the AI model. No row data, personal values, or secret payloads are ever transmitted.
+                In cloud mode (free trial, then paid), your questions, the database type, your schema (table and column names) and the results of queries the assistant runs (up to 100 rows each) are sent to BerryDB's AI service; table sample rows are shared only if you turn that on. On macOS 26 with Apple Intelligence you can switch to Apple's on-device model; the conversation text is still sent to BerryDB's service to index your chat history for search. AI is off by default on connections marked as production.
               </p>
             </div>
           </div>
