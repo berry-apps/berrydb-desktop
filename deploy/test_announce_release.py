@@ -462,10 +462,10 @@ class ChannelSelectionTests(unittest.TestCase):
 
     def test_preview_shows_only_the_selected_channel(self):
         _, out, _ = run_main(["--tag", TAG, "--preview", "--only", "telegram"], dict(BASE_ENV), FakeOpener())
-        self.assertIn("== Telegram", out)
+        self.assertIn("### Telegram", out)
         self.assertNotIn("Facebook", out)
         _, out, _ = run_main(["--tag", TAG, "--preview", "--only", "facebook"], dict(BASE_ENV), FakeOpener())
-        self.assertIn("== Facebook Page", out)
+        self.assertIn("### Facebook Page", out)
         self.assertNotIn("Telegram", out)
 
     def test_summary_shows_only_the_selected_channel(self):
@@ -511,10 +511,10 @@ class FetchReleaseTests(unittest.TestCase):
         self.assertIn("404", str(ctx.exception))
         self.assertNotIn(GH_TOKEN, str(ctx.exception))
 
-    def test_repository_must_look_like_owner_slash_name(self):
-        for bad in ("", "no-slash", "a/b/c", "../x", "a b/c"):
-            with self.assertRaises(announce.ConfigError, msg=bad):
-                announce.fetch_release(bad, TAG, GH_TOKEN, FakeOpener())
+    def test_repository_is_percent_encoded_into_the_path(self):
+        opener = FakeOpener()
+        announce.fetch_release("some owner/na me", TAG, GH_TOKEN, opener)
+        self.assertEqual(urlsplit(opener.requests[0].url).path, f"/repos/some%20owner/na%20me/releases/tags/{TAG}")
 
 
 class PostTests(unittest.TestCase):
@@ -661,6 +661,13 @@ class MainTests(unittest.TestCase):
         _, out, _ = run_main(["--tag", TAG, "--preview"], dict(BASE_ENV), FakeOpener())
         self.assertIn("of 4096 characters, fits", out)
         self.assertNotIn("truncated", out)
+
+    def test_the_preview_on_stdout_is_the_same_markdown_the_summary_file_gets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = pathlib.Path(tmp) / "summary.md"
+            _, out, _ = run_main(["--tag", TAG, "--preview", "--summary-file", str(summary)], dict(BASE_ENV), FakeOpener())
+            written = summary.read_text()
+        self.assertIn(written, out)
 
     def test_summary_file_gets_a_fenced_markdown_preview(self):
         with tempfile.TemporaryDirectory() as tmp:

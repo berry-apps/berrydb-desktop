@@ -4,9 +4,9 @@
 Run by .github/workflows/announce-release.yml, in two modes:
 
   --preview   Read the release and print the exact message each channel would
-              receive. Posts nothing, needs no channel secrets, and with
-              --summary-file also appends a Markdown version for the Actions job
-              summary.
+              receive, as Markdown. Posts nothing, needs no channel secrets, and
+              with --summary-file also appends the same Markdown to the Actions
+              job summary.
   (default)   Read the release again and post to every configured channel.
 
 The release is read from the GitHub API at the moment of use, so an edit to the
@@ -202,15 +202,19 @@ def _truncate(text: str, units: int) -> str:
     return cut.rstrip() + ELLIPSIS
 
 
-def build_message(name: str, body: str, url: str, limit: Optional[int]) -> str:
+def _full_message(name: str, body: str, url: str) -> str:
+    return f"{name}\n\n{body}\n\n{url}" if body else f"{name}\n\n{url}"
+
+
+def build_message(name: str, body: str, url: str, limit: int) -> str:
     """name, blank line, body, blank line, release page URL. Over `limit` UTF-16
     units, the body is shortened; the URL is last and is never touched. Only a
     name too long to leave room for the URL is shortened as well."""
+    full = _full_message(name, body, url)
+    if utf16_length(full) <= limit:
+        return full
     head = f"{name}\n\n"
     tail = f"\n\n{url}"
-    full = head + body + tail if body else head.rstrip("\n") + tail
-    if limit is None or utf16_length(full) <= limit:
-        return full
     room = limit - utf16_length(head) - utf16_length(tail)
     if body and room > utf16_length(ELLIPSIS):
         return head + _truncate(body, room) + tail
@@ -334,10 +338,8 @@ def _form_post(url: str, fields: Mapping[str, str]) -> urllib.request.Request:
 def fetch_release(repo: str, tag: str, token: str, opener: Opener) -> Release:
     # The tag endpoint returns published releases only, so a draft is never
     # announced: https://docs.github.com/en/rest/releases/releases#get-a-release-by-tag-name
-    if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*/(?!\.{1,2}$)[A-Za-z0-9_.-]+", repo):
-        raise ConfigError("GITHUB_REPOSITORY must look like owner/name")
     request = urllib.request.Request(
-        f"{GITHUB_API}/repos/{repo}/releases/tags/{urllib.parse.quote(tag, safe='')}",
+        f"{GITHUB_API}/repos/{urllib.parse.quote(repo, safe='/')}/releases/tags/{urllib.parse.quote(tag, safe='')}",
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
@@ -406,36 +408,17 @@ def _fence(text: str) -> str:
 
 def _telegram_note(release: Release) -> str:
     text = telegram_text(release)
-    full = build_message(release.name, release.body, release.url, None)
-    state = "body truncated to fit" if text != full else "fits"
-    return f"{utf16_length(text)} of {TELEGRAM_MAX_CHARS} characters, {state}"
-
-
-def render_preview(release: Release, channels: Sequence[str] = CHANNELS) -> str:
-    sections = [f"Release: {release.name}\nPage: {release.url}\n"]
-    if "telegram" in channels:
-        sections.append(
-            f"== Telegram ({_telegram_note(release)}) ==\n"
-            f"{telegram_text(release)}\n"
-            f"link preview: {release.url}\n"
-        )
-    if "facebook" in channels:
-        sections.append(
-            f"== Facebook Page (message, with the release page as the link) ==\n"
-            f"link: {release.url}\n"
-            f"\n"
-            f"{facebook_message(release)}\n"
-        )
-    return "\n".join(sections)
+    over = utf16_length(_full_message(release.name, release.body, release.url)) > TELEGRAM_MAX_CHARS
+    return f"{utf16_length(text)} of {TELEGRAM_MAX_CHARS} characters, {'body truncated to fit' if over else 'fits'}"
 
 
 def render_summary(release: Release, channels: Sequence[str] = CHANNELS) -> str:
     parts = [
         f"## Release announcement preview\n\n"
         f"**{release.name}**: {release.url}\n\n"
-        f"Nothing has been posted yet. The post job waits for approval in the "
-        f"`release-announcement` environment. The release notes are read again "
-        f"when that job runs, so an edit made before approving is what gets posted.\n"
+        f"Nothing has been posted. In the workflow, the post job waits for approval in the "
+        f"`release-announcement` environment and reads the release notes again, so an "
+        f"edit made before approving is what gets posted.\n"
     ]
     if "telegram" in channels:
         parts.append(
@@ -505,7 +488,7 @@ def main(
         except (ConfigError, RequestError) as exc:
             print(f"✗ {exc}", file=err)
             return 1
-        print(render_preview(release, args.only), file=out)
+        print(render_summary(release, args.only), file=out)
         if args.summary_file:
             with open(args.summary_file, "a", encoding="utf-8") as summary:
                 summary.write(render_summary(release, args.only))
