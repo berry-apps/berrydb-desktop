@@ -283,11 +283,12 @@ public struct MCPToolRouter: Sendable {
         return result
     }
 
-    /// Returns the payload as `structuredContent` and, byte for byte, as the
-    /// text content: the protocol asks a tool that returns structured content
-    /// to also return the serialized JSON in a text block, because hosts that
-    /// ignore `structuredContent` would otherwise get no data at all. The size
-    /// ceiling applies to that one JSON.
+    /// Returns the payload as `structuredContent` and its serialized JSON as
+    /// the text content: the protocol asks a tool that returns structured
+    /// content to also return the serialized JSON in a text block, because
+    /// hosts that ignore `structuredContent` would otherwise get no data at
+    /// all. `structuredContent` is built from that same JSON and encodes back
+    /// to the text's bytes. The size ceiling applies to that one JSON.
     private func respond<T: Encodable>(_ payload: T) throws -> CallTool.Result {
         let data = try MCPStructuredEncoding.data(payload)
         guard data.count <= MCPToolCatalog.maximumResultBytes else { return Self.failure(Self.tooLargeText) }
@@ -329,7 +330,39 @@ enum MCPStructuredEncoding {
         try value(from: data(payload))
     }
 
+    /// The `Value` of serialized JSON, mapping each JSON value to the
+    /// matching case by hand and never producing `.data`. Decoding with
+    /// `Value.init(from:)` instead would turn every string shaped like a data
+    /// URL (`data:…,…`) into `.data`, which encodes back as
+    /// `data:<mime>;base64,…`, so a column named `data:,x` would read
+    /// differently in the structured result and the text block. That decoder
+    /// also builds a new regular expression for each string it checks
+    /// (`Value.init(from:)` and `Data.isDataURL` in swift-sdk 0.12.1).
     static func value(from data: Data) throws -> Value {
-        try JSONDecoder().decode(Value.self, from: data)
+        try value(of: JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]))
+    }
+
+    private static func value(of object: Any) throws -> Value {
+        switch object {
+        case is NSNull:
+            return .null
+        case let string as String:
+            return .string(string)
+        case let number as NSNumber:
+            // JSONSerialization returns JSON booleans and numbers alike as
+            // NSNumber; booleans are the CFBoolean singletons, and a number
+            // written with a fraction or exponent is stored as a float type.
+            if CFGetTypeID(number) == CFBooleanGetTypeID() { return .bool(number.boolValue) }
+            if CFNumberIsFloatType(number) { return .double(number.doubleValue) }
+            return .int(number.intValue)
+        case let array as [Any]:
+            return .array(try array.map(value(of:)))
+        case let members as [String: Any]:
+            return .object(try members.mapValues(value(of:)))
+        default:
+            throw EncodingError.invalidValue(
+                object, .init(codingPath: [], debugDescription: "Not a JSON value")
+            )
+        }
     }
 }

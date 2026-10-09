@@ -107,10 +107,15 @@ struct MCPToolCatalogTests {
         return text
     }
 
-    /// The text content must be the compact JSON of `structuredContent`, on one line.
+    /// The text content must be the compact JSON of `structuredContent`, on
+    /// one line. Compared as bytes after encoding `structuredContent`, since
+    /// decoding the text into `Value` would pass through the same SDK decoder
+    /// that rewrites data-URL-shaped strings.
     func expectJSONText(_ result: CallTool.Result, sourceLocation: SourceLocation = #_sourceLocation) {
-        let decoded = try? JSONDecoder().decode(Value.self, from: Data(text(result).utf8))
-        #expect(decoded != nil && decoded == result.structuredContent, sourceLocation: sourceLocation)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let encoded = result.structuredContent.flatMap { try? encoder.encode($0) }
+        #expect(encoded.map { String(decoding: $0, as: UTF8.self) } == text(result), sourceLocation: sourceLocation)
         #expect(!text(result).contains("\n") && !text(result).contains("\r"), sourceLocation: sourceLocation)
     }
 
@@ -607,6 +612,47 @@ struct MCPToolCatalogTests {
         let failure = try call(.graphQuery, ["connection_id": connectionID, "operation": "neighbors", "node": "x\ny"])
         #expect(failure.isError == true)
         #expect(!text(failure).contains("\n"))
+    }
+
+    /// The SDK's `Value` decoder reads any `data:…,…` string as binary data
+    /// and writes it back as base64, so a name of that shape would differ
+    /// between the structured result and the text block.
+    @Test func dataURLShapedNamesStayStrings() throws {
+        var graph = shopGraph()
+        graph.addNode(GraphNode(id: "t:data", kind: .table, name: "data:,x"))
+        graph.addNode(GraphNode(
+            id: "c:data.y", kind: .column, name: "data:text/plain;base64,eA==",
+            attrs: ["type": "text", "nullable": "true", "primaryKey": "false"]
+        ))
+        graph.addEdge(GraphEdge(src: "t:data", dst: "c:data.y", kind: .hasColumn))
+
+        let result = try call(
+            .getSchema, ["connection_id": connectionID, "object_names": ["data:,x"], "detail": "full"],
+            router: router(graph: graph)
+        )
+
+        #expect(result.isError != true)
+        let table = try #require(object(result)["objects"]?.arrayValue?.first?.objectValue)
+        #expect(table["name"] == .string("data:,x"))
+        #expect(table["columns"]?.arrayValue?.first?.objectValue?["name"] == .string("data:text/plain;base64,eA=="))
+        #expect(text(result).contains(#""name":"data:,x""#))
+        expectJSONText(result)
+    }
+
+    @Test func everyJSONKindMapsToItsValueCase() throws {
+        let json = #"{"a":[0,1,"x"],"d":2.5,"e":1.0,"f":false,"i":-7,"n":null,"o":{},"s":"data:,x","t":true}"#
+        let value = try MCPStructuredEncoding.value(from: Data(json.utf8))
+        #expect(value == .object([
+            "a": .array([.int(0), .int(1), .string("x")]),
+            "d": .double(2.5),
+            "e": .double(1.0),
+            "f": .bool(false),
+            "i": .int(-7),
+            "n": .null,
+            "o": .object([:]),
+            "s": .string("data:,x"),
+            "t": .bool(true),
+        ]))
     }
 
     // MARK: Output schemas
