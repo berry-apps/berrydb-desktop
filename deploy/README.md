@@ -64,7 +64,7 @@ git tag v1.0.3
 git push --tags
 ```
 
-`.github/workflows/release.yml` then builds, signs, notarizes, checks the app size, publishes the DMG and appcast to R2, creates a GitHub Release and updates the website's version. Credentials come from GitHub Secrets, not from `deploy/.env`.
+`.github/workflows/release.yml` then builds, signs, notarizes, checks the app size, publishes the DMG and appcast to R2, creates a GitHub Release, updates the website's version and, once a reviewer approves, announces the release on Telegram and a Facebook Page (see section 8). Credentials come from GitHub Secrets, not from `deploy/.env`.
 
 To rehearse without publishing, run the workflow manually from the Actions tab with `dry_run` enabled: it builds, signs and notarizes, then stops before R2 and before creating the Release, and attaches the DMG as a workflow artifact.
 
@@ -108,3 +108,52 @@ Place `deploy/icon-1024.png` (1024x1024) in the deploy directory. `scripts/make_
 
 - BerryDB runs with Apple Hardened Runtime (`deploy/BerryDB.entitlements`).
 - Appcast and release manifest (`releases.json`) are generated automatically during the release pipeline.
+
+## 8. Release Announcements
+
+After a real release is published, `.github/workflows/announce-release.yml` posts it to a Telegram channel and to a Facebook Page, once a person approves. A dry run announces nothing. X is posted by hand. Facebook Groups and personal profiles are not covered: Meta's API does not post to them.
+
+### What is posted, and when
+
+`release.yml` calls the workflow after the GitHub Release exists. It does not listen for the `release` event, because the Release is created with the workflow's `GITHUB_TOKEN`, and events caused by `GITHUB_TOKEN` do not start new workflow runs ([GitHub docs](https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow)). The workflow has two jobs:
+
+1. `preview` renders the exact message for each channel into the run's job summary. It posts nothing and receives no channel secret.
+2. `post` is bound to the `release-announcement` environment, so it waits for a reviewer before it starts. The reviewer reads the preview's summary, then approves or rejects. The release notes are read again when `post` runs, so editing the Release before approving changes what is posted.
+
+The messages:
+
+- **Telegram**: the release name, the release notes as plain text (headings without `#`, list items as bullets, bold markers removed, links kept), and the release page URL last. Telegram limits a message to 4096 characters ([Bot API](https://core.telegram.org/bots/api#sendmessage)), so a long body is shortened with an ellipsis and the URL is never cut. No `parse_mode` is sent, so release text cannot trip Telegram's Markdown parser.
+- **Facebook Page**: the same name and notes as the post text, with the release page attached as the post's link.
+
+To announce or re-announce a tag by hand, run **Announce Release** from the Actions tab with the tag (for example `v1.0.8`). A failed run is retried with *Re-run failed jobs*, which posts to every configured channel again, including one that already succeeded.
+
+A Release run that is waiting for approval has not finished, so a later Release run stays pending in the same concurrency group (`berrydb-release`) until it does ([GitHub docs](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)). Approve or reject promptly.
+
+### One-time setup
+
+1. **Create the environment.** Settings, Environments, New environment, named exactly `release-announcement`. Add yourself under *Required reviewers*. Optionally restrict *Deployment branches and tags* ([GitHub docs](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)).
+2. **Add the secrets to that environment**, under *Environment secrets*, not as repository secrets. GitHub releases an environment's secrets only to a job that uses it, and only after its protection rules pass, so nothing can post before the environment is configured. A repository secret with the same name would be passed to the workflow as well; the environment's value takes precedence in `post`, but there is no reason to create one.
+
+| Secret | Value |
+| :--- | :--- |
+| `TELEGRAM_BOT_TOKEN` | The bot's token |
+| `TELEGRAM_CHAT_ID` | The channel as `@channelusername`, or its numeric id |
+| `FACEBOOK_PAGE_ID` | The Page's id |
+| `FACEBOOK_PAGE_ACCESS_TOKEN` | A Page access token, see below |
+
+A channel is posted to only when both of its secrets are set. Setting one without the other fails the run before anything is posted; setting neither skips that channel, so the two channels can be enabled independently. `release.yml` passes the four secrets to the workflow by name. A called workflow only receives an environment secret when its caller passes it, even when the secret exists only in the environment ([GitHub docs](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)).
+
+### Telegram
+
+1. Message [@BotFather](https://t.me/BotFather) to create a bot and receive its token ([Telegram docs](https://core.telegram.org/bots)). Anyone holding the token controls the bot, so it goes only into the environment secret.
+2. Add the bot to the channel as an administrator that is allowed to post messages (`can_post_messages` in the [Bot API](https://core.telegram.org/bots/api#chatmemberadministrator)).
+3. Set `TELEGRAM_CHAT_ID` to `@channelusername` for a public channel. For a private channel use its numeric id, which appears as `chat.id` in the bot's `channel_post` updates ([`getUpdates`](https://core.telegram.org/bots/api#getupdates)) after something is posted in the channel.
+
+### Facebook Page
+
+1. Create an app on [Meta for Developers](https://developers.facebook.com/) and keep it in Development mode, with the person who manages the Page as a role user. An app in Development mode can only request permissions from role users ([App modes](https://developers.facebook.com/docs/development/build-and-test/app-modes)).
+2. As a person who can manage the Page and has a role on the app, authorize the app through Facebook Login with the `pages_manage_posts` permission, plus the others Meta lists for publishing ([Pages API: posts](https://developers.facebook.com/docs/pages-api/posts)).
+3. Exchange that short-lived user token for a long-lived one, then request the Page's token with `GET /{user-id}/accounts` ([long-lived tokens](https://developers.facebook.com/docs/facebook-login/guides/access-tokens/get-long-lived)). Meta documents that a Page access token obtained from a long-lived user token has no expiration date, and that it can still be invalidated under certain conditions. When posting starts failing with an OAuth error, generate a new token and replace the secret.
+4. Set `FACEBOOK_PAGE_ID` to the Page's id and `FACEBOOK_PAGE_ACCESS_TOKEN` to the Page token. The Graph API version is the `GRAPH_API_VERSION` constant in `deploy/announce-release.py`.
+
+The script's tests run with `python3 -m unittest deploy/test_announce_release.py` and never touch the network. To see what the next announcement would look like without posting anything: `GH_TOKEN=$(gh auth token) GITHUB_REPOSITORY=berry-apps/berrydb-desktop python3 deploy/announce-release.py --tag v1.0.8 --preview`.
