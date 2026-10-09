@@ -1,0 +1,158 @@
+name: Announce Release
+
+# Posts a published release to a Telegram channel and a Facebook Page, after a
+# person approves. It starts when a tag-pushed Release run succeeds, and it can
+# be run by hand to announce or re-announce any tag, or to retry one channel.
+#
+# Why a separate workflow that listens for the Release run (workflow_run), and
+# not an `on: release` workflow or a job inside release.yml:
+#
+#  - release.yml creates the GitHub Release with `github.token`, and an event
+#    caused by GITHUB_TOKEN does not start a new workflow run, so `on: release`
+#    would never fire. workflow_run is triggered by the Release run completing:
+#    https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow
+#  - release.yml serialises its runs with `concurrency: berrydb-release`. A job
+#    there that waits for an approval keeps its run unfinished. GitHub allows at
+#    most one running run per concurrency group; a run queued behind it is
+#    pending, and by default a newly queued run replaces (cancels) the run
+#    already pending (https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+#    So an unanswered approval could stall the next release, and a third release
+#    would cancel the second. Here the approval wait belongs to this workflow's
+#    own run.
+#  - A failed announcement fails this run only. The Release run, and the
+#    release it published, stay green.
+#
+# GitHub documents that a workflow_run workflow only triggers if its file exists
+# on the default branch, that GITHUB_SHA and GITHUB_REF are then the default
+# branch's last commit and the default branch, that it runs whatever the
+# conclusion of the triggering run was, and that it can read secrets:
+# https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run
+# So changes to this file take effect from the default branch only, and a branch
+# is tested by running this workflow by hand.
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to announce, with the leading v (e.g. v1.0.8)"
+        required: true
+        type: string
+      channels:
+        description: "Channels to use, comma separated: telegram, facebook. Name one to retry only that channel."
+        required: false
+        default: "telegram,facebook"
+        type: string
+
+# Its own group, never release.yml's `berrydb-release`, and one per tag so that
+# announcements of different tags do not wait on, or cancel, each other.
+# `cancel-in-progress: false` keeps a run that is waiting for approval alive when
+# another run for the same tag is queued; the queued run is then the one pending
+# run of the group, and a third would replace it.
+concurrency:
+  group: berrydb-release-announcement-${{ github.event.workflow_run.head_branch || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    name: "Render the announcement"
+    # On workflow_run, announce only a Release run that:
+    #  - succeeded;
+    #  - was started by a tag push (event 'push'), whose head_branch is then the
+    #    tag, and that tag starts with v;
+    #  - ran the file .github/workflows/release.yml. `workflows: ["Release"]`
+    #    matches by workflow name, not by file, so any other workflow named
+    #    Release would also trigger this one.
+    # gh run list --workflow release.yml on berry-apps/berrydb-desktop and
+    # gh api repos/berry-apps/berrydb-desktop/actions/runs/<id> (checked
+    # 2026-10-09) show tag-pushed runs as event=push head_branch=v1.0.8 (likewise
+    # v1.0.7, v1.0.4), a manually dispatched run as event=workflow_dispatch
+    # head_branch=main, and all of them with path .github/workflows/release.yml.
+    # That is the REST run object; the field has not yet been seen in a live
+    # workflow_run event payload. If the payload lacked `path` this condition
+    # would be false and nothing would be announced automatically.
+    # A dispatched release, a dry run included, is not announced automatically:
+    # run this workflow by hand for a dispatched real release. The post job needs
+    # this one, so it is skipped whenever this one is.
+    if: >-
+      github.repository == 'berry-apps/berrydb-desktop'
+      && (github.event_name == 'workflow_dispatch'
+      || (github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.path == '.github/workflows/release.yml'
+      && startsWith(github.event.workflow_run.head_branch, 'v')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: "Checkout source"
+        # Under workflow_run this checks out the default branch, not the commit
+        # the Release run built: actions/checkout defaults `ref` to "the
+        # reference or SHA for that event", and for workflow_run that is the
+        # default branch's last commit (see the event table linked above). The
+        # script that runs, and that holds the channel secrets in the post job,
+        # is therefore always the default branch's. Never pass the triggering
+        # run's head_sha or head_branch as `ref` here.
+        uses: actions/checkout@v4
+        with:
+          # Nothing here pushes, so the token does not need to stay on disk.
+          persist-credentials: false
+
+      - name: "Render the exact messages into the job summary"
+        # No channel secret is mapped into this job, and the script never posts
+        # in --preview mode. The tag is a tag name or free-form manual input, so
+        # it goes through the environment, never into the script text.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.workflow_run.head_branch || inputs.tag }}
+          CHANNELS: ${{ inputs.channels || 'telegram,facebook' }}
+        run: python3 deploy/announce-release.py --tag "$TAG" --only "$CHANNELS" --preview --summary-file "$GITHUB_STEP_SUMMARY"
+
+  post:
+    name: "Post the announcement"
+    needs: preview
+    if: github.repository == 'berry-apps/berrydb-desktop'
+    # The approval gate. The release-announcement environment holds the required
+    # reviewers and the four channel secrets, so this job does not start, and
+    # the environment's secrets are not released to it, until a reviewer
+    # approves. The reviewer reads the preview job's summary first.
+    #
+    # The environment has to be set up before this workflow is merged, in the
+    # order given in deploy/README.md (Release Announcements). GitHub creates a
+    # referenced environment that does not exist, with no protection rules and
+    # no secrets, and anyone who can edit workflows can cause that:
+    # https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments
+    # Its deployment branches and tags must be limited to `main`. This file is
+    # editable on any branch, and a branch's copy that keeps `environment:` would
+    # otherwise receive the secrets once a reviewer approved that run. A run of
+    # this workflow from another branch still renders the preview, and this job
+    # is then refused by that rule.
+    environment: release-announcement
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: "Checkout source"
+        # The default branch under workflow_run; see the preview job.
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: "Post to the selected channels"
+        # The script reads the release again, so edits made to the release
+        # notes while this job waited for approval are what gets posted.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.workflow_run.head_branch || inputs.tag }}
+          CHANNELS: ${{ inputs.channels || 'telegram,facebook' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
+          FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
+        run: python3 deploy/announce-release.py --tag "$TAG" --only "$CHANNELS"
