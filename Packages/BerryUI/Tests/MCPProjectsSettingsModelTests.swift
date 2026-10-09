@@ -322,6 +322,35 @@ struct MCPProjectsSettingsModelTests {
         #expect(verified.project.isEnabled == false)
     }
 
+    /// The editor tells the user of an unverified project that turning
+    /// Enabled on and saving confirms it; this is what makes that true.
+    @Test func anUnverifiedProjectTurnedOnAndSavedIsVerifiedAndEnabled() throws {
+        let (store, _, _) = try makeStore()
+        let box = KeyBox()
+        let model = makeModel(store, box)
+        var draft = model.draftForNewProject()
+        draft.name = "Billing"
+        draft.isEnabled = true
+        draft.workspaceRoots = ["/work/billing"]
+        #expect(model.save(draft))
+        try store.executeForTesting(
+            #"UPDATE mcp_project SET workspaceRootsJSON = '["/work/elsewhere"]' WHERE id = ?"#,
+            arguments: [draft.id]
+        )
+        model.reload()
+        #expect(model.unverifiedProjectIDs == [draft.id])
+
+        var edited = try #require(model.draft(for: draft.id))
+        #expect(edited.isEnabled == false)
+        edited.isEnabled = true
+        #expect(model.save(edited))
+
+        let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
+        #expect(verified.projectTagValid)
+        #expect(verified.project.isEnabled)
+        #expect(model.unverifiedProjectIDs.isEmpty)
+    }
+
     @Test func projectsWhoseTagDoesNotVerifyAreMarkedUnverified() throws {
         let (store, _, _) = try makeStore()
         let model = makeModel(store, KeyBox())
@@ -477,6 +506,10 @@ struct MCPProjectsSettingsModelTests {
             "agy mcp add berrydb -- \(quoted)\(explicit)",
         ])
         #expect(Array(snippets.map(\.host).prefix(3)) == ["Claude Code", "Codex", "Antigravity"])
+        // The pinned entries are installed at the same user scope, so their
+        // label must not read as a narrower scope.
+        #expect(Array(snippets.map(\.host).suffix(3))
+            == ["Claude Code", "Codex", "Antigravity"].map { L("\($0), always this project") })
     }
 
     @Test func pinnedSnippetsOnlyForASavedProject() throws {
@@ -626,6 +659,43 @@ struct MCPProjectsSettingsModelTests {
         recased.name = "BILLING"
         #expect(model.save(recased))
         #expect(try store.mcpProject(id: billing.id)?.name == "BILLING")
+    }
+
+    /// Linking compares the name field, trimmed, with the stored name, so a
+    /// name saved with its surrounding whitespace could never be linked.
+    @Test func aNameIsSavedTrimmed() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        var draft = model.draftForNewProject()
+        draft.name = "  Billing \n"
+
+        #expect(model.save(draft))
+
+        #expect(try store.mcpProject(id: draft.id)?.name == "Billing")
+        #expect(model.repositoryLinkUnavailableReason(for: draft) == nil)
+    }
+
+    /// A link file names the project, so a rename that the link's name rule
+    /// does not absorb leaves every linked repository selecting nothing.
+    @Test func renamingASavedProjectWarnsThatLinksToTheOldNameStopSelectingIt() throws {
+        let (store, _, _) = try makeStore()
+        let model = makeModel(store, KeyBox())
+        let billing = try savedDraft(named: "Billing", in: model)
+        let notice = L("Repositories linked to “\("Billing")” stop selecting this project until they are linked again.")
+
+        var renamed = billing
+        renamed.name = "Billing API"
+        #expect(model.renameLinkNotice(for: renamed) == notice)
+        var recased = billing
+        recased.name = " BILLING "
+        #expect(model.renameLinkNotice(for: recased) == nil)
+        #expect(model.renameLinkNotice(for: billing) == nil)
+        var cleared = billing
+        cleared.name = "  "
+        #expect(model.renameLinkNotice(for: cleared) == nil)
+        var unsaved = model.draftForNewProject()
+        unsaved.name = "Ledger"
+        #expect(model.renameLinkNotice(for: unsaved) == nil)
     }
 
     // MARK: Repository links

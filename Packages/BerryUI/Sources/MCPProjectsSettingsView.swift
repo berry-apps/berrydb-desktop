@@ -119,8 +119,9 @@ private struct MCPProjectsPane: View {
             if model.unverifiedProjectIDs.contains(project.id) {
                 // The stored enabled flag is unverified. The helper still
                 // selects the project and serves its metadata, with live
-                // reads off and integrity reported as unavailable; the
-                // editing copy is disabled until the user saves it.
+                // reads off and integrity reported as unavailable. The
+                // editing copy opens disabled, and saving keeps it disabled
+                // unless Enabled is turned on first, as the editor says.
                 Text(L("Not verified — save to confirm"))
                     .font(.caption)
                     .foregroundStyle(.orange)
@@ -162,7 +163,19 @@ private struct MCPProjectEditorSheet: View {
             Divider()
             Form {
                 TextField(L("Name"), text: $draft.name)
+                if let notice = model.renameLinkNotice(for: draft) {
+                    Text(notice)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Toggle(L("Enabled"), isOn: $draft.isEnabled)
+                if model.unverifiedProjectIDs.contains(draft.id) {
+                    Text(L("This project opened disabled because its saved settings could not be verified. Turn Enabled on and save to confirm them."))
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 rootsSection
                 repositoryLinksSection
                 connectionsSection
@@ -230,7 +243,7 @@ private struct MCPProjectEditorSheet: View {
 
     private var rootsSection: some View {
         Section(L("Workspace Folders")) {
-            Text(L("Add every folder whose code uses these connections. Subfolders and worktrees inside a folder are included."))
+            Text(L("Add every folder whose code uses these connections. Subfolders and worktrees inside a folder are included, unless a .berrydb.json in or above them decides first."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -250,9 +263,10 @@ private struct MCPProjectEditorSheet: View {
                         }
                         .buttonStyle(.borderless)
                         .help(L("Remove"))
+                        .accessibilityLabel(L("Remove"))
                     }
                     if MCPProjectsSettingsModel.isHomeDirectory(root) {
-                        Text(L("This is your home folder: every repository inside it selects this project unless another project has a more specific folder."))
+                        Text(L("This is your home folder: every repository inside it selects this project, unless a .berrydb.json or another project’s more specific folder decides first."))
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
@@ -271,6 +285,13 @@ private struct MCPProjectEditorSheet: View {
     private var repositoryLinksSection: some View {
         Section(L("Repository Links")) {
             Text(L("Writes .berrydb.json naming this project. Commit it so clones and teammates select a project with the same name in their BerryDB, or add it to .gitignore to keep it local."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            // A link file can name any project and decides its workspace
+            // before the registered folders, so a repository from someone
+            // else selects this project as surely as one linked here.
+            Text(L("Any repository whose .berrydb.json names this project, including one cloned from someone else, selects it for agents working there."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -336,7 +357,7 @@ private struct MCPProjectEditorSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if model.isSaved(draft.id) {
-                    Text(L("An entry marked “this project only” always serves this project, whichever folder the agent works in."))
+                    Text(L("An entry marked “always this project” serves this project in every folder the agent works in, whatever .berrydb.json or workspace folders would select."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

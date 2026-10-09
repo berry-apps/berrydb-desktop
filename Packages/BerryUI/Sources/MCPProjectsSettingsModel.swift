@@ -240,6 +240,21 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         return nil
     }
 
+    /// A notice to show under the name field, or nil. Link files name a
+    /// project, and the helper decides a workspace with a link file by that
+    /// file alone, so renaming a saved project leaves every repository
+    /// linked to the old name selecting nothing. A change of letter case or
+    /// surrounding whitespace still matches the old name by the link rule
+    /// and gets no notice, and neither does a cleared field, which cannot be
+    /// saved.
+    public func renameLinkNotice(for draft: Draft) -> String? {
+        guard let saved = projects.first(where: { $0.id == draft.id }),
+              !draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !MCPRepositoryLink.matches(projectName: saved.name, linkedName: draft.name)
+        else { return nil }
+        return L("Repositories linked to “\(saved.name)” stop selecting this project until they are linked again.")
+    }
+
     /// Links each folder of `folders` to the saved project `projectID` by
     /// writing `MCPRepositoryLink.contents(projectName:)` for its saved name
     /// to `.berrydb.json` at the folder's top, and returns one result per
@@ -364,12 +379,14 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// (`~/.gemini/config/mcp_config.json`).
     ///
     /// A saved `project` also gets one pinned entry per host, which passes
-    /// `--project` and serves that project from any folder. An unsaved
-    /// project gets none, since its ID means nothing to the helper yet. The
-    /// `--` before the helper keeps `--project` an argument of the helper:
-    /// `agy mcp add --help` (1.3.1) requires `--` before arguments that
-    /// begin with `-`. The helper path is double-quoted for a POSIX shell so
-    /// an install path with spaces stays one argument.
+    /// `--project` and serves that project from any folder. It is installed
+    /// at the same user level as the shared entry, so its label says it
+    /// always serves the project rather than suggesting a narrower scope.
+    /// An unsaved project gets none, since its ID means nothing to the
+    /// helper yet. The `--` before the helper keeps `--project` an argument
+    /// of the helper: `agy mcp add --help` (1.3.1) requires `--` before
+    /// arguments that begin with `-`. The helper path is double-quoted for a
+    /// POSIX shell so an install path with spaces stays one argument.
     public func configurationSnippets(project: UUID) -> [(host: String, text: String)] {
         guard let helperURL else { return [] }
         let helper = Self.shellQuoted(helperURL.path)
@@ -380,7 +397,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         ]
         guard isSaved(project) else { return commands }
         let pinned = " --project \(project.uuidString.lowercased())"
-        return commands + commands.map { (host: L("\($0.host), this project only"), text: $0.text + pinned) }
+        return commands + commands.map { (host: L("\($0.host), always this project"), text: $0.text + pinned) }
     }
 
     private static let keyReadFailure = L(
