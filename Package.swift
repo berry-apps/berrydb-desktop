@@ -359,7 +359,7 @@ let package = Package(
         .executableTarget(
             name: "BerryDBMCP",
             dependencies: [
-                "BerryCredentials", "BerryDriverBootstrap", "BerryGraph", "BerryMCP", "BerryMCPServer", "BerryStore",
+                "BerryCredentials", "BerryDriverBootstrap", "BerryMCP", "BerryMCPServer", "BerryStore",
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "MCP", package: "swift-sdk"),
             ],
