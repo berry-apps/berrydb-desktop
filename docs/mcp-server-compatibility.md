@@ -108,7 +108,9 @@ Measured on 2026-09-26 from the fixture's debug build on arm64 macOS:
 - `MCPCompatibilitySpike` debug executable: 7,024,640 bytes (6,860 KiB allocated).
 - Dynamic linkage consisted of Apple system frameworks/libraries; no new non-system dylib appeared in `otool -L` output.
 
-This is development evidence, not packaged-release size. The fixture linked only the SDK; `berrydb-mcp` also links every database driver the app registers, so the fixture's size says nothing about the helper's. The signed release helper must be measured again after release optimization, stripping, and app bundling.
+This is development evidence, not packaged-release size. The fixture linked only the SDK; `berrydb-mcp` also links every database driver the app registers, so the fixture's size says nothing about the helper's.
+
+Measured again on 2026-10-09 from a release build (`swift build -c release`, Swift 6.3.3, arm64) packaged by `scripts/make_app.sh`: the helper in `Contents/Helpers` is 55,248,656 bytes, not stripped, and the whole `BerryDB.app` is 132 MB, under the 200 MB limit `scripts/check-size.sh` enforces. Its only non-system library is the FreeTDS `libsybdb` the app already embeds, loaded through `@rpath`. The Developer ID–signed size was not measured.
 
 ## Gate status
 
@@ -345,9 +347,23 @@ reads app-created secrets. Without further work it prompts once per item
 (one secret per profile credential kind). Removing that prompt requires the
 app to include the helper's designated requirement in each item's ACL when
 writing it, and to rewrite existing items once, which the app can do because
-it is already trusted. That change and its verification with a packaged,
-app-written item belong to the packaging work. Data-protection keychain
-access groups were not evaluated.
+it is already trusted. Data-protection keychain access groups were not
+evaluated.
+
+The app now bundles the helper at `Contents/Helpers/berrydb-mcp` without
+that ACL change. The deep sign of the bundle gives it the identifier
+`berrydb-mcp` rather than the probe's `dev.berrydb.mcp`; with a
+non-ad-hoc identity no per-build suffix is added, so its designated
+requirement stays the same across releases (observed with codesign on
+macOS 26.6.2, see
+[Packaging and signing](architecture/mcp-server.md#packaging-and-signing)).
+By the result above, the bundled helper's first read of the one item the
+metadata tools need, the integrity key `dev.berrydb.mcp.access-key`,
+prompts once, and **Always Allow** ends the prompts. The app rotates that
+key with an in-place `SecItemUpdate`, so the access-list entry is expected
+to survive rotation. Neither the prompt with a packaged, Developer
+ID–signed helper nor the entry surviving rotation or an update has been
+observed.
 
 ## Metadata tools host check
 

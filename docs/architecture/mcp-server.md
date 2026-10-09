@@ -8,12 +8,12 @@ an explicit `--project`, the host's workspace roots or the working
 directory, each workspace decided by a repository link file
 (`.berrydb.json`) or by the workspace folders registered in the app. The
 app's **AI Agents** settings pane creates and edits projects and links
-repositories; it shows the host setup commands only once the helper is
-bundled with the app, which this version does not do. Underneath sit key
-storage, the `MCPProject` persistence model, HMAC-SHA256 row integrity and
-key rotation, a SQL-only connection coordinator with bounded shutdown, the
-SQL read policy parser and a byte-exact result limiter. No tool reads live
-data yet, and the helper is not packaged with the app (see
+repositories; it shows the host setup commands for the helper bundled in
+the app (see [Packaging and signing](#packaging-and-signing)). Underneath
+sit key storage, the `MCPProject` persistence model, HMAC-SHA256 row
+integrity and key rotation, a SQL-only connection coordinator with bounded
+shutdown, the SQL read policy parser and a byte-exact result limiter. No
+tool reads live data yet (see
 [Implemented and planned](#implemented-and-planned)). See
 [`../mcp-server-compatibility.md`](../mcp-server-compatibility.md) for the
 protocol gate, the host checks and
@@ -28,7 +28,7 @@ BerryDB has two independent MCP roles:
   launches external servers from a BerryDB-curated allowlist.
 - `berrydb-mcp` is an inbound local MCP **server**. A coding-agent host (Codex,
   Claude Code, Antigravity, or another MCP-capable application) launches the
-  `berrydb-mcp` helper (signed with the app once packaging exists) as a
+  `berrydb-mcp` helper, bundled in and signed with the app, as a
   subprocess and calls a bounded,
   BerryDB-owned capability surface: schema/graph inspection and, where a
   profile allows it, bounded read-only queries (not implemented yet).
@@ -133,41 +133,59 @@ character removes the question.
 
 ## Setup
 
-1. **The helper.** The settings pane looks for the helper at
-   `BerryDB.app/Contents/Helpers/berrydb-mcp`. App builds do not include it
-   yet (packaging is planned), and the pane then says the helper is not
-   bundled instead of showing setup commands. From a source checkout,
-   `swift build --product berrydb-mcp` builds it into the folder that
-   `swift build --show-bin-path` prints; the executable
-   `<that folder>/berrydb-mcp` is the `<helper>` in the commands below.
-   Such a build is not signed by BerryDB's team, so it is not in the
-   access list of the integrity key's Keychain item. Once a session has
-   chosen a project, the helper reads that key on every `tools/list`,
-   `tools/call`, `resources/list` and `resources/read` request. That
-   includes requests where the project has since been disabled
-   (`project_disabled`) or deleted (`no_matching_project`), because the
-   key is read before the project row. A session whose selection chose no
-   project never reads it. Expect a Keychain dialog on those reads:
-   [gate G1](../mcp-server-compatibility.md#g1-keychain-sharing) saw one
-   when an ad-hoc signed probe read an app-created item. Choose **Always
-   Allow** for a source-built helper; it adds the build to the item's
-   access list, pinned to its code hash, so the dialog returns only after
-   a rebuild. **Allow** grants that one read and **Deny** refuses it
+1. **The helper.** BerryDB ships it at
+   `BerryDB.app/Contents/Helpers/berrydb-mcp`, and the settings pane fills
+   that path into the setup commands. Two cases show no commands instead.
+   A build without the helper says it is not bundled. And because every
+   command embeds the helper's absolute path, a BerryDB running from a
+   read-only volume asks to be moved to the Applications folder and opened
+   from there (see [Packaging and signing](#packaging-and-signing)).
+
+   Once a session has chosen a project, the helper reads the integrity key
+   on every `tools/list`, `tools/call`, `resources/list` and
+   `resources/read` request. That includes requests where the project has
+   since been disabled (`project_disabled`) or deleted
+   (`no_matching_project`), because the key is read before the project
+   row. A session whose selection chose no project never reads it. The
+   key's Keychain item, `dev.berrydb.mcp.access-key`, is created by the
+   app and trusts only the app, so the bundled helper's first such read
+   shows a Keychain dialog. Choose **Always Allow**.
+   [Gate G1](../mcp-server-compatibility.md#g1-keychain-sharing) saw a
+   helper signed by the app's team read an app-created item after that
+   choice and show no dialog afterwards, including after it was re-signed,
+   because the entry added is the helper's designated requirement (its
+   identifier and team), not a code hash. The app rotates the key by
+   updating that item in place rather than replacing it, and a release
+   keeps the helper's identifier (`berrydb-mcp`) and team, so the entry is
+   expected to outlast both key rotation and updates. Neither has been
+   observed yet, and the dialog itself has not been seen with a packaged,
+   Developer ID–signed helper. **Allow** grants that one read and **Deny**
+   refuses it
    ([If you're asked for access to your keychain](https://support.apple.com/guide/keychain-access/if-youre-asked-for-access-to-your-keychain-kyca1243/mac)
    calls the one-time choice "Allow Once"), so the next request asks
    again; each request waits while its dialog is open, and a refused read
-   serves that request with `integrity: "unavailable"`. The helper itself
-   was not observed being prompted. **Always Allow** puts that unsigned
-   build on the access list of the key that seals project settings, so
-   any process able to run that binary can read the key without a dialog.
-   Remove the entry when you are done with the source build: in Keychain
-   Access, find the login-keychain item whose name or service is
-   `dev.berrydb.mcp.access-key` (the item carries no separate label) and
-   remove `berrydb-mcp` from the applications its **Access Control** tab
-   lists; these steps follow Apple's Keychain Access guide
-   (https://support.apple.com/guide/keychain-access/welcome/mac) and were
-   not clicked through on this macOS version. A helper read that never
-   shows a dialog is planned with packaging.
+   serves that request with `integrity: "unavailable"`. A read that never
+   shows a dialog is not implemented: the app would have to add the
+   helper's designated requirement to the item's access list when it
+   writes the item.
+
+   From a source checkout, `swift build --product berrydb-mcp` builds the
+   helper into the folder that `swift build --show-bin-path` prints; the
+   executable `<that folder>/berrydb-mcp` is the `<helper>` in the
+   commands below. Such a build is not signed by BerryDB's team, so its
+   reads show the same dialog: G1 saw one when an ad-hoc signed probe read
+   an app-created item. **Always Allow** adds that build to the item's
+   access list pinned to its code hash, so the dialog returns only after a
+   rebuild. The helper itself was not observed being prompted. **Always
+   Allow** puts that unsigned build on the access list of the key that
+   seals project settings, so any process able to run that binary can
+   read the key without a dialog. Remove the entry when you are done with
+   the source build: in Keychain Access, find the login-keychain item
+   whose name or service is `dev.berrydb.mcp.access-key` (the item carries
+   no separate label) and remove `berrydb-mcp` from the applications its
+   **Access Control** tab lists; these steps follow Apple's Keychain
+   Access guide (https://support.apple.com/guide/keychain-access/welcome/mac)
+   and were not clicked through on this macOS version.
 2. **A project.** In **Settings → AI Agents**, create a project, turn on
    **Enabled**, choose its connections, and either add **Workspace
    Folders** (every folder below one is included, unless a `.berrydb.json`
@@ -179,10 +197,10 @@ character removes the question.
    the BerryDB of whoever opens it; adding it to `.gitignore` keeps it
    local.
 3. **Each host, once.** Run one command per host, each adding a
-   user-level entry named `berrydb`. Once the helper is bundled, the pane's
-   **Agent Setup** section shows these commands with the bundled path
-   filled in; until then, run them by hand with the source-built
-   executable as `<helper>`:
+   user-level entry named `berrydb`. The pane's **Agent Setup** section
+   shows these commands with the bundled helper's path filled in; for a
+   source build, run them by hand with the source-built executable as
+   `<helper>`:
 
    ```sh
    claude mcp add --scope user berrydb -- "<helper>"
@@ -204,6 +222,58 @@ character removes the question.
 The helper accepts two optional arguments and rejects any other:
 `--project <uuid>` and `--store-path <absolute path>`, the latter for a
 store other than the app's.
+
+## Packaging and signing
+
+**Location.** `scripts/make_app.sh` copies the `berrydb-mcp` executable
+built for the same configuration to `Contents/Helpers/berrydb-mcp` and
+stops, for every configuration, when it is missing, since a bundle
+without it ships a settings pane that cannot connect any agent. Every
+script that packages the app builds the helper first. The helper links
+the same Homebrew FreeTDS `libsybdb` as the app; packaging repoints that
+reference at `@rpath/libsybdb.5.dylib`, the copy embedded in
+`Contents/Frameworks` together with the OpenSSL it needs, and gives the
+helper an `LC_RPATH` of `@executable_path/../Frameworks`. On 2026-10-09,
+on macOS 26.6.2, a release build packaged this way loaded `libsybdb`,
+`libssl` and `libcrypto` from `Contents/Frameworks` and nothing from
+Homebrew (`DYLD_PRINT_LIBRARIES=1`), and answered `initialize` and
+`tools/list` over standard input and output.
+
+**Signing.** The helper is signed by the release pipeline's one
+`codesign --force --deep --options runtime --timestamp` step over the
+whole bundle, not separately: `--force --deep` re-signs nested code with
+the outer options and replaces any signature made before it. Signed that
+way with a non-ad-hoc identity on macOS 26.6.2, the helper carried the
+hardened runtime flag, a secure timestamp, the outer identity and the
+identifier `berrydb-mcp`, which is what its designated requirement, and
+so a Keychain **Always Allow** entry, is tied to. An ad-hoc signature,
+as development builds get, appends a per-build suffix to that
+identifier. `deploy/release.sh` then fails the release unless the
+helper's signature has the hardened runtime flag, a timestamp and the
+team ID. Signing with the Developer ID identity and notarizing a bundle
+that contains the helper have not been verified yet.
+
+**Guard.** `scripts/check-size.sh` fails a bundle whose helper is
+missing, links anything but system libraries, the Swift runtime and
+`@rpath/libsybdb`, references an `@rpath` library absent from
+`Contents/Frameworks`, or lacks that rpath; `scripts/check-minos.sh`
+checks the helper's minimum macOS version as it checks the embedded
+libraries'. The 200 MB bundle limit includes the helper: the release
+bundle measured 132 MB with a 55 MB helper.
+
+**Read-only volumes.** Each setup command embeds the helper's absolute
+path, which must keep existing for as long as the host's entry does. An
+app run from a mounted disk image loses that path when the image is
+ejected, and Gatekeeper runs an app downloaded outside the Mac App Store
+from "a randomized read-only location" until it is moved, usually to
+`/Applications`
+([`providerTranslocated`](https://developer.apple.com/documentation/fileprovider/nsfileprovidererror/providertranslocated)).
+The pane therefore checks whether the app bundle's volume is mounted
+read-only (`URLResourceKey.volumeIsReadOnlyKey`) and, when it is, shows
+"Move BerryDB to the Applications folder and open it from there to set
+up agents." instead of the commands. On macOS 26.6.2 the key read true
+inside a compressed disk image mounted with `hdiutil` and false for
+`/Applications`. It was not observed for a translocated app.
 
 ## Project selection and why it is not a boundary
 
@@ -527,9 +597,12 @@ Implemented:
   folders; selection on the first request, verification on every request,
   and `berrydb_status`.
 - The **AI Agents** settings pane: projects, workspace folders, repository
-  links and connections. Its setup-command section is in place but shows
-  the commands only for a bundled helper, so in this version it reports
-  that the helper is not bundled.
+  links and connections, and setup commands for the bundled helper,
+  withheld while the app runs from a read-only volume.
+- Packaging: the helper in `Contents/Helpers`, its libraries embedded and
+  its signature made by the bundle's deep sign, checked by the release
+  pipeline and guarded by `scripts/check-size.sh` and
+  `scripts/check-minos.sh` (see [Packaging and signing](#packaging-and-signing)).
 - Groundwork no tool uses yet: a SQL-only connection coordinator with
   bounded shutdown, the SQL read policy parser and the byte-exact result
   limiter.
@@ -543,8 +616,14 @@ Not implemented:
   (`Query` only, never `Scan`); the live-read switch and the production
   consent in the settings pane; the production-labeled limits.
 - The audit log.
-- Packaging: the helper bundled in and signed with the app, after which the
-  settings pane shows the setup commands; a read of the integrity key that
-  never shows a Keychain dialog; closing the Keychain key-planting gap
-  noted above (deleting or pre-creating the key item).
+- A read of the integrity key that never shows a Keychain dialog: the
+  app adding the helper's designated requirement to the item's access
+  list; closing the Keychain key-planting gap noted above (deleting or
+  pre-creating the key item).
+- A server version from a packaged helper: an executable in
+  `Contents/Helpers` has no `Info.plist` of its own, so the packaged
+  helper reports `dev` to hosts, as a build run from `.build` does
+  (observed on 2026-10-09).
+- Verification of Developer ID signing and notarization of a bundle that
+  contains the helper, and of the Keychain dialog with such a helper.
 - Any Cursor verification.
