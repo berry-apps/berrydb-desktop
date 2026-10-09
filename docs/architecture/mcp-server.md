@@ -229,20 +229,24 @@ shell and as TOML strings.
   Code asks for approval in an interactive session before it uses a server
   from `.mcp.json`, and loads it without asking in `claude -p` runs
   ([Project scope](https://code.claude.com/docs/en/mcp#project-scope)).
+  Once approved, the repository's entry takes precedence over a user-level
+  `berrydb` entry, which the documentation ranks below project scope
+  ([Scope hierarchy and precedence](https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence));
+  until then the user-level entry is used. The pane's caption says so.
   Observed on 2026-10-09 with Claude Code 2.1.295 and a throwaway `HOME`:
   `claude mcp add --scope project berrydb -- /usr/bin/true --project "repo
   pinned"` wrote `.mcp.json` in the current folder with
-  `"args": ["--project", "repo pinned"]`. With a user-level `berrydb`
-  entry also present, and the project entry approved through
-  `enabledMcpjsonServers` in `.claude/settings.local.json`,
-  `claude mcp get berrydb` and `claude mcp list` used the user-level entry,
-  and `claude mcp list` printed `[Conflicting scopes] Server "berrydb" is
-  defined in multiple scopes with different endpoints: user (...), project
-  (...)`. Claude Code's documentation ranks project scope above user scope
-  ([Scope hierarchy and precedence](https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence)),
-  which that run did not show. Either way, remove the user-level entry
-  (`claude mcp remove berrydb -s user`) when a repository carries its own;
-  the pane's caption says so.
+  `"args": ["--project", "repo pinned"]`, and `claude mcp list` showed the
+  entry as ``⏸ Pending approval (run `claude` to approve)``. Writing
+  `enabledMcpjsonServers` into the folder's `.claude/settings.local.json`
+  did not approve it. With a user-level `berrydb` entry also present,
+  `claude mcp list` and `claude mcp get berrydb` used the user-level entry
+  while the project entry was pending. Once the approval was recorded in
+  `~/.claude.json` under `projects["<folder>"]`
+  (`enabledMcpjsonServers: ["berrydb"]`, `hasTrustDialogAccepted: true`),
+  both used the project entry and `claude mcp get berrydb` reported
+  `Scope: Project config (shared via .mcp.json)`. `claude mcp list` printed
+  a `[Conflicting scopes]` diagnostic for `berrydb` in both states.
 - **Codex.** Add to the repository's `.codex/config.toml`:
 
   ```toml

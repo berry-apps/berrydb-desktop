@@ -474,7 +474,7 @@ repository entry.
 
 | Host | Version | Repository entry | Observed |
 |---|---|---|---|
-| Claude Code | 2.1.295 | `.mcp.json` written by `claude mcp add --scope project berrydb -- /usr/bin/true --project "repo pinned"` | The file held `"args": ["--project", "repo pinned"]`. With a user-level `berrydb` entry also present, and the project entry approved through `enabledMcpjsonServers` in `.claude/settings.local.json`, `claude mcp get berrydb` and `claude mcp list` used the user-level entry, and `mcp list` printed `[Conflicting scopes] Server "berrydb" is defined in multiple scopes with different endpoints: user (...), project (...)`. |
+| Claude Code | 2.1.295 | `.mcp.json` written by `claude mcp add --scope project berrydb -- /usr/bin/true --project "repo pinned"` | The file held `"args": ["--project", "repo pinned"]`, and `claude mcp list` showed the entry as ``⏸ Pending approval (run `claude` to approve)``; writing `enabledMcpjsonServers` into the folder's `.claude/settings.local.json` did not approve it. With a user-level `berrydb` entry also present, `claude mcp list` and `claude mcp get berrydb` used the user-level entry while the project entry was pending, and the project entry once the approval was recorded in `~/.claude.json` under `projects["<folder>"]` (`enabledMcpjsonServers: ["berrydb"]`, `hasTrustDialogAccepted: true`); in that run the project entry was `/bin/cat --project repo-pinned`, which `claude mcp get berrydb` reported with `Scope: Project config (shared via .mcp.json)`. `claude mcp list` printed a `[Conflicting scopes]` diagnostic for `berrydb` in both states. |
 | Codex CLI | 0.157.1 | `[mcp_servers.berrydb]` with `args = ["--project", "repo-pinned"]` in the repository's `.codex/config.toml`, beside a user-level entry with `args = []` | `codex mcp get berrydb` inside the repository showed `args: --project repo-pinned` when the user `config.toml` marked the folder `trust_level = "trusted"`, and `args: -` in an untrusted folder. |
 | Antigravity | 1.3.1 | `.agents/mcp_config.json` and `.agent/mcp_config.json` in the folder, each with a server named `berrydb-ws` | `agy mcp list` inside the folder listed only the user-level server. The CLI's embedded documentation names only `~/.gemini/config/mcp_config.json` and `plugins/<name>/mcp_config.json`. |
 
@@ -483,11 +483,13 @@ before it uses a server from `.mcp.json`, while `claude -p` runs load it
 without asking ([Project scope](https://code.claude.com/docs/en/mcp#project-scope)),
 and ranks project scope above user scope
 ([Scope hierarchy and precedence](https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence)),
-which the run above did not show.
+which matches the approved state above.
 
 Conclusion: Claude Code and Codex take a per-repository entry that names
-the project, each behind its own trust step; Antigravity 1.3.1 does not.
-The settings pane offers the two entries and says to remove a user-level
-Claude Code entry beside them. Not covered: an interactive Claude Code
-session's approval prompt, and a host session that started
-`berrydb-mcp` through a repository entry.
+the project, each behind its own trust step, and once trusted that entry
+replaces the shared user-level `berrydb` entry in the repository;
+Antigravity 1.3.1 takes none. The settings pane offers the two entries and
+says which entry applies before and after approval. Not covered: an
+interactive Claude Code session's approval prompt itself (the approval
+was written into `~/.claude.json` directly), and a host session that
+started `berrydb-mcp` through a repository entry.

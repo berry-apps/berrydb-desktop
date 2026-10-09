@@ -357,13 +357,14 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     ///   `claude -p` run (https://code.claude.com/docs/en/mcp#project-scope).
     ///   Observed with Claude Code 2.1.295 and a throwaway home directory:
     ///   `claude mcp add --scope project` wrote `.mcp.json` in the current
-    ///   folder with the arguments as given. With a user-level `berrydb`
-    ///   entry also present and the repository's entry approved,
-    ///   `claude mcp get` and `claude mcp list` used the user-level entry and
-    ///   `mcp list` reported conflicting scopes, although that page ranks
-    ///   project scope above user scope
-    ///   (https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence);
-    ///   the caption therefore says to remove the user-level entry.
+    ///   folder with the arguments as given, and `claude mcp list` showed the
+    ///   entry as pending approval. With a user-level `berrydb` entry also
+    ///   present, `claude mcp get` and `claude mcp list` used the user-level
+    ///   entry while the repository's was pending, and the repository's once
+    ///   the approval was recorded in `~/.claude.json`, the order that page
+    ///   gives (https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence).
+    ///   The caption therefore says which entry applies before and after
+    ///   approval rather than asking for the user-level entry's removal.
     /// - codex-cli 0.157.1, observed with a throwaway home directory:
     ///   `[mcp_servers.berrydb]` in a repository's `.codex/config.toml`
     ///   replaced the user-level entry for `codex mcp get` run inside the
@@ -387,7 +388,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             AgentSetupEntry(
                 host: L("\("Claude Code"), this repository"),
                 text: "claude mcp add --scope project berrydb -- \(helper) --project \(Self.shellQuoted(saved.name))",
-                caption: L("Run it in the repository’s top folder. It writes .mcp.json there, which can be committed; Claude Code asks before an interactive session starts a server that a repository defines. If a user-level berrydb entry also exists, Claude Code uses that one and reports conflicting scopes, so remove it with claude mcp remove berrydb -s user.")
+                caption: L("Run it in the repository’s top folder. It writes .mcp.json there, which can be committed. Once you approve the entry in Claude Code, Claude Code uses it in this repository instead of a user-level berrydb entry; until then, it uses the user-level entry.")
             ),
             AgentSetupEntry(
                 host: L("\("Codex"), this repository"),
