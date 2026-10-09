@@ -59,19 +59,11 @@ struct HostCompatibleStdioTransportTests {
         return (HostCompatibleStdioTransport(base: base), input, output)
     }
 
-    /// A payload of `kibibytes` KiB, several times what a pipe holds (64 KiB,
-    /// measured on macOS 26.6 by non-blocking writes until EAGAIN), so
-    /// writing it meets a full pipe again and again while the reader drains
-    /// it.
-    private static func payload(_ letter: Character, kibibytes: Int = 256) -> Data {
-        Data(repeating: letter.asciiValue!, count: kibibytes << 10)
-    }
-
-    /// Whether a pipe holds bytes not yet read; poll(2) with a zero timeout
-    /// answers without waiting.
-    private static func hasUnread(_ descriptor: Int32) -> Bool {
-        var entry = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
-        return poll(&entry, 1, 0) == 1 && entry.revents & Int16(POLLIN) != 0
+    /// A 256 KiB payload, several times what a pipe holds (64 KiB, measured
+    /// on macOS 26.6 by non-blocking writes until EAGAIN), so writing it
+    /// meets a full pipe again and again while the reader drains it.
+    private static func payload(_ letter: Character) -> Data {
+        Data(repeating: letter.asciiValue!, count: 256 << 10)
     }
 
     @Test("concurrent sends reach the output one whole message at a time")
@@ -96,47 +88,6 @@ struct HostCompatibleStdioTransportTests {
 
         #expect(lines.count == 2)
         #expect(Set(lines) == [first, second], "a line mixes the bytes of both messages")
-    }
-
-    @Test("the discovery fallback reply waits for a message being written")
-    func discoveryReplyNeverInterleaves() async throws {
-        let (transport, input, output) = try Self.pipedTransport()
-        defer {
-            input.close()
-            output.close()
-        }
-        try await transport.connect()
-        // Once the reader starts, the reply and the large message each retry
-        // a full pipe every 10 ms; sixteen pipefuls give the reply many
-        // chances to land inside the message if nothing orders the two.
-        let large = Self.payload("a", kibibytes: 1024)
-        let discover = Data(#"{"jsonrpc":"2.0","id":7,"method":"server/discover","params":{}}"#.utf8 + [UInt8(ascii: "\n")])
-        let reply = try #require(HostCompatibleStdioTransport.legacyDiscoveryFallbackResponse(for: discover.dropLast()))
-
-        let lines = try await withDeadline(.seconds(60)) {
-            // With no reader yet, the large message stops part-written once
-            // the pipe is full, and stays so until the reader starts.
-            async let sentLarge: Void = transport.send(large)
-            while !Self.hasUnread(output.read) {
-                try await Task.sleep(for: .milliseconds(5))
-            }
-            _ = discover.withUnsafeBytes { Darwin.write(input.write, $0.baseAddress, $0.count) }
-            while Self.hasUnread(input.read) {
-                try await Task.sleep(for: .milliseconds(5))
-            }
-            // The transport has read the request; the allowance covers the
-            // step from there to its reply attempt, which involves no I/O.
-            // Only a reply attempted after the reader has drained the large
-            // message would let this test pass without checking the order.
-            try await Task.sleep(for: .milliseconds(100))
-            async let lines = readLines(output.read, count: 2)
-            try await sentLarge
-            return await lines
-        }
-        await transport.disconnect()
-
-        #expect(lines.count == 2)
-        #expect(Set(lines) == [large, reply], "the reply was written inside the larger message")
     }
 
     @Test("a failed send does not hold back the next one")
@@ -208,52 +159,5 @@ struct HostCompatibleStdioTransportTests {
         let elicitation = try #require(capabilities["elicitation"] as? [String: Any])
         #expect((elicitation["form"] as? [String: Any])?.isEmpty == true)
         #expect((elicitation["url"] as? [String: Any])?.isEmpty == true)
-    }
-
-    @Test("legacy discovery fallback is narrow and preserves request identifiers")
-    func legacyDiscoveryFallbackScope() throws {
-        let list = Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#.utf8)
-        #expect(HostCompatibleStdioTransport.legacyDiscoveryFallbackResponse(for: list) == nil)
-
-        let notification = Data(#"{"jsonrpc":"2.0","method":"server/discover","params":{}}"#.utf8)
-        #expect(HostCompatibleStdioTransport.legacyDiscoveryFallbackResponse(for: notification) == nil)
-
-        let invalidRequests = [
-            #"{"id":1,"method":"server/discover","params":{}}"#,
-            #"{"jsonrpc":"1.0","id":1,"method":"server/discover","params":{}}"#,
-            #"{"jsonrpc":"2.0","id":null,"method":"server/discover","params":{}}"#,
-            #"{"jsonrpc":"2.0","id":true,"method":"server/discover","params":{}}"#,
-            #"{"jsonrpc":"2.0","id":{},"method":"server/discover","params":{}}"#,
-            #"{"jsonrpc":"2.0","id":[],"method":"server/discover","params":{}}"#,
-        ]
-        for invalid in invalidRequests {
-            #expect(
-                HostCompatibleStdioTransport.legacyDiscoveryFallbackResponse(
-                    for: Data(invalid.utf8)
-                ) == nil
-            )
-        }
-
-        let request = Data(#"{"jsonrpc":"2.0","id":"discover-1","method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#.utf8)
-        let responseData = try #require(
-            HostCompatibleStdioTransport.legacyDiscoveryFallbackResponse(for: request)
-        )
-        let response = try #require(
-            JSONSerialization.jsonObject(with: responseData) as? [String: Any]
-        )
-        #expect(response["jsonrpc"] as? String == "2.0")
-        #expect(response["id"] as? String == "discover-1")
-        let error = try #require(response["error"] as? [String: Any])
-        #expect(error["code"] as? Int == -32601)
-        #expect(error["message"] as? String == "Method not found")
-
-        let numericRequest = Data(#"{"jsonrpc":"2.0","id":7.5,"method":"server/discover","params":{}}"#.utf8)
-        let numericResponseData = try #require(
-            HostCompatibleStdioTransport.legacyDiscoveryFallbackResponse(for: numericRequest)
-        )
-        let numericResponse = try #require(
-            JSONSerialization.jsonObject(with: numericResponseData) as? [String: Any]
-        )
-        #expect(numericResponse["id"] as? Double == 7.5)
     }
 }

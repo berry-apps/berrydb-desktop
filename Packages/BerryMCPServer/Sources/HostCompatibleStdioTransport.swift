@@ -1,15 +1,29 @@
-import CoreFoundation
 import Foundation
 import Logging
 import MCP
 
-/// Compatibility boundary for host messages that swift-sdk 0.12.1 cannot
-/// process correctly while this server remains on legacy MCP 2025-11-25.
+/// The SDK's `StdioTransport` with one compatibility rule for a host message
+/// that swift-sdk 0.12.1 cannot decode, and with outgoing messages written
+/// one at a time.
 ///
-/// Every outgoing message, the SDK's responses and this transport's own
-/// replies alike, is written whole before the next one starts. The wrapped
-/// `StdioTransport.send` writes in a loop and, whenever standard output is
-/// full (EAGAIN), sleeps 10 ms with its actor free (`send` in
+/// The rule is `sanitizeIncomingMessage`, which keeps the `initialize`
+/// request of Codex 0.154.0 decodable
+/// (https://github.com/modelcontextprotocol/swift-sdk/issues/262).
+///
+/// A second rule used to answer the `server/discover` probe of MCP
+/// 2026-07-28 with `-32601` here. The host compatibility gate needed it
+/// because its fixture ran `.strict`, under which the SDK sends no response
+/// to any request but `initialize` and `ping` before initialization. This
+/// server runs the default configuration, under which the SDK answers a
+/// method it has no handler for with `-32601` itself (`handleRequest` in
+/// Server.swift), so the rule only repeated that answer and was removed.
+/// `BerryMCPStdioTests.serverDiscoverFallsBackToInitialize` pins the reply
+/// that lets a dual-era client such as Antigravity 1.2.11 fall back to
+/// `initialize`.
+///
+/// Every outgoing message is written whole before the next one starts. The
+/// wrapped `StdioTransport.send` writes in a loop and, whenever standard
+/// output is full (EAGAIN), sleeps 10 ms with its actor free (`send` in
 /// StdioTransport.swift of swift-sdk 0.12.1), and the SDK server sends each
 /// response from its own task, so without this order a second message could
 /// be written into the middle of a first one larger than the pipe.
@@ -40,10 +54,6 @@ public actor HostCompatibleStdioTransport: Transport {
             do {
                 let upstream = await base.receive()
                 for try await message in upstream {
-                    if let response = Self.legacyDiscoveryFallbackResponse(for: message) {
-                        try await self.send(response)
-                        continue
-                    }
                     continuation.yield(Self.sanitizeIncomingMessage(message))
                 }
                 continuation.finish()
@@ -75,37 +85,6 @@ public actor HostCompatibleStdioTransport: Transport {
 
     public func receive() -> AsyncThrowingStream<Data, Swift.Error> {
         stream
-    }
-
-    /// `server/discover` is a 2026-07-28 probe. The pinned SDK applies its
-    /// pre-initialize state guard first and returns `-32600`, which prevents
-    /// dual-era clients such as Antigravity 1.2.11 from falling back. Replying
-    /// `-32601` truthfully says this legacy server does not implement discovery.
-    public static func legacyDiscoveryFallbackResponse(for data: Data) -> Data? {
-        guard
-            let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            envelope["jsonrpc"] as? String == "2.0",
-            envelope["method"] as? String == "server/discover",
-            let id = envelope["id"],
-            Self.isValidRequestID(id)
-        else {
-            return nil
-        }
-
-        let response: [String: Any] = [
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": ["code": -32601, "message": "Method not found"],
-        ]
-        return try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
-    }
-
-    private static func isValidRequestID(_ value: Any) -> Bool {
-        if value is String { return true }
-        guard let number = value as? NSNumber else { return false }
-        // JSONSerialization bridges both JSON numbers and Booleans through
-        // NSNumber. JSON-RPC request IDs permit numbers, never Booleans.
-        return CFGetTypeID(number) != CFBooleanGetTypeID()
     }
 
     /// swift-sdk 0.12.1 decodes `Client.Capabilities.experimental` as
