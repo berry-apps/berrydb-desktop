@@ -18,7 +18,8 @@ public enum MCPResourceCatalog {
     private static let mimeType = "application/json"
 
     /// The resources of a context; none when no project is selected. A
-    /// connection's graph is listed only once it has been harvested.
+    /// connection's graph is listed only while it has a harvest time, that
+    /// is while the graph tools would find a graph to read.
     public static func resources(for context: MCPProjectContext, metadata: MCPMetadataService) throws -> [Resource] {
         guard case let .selected(project, _, _) = context else { return [] }
         let connections = try mapping { try metadata.listConnections(in: project) }

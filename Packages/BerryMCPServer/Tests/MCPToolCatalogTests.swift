@@ -817,6 +817,26 @@ struct MCPToolCatalogTests {
         }
     }
 
+    /// The latest harvest found no tables or views: the connection reports
+    /// no harvest time and no graph resource, as the graph tools report no
+    /// graph.
+    @Test func aHarvestThatFoundNothingListsNoGraph() throws {
+        let store = try BerryStore(path: ":memory:")
+        try store.save(shop)
+        let graphStore = GraphStore(store: store)
+        try graphStore.persist(shopGraph(), profileID: shop.id, now: Self.harvestTime)
+        try graphStore.persist(SchemaGraph(), profileID: shop.id, now: Self.harvestTime.addingTimeInterval(60))
+        let metadata = MCPMetadataService(store: store)
+        let router = MCPToolRouter(metadata: metadata)
+
+        let connections = try call(.listConnections, [:], router: router)
+        let first = try #require(object(connections)["connections"]?.arrayValue?.first?.objectValue)
+        #expect(first["graph_harvested_at"] == .null)
+        #expect(try MCPResourceCatalog.resources(for: selected(), metadata: metadata).map(\.uri) == ["berrydb://project"])
+        let stats = try call(.getGraphStats, ["connection_id": connectionID], router: router)
+        #expect(text(stats) == MCPMetadataError.noSnapshot.description)
+    }
+
     @Test func resourceReadRejectsUnassignedConnectionLikeUnknownURI() throws {
         let unknownMessage = "Unknown resource"
         let uris = [

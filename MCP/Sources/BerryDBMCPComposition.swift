@@ -1,6 +1,5 @@
 import BerryCredentials
 import BerryDriverBootstrap
-import BerryGraph
 import BerryMCP
 import BerryMCPServer
 import BerryStore
@@ -66,13 +65,7 @@ public enum BerryDBMCPComposition {
     static func dependencies(
         store: BerryStore, explicitProject: UUID?, workingDirectory: String
     ) -> BerryMCPServerFactory.Dependencies {
-        let graphStore = GraphStore(store: store)
-        let metadata = MCPMetadataService(
-            profiles: { try store.allProfiles() },
-            graph: BerryGraphQueryService(store: graphStore),
-            harvestedAt: { try graphStore.snapshots(profileID: $0).map(\.takenAt).max() },
-            loadGraph: { try graphStore.loadGraph(profileID: $0) }
-        )
+        let metadata = MCPMetadataService(store: store)
         let resolver = MCPProjectContextResolver(
             loadProjects: { try store.mcpProjects() },
             verify: { try store.verifiedMCPProject(id: $0, key: MCPAccessKeyStore.keychain.load()) }

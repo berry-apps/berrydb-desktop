@@ -144,6 +144,30 @@ struct MCPMetadataServiceTests {
         }
     }
 
+    /// A harvest that found no tables or views still records a snapshot, and
+    /// the graph tools then answer that no graph was harvested; the
+    /// connection must not claim a harvest time the tools contradict.
+    @Test func aConnectionCountsAsHarvestedOnlyWhenItsLatestSnapshotHoldsNodes() throws {
+        let store = try BerryStore(path: ":memory:")
+        for profile in [production, staging] {
+            try store.save(profile)
+        }
+        let graphStore = GraphStore(store: store)
+        let emptied = Self.harvestTime.addingTimeInterval(60)
+        try graphStore.persist(shopGraph(), profileID: production.id, now: Self.harvestTime)
+        try graphStore.persist(SchemaGraph(), profileID: production.id, now: emptied)
+        try graphStore.persist(shopGraph(), profileID: staging.id, now: emptied)
+        let service = MCPMetadataService(store: store)
+
+        let descriptors = try service.listConnections(in: project)
+        #expect(descriptors.map(\.graphHarvestedAt) == [nil, emptied])
+        #expect(throws: MCPMetadataError.noSnapshot) {
+            try service.graphStats(in: project, connectionID: production.id, object: nil)
+        }
+        let listing = try service.schema(in: project, connectionID: staging.id, objectNames: nil, detail: .overview)
+        #expect(listing.harvestedAt == emptied)
+    }
+
     @Test func listConnectionsSkipsProfilesThatNoLongerExistAndReadsProfilesOnce() throws {
         let counter = CallCounter()
         let vanished = MCPProfileAccess(profileID: UUID())

@@ -15,7 +15,10 @@ public struct MCPConnectionDescriptor: Codable, Equatable, Sendable {
     public let environment: String
     /// What the connection can serve without opening it: "schema" and "graph".
     public let capabilities: [String]
-    /// When the persisted graph was last harvested; nil when it never was.
+    /// The time of the last harvest that changed the persisted graph's
+    /// structure, the graph the graph tools read; nil when there is none or
+    /// that harvest found no tables or views. A later harvest that only
+    /// refreshed statistics does not move it.
     public let graphHarvestedAt: Date?
 
     private enum CodingKeys: String, CodingKey {
@@ -163,7 +166,8 @@ public struct MCPMetadataService: Sendable {
     ///   - profiles: Reads the saved connection profiles; called once per
     ///     `listConnections`.
     ///   - graph: Runs graph queries and schema listings.
-    ///   - harvestedAt: When a profile's graph was last harvested.
+    ///   - harvestedAt: A profile's `graphHarvestedAt`: the time of the
+    ///     graph the graph tools read, nil when they would find none.
     ///   - loadGraph: The persisted graph of a profile, read once per
     ///     `searchSchema`; an empty graph means none was harvested.
     public init(
@@ -176,6 +180,30 @@ public struct MCPMetadataService: Sendable {
         self.graph = graph
         self.harvestedAt = harvestedAt
         self.loadGraph = loadGraph
+    }
+
+    /// Reads `store`: its saved profiles and each profile's persisted graph.
+    ///
+    /// A profile's harvest time is that of its latest graph snapshot, and
+    /// none when that snapshot holds no nodes. The graph tools read the
+    /// graph as of that snapshot and answer that no graph was harvested when
+    /// it is empty, so a harvest that found no tables or views must not be
+    /// reported as one. The store records a snapshot only when a harvest
+    /// changes the graph's structure (`saveGraph`), so the time is that of
+    /// the last such harvest, not of the latest refresh of statistics.
+    public init(store: BerryStore) {
+        let graphStore = GraphStore(store: store)
+        self.init(
+            profiles: { try store.allProfiles() },
+            graph: BerryGraphQueryService(store: graphStore),
+            harvestedAt: { profileID in
+                guard let latest = try store.latestGraphSnapshot(profileID: profileID), latest.nodeCount > 0 else {
+                    return nil
+                }
+                return latest.takenAt
+            },
+            loadGraph: { try graphStore.loadGraph(profileID: $0) }
+        )
     }
 
     /// The project's connections, in the project's order. A profile deleted
