@@ -5,6 +5,23 @@ import Combine
 import CryptoKit
 import Foundation
 
+/// Whether the settings pane can offer setup commands for the `berrydb-mcp`
+/// helper, which the commands launch by absolute path.
+public enum MCPHelperLocation: Equatable, Sendable {
+    /// The helper inside an app on a writable volume, at a path that stays
+    /// valid while the app is not moved.
+    case bundled(URL)
+    /// This build ships no helper.
+    case notBundled
+    /// The app runs from a read-only volume, where the helper's path does not
+    /// last: a mounted disk image's path is gone once it is ejected, and
+    /// Gatekeeper runs an app downloaded outside the Mac App Store from "a
+    /// randomized read-only location" until the user moves it, usually to
+    /// /Applications
+    /// (https://developer.apple.com/documentation/fileprovider/nsfileprovidererror/providertranslocated).
+    case onReadOnlyVolume
+}
+
 /// Creates, edits and deletes the MCP projects that coding agents reach
 /// through the `berrydb-mcp` helper.
 ///
@@ -47,19 +64,62 @@ public final class MCPProjectsSettingsModel: ObservableObject {
 
     private let store: BerryStore
     private let keyStore: MCPAccessKeyStore
-    private let helperURL: URL?
-
-    /// `keyStore` defaults to the Keychain item the helper reads; the
-    /// helper path is looked up once, inside the running app's bundle.
-    public convenience init(store: BerryStore, keyStore: MCPAccessKeyStore = .keychain) {
-        self.init(store: store, keyStore: keyStore, helperURL: Self.bundledHelperURL(in: Bundle.main.bundleURL))
+    private let helperLocation: MCPHelperLocation
+    private var helperURL: URL? {
+        guard case let .bundled(url) = helperLocation else { return nil }
+        return url
     }
 
-    init(store: BerryStore, keyStore: MCPAccessKeyStore, helperURL: URL?) {
+    /// `keyStore` defaults to the Keychain item the helper reads; the
+    /// helper is looked up once, inside the running app's bundle.
+    public convenience init(store: BerryStore, keyStore: MCPAccessKeyStore = .keychain) {
+        let location = Self.helperLocation(in: Bundle.main.bundleURL, isOnReadOnlyVolume: Self.isOnReadOnlyVolume)
+        self.init(store: store, keyStore: keyStore, helperLocation: location)
+    }
+
+    /// A model whose helper is at `helperURL`, or that has none when it is nil.
+    convenience init(store: BerryStore, keyStore: MCPAccessKeyStore, helperURL: URL?) {
+        self.init(
+            store: store, keyStore: keyStore,
+            helperLocation: helperURL.map(MCPHelperLocation.bundled) ?? .notBundled
+        )
+    }
+
+    init(store: BerryStore, keyStore: MCPAccessKeyStore, helperLocation: MCPHelperLocation) {
         self.store = store
         self.keyStore = keyStore
-        self.helperURL = helperURL
+        self.helperLocation = helperLocation
         reload()
+    }
+
+    /// Why the pane offers no setup commands, ready to show; nil when
+    /// `configurationSnippets` has commands to offer.
+    public var agentSetupUnavailableReason: String? {
+        switch helperLocation {
+        case .bundled:
+            nil
+        case .notBundled:
+            L("The berrydb-mcp helper is not bundled in this build.")
+        case .onReadOnlyVolume:
+            L("Move BerryDB to the Applications folder and open it from there to set up agents.")
+        }
+    }
+
+    /// Where `bundleURL` keeps the helper, and whether setup commands may
+    /// embed that path. A missing helper is reported as such whatever the
+    /// volume, since moving the app would not help.
+    nonisolated static func helperLocation(
+        in bundleURL: URL, isOnReadOnlyVolume: (URL) -> Bool
+    ) -> MCPHelperLocation {
+        guard let helper = bundledHelperURL(in: bundleURL) else { return .notBundled }
+        return isOnReadOnlyVolume(bundleURL) ? .onReadOnlyVolume : .bundled(helper)
+    }
+
+    /// True when the volume holding `url` is mounted read-only. A volume
+    /// whose state cannot be read counts as writable, which keeps the setup
+    /// commands available.
+    nonisolated static func isOnReadOnlyVolume(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?.volumeIsReadOnly == true
     }
 
     /// Re-reads projects, their verification state and connection profiles,
@@ -333,8 +393,9 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         return FileManager.default.fileExists(atPath: helper.path) ? helper : nil
     }
 
-    /// Host commands that register the bundled helper; empty when the helper
-    /// is not bundled. Each command writes one entry to the host's user-level
+    /// Host commands that register the bundled helper; empty whenever
+    /// `agentSetupUnavailableReason` gives a reason. Each command writes one
+    /// entry to the host's user-level
     /// configuration, so the shared entry serves every repository and the
     /// helper selects the project from the host's workspace. Claude Code
     /// needs `--scope user` for that, since its default scope is the current

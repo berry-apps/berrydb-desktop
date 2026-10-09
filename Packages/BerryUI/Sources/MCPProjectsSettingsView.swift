@@ -297,8 +297,8 @@ private struct MCPProjectEditorSheet: View {
     private var snippetsSection: some View {
         Section(L("Agent Setup")) {
             let snippets = model.configurationSnippets(project: draft.id)
-            if snippets.isEmpty {
-                Text(L("The berrydb-mcp helper is not bundled in this build."))
+            if let unavailable = model.agentSetupUnavailableReason {
+                Text(unavailable)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {

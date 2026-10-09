@@ -32,18 +32,47 @@ public enum BerryDBMCPComposition {
             .path
     }
 
-    /// The version reported to hosts: the short version string of
-    /// `Bundle.main`, the bundle containing the current executable
-    /// (https://developer.apple.com/documentation/foundation/bundle/main).
-    /// Only an executable in an app's `Contents/MacOS` gets the app as its
-    /// main bundle; one in `Contents/Helpers`, where the settings pane looks
-    /// for the helper, gets that folder and no version (observed on macOS 26.6
-    /// with a probe executable copied into both folders of one app), so
-    /// packaging must embed an Info.plist or pass the version another way. A
-    /// build run from `.build` has no Info.plist and reports "dev"; the stdio
-    /// tests observe that value.
+    /// The version reported to hosts, for the running executable.
     static var serverVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        serverVersion(
+            executableURL: Bundle.main.executableURL,
+            mainBundleVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        )
+    }
+
+    /// The version reported to hosts by the executable at `executableURL`.
+    ///
+    /// Only an executable in an app's `Contents/MacOS` gets the app as its
+    /// main bundle
+    /// (https://developer.apple.com/documentation/foundation/bundle/main);
+    /// one in `Contents/Helpers`, where the app packages the helper, gets
+    /// that folder and no version (observed on macOS 26.6 with a probe
+    /// executable copied into both folders of one app). Such a helper
+    /// therefore reports the short version string of the app around it,
+    /// read from `<app>.app/Contents/Info.plist` after resolving symbolic
+    /// links, so a host's entry pointing at a link to the helper gets the
+    /// same answer. Anywhere else, or when that file has no version, the
+    /// executable's own main bundle version `mainBundleVersion` applies, and
+    /// "dev" without one: a build run from `.build` has no `Info.plist`, and
+    /// the stdio tests observe "dev".
+    public static func serverVersion(executableURL: URL?, mainBundleVersion: String?) -> String {
+        executableURL.flatMap(enclosingAppVersion) ?? mainBundleVersion ?? "dev"
+    }
+
+    /// The short version string of the app whose `Contents/Helpers` folder
+    /// holds `executableURL` once symbolic links are resolved, or nil.
+    private static func enclosingAppVersion(_ executableURL: URL) -> String? {
+        let helpers = executableURL.resolvingSymlinksInPath().deletingLastPathComponent()
+        let contents = helpers.deletingLastPathComponent()
+        guard helpers.lastPathComponent == "Helpers",
+              contents.lastPathComponent == "Contents",
+              contents.deletingLastPathComponent().pathExtension == "app",
+              let data = try? Data(contentsOf: contents.appendingPathComponent("Info.plist")),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let version = plist["CFBundleShortVersionString"] as? String,
+              !version.isEmpty
+        else { return nil }
+        return version
     }
 
     /// Why the store could not be opened, in words that never include the

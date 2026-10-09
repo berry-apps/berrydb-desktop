@@ -9,6 +9,7 @@ LIMIT_MB=200
 CONFIG=release
 APP="dist/BerryDB.app"
 BIN="$APP/Contents/MacOS/BerryDB"
+HELPER="$APP/Contents/Helpers/berrydb-mcp"
 
 # SKIP_BUILD=1 checks the bundle already on disk. The release pipeline sets it
 # because release.sh has just built and signed that exact bundle, and rebuilding
@@ -20,6 +21,8 @@ if [ -n "${SKIP_BUILD:-}" ]; then
 else
     echo "==> Building release + packaging"
     swift build -c "$CONFIG" --product BerryApp
+    # make_app.sh requires the helper; --product above builds only the app.
+    swift build -c "$CONFIG" --product berrydb-mcp
     sh scripts/make_app.sh "$CONFIG"
 fi
 
@@ -40,6 +43,34 @@ echo "SIZE app=${SIZE_MB} MB (limit ${LIMIT_MB} MB)"
 # else still fails the guard.
 FOREIGN=$(otool -L "$BIN" | tail -n +2 | awk '{print $1}' \
     | grep -v -e '^/usr/lib/' -e '^/System/Library/' -e 'libswift' -e 'Sparkle' -e 'libsybdb' || true)
+
+# --- Bundled berrydb-mcp helper ---
+# The settings pane offers agent setup only for a bundled helper, so a bundle
+# without one ships a pane that cannot connect any agent. The helper gets the
+# guard above with a narrower allowance: it links the database drivers but not
+# the updater, so libsybdb is its only sanctioned embedded dylib, and only
+# through @rpath. A libsybdb reference into /opt/homebrew or /usr/local
+# resolves only on a Mac with Homebrew's FreeTDS, whose copy is not signed by
+# our team (see make_app.sh), and each @rpath reference must find its dylib in
+# Contents/Frameworks through the helper's own rpath.
+HELPER_FAIL=""
+if [ ! -f "$HELPER" ]; then
+    HELPER_FAIL="  missing: Contents/Helpers/berrydb-mcp"
+else
+    HELPER_DEPS=$(otool -L "$HELPER" | tail -n +2 | awk '{print $1}')
+    HELPER_FOREIGN=$(printf '%s\n' "$HELPER_DEPS" \
+        | grep -v -e '^/usr/lib/' -e '^/System/Library/' -e 'libswift' -e '^@rpath/libsybdb\.' || true)
+    for dep in $HELPER_FOREIGN; do
+        HELPER_FAIL="$HELPER_FAIL
+  links $dep"
+    done
+    for dep in $(printf '%s\n' "$HELPER_DEPS" | grep '^@rpath/' | grep -v 'libswift' || true); do
+        [ -f "$APP/Contents/Frameworks/${dep#@rpath/}" ] || HELPER_FAIL="$HELPER_FAIL
+  links $dep, which is not in Contents/Frameworks"
+    done
+    otool -l "$HELPER" | grep -qF 'path @executable_path/../Frameworks ' || HELPER_FAIL="$HELPER_FAIL
+  has no LC_RPATH @executable_path/../Frameworks"
+fi
 
 # --- LGPL notices ---
 # libsybdb (FreeTDS DB-Library) is LGPL-2.1 and dynamically linked. Shipping the
@@ -82,6 +113,11 @@ fi
 if [ -n "$FOREIGN" ]; then
     echo "FAIL: non-system runtime dependency linked (no Electron/JVM/Qt):" >&2
     echo "$FOREIGN" | sed 's/^/  /' >&2
+    FAIL=1
+fi
+if [ -n "$HELPER_FAIL" ]; then
+    echo "FAIL: the berrydb-mcp helper is missing or would not run on a user's Mac:" >&2
+    printf '%s\n' "$HELPER_FAIL" | sed '/^$/d' >&2
     FAIL=1
 fi
 
