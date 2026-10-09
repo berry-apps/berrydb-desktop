@@ -223,25 +223,3 @@ jobs:
     # No `secrets:` key, deliberately. deploy-webapp.yml uses no secrets and runs
     # on the self-hosted runner; `secrets: inherit` would hand it the signing
     # identity and the Sparkle private key in order to deploy some HTML.
-
-  announce:
-    name: "Announce the release"
-    needs: release
-    if: needs.release.outputs.dry_run != 'true'
-    uses: ./.github/workflows/announce-release.yml
-    permissions:
-      contents: read
-    with:
-      tag: v${{ needs.release.outputs.version }}
-    # The four channel secrets are passed by name and nothing else: a called
-    # workflow only receives an environment secret if its caller passes it, and
-    # `secrets: inherit` would also hand over the signing identity and the
-    # Sparkle private key. announce-release.yml posts from a job gated by the
-    # release-announcement environment, which holds the reviewers and the real
-    # values; an unset secret reaches the script as an empty string and that
-    # channel is skipped.
-    secrets:
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
-      FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
