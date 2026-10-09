@@ -479,7 +479,7 @@ class ChannelSelectionTests(unittest.TestCase):
 
 
 class WorkflowCommandTests(unittest.TestCase):
-    """The runner reads workflow commands (`::warning::`, `::set-env`, ...) from
+    """The runner reads workflow commands (`::warning::`, `::add-mask::`, ...) from
     a step's stdout, and a release's text is whatever its author typed."""
 
     NOTES = "::warning::injected\n::error::also injected\nplain line"
