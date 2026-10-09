@@ -12,10 +12,11 @@ import Foundation
 /// verifies; the tag gates live reads only. A link cannot create a project,
 /// enable one, assign it a connection or change any other project setting.
 ///
-/// Its content is bounded. A file owned by another user is ignored as if
-/// absent; any other file that cannot be used, a symbolic link included, is
-/// reported as invalid rather than skipped, so a link never silently gives
-/// way to another selection input.
+/// Its content is bounded. A readable regular file owned by another user is
+/// ignored as if absent; any other entry of the name that cannot be used,
+/// such as a symbolic link, a folder, a FIFO or a file this user cannot
+/// read, is reported as invalid rather than skipped, so a link never
+/// silently gives way to another selection input.
 public enum MCPRepositoryLink {
     /// The link file's name, looked up in a workspace and its ancestors.
     public static let fileName = ".berrydb.json"

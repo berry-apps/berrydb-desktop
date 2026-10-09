@@ -161,10 +161,13 @@ character removes the question.
    build on the access list of the key that seals project settings, so
    any process able to run that binary can read the key without a dialog.
    Remove the entry when you are done with the source build: in Keychain
-   Access, open the item `dev.berrydb.mcp.access-key`, choose **Access
-   Control** and remove `berrydb-mcp` from the applications allowed to
-   access it. A helper read that never shows a dialog is planned with
-   packaging.
+   Access, find the login-keychain item whose name or service is
+   `dev.berrydb.mcp.access-key` (the item carries no separate label) and
+   remove `berrydb-mcp` from the applications its **Access Control** tab
+   lists; these steps follow Apple's Keychain Access guide
+   (https://support.apple.com/guide/keychain-access/welcome/mac) and were
+   not clicked through on this macOS version. A helper read that never
+   shows a dialog is planned with packaging.
 2. **A project.** In **Settings → AI Agents**, create a project, turn on
    **Enabled**, choose its connections, and either add **Workspace
    Folders** (every folder below one is included, unless a `.berrydb.json`
@@ -234,8 +237,10 @@ own:
   object with a non-empty `project` string, or an entry that cannot be read
   as a regular file, including a symbolic link (never followed), is
   invalid; it is reported, never skipped, so a link does not silently give
-  way to another input. A regular file owned by another user is ignored as
-  if absent, and the walk continues upward. Other keys are ignored.
+  way to another input. A readable regular file owned by another user is
+  ignored as if absent, and the walk continues upward; a file this user
+  cannot read, or a FIFO, is invalid like any other unusable entry. Other
+  keys are ignored.
 - **Otherwise by registered workspace folders.** A workspace matches a
   project when it equals or is contained in one of the project's workspace
   folders, compared on path components after resolving symlinks and the
@@ -328,9 +333,11 @@ from a workspace also passes folders other users can write to, such as
 user owns there is ignored, as git refuses to read the configuration of a
 repository another user owns
 ([`safe.directory`](https://git-scm.com/docs/git-config#Documentation/git-config.txt-safedirectory)),
-so it selects nothing. Another user can still leave a folder or a symbolic
-link of that name there, which reads as `invalid_link_file` for workspaces
-below it with no nearer link: a denial, not a selection. A link in the home
+so it selects nothing. That applies to a regular file this user can read;
+anything else of that name another user leaves there, such as a folder, a
+symbolic link, a FIFO or a file this user cannot read, reads as
+`invalid_link_file` for workspaces below it with no nearer link: a denial,
+not a selection. A link in the home
 folder applies to every folder inside it without a nearer link, including
 another project's workspace folders; the settings pane warns when it writes
 one there.

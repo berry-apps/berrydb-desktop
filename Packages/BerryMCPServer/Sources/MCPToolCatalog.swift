@@ -352,8 +352,10 @@ enum MCPStructuredEncoding {
             return .string(string)
         case let number as NSNumber:
             // JSONSerialization returns JSON booleans and numbers alike as
-            // NSNumber; booleans are the CFBoolean singletons, and a number
-            // written with a fraction or exponent is stored as a float type.
+            // NSNumber (https://developer.apple.com/documentation/foundation/jsonserialization);
+            // booleans are the CFBoolean singletons, and a number written
+            // with a fraction or exponent is stored as a float type. Observed
+            // on macOS 26.6 and pinned by `everyJSONKindMapsToItsValueCase`.
             if CFGetTypeID(number) == CFBooleanGetTypeID() { return .bool(number.boolValue) }
             if CFNumberIsFloatType(number) { return .double(number.doubleValue) }
             return .int(number.intValue)
