@@ -529,6 +529,14 @@ class PostTests(unittest.TestCase):
         self.assertIn("Unauthorized", str(ctx.exception))
         self.assertNotIn(BOT_TOKEN, str(ctx.exception))
 
+    def test_the_error_response_is_closed_after_its_body_is_read(self):
+        body = io.BytesIO(b'{"ok": false, "description": "Bad Request: chat not found"}')
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        opener = FakeOpener(telegram=urllib.error.HTTPError(url, 400, "error", {}, body))
+        with self.assertRaises(announce.RequestError):
+            announce.post_telegram(opener, BOT_TOKEN, CHAT_ID, "x", RELEASE_URL)
+        self.assertTrue(body.closed)
+
     def test_facebook_graph_error_message_is_surfaced_and_scrubbed(self):
         url = f"https://graph.facebook.com/{announce.GRAPH_API_VERSION}/{PAGE_ID}/feed"
         body = {"error": {"message": f"Invalid OAuth access token {PAGE_TOKEN}", "code": 190}}

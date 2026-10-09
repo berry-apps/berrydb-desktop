@@ -292,8 +292,10 @@ def _send(opener: Opener, request: urllib.request.Request, secrets: Sequence[str
         with opener(request, timeout=REQUEST_TIMEOUT) as response:
             raw = response.read()
     except urllib.error.HTTPError as exc:
+        with exc:  # closes the response; the script would otherwise hold its socket until exit
+            raw_body = exc.read(2000)
         # Scrub before shortening, or a secret straddling the cut would survive.
-        detail = _scrub(_error_detail(exc.read(2000)), secrets)[:300]
+        detail = _scrub(_error_detail(raw_body), secrets)[:300]
         raise RequestError(f"HTTP {exc.code}: {detail}") from None
     except Exception as exc:  # noqa: BLE001 - any failure must be scrubbed, not raised raw
         raise RequestError(_scrub(f"{type(exc).__name__}: {exc}", secrets)) from None
