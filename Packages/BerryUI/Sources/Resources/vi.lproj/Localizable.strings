@@ -757,6 +757,7 @@
 "Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder." = "Chạy một lệnh một lần cho mỗi agent; lệnh sẽ thêm một mục tên berrydb vào cấu hình người dùng của agent. Mục dùng chung hoạt động ở mọi repository và chọn dự án theo thư mục của agent.";
 "An entry marked “always this project” serves this project in every folder the agent works in, whatever .berrydb.json or workspace folders would select." = "Mục có ghi “luôn dùng dự án này” phục vụ dự án này ở mọi thư mục mà agent làm việc, bất kể tệp .berrydb.json hay các thư mục làm việc sẽ chọn dự án nào.";
 "The berrydb-mcp helper is not bundled in this build." = "Bản build này không kèm helper berrydb-mcp.";
+"Move BerryDB to the Applications folder and open it from there to set up agents." = "Hãy chuyển BerryDB vào thư mục Ứng dụng (Applications) rồi mở từ đó để thiết lập agent.";
 "%@, always this project" = "%@, luôn dùng dự án này";
 "MCP projects could not be loaded: %@" = "Không thể tải các dự án MCP: %@";
 "The MCP project could not be saved: %@" = "Không thể lưu dự án MCP: %@";

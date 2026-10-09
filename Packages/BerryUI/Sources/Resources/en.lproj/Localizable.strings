@@ -757,6 +757,7 @@
 "Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder." = "Run one command once per agent; it adds an entry named berrydb to the agent’s user configuration. The shared entry works in every repository and selects the project from the agent’s folder.";
 "An entry marked “always this project” serves this project in every folder the agent works in, whatever .berrydb.json or workspace folders would select." = "An entry marked “always this project” serves this project in every folder the agent works in, whatever .berrydb.json or workspace folders would select.";
 "The berrydb-mcp helper is not bundled in this build." = "The berrydb-mcp helper is not bundled in this build.";
+"Move BerryDB to the Applications folder and open it from there to set up agents." = "Move BerryDB to the Applications folder and open it from there to set up agents.";
 "%@, always this project" = "%@, always this project";
 "MCP projects could not be loaded: %@" = "MCP projects could not be loaded: %@";
 "The MCP project could not be saved: %@" = "The MCP project could not be saved: %@";
