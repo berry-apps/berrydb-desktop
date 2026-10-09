@@ -171,6 +171,38 @@ struct MCPProjectsSettingsModelTests {
         #expect(try store.mcpProjects().isEmpty)
     }
 
+    /// The store refuses an access row for a missing profile only after the
+    /// new key is stored, which would leave every other project sealed under
+    /// a key that is gone. A connection deleted while its project's editor
+    /// is open therefore has to leave the draft before the key is read.
+    @Test func aConnectionDeletedWhileEditingIsDroppedAndOtherProjectsStillVerify() throws {
+        let (store, orders, events) = try makeStore()
+        let box = KeyBox()
+        let model = makeModel(store, box)
+        var ledger = model.draftForNewProject()
+        ledger.name = "Ledger"
+        ledger.isEnabled = true
+        ledger.workspaceRoots = ["/work/ledger"]
+        #expect(model.save(ledger))
+        var billing = model.draftForNewProject()
+        billing.name = "Billing"
+        billing.isEnabled = true
+        billing.profileIDs = [orders.id, events.id]
+        #expect(model.save(billing))
+        let stale = try #require(model.draft(for: billing.id))
+        try store.deleteProfile(id: orders.id)
+
+        #expect(model.save(stale))
+
+        #expect(model.errorMessage == nil)
+        let saved = try #require(try store.verifiedMCPProject(id: billing.id, key: box.key))
+        #expect(saved.projectTagValid)
+        #expect(saved.project.profiles.map(\.profileID) == [events.id])
+        let other = try #require(try store.verifiedMCPProject(id: ledger.id, key: box.key))
+        #expect(other.projectTagValid)
+        #expect(model.unverifiedProjectIDs.isEmpty)
+    }
+
     @Test func editPreservesVerifiedLiveReadAndDropsUnverified() throws {
         let (store, orders, events) = try makeStore()
         let reporting = ConnectionProfile(driverID: "mysql", name: "Reporting")
@@ -367,6 +399,39 @@ struct MCPProjectsSettingsModelTests {
         #expect(model.errorMessage == L("A workspace root cannot be the whole disk."))
         #expect(try store.mcpProject(id: disk.id) == nil)
         #expect(box.writeCount == writesBefore)
+    }
+
+    /// Two projects with the same folder tie for every workspace inside it,
+    /// and the helper then serves neither. The comparison follows symbolic
+    /// links and drops a trailing slash, as the store and the helper do.
+    @Test func aWorkspaceFolderAnotherProjectUsesIsRefusedBeforeTheKeyIsTouched() throws {
+        let (store, _, _) = try makeStore()
+        let box = KeyBox()
+        let model = makeModel(store, box)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("berrydb-root-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let checkout = directory.appendingPathComponent("checkout", isDirectory: true)
+        let alias = directory.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(at: checkout, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: checkout)
+        var billing = model.draftForNewProject()
+        billing.name = "Billing"
+        billing.workspaceRoots = ["/work/billing", checkout.path]
+        #expect(model.save(billing))
+        let keyBefore = try #require(box.data)
+        let writesBefore = box.writeCount
+
+        for root in ["/work/billing/", alias.path] {
+            var staging = model.draftForNewProject()
+            staging.name = "Staging \(root)"
+            staging.workspaceRoots = ["/work/staging", root]
+            #expect(model.save(staging) == false)
+            #expect(model.errorMessage == L("Another project already uses the workspace folder \(root). Agents working there would get neither project."))
+            #expect(try store.mcpProjects().map(\.id) == [billing.id])
+            #expect(box.data == keyBefore)
+            #expect(box.writeCount == writesBefore)
+        }
     }
 
     @Test func snippetsAbsentWithoutBundledHelper() throws {

@@ -764,6 +764,7 @@
 "BerryDB could not read its MCP access key from the Keychain. Nothing was changed." = "BerryDB could not read its MCP access key from the Keychain. Nothing was changed.";
 "BerryDB could not update its MCP access key in the Keychain. Nothing was changed." = "BerryDB could not update its MCP access key in the Keychain. Nothing was changed.";
 "Another project already uses this name. Repository links select projects by name." = "Another project already uses this name. Repository links select projects by name.";
+"Another project already uses the workspace folder %@. Agents working there would get neither project." = "Another project already uses the workspace folder %@. Agents working there would get neither project.";
 "Repository Links" = "Repository Links";
 "Writes .berrydb.json naming this project. Commit it so clones and teammates select a project with the same name in their BerryDB, or add it to .gitignore to keep it local." = "Writes .berrydb.json naming this project. Commit it so clones and teammates select a project with the same name in their BerryDB, or add it to .gitignore to keep it local.";
 "Link Repository…" = "Link Repository…";

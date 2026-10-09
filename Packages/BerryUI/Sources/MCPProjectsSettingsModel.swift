@@ -128,29 +128,47 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     }
 
     /// Saves `draft` under a newly rotated key. Returns false with
-    /// `errorMessage` set when a root is invalid, another project already
-    /// uses the name, the key cannot be read or written, or the store
-    /// refuses the write. Roots and the name are checked before the key is
-    /// read, so an invalid draft changes nothing.
+    /// `errorMessage` set when a root is invalid or is also a root of
+    /// another project, another project already uses the name, the key
+    /// cannot be read or written, or the store refuses the write. Roots and
+    /// the name are checked before the key is read, so an invalid draft
+    /// changes nothing.
+    ///
+    /// A connection deleted since the draft was made is dropped from it
+    /// before the key is read, since deleting a connection removes its
+    /// access. Kept, it would fail the store's foreign key only after the
+    /// new key is stored, leaving every project sealed under a key that is
+    /// gone.
     public func save(_ draft: Draft) -> Bool {
         if let invalidRoot = draft.workspaceRoots.lazy.compactMap(Self.validateRoot).first {
             return fail(invalidRoot)
         }
-        let stored: [MCPProject]
+        let others: [MCPProject]
+        let savedProfileIDs: Set<UUID>
         do {
-            stored = try store.mcpProjects()
+            others = try store.mcpProjects().filter { $0.id != draft.id }
+            savedProfileIDs = Set(try store.allProfiles().map(\.id))
         } catch {
             return fail(L("The MCP project could not be saved: \(error.localizedDescription)"))
         }
         // A link file names a project, and the helper selects every project
         // whose name that link matches; two such projects would make every
         // link to either one ambiguous.
-        let nameTaken = stored.contains {
-            $0.id != draft.id && MCPRepositoryLink.matches(projectName: $0.name, linkedName: draft.name)
+        let nameTaken = others.contains {
+            MCPRepositoryLink.matches(projectName: $0.name, linkedName: draft.name)
         }
         if nameTaken {
             return fail(L("Another project already uses this name. Repository links select projects by name."))
         }
+        // Two projects with the same root tie for every workspace inside it,
+        // and the helper serves neither of them there. Nested roots stay
+        // allowed, since the longer one wins.
+        let otherRoots = Set(others.flatMap(\.workspaceRoots).map(Self.storedRoot))
+        if let sharedRoot = draft.workspaceRoots.first(where: { otherRoots.contains(Self.storedRoot($0)) }) {
+            return fail(L("Another project already uses the workspace folder \(sharedRoot). Agents working there would get neither project."))
+        }
+        var draft = draft
+        draft.profileIDs.removeAll { !savedProfileIDs.contains($0) }
         let previousKey: SymmetricKey?
         do {
             previousKey = try keyStore.loadForRotation()
@@ -319,6 +337,14 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// `/private`; matching is unaffected because the helper re-resolves it.
     nonisolated public static func canonicalRoot(_ path: String) -> String {
         MCPProjectSelector.canonicalPath(path)
+    }
+
+    /// `path` in the form the store keeps a saved root: `canonicalRoot`, then
+    /// the store's own standardization. Applied to both sides of a
+    /// comparison, two spellings of one folder, through a symbolic link, a
+    /// trailing slash or a leading `/private`, compare equal.
+    nonisolated private static func storedRoot(_ path: String) -> String {
+        URL(fileURLWithPath: canonicalRoot(path)).standardizedFileURL.path
     }
 
     /// The helper inside `bundleURL`, or nil when this build does not ship it.
