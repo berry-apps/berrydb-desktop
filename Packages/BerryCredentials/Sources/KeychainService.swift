@@ -92,6 +92,21 @@ public enum KeychainService {
         }
     }
 
+    /// Removes the item under `service` (and `account`, when given). Returns
+    /// false only when the item is absent; a Keychain refusal to answer is
+    /// treated as a delete for the same reason `saveData`'s update path is
+    /// idempotent — deleting a secret that is already gone is a success.
+    @discardableResult
+    static func deleteData(service: String, account: String? = nil) -> Bool {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+        ]
+        if let account { query[kSecAttrAccount as String] = account }
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
+
     /// Deleting a profile must also delete its secrets — no orphaned entries.
     public static func deleteSecrets(profileID: UUID) {
         for kind in SecretKind.allCases {

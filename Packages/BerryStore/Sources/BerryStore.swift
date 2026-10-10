@@ -649,6 +649,24 @@ public final class BerryStore: Sendable {
                 t.primaryKey(["projectID", "profileID"])
             }
         }
+        migrator.registerMigration("v31-ai-provider") { db in
+            // User-configured AI providers. API keys never land in this table
+            // — they live in Keychain keyed by the row's id, so only
+            // non-secret configuration is stored here.
+            try db.create(table: "ai_provider") { t in
+                t.primaryKey("id", .blob)
+                t.column("kind", .text).notNull()
+                t.column("displayName", .text).notNull()
+                t.column("baseURL", .text).notNull()
+                t.column("model", .text).notNull()
+                t.column("embeddingModel", .text)
+                t.column("detailLevel", .text)
+                t.column("isActive", .boolean).notNull().defaults(to: false)
+                t.column("sortOrder", .integer).notNull().defaults(to: 0)
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+        }
         return migrator
     }
 
@@ -1295,6 +1313,43 @@ public final class BerryStore: Sendable {
     public func saveAISetting(_ setting: AIConnectionSetting) throws {
         try dbQueue.write { db in
             try setting.save(db)
+        }
+    }
+
+ // MARK: - AI providers
+
+    public func aiProviders() throws -> [AIProviderRecord] {
+        try dbQueue.read { db in
+            try AIProviderRecord
+                .order(Column("sortOrder").asc, Column("createdAt").asc)
+                .fetchAll(db)
+        }
+    }
+
+    /// Saves a provider. Saving an active provider clears the active flag on
+    /// every other row in the same transaction, so at most one provider is
+    /// ever active.
+    public func saveAIProvider(_ provider: AIProviderRecord) throws {
+        try dbQueue.write { db in
+            if provider.isActive {
+                try db.execute(
+                    sql: "UPDATE ai_provider SET isActive = 0 WHERE id != ?",
+                    arguments: [provider.id]
+                )
+            }
+            try provider.save(db)
+        }
+    }
+
+    public func activeAIProvider() throws -> AIProviderRecord? {
+        try dbQueue.read { db in
+            try AIProviderRecord.filter(Column("isActive") == true).fetchOne(db)
+        }
+    }
+
+    public func deleteAIProvider(id: UUID) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM ai_provider WHERE id = ?", arguments: [id])
         }
     }
 
