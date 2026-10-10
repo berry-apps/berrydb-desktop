@@ -1316,7 +1316,7 @@ public final class BerryStore: Sendable {
         }
     }
 
- // MARK: - AI providers
+// MARK: - AI providers
 
     public func aiProviders() throws -> [AIProviderRecord] {
         try dbQueue.read { db in
