@@ -60,7 +60,7 @@ the real Sparkle class is compiled in either way.
 Push a tag. Everything else is automatic.
 
 ```sh
-git tag v1.0.3
+git tag v1.1.0
 git push --tags
 ```
 
@@ -76,7 +76,7 @@ To rehearse without publishing, run the workflow manually from the Actions tab w
 python3 -m venv .venv-release
 .venv-release/bin/pip install -r deploy/requirements.txt
 
-make release 1.0.3
+make release 1.1.0
 .venv-release/bin/python deploy/upload-release.py
 ```
 

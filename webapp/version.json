@@ -1,8 +1,8 @@
 {
   "name": "BerryDB",
-  "version": "1.0.2",
-  "releaseDate": "2026-08-14",
-  "commit": "latest",
+  "version": "1.0.8",
+  "releaseDate": "2026-09-16",
+  "webCommit": "latest",
   "downloadUrl": "https://download-db.berryhub.app/BerryDB-latest.dmg",
   "downloadDmgUrl": "https://download-db.berryhub.app/BerryDB-latest.dmg",
   "minMacOS": "15.0",
