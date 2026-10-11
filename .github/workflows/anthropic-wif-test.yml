@@ -1,0 +1,40 @@
+name: anthropic-wif-test
+# The federation rule only accepts tokens minted for refs/heads/main, so this
+# runs once when the file lands on main, and on demand afterwards.
+on:
+    push:
+        branches: [main]
+        paths:
+            - .github/workflows/anthropic-wif-test.yml
+    workflow_dispatch:
+permissions:
+    id-token: write
+    contents: read
+jobs:
+    call-claude:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Fetch GitHub OIDC token
+              uses: actions/github-script@v8
+              with:
+                  script: |
+                      const token = await core.getIDToken('https://api.anthropic.com');
+                      core.setSecret(token);
+                      core.exportVariable('JWT', token);
+            - name: Exchange for an Anthropic access token
+              # Explicit bash adds pipefail; with --fail-with-body a rejected
+              # exchange fails the job instead of printing the error and passing.
+              shell: bash
+              run: |
+                  curl -sS --fail-with-body https://api.anthropic.com/v1/oauth/token \
+                    -H "content-type: application/json" \
+                    --data @- <<JSON | jq 'with_entries(if (.key | test("token$")) then .value = "<redacted>" else . end)'
+                  {
+                    "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                    "assertion": "$JWT",
+                    "federation_rule_id": "fdrl_01CE2fhFFJ1vunUchcrhjL2s",
+                    "organization_id": "2df42c59-6edc-4476-9b31-0ad476ef94d6",
+                    "service_account_id": "svac_01VeGwMZ1yBSCDoCD9kzCrrG",
+                    "workspace_id": "wrkspc_013VwmAJj2dA3AV3WwrCgQzp"
+                  }
+                  JSON
