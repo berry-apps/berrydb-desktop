@@ -1,4 +1,5 @@
 import BerryLicense
+import BerryStore
 import Foundation
 import Testing
 
@@ -13,44 +14,47 @@ import Testing
 @MainActor
 @Suite("AIPanelController mention trigger")
 struct AIPanelControllerMentionTests {
-    private func makeController() -> AIPanelController {
+    private func makeController() throws -> AIPanelController {
         let client = LicenseClient(baseURL: URL(string: "https://example.invalid")!)
         let license = LicenseManager(client: client)
-        return AIPanelController(license: license, backendURL: URL(string: "https://example.invalid")!)
+        return AIPanelController(
+            license: license, backendURL: URL(string: "https://example.invalid")!,
+            store: try BerryStore(path: ":memory:")
+        )
     }
 
-    @Test func bareAtAtStartOfDraftTriggersWithAnEmptyQuery() {
-        let controller = makeController()
+    @Test func bareAtAtStartOfDraftTriggersWithAnEmptyQuery() throws {
+        let controller = try makeController()
         controller.draft = "@"
         #expect(controller.artifactMentionQuery == "")
     }
 
-    @Test func bareAtMidSentenceTriggersWhenPrecededByWhitespace() {
-        let controller = makeController()
+    @Test func bareAtMidSentenceTriggersWhenPrecededByWhitespace() throws {
+        let controller = try makeController()
         controller.draft = "show me @use"
         #expect(controller.artifactMentionQuery == "use")
     }
 
-    @Test func atEmbeddedMidWordDoesNotTrigger() {
-        let controller = makeController()
+    @Test func atEmbeddedMidWordDoesNotTrigger() throws {
+        let controller = try makeController()
         controller.draft = "email me at foo@bar"
         #expect(controller.artifactMentionQuery == nil)
     }
 
-    @Test func atFollowedByWhitespaceClosesTheQuery() {
-        let controller = makeController()
+    @Test func atFollowedByWhitespaceClosesTheQuery() throws {
+        let controller = try makeController()
         controller.draft = "@customers is great"
         #expect(controller.artifactMentionQuery == nil)
     }
 
-    @Test func noAtInDraftReturnsNil() {
-        let controller = makeController()
+    @Test func noAtInDraftReturnsNil() throws {
+        let controller = try makeController()
         controller.draft = "how many rows are there"
         #expect(controller.artifactMentionQuery == nil)
     }
 
-    @Test func mostRecentAtWinsWhenTwoArePresent() {
-        let controller = makeController()
+    @Test func mostRecentAtWinsWhenTwoArePresent() throws {
+        let controller = try makeController()
         // As if the user already accepted one mention (@{Orders} always
         // leaves a trailing space) and started typing a second.
         controller.draft = "join @{Orders} with @cust"

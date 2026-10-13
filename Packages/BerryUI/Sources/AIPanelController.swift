@@ -266,7 +266,7 @@ public final class AIPanelController {
     /// connections to the same store.sqlite). Falls back to an in-memory store
     /// if `store.sqlite` can't be opened, so a rare disk error degrades to
     /// "chat doesn't persist" instead of the whole AI panel breaking.
-    private let store: BerryStore = (try? BerryStore.open()) ?? (try! BerryStore(path: ":memory:"))
+    private let store: BerryStore
 
  /// Saved conversations for the panel's history menu.
     public private(set) var threads: [AIThreadSummary] = []
@@ -469,9 +469,19 @@ public final class AIPanelController {
         return mentionCandidates?(query) ?? []
     }
 
-    public init(license: LicenseManager, backendURL: URL) {
+    public convenience init(license: LicenseManager, backendURL: URL) {
+        self.init(
+            license: license, backendURL: backendURL,
+            store: (try? BerryStore.open()) ?? (try! BerryStore(path: ":memory:"))
+        )
+    }
+
+    /// A controller on `store` instead of the default store, so a test never
+    /// opens, migrates or writes the store of whoever runs it.
+    init(license: LicenseManager, backendURL: URL, store: BerryStore) {
         self.license = license
         self.backendURL = backendURL
+        self.store = store
         // Nothing else purges `ai_pending_interaction` rows past their
         // expiry — an interaction the user starts but never resumes (closes
         // the app, abandons the chat) would otherwise sit in store.sqlite
