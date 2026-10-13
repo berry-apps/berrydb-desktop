@@ -83,5 +83,27 @@ jobs:
           swift build -c debug
 
       - name: Run Test Suite
+        # A test process whose output stops for three minutes is sampled
+        # (every thread's stack, printed) and the step fails, so a hang names
+        # its cause instead of ending silently at the job timeout.
+        shell: bash
         run: |
-          swift test
+          : > test-output.log
+          ( set +e; swift test 2>&1 | tee test-output.log; echo "${PIPESTATUS[0]}" > test-exit-code ) &
+          last=-1
+          quiet=0
+          while [ ! -f test-exit-code ]; do
+            sleep 20
+            lines=$(wc -l < test-output.log)
+            if [ "$lines" = "$last" ]; then quiet=$((quiet + 1)); else quiet=0; fi
+            last=$lines
+            if [ "$quiet" -ge 9 ]; then
+              echo "::error::No test output for three minutes; sampling the test process."
+              for pid in $(pgrep -f 'BerryDBPackageTests.xctest/Contents/MacOS/BerryDBPackageTests'); do
+                sample "$pid" 5 -file "sample-$pid.txt" > /dev/null 2>&1
+                cat "sample-$pid.txt"
+              done
+              exit 1
+            fi
+          done
+          exit "$(cat test-exit-code)"
