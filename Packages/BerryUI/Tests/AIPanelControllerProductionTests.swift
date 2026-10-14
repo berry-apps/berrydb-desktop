@@ -1,4 +1,5 @@
 import BerryCore
+import BerryDataSourceKit
 import BerryDriverKit
 import BerryDriverSQLite
 import BerryLicense
@@ -7,6 +8,33 @@ import Foundation
 import Testing
 
 @testable import BerryUI
+
+private struct NoCollections: DataSourceIntrospector {
+    func collections() async throws -> [CollectionRef] { [] }
+    func inferredSchema(of collection: CollectionRef, sampleSize: Int) async throws -> [String: String] { [:] }
+}
+
+/// A document, search or vector connection that is never queried: these
+/// tests only bind it.
+private actor IdleConnection: DataSourceConnection {
+    nonisolated let id = UUID()
+
+    func listCollections() async throws -> [CollectionRef] { [] }
+    func createCollection(_ ref: CollectionRef, options: BerryDocument) async throws {}
+
+    nonisolated func query(_ request: DataSourceQuery) -> AsyncThrowingStream<DataSourceEvent, Error> {
+        AsyncThrowingStream { $0.finish() }
+    }
+
+    func write(_ change: DataSourceChangeSet) async throws -> DataSourceWriteResult {
+        DataSourceWriteResult(affectedCount: 0)
+    }
+
+    nonisolated func cancelCurrentQuery() {}
+    nonisolated var introspector: any DataSourceIntrospector { NoCollections() }
+    func ping() async -> Bool { true }
+    func close() async {}
+}
 
 /// What `bind` restores for a connection labeled production, and what the
 /// settings menu's toggle records there. Every profile that turned AI on
@@ -150,6 +178,79 @@ struct AIPanelControllerProductionTests {
             #expect(saves.value?.autoApproveSelects == false)
             controller.allowSampleRows = true
             #expect(saves.value?.autoApproveSelects == false)
+        }
+    }
+
+    // MARK: AI on or off by default
+
+    private func makeDataSourceSession(_ kind: DataSourceKind, isProduction: Bool) -> DataSourceSession {
+        DataSourceSession(
+            profileID: nil, isProduction: isProduction, connection: IdleConnection(), kind: kind,
+            capabilities: DataSourceCapabilities(write: true), driverDisplayName: kind.rawValue, displayName: "test"
+        )
+    }
+
+    /// A licensed controller with nothing stored for the connection.
+    private func makeLicensedController() throws -> AIPanelController {
+        let controller = try makeController(saved: nil)
+        controller.licenseStatus = { .trial(daysLeft: 5) }
+        return controller
+    }
+
+    /// A connection labeled production starts with AI off and says why,
+    /// whatever its engine.
+    @Test(arguments: [DataSourceKind.document, .search, .vector])
+    func productionDocumentSearchOrVectorConnectionStartsWithAIOff(_ kind: DataSourceKind) async throws {
+        try await withProfile { profileID in
+            let controller = try makeLicensedController()
+
+            controller.bind(
+                session: nil, dataSourceSession: makeDataSourceSession(kind, isProduction: true),
+                catalog: nil, objects: [], profileID: profileID
+            )
+
+            #expect(controller.isProduction)
+            #expect(!controller.enabledForConnection)
+            #expect(controller.availability == .disabledForConnection)
+        }
+    }
+
+    @Test func productionSQLConnectionStartsWithAIOff() async throws {
+        try await withProfile { profileID in
+            let controller = try makeLicensedController()
+
+            controller.bind(session: try await makeSQLiteSession(isProduction: true), catalog: nil, objects: [], profileID: profileID)
+
+            #expect(controller.isProduction)
+            #expect(!controller.enabledForConnection)
+        }
+    }
+
+    /// Guard: every other connection still starts with AI on.
+    @Test(arguments: [DataSourceKind.document, .search, .vector])
+    func otherDocumentSearchOrVectorConnectionStartsWithAIOn(_ kind: DataSourceKind) async throws {
+        try await withProfile { profileID in
+            let controller = try makeLicensedController()
+
+            controller.bind(
+                session: nil, dataSourceSession: makeDataSourceSession(kind, isProduction: false),
+                catalog: nil, objects: [], profileID: profileID
+            )
+
+            #expect(!controller.isProduction)
+            #expect(controller.enabledForConnection)
+            #expect(controller.availability == .needsConsent)
+        }
+    }
+
+    @Test func otherSQLConnectionStartsWithAIOn() async throws {
+        try await withProfile { profileID in
+            let controller = try makeLicensedController()
+
+            controller.bind(session: try await makeSQLiteSession(isProduction: false), catalog: nil, objects: [], profileID: profileID)
+
+            #expect(!controller.isProduction)
+            #expect(controller.enabledForConnection)
         }
     }
 }

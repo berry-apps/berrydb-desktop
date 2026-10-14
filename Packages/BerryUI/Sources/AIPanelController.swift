@@ -389,7 +389,7 @@ public final class AIPanelController {
             if !isRestoring {
                 storedAutoApproveSelects = autoApproveSelects
                 ProductionAutoRun.recordChoice(
-                    isProduction: isProductionConnection, profileID: currentProfileID, defaults: .standard
+                    isProduction: isProduction, profileID: currentProfileID, defaults: .standard
                 )
             }
             persistSettings()
@@ -402,9 +402,6 @@ public final class AIPanelController {
     /// keep auto-run off after the production label is removed.
     private var storedAutoApproveSelects = true
 
-    private var isProductionConnection: Bool {
-        session?.isProduction ?? dataSourceSession?.isProduction ?? false
-    }
     private var consentGiven = false {
         didSet {
             persistSettings()
@@ -519,7 +516,11 @@ public final class AIPanelController {
         _ = try? store.deleteExpiredPendingAIInteractions(nowUnix: Int64(Date().timeIntervalSince1970))
     }
 
-    public var isProduction: Bool { session?.isProduction ?? false }
+    /// Whether the bound connection is labeled production, whatever its
+    /// engine. The one predicate behind AI starting off, auto-run starting
+    /// off and the production notices, so a document, search or vector
+    /// connection gets the same defaults as a SQL one.
+    public var isProduction: Bool { session?.isProduction ?? dataSourceSession?.isProduction ?? false }
 
     /// Pass-throughs for the view.
     public var isStreaming: Bool { aiSession?.isStreaming ?? false }
@@ -828,12 +829,13 @@ public final class AIPanelController {
         // The store's own default for a connection with nothing saved yet.
         storedAutoApproveSelects = saved?.autoApproveSelects ?? true
         autoApproveSelects = ProductionAutoRun.restored(
-            stored: saved?.autoApproveSelects, isProduction: isProductionConnection, profileID: profileID, defaults: .standard
+            stored: saved?.autoApproveSelects, isProduction: isProduction, profileID: profileID, defaults: .standard
         )
         enabledMCPServers = saved?.enabledMCPServers ?? []
         trustedMCPServers = saved?.trustedMCPServers ?? []
- // default OFF on production when there's no saved choice.
-        enabledForConnection = saved?.enabled ?? (session.map { !$0.isProduction } ?? (dataSourceSession != nil))
+        // Off by default on production when nothing is stored.
+        let hasConnection = session != nil || dataSourceSession != nil
+        enabledForConnection = saved?.enabled ?? (hasConnection && !isProduction)
         isRestoring = false
 
         guard session != nil || dataSourceSession != nil, LicenseManager.apiToken() != nil else {
