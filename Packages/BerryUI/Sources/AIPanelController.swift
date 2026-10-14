@@ -18,7 +18,7 @@ import Observation
 @Observable
 public final class AIPanelController {
     /// Why the chat is or isn't usable right now — drives the panel's gate.
-    public enum Availability: Equatable {
+    public enum Availability: Equatable, Sendable {
         case noConnection
         case unlicensed
  /// switched off for this connection (default on production).
@@ -1146,8 +1146,10 @@ public final class AIPanelController {
         return .reply(routingSession.transcript.last(where: { $0.role == .assistant })?.text)
     }
 
-    /// What became of a command palette query.
-    public enum CommandPaletteOutcome: Equatable {
+    /// What became of a command palette query. Sendable because the palette
+    /// awaits it through a nonisolated closure, which Swift 6.1 rejects for a
+    /// non-Sendable result.
+    public enum CommandPaletteOutcome: Equatable, Sendable {
         /// A UI action ran; the palette closes.
         case performed
         /// The model answered without acting, or the query could not be
