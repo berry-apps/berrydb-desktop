@@ -1,12 +1,71 @@
+import BerryDriverKit
 import CryptoKit
 import Foundation
 import GRDB
+import Synchronization
 
 /// Local persistence:
 /// `~/Library/Application Support/BerryDB/store.sqlite`.
 /// Versioned migrations; backup logic added at the first schema change.
 public final class BerryStore: Sendable {
-    private let dbQueue: DatabaseQueue
+    /// The app's connection, the only one that writes: the writer of a pool
+    /// for a store file in WAL mode, else a queue. Nil in a store opened with
+    /// `openReadOnly(path:)`.
+    let writer: (any DatabaseWriter)?
+
+    /// Serves every read. In the app, a store file in WAL mode is read
+    /// through the reader connections of the writer's pool, so a read never
+    /// waits for a write transaction such as a harvest pass's; an in-memory
+    /// store, or one still in rollback mode, is read through the writer's
+    /// queue. A read-only open gets a pool of reader connections on a WAL
+    /// store and a single queue otherwise.
+    let reader: any DatabaseReader
+
+    /// How many times `releaseMemory()` ran; lets a test observe the memory
+    /// manager without reaching into SQLite.
+    private let releases = Mutex(0)
+
+    /// Test access to the writer connection for raw SQL and explicit
+    /// transactions. Nil in a read-only open; `dbQueue` is also nil when the
+    /// writer is a pool's.
+    var dbWriter: (any DatabaseWriter)? { writer }
+    var dbQueue: DatabaseQueue? { writer as? DatabaseQueue }
+
+    var releaseCount: Int { releases.withLock { $0 } }
+
+    /// Whether reads run on a pool of reader connections rather than a single
+    /// queue.
+    var usesReaderPool: Bool { reader is DatabasePool }
+
+    /// A write method was called on a store opened with
+    /// `openReadOnly(path:)`. The helper never writes; reaching this is a
+    /// programming error, reported as a thrown error so a caller cannot
+    /// mistake the refusal for a successful save.
+    public struct ReadOnlyWriteAttempt: Error, Equatable {}
+
+    /// Every read goes through `reader`.
+    func read<T>(_ body: (Database) throws -> T) throws -> T {
+        try reader.read(body)
+    }
+
+    /// Every write goes through `writer`; a read-only open has none.
+    func write<T>(_ body: (Database) throws -> T) throws -> T {
+        guard let writer else { throw ReadOnlyWriteAttempt() }
+        return try writer.write(body)
+    }
+
+    // The async pair keeps the methods on `AISession`'s main-actor path off
+    // the main thread: GRDB runs the closure on the connection's own queue
+    // instead of blocking the caller, which the sync pair above would do.
+
+    func read<T: Sendable>(_ body: @Sendable (Database) throws -> T) async throws -> T {
+        try await reader.read(body)
+    }
+
+    func write<T: Sendable>(_ body: @Sendable (Database) throws -> T) async throws -> T {
+        guard let writer else { throw ReadOnlyWriteAttempt() }
+        return try await writer.write(body)
+    }
 
     /// `~/Library/Application Support/BerryDB/store.sqlite` — exposed so
     /// callers that need the file itself (e.g. a "reset local data" action)
@@ -29,31 +88,89 @@ public final class BerryStore: Sendable {
 
     /// How long a connection waits for another connection's lock on the
     /// store file before failing with "database is locked". The app and the
-    /// MCP helper open the same file from separate processes, and the store
-    /// uses a rollback journal, so an app commit must wait for any helper
-    /// read in progress and a helper read must wait for an app commit.
-    /// Both sides hold the lock for one short transaction (a settings save,
-    /// a history insert, one verification read), far below this bound; 5
-    /// seconds absorbs a slow disk or a burst of writes without letting a
-    /// stuck peer block the caller indefinitely, and is no longer than the
-    /// request timeout for production-labeled profiles.
+    /// MCP helper open the same file from separate processes. In WAL mode a
+    /// reader and the writer no longer wait for each other
+    /// (https://www.sqlite.org/wal.html), so the bound now covers what is
+    /// left: switching the file to WAL at open, and a helper reading a store
+    /// still in rollback mode, where an app commit and a helper read wait for
+    /// each other. Both sides hold the lock for one short transaction (a
+    /// settings save, a history insert, one verification read), far below
+    /// this bound; 5 seconds absorbs a slow disk or a burst of writes without
+    /// letting a stuck peer block the caller indefinitely, and is no longer
+    /// than the request timeout for production-labeled profiles. The reader
+    /// connections of a pool, the app's and the helper's, do not use it: GRDB
+    /// gives pool readers its own default of 10 seconds and does not expose
+    /// that setting (`readerConfiguration` in
+    /// https://github.com/groue/GRDB.swift/blob/v7.11.1/GRDB/Core/DatabasePool.swift),
+    /// so the bound applies to the writer and to the single-queue opens only.
     static let busyTimeout: TimeInterval = 5
 
     /// Store at an arbitrary path — used for tests (`:memory:`).
     public init(path: String) throws {
         var configuration = Configuration()
         configuration.busyMode = .timeout(Self.busyTimeout)
+        // GRDB runs this on every connection it opens, the writer and each
+        // reader of a pool alike (`Configuration.prepareDatabase` in GRDB
+        // 7.11.1, https://github.com/groue/GRDB.swift/blob/v7.11.1/GRDB/Core/Configuration.swift);
+        // a test queries the vector table from many pool readers at once.
         configuration.prepareDatabase { db in
             try SQLiteVecExtension.install(into: db)
         }
-        dbQueue = try DatabaseQueue(path: path, configuration: configuration)
-        try Self.retireSupersededMigrations(in: dbQueue)
+        let writer = try Self.openWriter(path: path, configuration: configuration)
+        self.writer = writer
+        reader = writer
+        try Self.retireSupersededMigrations(in: writer)
         let migrator = Self.migrator
         do {
-            try migrator.migrate(dbQueue)
+            try migrator.migrate(writer)
         } catch {
-            throw Self.openError(afterFailedMigration: error, migrator: migrator, in: dbQueue)
+            throw Self.openError(afterFailedMigration: error, migrator: migrator, in: writer)
         }
+    }
+
+    /// A pool for a store file, which puts the file in WAL mode and reads
+    /// through connections of its own, else a queue.
+    ///
+    /// WAL lets the MCP helper read while the app commits and the reverse,
+    /// and lets the app's own reads go on while it writes. The mode persists
+    /// in the file once set
+    /// (https://www.sqlite.org/wal.html#persistence_of_wal_mode), so the
+    /// switch only matters at the first open. GRDB's pool switches the file
+    /// itself and refuses to open when it cannot
+    /// (`Database.setUpWALMode` in GRDB 7.11.1). With a read open on a
+    /// rollback-mode file the switch waited out the whole busy timeout
+    /// (observed by opening a store while another connection held a read),
+    /// and failing the open for that would leave the app without its store,
+    /// so the store then opens as a queue in rollback mode, without trying
+    /// the switch a second time, and the next launch retries. The pool also
+    /// sets NORMAL synchronous on its writer, the level a WAL connection
+    /// already had: the SQLite bundled with macOS (3.51.0) is built with
+    /// `DEFAULT_WAL_SYNCHRONOUS=1` (`PRAGMA compile_options`). An in-memory
+    /// store cannot use WAL and is always a queue.
+    ///
+    /// The pool keeps at most two reader connections, against GRDB's default
+    /// of five. The app reads one main-actor read at a time beside a
+    /// background read or two (a pass's state, a drain's queue, a chat
+    /// thread), and every reader holds a page cache of its own, up to
+    /// 2,000 KiB by default (https://www.sqlite.org/pragma.html#pragma_cache_size),
+    /// in each of the two stores a window opens, its workspace's and its AI
+    /// panel's. A third read at once waits for one of the two, as every read
+    /// waited for the writer before. The helper keeps the default for its
+    /// concurrent tool calls.
+    ///
+    /// `makePool` exists so a test can make the switch fail without racing a
+    /// lock against the busy timeout.
+    static func openWriter(
+        path: String,
+        configuration: Configuration,
+        makePool: (String, Configuration) throws -> DatabasePool = { try DatabasePool(path: $0, configuration: $1) }
+    ) throws -> any DatabaseWriter {
+        var poolConfiguration = configuration
+        poolConfiguration.maximumReaderCount = 2
+        if path != ":memory:", !path.isEmpty, let pool = try? makePool(path, poolConfiguration) {
+            return pool
+        }
+        return try DatabaseQueue(path: path, configuration: configuration)
     }
 
     /// Test-only: wraps an already-prepared `DatabaseQueue` as-is, running no
@@ -61,7 +178,14 @@ public final class BerryStore: Sendable {
     /// migrate it partway or fully with `BerryStore.migrator` directly, then
     /// exercise `BerryStore`'s own methods against the result.
     init(dbQueue: DatabaseQueue) {
-        self.dbQueue = dbQueue
+        writer = dbQueue
+        reader = dbQueue
+    }
+
+    /// A store that only reads, as `openReadOnly(path:)` returns.
+    private init(reader: any DatabaseReader) {
+        writer = nil
+        self.reader = reader
     }
 
     /// `init(path:)` failure modes of its own. Any other failure to open the
@@ -114,11 +238,41 @@ public final class BerryStore: Sendable {
     /// columns became per-profile access with integrity tags. Its rows have no
     /// meaning in that model, so they are dropped, deliberately, and
     /// `v30-mcp-project` then creates the current tables.
+    ///
+    /// `v31-schema-object-versions`, `v32-schema-embedding-partition` and
+    /// `v33-drop-legacy-graph-tables` were never in a release either. Earlier
+    /// definitions of all three were applied to a development machine's store
+    /// by test runs that opened the default store, and the definitions changed
+    /// afterwards; the current ones are registered as `v34`, `v35` and `v36`.
+    /// A store that applied the earlier ones drops the schema version tables
+    /// and the partitioned name vectors they created, and its schema history
+    /// with them, deliberately. Where the earlier `v33` had already dropped
+    /// the per-node graph they were copied from, `v34` copies nothing and the
+    /// next harvest pass writes the schema again, queuing every name for
+    /// embedding; where it had not, `v34` copies the graph again. `v33`
+    /// created nothing. The vector table is a vec0 virtual table, which only
+    /// a connection with sqlite-vec installed can drop; `init(path:)`
+    /// installs it on every connection before this runs.
     private static let supersededMigrations = [
         SupersededMigration(
             identifier: "v30-mcp-project-grant",
             replacement: "v30-mcp-project",
             tables: ["mcp_project_grant", "mcp_project_profile", "mcp_project"]
+        ),
+        SupersededMigration(
+            identifier: "v31-schema-object-versions",
+            replacement: "v34-schema-object-versions",
+            tables: ["schema_object", "schema_relation", "schema_stats", "schema_change", "schema_graph_state"]
+        ),
+        SupersededMigration(
+            identifier: "v32-schema-embedding-partition",
+            replacement: "v35-schema-embedding-partition",
+            tables: ["schema_object_embedding"]
+        ),
+        SupersededMigration(
+            identifier: "v33-drop-legacy-graph-tables",
+            replacement: "v36-drop-per-node-graph-tables",
+            tables: []
         ),
     ]
 
@@ -127,8 +281,8 @@ public final class BerryStore: Sendable {
     /// file) or without a withdrawn identifier is left as it is. Only
     /// `init(path:)` calls this: `openReadOnly(path:)` never writes, and keeps
     /// refusing such a store through its applied-set check.
-    private static func retireSupersededMigrations(in dbQueue: DatabaseQueue) throws {
-        try dbQueue.write { db in
+    private static func retireSupersededMigrations(in writer: any DatabaseWriter) throws {
+        try writer.write { db in
             guard try db.tableExists("grdb_migrations") else { return }
             let applied = try String.fetchSet(db, sql: "SELECT identifier FROM grdb_migrations")
             for superseded in supersededMigrations where applied.contains(superseded.identifier) {
@@ -170,9 +324,9 @@ public final class BerryStore: Sendable {
     static func openError(
         afterFailedMigration error: any Error,
         migrator: DatabaseMigrator,
-        in dbQueue: DatabaseQueue
+        in database: any DatabaseReader
     ) -> any Error {
-        let applied = try? dbQueue.read { db in
+        let applied = try? database.read { db in
             try String.fetchSet(db, sql: "SELECT identifier FROM grdb_migrations")
         }
         guard let applied,
@@ -195,22 +349,65 @@ public final class BerryStore: Sendable {
     /// path the app has never written throws rather than starting an empty
     /// store; the file's applied migration set must also match this build's
     /// exactly, whether older or newer, or the open is refused the same way.
+    /// A store in WAL mode is read through a pool of reader connections and
+    /// one still in rollback mode through a single queue. Either way the
+    /// returned store never writes: its write methods throw
+    /// `ReadOnlyWriteAttempt`.
     public static func openReadOnly(path: String) throws -> BerryStore {
         var configuration = Configuration()
         configuration.readonly = true
         configuration.busyMode = .timeout(busyTimeout)
         configuration.prepareDatabase { db in try SQLiteVecExtension.install(into: db) }
-        let queue = try DatabaseQueue(path: path, configuration: configuration)
+        let probe = try DatabaseQueue(path: path, configuration: configuration)
         let expected = migrator.migrations
         // Read the table directly rather than asking the migrator: an identifier
         // unknown to this build is exactly what reveals a store from a newer app.
-        let applied = try queue.read { db in
+        let applied = try probe.read { db in
             try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY identifier")
         }
         guard Set(applied) == Set(expected) else {
             throw ReadOnlyOpenError.schemaMismatch(applied: applied, expected: expected)
         }
-        return BerryStore(dbQueue: queue)
+        // A WAL store gets a pool of reader connections, so concurrent tool
+        // calls read in parallel and never wait for the app's commits. A
+        // read-only process can open a WAL database when it can create the
+        // -shm file, which the same user in the same directory can
+        // (https://www.sqlite.org/wal.html#readonly). A store still in
+        // rollback mode, because the app could not switch it while a reader
+        // held it, keeps the single queue.
+        let mode = try probe.read { try String.fetchOne($0, sql: "PRAGMA journal_mode") }
+        if mode == "wal" {
+            return BerryStore(reader: try DatabasePool(path: path, configuration: configuration))
+        }
+        return BerryStore(reader: probe)
+    }
+
+    /// Moves as many committed pages as possible from the WAL into the store
+    /// file without waiting for any reader or writer. Does nothing for a
+    /// read-only open; on a store that is not in WAL mode the pragma is a
+    /// no-op (https://www.sqlite.org/pragma.html#pragma_wal_checkpoint).
+    public func checkpoint() {
+        // PASSIVE never invokes the busy handler, so this cannot stall the
+        // caller; pages it cannot move yet stay in the WAL for the next
+        // checkpoint. A failure leaves the store as it was.
+        try? writer?.writeWithoutTransaction { try $0.execute(sql: "PRAGMA wal_checkpoint(PASSIVE)") }
+    }
+
+    /// Gives SQLite's page and statement caches back to the system. GRDB does
+    /// this on its own only on iOS, so a macOS process calls it when it goes
+    /// idle or the system reports memory pressure
+    /// (https://github.com/groue/GRDB.swift/blob/v7.11.1/README.md#memory-management).
+    /// Blocks until in-flight reads finish.
+    public func releaseMemory() {
+        releases.withLock { $0 += 1 }
+        // In the app the reader is the writer's pool or queue, so this releases
+        // the writer and its readers; in a read-only open it releases the
+        // helper's connections.
+        switch reader {
+        case let queue as DatabaseQueue: queue.releaseMemory()
+        case let pool as DatabasePool: pool.releaseMemory()
+        default: break
+        }
     }
 
     static var migrator: DatabaseMigrator {
@@ -649,13 +846,487 @@ public final class BerryStore: Sendable {
                 t.primaryKey(["projectID", "profileID"])
             }
         }
+        migrator.registerMigration("v34-schema-object-versions") { db in
+            // One version row per table or view, valid from firstSeen until
+            // removedAt (NULL = current). The per-node graph tables it replaces
+            // cost ~15 KB per table at 20,000 tables; this holds a table's
+            // columns and indexes in one JSON value and only ever writes a row
+            // when the definition hash changes.
+            //
+            // Every namespace column (database, srcDatabase, dstDatabase) is
+            // NOT NULL and holds '' for an engine with no namespace, such as
+            // SQLite or DynamoDB. SQLite treats NULLs as distinct in a UNIQUE
+            // index (https://www.sqlite.org/lang_createindex.html#unique_indexes)
+            // and accepts NULL in a composite PRIMARY KEY
+            // (https://www.sqlite.org/lang_createtable.html#the_primary_key),
+            // so with NULL the indexes below would not stop a second current
+            // row and schema_stats could not be overwritten in place.
+            try db.create(table: "schema_object") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("profileID", .blob).notNull()
+                t.column("database", .text).notNull().defaults(to: "")
+                t.column("name", .text).notNull()
+                t.column("kind", .text).notNull()
+                t.column("fingerprint", .text)
+                t.column("definitionHash", .text)
+                // Compressed, as `StoredDefinition` writes it.
+                t.column("definition", .blob)
+                // The column names and the index names, each folded and
+                // newline-separated, searched apart so a needle that matches
+                // only index names never walks the column matches' rows.
+                t.column("columnText", .text).notNull().defaults(to: "")
+                t.column("indexText", .text).notNull().defaults(to: "")
+                t.column("searchName", .text).notNull()
+                t.column("firstSeen", .datetime).notNull()
+                t.column("removedAt", .datetime)
+                t.column("previousID", .integer)
+                t.column("changeID", .integer)
+                t.column("removedByChangeID", .integer)
+                t.column("needsEmbedding", .boolean).notNull().defaults(to: false)
+                t.column("embeddingAttempts", .integer).notNull().defaults(to: 0)
+                // Set on a version closed for a successor, which its change
+                // records as one changed entry with the successor, never as a
+                // removal of its own.
+                t.column("replaced", .boolean).notNull().defaults(to: false)
+            }
+            // Partial unique index: at most one current row per object, enforced
+            // by SQLite so two overlapping passes cannot both insert.
+            try db.execute(sql: """
+                CREATE UNIQUE INDEX schema_object_current
+                    ON schema_object (profileID, database, name, kind) WHERE removedAt IS NULL
+                """)
+            // A column or index search reads the folded names of every
+            // current row. In this index it reads about 0.4 KB per object in
+            // the listing's order, where the table row also holds the
+            // definition, and only the definitions of the rows a search keeps
+            // are read from the table.
+            try db.execute(sql: """
+                CREATE INDEX schema_object_search
+                    ON schema_object (profileID, database, name, kind, columnText, indexText) WHERE removedAt IS NULL
+                """)
+            // The folded name of every current row, for a search of object
+            // names, which reads only this small index, and for a lookup of a
+            // name in any case, which seeks it.
+            try db.execute(sql: """
+                CREATE INDEX schema_object_folded_name
+                    ON schema_object (profileID, searchName, database, name, kind) WHERE removedAt IS NULL
+                """)
+            try db.execute(sql: "CREATE INDEX schema_object_history ON schema_object (profileID, removedAt, firstSeen)")
+            try db.execute(sql: "CREATE INDEX schema_object_embedding_queue ON schema_object (profileID) WHERE needsEmbedding = 1")
+            // A change listing reads the versions a change introduced and the
+            // ones it closed without a successor; without an index on each
+            // side the closed side would scan the profile's whole history.
+            // Each index carries the listing's order after the change, so a
+            // page of a first pass's change, which holds every object, walks
+            // the index from where the previous page ended instead of sorting
+            // the whole change. The closed side's index holds only versions
+            // closed without a successor: a pass that changes every table
+            // closes one version per table, and walking those to skip them
+            // took 20 to 23 ms of SQL per page at 20,000 tables.
+            try db.execute(sql: "CREATE INDEX schema_object_change ON schema_object (profileID, changeID, database, name, kind)")
+            try db.execute(sql: """
+                CREATE INDEX schema_object_dropped_change ON schema_object (profileID, removedByChangeID, database, name, kind)
+                    WHERE removedByChangeID IS NOT NULL AND replaced = 0
+                """)
+            // Retention reads every change a closed version names through it:
+            // EXPLAIN QUERY PLAN of its change-row delete on SQLite 3.51.0
+            // shows `COVERING INDEX schema_object_removed_change
+            // (profileID=? AND removedByChangeID>?)`.
+            try db.execute(sql: "CREATE INDEX schema_object_removed_change ON schema_object (profileID, removedByChangeID)")
+
+            try db.create(table: "schema_relation") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("profileID", .blob).notNull()
+                t.column("srcDatabase", .text).notNull().defaults(to: "")
+                t.column("srcName", .text).notNull()
+                t.column("srcColumn", .text).notNull()
+                t.column("dstDatabase", .text).notNull().defaults(to: "")
+                t.column("dstName", .text).notNull()
+                t.column("dstColumn", .text).notNull()
+                t.column("constraintName", .text)
+                t.column("firstSeen", .datetime).notNull()
+                t.column("removedAt", .datetime)
+                t.column("changeID", .integer)
+                t.column("removedByChangeID", .integer)
+            }
+            try db.execute(sql: """
+                CREATE UNIQUE INDEX schema_relation_current
+                    ON schema_relation (profileID, srcDatabase, srcName, srcColumn, dstDatabase, dstName, dstColumn)
+                    WHERE removedAt IS NULL
+                """)
+            try db.execute(sql: "CREATE INDEX schema_relation_history ON schema_relation (profileID, removedAt)")
+            // In the listing's order after the change, as for the objects.
+            try db.execute(sql: """
+                CREATE INDEX schema_relation_change ON schema_relation
+                    (profileID, changeID, srcDatabase, srcName, srcColumn, dstDatabase, dstName, dstColumn)
+                """)
+            try db.execute(sql: """
+                CREATE INDEX schema_relation_removed_change ON schema_relation
+                    (profileID, removedByChangeID, srcDatabase, srcName, srcColumn, dstDatabase, dstName, dstColumn)
+                """)
+
+            // Statistics change on every pass; versioning them would make every
+            // pass look like a schema change, so they are overwritten in place.
+            try db.create(table: "schema_stats") { t in
+                t.column("profileID", .blob).notNull()
+                t.column("database", .text).notNull().defaults(to: "")
+                t.column("name", .text).notNull()
+                t.column("rows", .integer)
+                t.column("sizeBytes", .integer)
+                t.column("seqScan", .integer)
+                t.column("idxScan", .integer)
+                t.column("indexStats", .text)
+                t.column("updatedAt", .datetime).notNull()
+                t.primaryKey(["profileID", "database", "name"])
+            }
+            try db.create(table: "schema_change") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("profileID", .blob).notNull()
+                t.column("at", .datetime).notNull()
+                t.column("added", .integer).notNull().defaults(to: 0)
+                t.column("changed", .integer).notNull().defaults(to: 0)
+                t.column("removed", .integer).notNull().defaults(to: 0)
+                t.column("relationsAdded", .integer).notNull().defaults(to: 0)
+                t.column("relationsRemoved", .integer).notNull().defaults(to: 0)
+            }
+            try db.execute(sql: "CREATE INDEX schema_change_profile ON schema_change (profileID, at)")
+            try db.create(table: "schema_graph_state") { t in
+                t.primaryKey("profileID", .blob)
+                t.column("versionToken", .text)
+                t.column("lastCheckedAt", .datetime)
+                t.column("lastChangedAt", .datetime)
+                t.column("selectedSchemas", .text)
+                t.column("objectCount", .integer).notNull().defaults(to: 0)
+                t.column("detailedCount", .integer).notNull().defaults(to: 0)
+                t.column("lastErrorCode", .text)
+                t.column("lastErrorAt", .datetime)
+                t.column("retryAfter", .datetime)
+                t.column("hint", .text)
+                // Moved by every committed write that changes the stored
+                // objects, definitions or relations, including one of a pass
+                // that fails afterwards, which leaves lastChangedAt as it was.
+                t.column("revision", .integer).notNull().defaults(to: 0)
+            }
+            try Self.copyLegacyGraph(db)
+        }
+        migrator.registerMigration("v35-schema-embedding-partition") { db in
+            // Name vectors gain the connection as a partition key, so a nearest
+            // name query reads only that connection's vectors. Without one the
+            // query took the nearest vectors across every connection first and
+            // kept this connection's afterwards, which found nothing for a
+            // small connection next to a large one.
+            //
+            // The partition key is part of the table definition, so the table
+            // is rebuilt. Verified against sqlite-vec 0.1.9:
+            // - ALTER TABLE ... RENAME is accepted but leaves the shadow tables
+            //   under the old name, and the renamed table then fails every read
+            //   because the module has no rename hook in this version
+            //   (https://github.com/asg017/sqlite-vec/issues/43). The rows go
+            //   through a scratch table so the final table keeps its name.
+            // - Each partition allocates a whole chunk up front, and a chunk
+            //   defaults to 1024 vectors, 6.3 MB for 1536 dimensions: ten
+            //   connections with one vector each took 63.5 MB, against 4.4 MB
+            //   with chunk_size=64. The documentation warns about the same
+            //   over-sharding:
+            //   https://alexgarcia.xyz/sqlite-vec/features/vec0.html#partition-keys
+            func createEmbeddingTable(_ name: String) throws {
+                try db.execute(sql: """
+                    CREATE VIRTUAL TABLE \(name) USING vec0(
+                        objectKey TEXT PRIMARY KEY,
+                        profileID TEXT PARTITION KEY,
+                        embedding FLOAT[1536],
+                        chunk_size=64
+                    )
+                    """)
+            }
+            if try db.tableExists("schema_object_embedding") {
+                // The key is "<profile uuid>#<name>" and a uuid is 36 characters.
+                try createEmbeddingTable("schema_object_embedding_v2")
+                try db.execute(sql: """
+                    INSERT INTO schema_object_embedding_v2 (objectKey, profileID, embedding)
+                    SELECT objectKey, substr(objectKey, 1, 36), embedding FROM schema_object_embedding
+                    """)
+                try db.execute(sql: "DROP TABLE schema_object_embedding")
+                try createEmbeddingTable("schema_object_embedding")
+                try db.execute(sql: """
+                    INSERT INTO schema_object_embedding (objectKey, profileID, embedding)
+                    SELECT objectKey, profileID, embedding FROM schema_object_embedding_v2
+                    """)
+                try db.execute(sql: "DROP TABLE schema_object_embedding_v2")
+            } else {
+                // A store that applied the withdrawn
+                // `v32-schema-embedding-partition` had its vector table
+                // dropped at open, so there are no vectors to copy.
+                try createEmbeddingTable("schema_object_embedding")
+            }
+
+            // Objects copied from the earlier graph start with their queue flag
+            // cleared, and a search embeds only a bounded number of the names
+            // it lists, so a current object without a vector might never get
+            // one.
+            let profileUUID = """
+                substr(hex(profileID), 1, 8) || '-' || substr(hex(profileID), 9, 4) || '-'
+                || substr(hex(profileID), 13, 4) || '-' || substr(hex(profileID), 17, 4)
+                || '-' || substr(hex(profileID), 21)
+                """
+            try db.execute(sql: """
+                UPDATE schema_object SET needsEmbedding = 1
+                WHERE removedAt IS NULL AND needsEmbedding = 0
+                  AND (\(profileUUID)) || '#' || name NOT IN (SELECT objectKey FROM schema_object_embedding)
+                """)
+        }
+        migrator.registerMigration("v36-drop-per-node-graph-tables") { db in
+            // v34 copied these into the per-table tables; nothing reads them
+            // once every consumer moved to the per-table store. Dropped in
+            // their own migration so the copy and the drop are each final the
+            // first time any build runs them.
+            for table in ["graph_edge", "graph_node", "graph_snapshot"] {
+                try db.execute(sql: "DROP TABLE IF EXISTS \(table)")
+            }
+        }
         return migrator
+    }
+
+    /// Copies the per-node graph tables into the per-table version tables, one
+    /// version per table or view. The graph tables stay in place.
+    ///
+    /// A graph snapshot is written only when the structure changed, so an
+    /// object last seen before the latest snapshot was dropped by it, while an
+    /// object last seen at or after it is current. A profile with no snapshot
+    /// has only current objects. A dropped object is closed at the first
+    /// snapshot after it was last seen: that is the first harvest that no
+    /// longer had it, and closing at the last sighting instead would give an
+    /// object seen in exactly one harvest an empty interval, invisible at the
+    /// snapshot that recorded it.
+    ///
+    /// Only the graphs of saved profiles are copied. Deleting a profile left
+    /// its graph rows behind before this version; copied, they would be rows
+    /// that no profile deletion reaches, and the next migration would queue
+    /// their names for embedding.
+    ///
+    /// A store that applied the withdrawn `v33-drop-legacy-graph-tables` has
+    /// no graph tables left, and copies nothing: its first harvest pass
+    /// writes the schema again.
+    private static func copyLegacyGraph(_ db: Database) throws {
+        for table in ["graph_node", "graph_edge", "graph_snapshot"] {
+            guard try db.tableExists(table) else { return }
+        }
+        let profiles = try UUID.fetchAll(db, sql: """
+            SELECT DISTINCT profileID FROM graph_node WHERE profileID IN (SELECT id FROM connection_profile)
+            """)
+        for profile in profiles {
+            let snapshots = try Date.fetchAll(
+                db, sql: "SELECT takenAt FROM graph_snapshot WHERE profileID = ? ORDER BY takenAt",
+                arguments: [profile]
+            )
+            try copyLegacyObjects(db, profile: profile, snapshots: snapshots)
+            try copyLegacyRelations(db, profile: profile, snapshots: snapshots)
+            try copyLegacyChanges(db, profile: profile)
+            let counts = try Row.fetchOne(
+                db, sql: """
+                    SELECT COUNT(*) AS objects, COUNT(definition) AS detailed
+                    FROM schema_object WHERE profileID = ? AND removedAt IS NULL
+                    """,
+                arguments: [profile]
+            )
+            try db.execute(
+                sql: "INSERT INTO schema_graph_state (profileID, lastChangedAt, objectCount, detailedCount) VALUES (?, ?, ?, ?)",
+                arguments: [profile, snapshots.last, counts?["objects"] as Int? ?? 0, counts?["detailed"] as Int? ?? 0]
+            )
+        }
+    }
+
+    /// When something last seen at `lastSeen` was closed: the earliest
+    /// snapshot after it, which is the first harvest that no longer had it. Nil
+    /// when it was seen at or after the latest snapshot, so it is current. A
+    /// closing snapshot always exists for a dropped object because it is
+    /// dropped exactly when the latest snapshot is later than its last sighting.
+    private static func removalDate(lastSeen: Date, snapshots: [Date]) -> Date? {
+        guard let latest = snapshots.last, lastSeen < latest else { return nil }
+        return snapshots.first { $0 > lastSeen }
+    }
+
+    /// Finds the columns or indexes of a table by edge, and keeps only those
+    /// seen in the table's last pass: a column or index dropped earlier keeps
+    /// its old lastSeen and must not reappear in the definition. rowid order is
+    /// the order the harvest inserted them, the closest the old model has to
+    /// the columns' ordinal order.
+    ///
+    /// The unary plus keeps the lastSeen term away from graph_node's lastSeen
+    /// index. Without it SQLite drives the join from that index, and since most
+    /// nodes share a lastSeen it walks nearly every node for every table: 2,000
+    /// tables took 23 seconds and the time quadrupled with each doubling
+    /// (EXPLAIN QUERY PLAN, SQLite as bundled with macOS). The unary plus is the
+    /// documented way to keep a term away from an index, under "Disqualifying
+    /// WHERE Clause Terms Using Unary +" at
+    /// https://www.sqlite.org/optoverview.html#disqualifying_where_clause_terms_using_unary_
+    /// in the SQLite query planner overview.
+    static let legacyChildrenSQL = """
+        SELECT child.name AS name, child.attrs AS attrs
+        FROM graph_edge edge
+        JOIN graph_node child ON child.profileID = edge.profileID AND child.nodeID = edge.dst
+        WHERE edge.profileID = ? AND edge.src = ? AND edge.kind = ? AND +child.lastSeen = ?
+        ORDER BY child.rowid
+        """
+
+    /// A table node and a pass in which a reference pointed at it.
+    private struct LegacyReferenceTarget: Hashable {
+        let nodeID: String
+        let seen: Date
+    }
+
+    private static func copyLegacyObjects(_ db: Database, profile: UUID, snapshots: [Date]) throws {
+        let children = try db.cachedStatement(sql: legacyChildrenSQL)
+        // Read once per profile: the edge table's key starts with the source,
+        // so looking a target up per table would scan the profile's edges.
+        var referenced = Set<LegacyReferenceTarget>()
+        let references = try Row.fetchCursor(db, sql: """
+            SELECT dst, lastSeen FROM graph_edge WHERE profileID = ? AND kind = 'references'
+            """, arguments: [profile])
+        while let row = try references.next() {
+            referenced.insert(LegacyReferenceTarget(nodeID: row["dst"], seen: row["lastSeen"]))
+        }
+        let insert = try db.cachedStatement(sql: """
+            INSERT INTO schema_object
+                (profileID, database, name, kind, definitionHash, definition, columnText, indexText, searchName, firstSeen,
+                 removedAt, needsEmbedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            """)
+        let tables = try Row.fetchAll(db, sql: """
+            SELECT nodeID, kind, name, COALESCE(database, '') AS database, firstSeen, lastSeen FROM graph_node
+            WHERE profileID = ? AND kind IN ('table', 'view') ORDER BY rowid
+            """, arguments: [profile])
+        for table in tables {
+            let nodeID: String = table["nodeID"]
+            let name: String = table["name"]
+            let lastSeen: Date = table["lastSeen"]
+            let columns = try Row.fetchAll(children, arguments: [profile, nodeID, "hasColumn", lastSeen]).map { row -> [String: Any] in
+                let attrs = decodeAttributes(row["attrs"])
+                return [
+                    "name": row["name"] as String,
+                    "nullable": attrs["nullable"] == "true",
+                    "primaryKey": attrs["primaryKey"] == "true",
+                    "type": attrs["type"] ?? "",
+                ]
+            }
+            let indexes = try Row.fetchAll(children, arguments: [profile, nodeID, "hasIndex", lastSeen])
+                .map { row -> (name: String, unique: Bool, columns: [String]) in
+                    let attrs = decodeAttributes(row["attrs"])
+                    return (
+                        row["name"] as String, attrs["unique"] == "true",
+                        (attrs["columns"] ?? "").split(separator: ",").map(String.init)
+                    )
+                }
+                .sorted { $0.name < $1.name }
+            // The per-node graph builder added a bare table node for a foreign
+            // key target missing from the listing, so the reference had an
+            // end: no column and no index, only a reference into it in the
+            // same pass. It is not a listed table; copied, the next pass would
+            // record it as removed. The reference itself is still copied.
+            if table["kind"] as String == "table", columns.isEmpty, indexes.isEmpty,
+               referenced.contains(LegacyReferenceTarget(nodeID: nodeID, seen: lastSeen)) {
+                continue
+            }
+            // A node with no column in its last pass never had its detail
+            // harvested: a view, or a table whose detail fetch failed. It is
+            // migrated as pending, with no definition, not as a table that has
+            // no columns, and a name search can still find it.
+            var definition: String?
+            var columnNames: [String] = []
+            var indexNames: [String] = []
+            if !columns.isEmpty {
+                definition = try canonicalDefinitionJSON(
+                    columns: columns,
+                    indexes: indexes.map { ["columns": $0.columns, "name": $0.name, "unique": $0.unique] as [String: Any] }
+                )
+                columnNames = columns.compactMap { $0["name"] as? String }
+                indexNames = indexes.map(\.name)
+            }
+            try insert.execute(arguments: [
+                profile, table["database"] as String, name, table["kind"] as String,
+                definition.map(ContentHash.fnv1a64), definition.map(StoredDefinition.init(text:)),
+                SchemaSearchText.joined(columnNames), SchemaSearchText.joined(indexNames), SchemaSearchText.fold(name),
+                table["firstSeen"] as Date, removalDate(lastSeen: lastSeen, snapshots: snapshots),
+            ])
+        }
+    }
+
+    private static func copyLegacyRelations(_ db: Database, profile: UUID, snapshots: [Date]) throws {
+        let edges = try Row.fetchAll(db, sql: """
+            SELECT COALESCE(source.database, '') AS srcDatabase, source.name AS srcName,
+                   COALESCE(target.database, '') AS dstDatabase, target.name AS dstName,
+                   edge.attrs AS attrs, edge.firstSeen AS firstSeen, edge.lastSeen AS lastSeen
+            FROM graph_edge edge
+            JOIN graph_node source ON source.profileID = edge.profileID AND source.nodeID = edge.src
+            JOIN graph_node target ON target.profileID = edge.profileID AND target.nodeID = edge.dst
+            WHERE edge.profileID = ? AND edge.kind = 'references'
+            ORDER BY edge.rowid
+            """, arguments: [profile])
+        for edge in edges {
+            let attrs = decodeAttributes(edge["attrs"])
+            try db.execute(sql: """
+                INSERT INTO schema_relation
+                    (profileID, srcDatabase, srcName, srcColumn, dstDatabase, dstName, dstColumn, firstSeen, removedAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, arguments: [
+                    profile, edge["srcDatabase"] as String, edge["srcName"] as String, attrs["column"] ?? "",
+                    edge["dstDatabase"] as String, edge["dstName"] as String, attrs["referencedColumn"] ?? "",
+                    edge["firstSeen"] as Date, removalDate(lastSeen: edge["lastSeen"], snapshots: snapshots),
+                ])
+        }
+    }
+
+    /// A snapshot records totals, so the delta against the previous snapshot is
+    /// the best the old model can say about what a pass added or removed. The
+    /// counts on these migrated rows are node and edge count deltas, not object
+    /// counts: they include every column and index, and a changed table cannot
+    /// be told from an unchanged one, so `changed` is always 0.
+    private static func copyLegacyChanges(_ db: Database, profile: UUID) throws {
+        let snapshots = try Row.fetchAll(db, sql: """
+            SELECT takenAt, nodeCount, edgeCount FROM graph_snapshot
+            WHERE profileID = ? ORDER BY takenAt, rowid
+            """, arguments: [profile])
+        var previousNodes = 0
+        var previousEdges = 0
+        for snapshot in snapshots {
+            let nodes: Int = snapshot["nodeCount"]
+            let edges: Int = snapshot["edgeCount"]
+            try db.execute(sql: """
+                INSERT INTO schema_change (profileID, at, added, changed, removed, relationsAdded, relationsRemoved)
+                VALUES (?, ?, ?, 0, ?, ?, ?)
+                """, arguments: [
+                    profile, snapshot["takenAt"] as Date,
+                    max(nodes - previousNodes, 0), max(previousNodes - nodes, 0),
+                    max(edges - previousEdges, 0), max(previousEdges - edges, 0),
+                ])
+            previousNodes = nodes
+            previousEdges = edges
+        }
+    }
+
+    private static func decodeAttributes(_ json: String?) -> [String: String] {
+        guard let json, let attributes = try? JSONDecoder().decode([String: String].self, from: Data(json.utf8)) else { return [:] }
+        return attributes
+    }
+
+    /// The bytes `SchemaDefinition.json()` produces for the same content:
+    /// sorted keys, no whitespace, slashes unescaped. The store cannot depend
+    /// on BerryGraph, which owns that type, so a migrated row is written by this
+    /// copy of the encoding, and the two must stay equal or the first harvest
+    /// after the upgrade writes a new version of every table. The old model
+    /// records no column default, so none is written.
+    private static func canonicalDefinitionJSON(columns: [[String: Any]], indexes: [[String: Any]]) throws -> String {
+        let data = try JSONSerialization.data(
+            withJSONObject: ["columns": columns, "indexes": indexes],
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        return String(decoding: data, as: UTF8.self)
     }
 
  // MARK: - Connection profiles
 
     public func allProfiles() throws -> [ConnectionProfile] {
-        try dbQueue.read { db in
+        try read { db in
             try ConnectionProfile
                 .order(Column("sortOrder").asc, Column("createdAt").asc)
                 .fetchAll(db)
@@ -663,7 +1334,7 @@ public final class BerryStore: Sendable {
     }
 
     public func save(_ profile: ConnectionProfile) throws {
-        try dbQueue.write { db in
+        try write { db in
             try profile.save(db)
         }
     }
@@ -678,8 +1349,13 @@ public final class BerryStore: Sendable {
     /// the profile's secrets are deleted from the Keychain with it, so the
     /// helper has no credential to use for it, and a connection that needs
     /// none is one the same-user process can open without BerryDB.
+    ///
+    /// The profile's schema graph, statistics and name embeddings are deleted
+    /// in the same transaction; none of them is tied to the profile row by a
+    /// foreign key, so they would otherwise stay behind as orphans.
     public func deleteProfile(id: UUID) throws {
-        _ = try dbQueue.write { db in
+        _ = try write { db in
+            try Self.deleteSchemaGraphRows(db, profileID: id)
             try ConnectionProfile.deleteOne(db, key: id)
         }
     }
@@ -687,7 +1363,7 @@ public final class BerryStore: Sendable {
     // MARK: - MCP projects
 
     public func mcpProjects() throws -> [MCPProject] {
-        try dbQueue.read { db in
+        try read { db in
             let records = try MCPProjectRecord
                 .order(Column("name").collating(.nocase).asc, Column("id").asc)
                 .fetchAll(db)
@@ -696,7 +1372,7 @@ public final class BerryStore: Sendable {
     }
 
     public func mcpProject(id: UUID) throws -> MCPProject? {
-        try dbQueue.read { db in
+        try read { db in
             guard let record = try MCPProjectRecord.fetchOne(db, key: id) else { return nil }
             return try Self.makeMCPProject(record: record, db: db)
         }
@@ -704,13 +1380,13 @@ public final class BerryStore: Sendable {
 
     /// Test-only raw SQL, used to simulate a process editing the store file directly.
     func executeForTesting(_ sql: String, arguments: StatementArguments = []) throws {
-        try dbQueue.write { try $0.execute(sql: sql, arguments: arguments) }
+        try write { try $0.execute(sql: sql, arguments: arguments) }
     }
 
     /// Test-only raw SQL read, used to snapshot exact stored bytes (e.g. a
     /// tag) before simulating a stale restore or other file-level tampering.
     func fetchForTesting(_ sql: String, arguments: StatementArguments = []) throws -> [Row] {
-        try dbQueue.read { try Row.fetchAll($0, sql: sql, arguments: arguments) }
+        try read { try Row.fetchAll($0, sql: sql, arguments: arguments) }
     }
 
     /// Saves `project` sealed under `sealingKey`, then re-seals every other
@@ -762,7 +1438,7 @@ public final class BerryStore: Sendable {
             try MCPAccessIntegrity.projectPayload(id: project.id, isEnabled: project.isEnabled, workspaceRoots: roots),
             key: sealingKey
         )
-        try dbQueue.write { db in
+        try write { db in
             try record.save(db)
             try MCPProjectProfileRecord.filter(Column("projectID") == project.id).deleteAll(db)
             var seen = Set<UUID>()
@@ -897,7 +1573,7 @@ public final class BerryStore: Sendable {
     public func deleteMCPProject(id: UUID, sealingKey: SymmetricKey, previousKey: SymmetricKey?) throws {
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
-        try dbQueue.write { db in
+        try write { db in
             _ = try MCPProjectRecord.deleteOne(db, key: id)
             try Self.reseal(
                 otherThan: id, sealingKey: sealingKey, previousKey: previousKey,
@@ -916,7 +1592,7 @@ public final class BerryStore: Sendable {
     /// outright. A verified but disabled project always yields an empty
     /// `liveReadProfileIDs`.
     public func verifiedMCPProject(id: UUID, key: SymmetricKey?) throws -> MCPVerifiedProject? {
-        try dbQueue.read { db in
+        try read { db in
             guard let record = try MCPProjectRecord.fetchOne(db, key: id) else { return nil }
             let project = try Self.makeMCPProject(record: record, db: db)
 
@@ -957,7 +1633,7 @@ public final class BerryStore: Sendable {
     /// key, so any other key makes every row look unverified and the
     /// editing copy comes back disabled with every `liveRead` off.
     public func mcpProjectForEditing(id: UUID, key: SymmetricKey?) throws -> MCPProject? {
-        try dbQueue.read { db in
+        try read { db in
             guard let record = try MCPProjectRecord.fetchOne(db, key: id) else { return nil }
             var project = try Self.makeMCPProject(record: record, db: db)
 
@@ -1056,7 +1732,7 @@ public final class BerryStore: Sendable {
     public static let historyCapPerProfile = 10_000
 
     public func record(_ entry: QueryHistoryEntry) throws {
-        try dbQueue.write { db in
+        try write { db in
             try entry.insert(db)
             // Rotate: delete oldest rows beyond the cap for this profile.
             try db.execute(
@@ -1083,7 +1759,7 @@ public final class BerryStore: Sendable {
         beforeID: UUID? = nil,
         limit: Int = 200
     ) throws -> [QueryHistoryEntry] {
-        try dbQueue.read { db in
+        try read { db in
             var request = QueryHistoryEntry.all()
             if let profileID {
                 request = request.filter(Column("profileID") == profileID)
@@ -1110,7 +1786,7 @@ public final class BerryStore: Sendable {
     }
 
     public func clearHistory() throws {
-        _ = try dbQueue.write { db in
+        _ = try write { db in
             try QueryHistoryEntry.deleteAll(db)
         }
     }
@@ -1122,7 +1798,7 @@ public final class BerryStore: Sendable {
     public static let workspaceActionCapPerProfile = 50
 
     public func recordWorkspaceAction(_ entry: WorkspaceActionRecord) throws {
-        try dbQueue.write { db in
+        try write { db in
             try entry.insert(db)
             try db.execute(
                 sql: """
@@ -1140,7 +1816,7 @@ public final class BerryStore: Sendable {
 
     /// Most recent actions for a profile, newest first.
     public func recentWorkspaceActions(profileID: UUID?, limit: Int = 50) throws -> [WorkspaceActionRecord] {
-        try dbQueue.read { db in
+        try read { db in
             try WorkspaceActionRecord
                 .filter(Column("profileID") == profileID)
                 .order(Column("createdAt").desc)
@@ -1152,13 +1828,13 @@ public final class BerryStore: Sendable {
  // MARK: - Editor sessions
 
     public func saveEditorSession(_ record: EditorSessionRecord) throws {
-        try dbQueue.write { db in
+        try write { db in
             try record.save(db)
         }
     }
 
     public func editorSessions(profileID: UUID?) throws -> [EditorSessionRecord] {
-        try dbQueue.read { db in
+        try read { db in
             try EditorSessionRecord
                 .filter(Column("profileID") == profileID)
                 .order(Column("updatedAt").asc)
@@ -1167,7 +1843,7 @@ public final class BerryStore: Sendable {
     }
 
     public func deleteEditorSession(id: UUID) throws {
-        _ = try dbQueue.write { db in
+        _ = try write { db in
             try EditorSessionRecord.deleteOne(db, key: id)
         }
     }
@@ -1175,7 +1851,7 @@ public final class BerryStore: Sendable {
  // MARK: - Saved queries
 
     public func saveSavedQuery(_ query: SavedQuery) throws {
-        try dbQueue.write { db in
+        try write { db in
             try query.save(db)
         }
     }
@@ -1183,7 +1859,7 @@ public final class BerryStore: Sendable {
     /// Snippets visible from a connection: the profile's own plus all global
     /// (profileID IS NULL) ones, newest first. Pass nil for global-only.
     public func savedQueries(profileID: UUID?) throws -> [SavedQuery] {
-        try dbQueue.read { db in
+        try read { db in
             if let profileID {
                 return try SavedQuery
                     .filter(Column("profileID") == profileID || Column("profileID") == nil)
@@ -1198,7 +1874,7 @@ public final class BerryStore: Sendable {
     }
 
     public func deleteSavedQuery(id: UUID) throws {
-        _ = try dbQueue.write { db in
+        _ = try write { db in
             try SavedQuery.deleteOne(db, key: id)
         }
     }
@@ -1206,19 +1882,19 @@ public final class BerryStore: Sendable {
  // MARK: - Artifacts
 
     public func saveArtifact(_ artifact: Artifact) throws {
-        try dbQueue.write { db in
+        try write { db in
             try artifact.save(db)
         }
     }
 
     public func artifact(id: UUID) throws -> Artifact? {
-        try dbQueue.read { db in
+        try read { db in
             try Artifact.fetchOne(db, key: id)
         }
     }
 
     public func artifacts(profileID: UUID) throws -> [Artifact] {
-        try dbQueue.read { db in
+        try read { db in
             try Artifact
                 .filter(Column("profileID") == profileID)
                 .order(Column("updatedAt").desc)
@@ -1227,7 +1903,7 @@ public final class BerryStore: Sendable {
     }
 
     public func deleteArtifact(id: UUID) throws {
-        _ = try dbQueue.write { db in
+        _ = try write { db in
             try ArtifactVersion.filter(Column("artifactID") == id).deleteAll(db)
             try Artifact.deleteOne(db, key: id)
         }
@@ -1240,7 +1916,7 @@ public final class BerryStore: Sendable {
     public func appendArtifactVersion(
         artifactID: UUID, payload: String, resultSnapshotJSON: String? = nil
     ) throws -> ArtifactVersion {
-        try dbQueue.write { db in
+        try write { db in
             let nextNumber = try (ArtifactVersion
                 .filter(Column("artifactID") == artifactID)
                 .select(max(Column("versionNumber")))
@@ -1255,7 +1931,7 @@ public final class BerryStore: Sendable {
     }
 
     public func artifactVersions(artifactID: UUID) throws -> [ArtifactVersion] {
-        try dbQueue.read { db in
+        try read { db in
             try ArtifactVersion
                 .filter(Column("artifactID") == artifactID)
                 .order(Column("versionNumber").asc)
@@ -1264,7 +1940,7 @@ public final class BerryStore: Sendable {
     }
 
     public func latestArtifactVersion(artifactID: UUID) throws -> ArtifactVersion? {
-        try dbQueue.read { db in
+        try read { db in
             try ArtifactVersion
                 .filter(Column("artifactID") == artifactID)
                 .order(Column("versionNumber").desc)
@@ -1277,7 +1953,7 @@ public final class BerryStore: Sendable {
     /// every other version's `payload`/`resultSnapshotJSON` into memory just
     /// to discard them.
     public func artifactVersion(artifactID: UUID, versionNumber: Int) throws -> ArtifactVersion? {
-        try dbQueue.read { db in
+        try read { db in
             try ArtifactVersion
                 .filter(Column("artifactID") == artifactID && Column("versionNumber") == versionNumber)
                 .fetchOne(db)
@@ -1287,102 +1963,14 @@ public final class BerryStore: Sendable {
  // MARK: - Per-connection AI settings
 
     public func aiSetting(profileID: UUID) throws -> AIConnectionSetting? {
-        try dbQueue.read { db in
+        try read { db in
             try AIConnectionSetting.fetchOne(db, key: profileID)
         }
     }
 
     public func saveAISetting(_ setting: AIConnectionSetting) throws {
-        try dbQueue.write { db in
+        try write { db in
             try setting.save(db)
-        }
-    }
-
- // MARK: - Database Intelligence graph
-
-    /// Upserts a profile's graph elements (preserving each element's `firstSeen`)
-    /// and records a snapshot. Absent elements are NOT deleted — their stale
-    /// `lastSeen` marks when they disappeared, which is how the Digital Twin
- /// reconstructs the graph as-of an earlier time.
-    public func saveGraph(
-        profileID: UUID,
-        nodes: [GraphNodeRecord],
-        edges: [GraphEdgeRecord],
-        takenAt: Date,
-        digest: String
-    ) throws {
-        try dbQueue.write { db in
-            for node in nodes {
-                try db.execute(sql: """
-                    INSERT INTO graph_node (profileID, nodeID, kind, name, database, attrs, firstSeen, lastSeen)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(profileID, nodeID) DO UPDATE SET
-                        kind = excluded.kind, name = excluded.name, database = excluded.database,
-                        attrs = excluded.attrs, lastSeen = excluded.lastSeen
-                    """, arguments: [node.profileID, node.nodeID, node.kind, node.name,
-                                     node.database, node.attrs, node.firstSeen, node.lastSeen])
-            }
-            for edge in edges {
-                try db.execute(sql: """
-                    INSERT INTO graph_edge (profileID, src, dst, kind, weight, attrs, firstSeen, lastSeen)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(profileID, src, dst, kind) DO UPDATE SET
-                        weight = excluded.weight, attrs = excluded.attrs, lastSeen = excluded.lastSeen
-                    """, arguments: [edge.profileID, edge.src, edge.dst, edge.kind,
-                                     edge.weight, edge.attrs, edge.firstSeen, edge.lastSeen])
-            }
-            // Dedup by digest: only record a snapshot when the structure
-            // changed, so frequent harvest-on-refresh doesn't bloat the Digital
- // Twin timeline. Node/edge lastSeen/attrs
-            // were still upserted above, so stats stay fresh.
-            let latestDigest = try GraphSnapshotRecord
-                .filter(Column("profileID") == profileID)
-                .order(Column("takenAt").desc)
-                .fetchOne(db)?.digest
-            if latestDigest != digest {
-                try GraphSnapshotRecord(
-                    profileID: profileID, takenAt: takenAt,
-                    nodeCount: nodes.count, edgeCount: edges.count, digest: digest
-                ).insert(db)
-            }
-        }
-    }
-
-    /// Graph elements present at `asOf` (firstSeen ≤ asOf ≤ lastSeen).
-    public func graphNodes(profileID: UUID, asOf: Date) throws -> [GraphNodeRecord] {
-        try dbQueue.read { db in
-            try GraphNodeRecord
-                .filter(Column("profileID") == profileID)
-                .filter(Column("firstSeen") <= asOf && Column("lastSeen") >= asOf)
-                .fetchAll(db)
-        }
-    }
-
-    public func graphEdges(profileID: UUID, asOf: Date) throws -> [GraphEdgeRecord] {
-        try dbQueue.read { db in
-            try GraphEdgeRecord
-                .filter(Column("profileID") == profileID)
-                .filter(Column("firstSeen") <= asOf && Column("lastSeen") >= asOf)
-                .fetchAll(db)
-        }
-    }
-
-    public func latestGraphSnapshot(profileID: UUID) throws -> GraphSnapshotRecord? {
-        try dbQueue.read { db in
-            try GraphSnapshotRecord
-                .filter(Column("profileID") == profileID)
-                .order(Column("takenAt").desc)
-                .fetchOne(db)
-        }
-    }
-
- /// Snapshot metadata for a profile, newest first (time-travel picker).
-    public func graphSnapshots(profileID: UUID) throws -> [GraphSnapshotRecord] {
-        try dbQueue.read { db in
-            try GraphSnapshotRecord
-                .filter(Column("profileID") == profileID)
-                .order(Column("takenAt").desc)
-                .fetchAll(db)
         }
     }
 
@@ -1390,12 +1978,12 @@ public final class BerryStore: Sendable {
 
  /// Records the user's response to an insight.
     public func recordRecommendationFeedback(_ record: RecommendationFeedbackRecord) throws {
-        try dbQueue.write { db in try record.insert(db) }
+        try write { db in try record.insert(db) }
     }
 
     /// All feedback recorded for one insight on one profile, newest first.
     public func recommendationFeedback(profileID: UUID, insightID: String) throws -> [RecommendationFeedbackRecord] {
-        try dbQueue.read { db in
+        try read { db in
             try RecommendationFeedbackRecord
                 .filter(Column("profileID") == profileID && Column("insightID") == insightID)
                 .order(Column("ts").desc)
@@ -1405,7 +1993,7 @@ public final class BerryStore: Sendable {
 
     /// Insight IDs the user has dismissed at least once on this profile — for down-ranking.
     public func dismissedInsightIDs(profileID: UUID) throws -> Set<String> {
-        try dbQueue.read { db in
+        try read { db in
             let rows = try RecommendationFeedbackRecord
                 .filter(Column("profileID") == profileID && Column("action") == RecommendationAction.dismissed.rawValue)
                 .fetchAll(db)
@@ -1417,13 +2005,13 @@ public final class BerryStore: Sendable {
 
  /// Saves a user-requested execution snapshot.
     public func saveQueryReplaySnapshot(_ record: QueryReplaySnapshotRecord) throws {
-        try dbQueue.write { db in try record.insert(db) }
+        try write { db in try record.insert(db) }
     }
 
     /// Snapshots of the same query on this profile, newest first — the
     /// replay comparison's input (`QueryReplayComparator`, module BerryGraph).
     public func queryReplaySnapshots(profileID: UUID, queryHash: String) throws -> [QueryReplaySnapshotRecord] {
-        try dbQueue.read { db in
+        try read { db in
             try QueryReplaySnapshotRecord
                 .filter(Column("profileID") == profileID && Column("queryHash") == queryHash)
                 .order(Column("ts").desc)
@@ -1435,12 +2023,12 @@ public final class BerryStore: Sendable {
 
  /// Saves a generated daily review digest.
     public func saveDailyReview(_ record: DailyReviewRecord) throws {
-        try dbQueue.write { db in try record.insert(db) }
+        try write { db in try record.insert(db) }
     }
 
     /// The most recent digest for this profile, or nil if none exists yet.
     public func latestDailyReview(profileID: UUID) throws -> DailyReviewRecord? {
-        try dbQueue.read { db in
+        try read { db in
             try DailyReviewRecord
                 .filter(Column("profileID") == profileID)
                 .order(Column("generatedAt").desc)
@@ -1453,7 +2041,7 @@ public final class BerryStore: Sendable {
     /// Stores a snapshot unless the latest one for this profile already has
     /// the same digest (no schema change → no growth).
     public func recordSnapshotIfChanged(_ snapshot: SchemaSnapshotRecord) throws {
-        try dbQueue.write { db in
+        try write { db in
             let latestDigest = try String.fetchOne(
                 db,
                 sql: """
@@ -1469,7 +2057,7 @@ public final class BerryStore: Sendable {
     }
 
     public func snapshots(profileID: UUID?, limit: Int = 100) throws -> [SchemaSnapshotRecord] {
-        try dbQueue.read { db in
+        try read { db in
             try SchemaSnapshotRecord
                 .filter(Column("profileID") == profileID)
                 .order(Column("takenAt").desc)
@@ -1482,14 +2070,14 @@ public final class BerryStore: Sendable {
 
  /// Saves a batch of runtime metrics from one harvest pass.
     public func saveRuntimeMetrics(_ records: [RuntimeMetricRecord]) throws {
-        try dbQueue.write { db in
+        try write { db in
             for record in records { try record.insert(db) }
         }
     }
 
     /// Recent values of one metric for this profile, newest first.
     public func runtimeMetrics(profileID: UUID, metric: String, limit: Int = 100) throws -> [RuntimeMetricRecord] {
-        try dbQueue.read { db in
+        try read { db in
             try RuntimeMetricRecord
                 .filter(Column("profileID") == profileID && Column("metric") == metric)
                 .order(Column("ts").desc)
@@ -1501,7 +2089,7 @@ public final class BerryStore: Sendable {
  // MARK: - AI chat history (Q17)
 
     public func saveAIThread(_ thread: AIThreadRecord) throws {
-        try dbQueue.write { db in try thread.save(db) }
+        try write { db in try thread.save(db) }
     }
 
     /// All local threads, most recently updated first. `connectionKey` scopes
@@ -1509,7 +2097,7 @@ public final class BerryStore: Sendable {
     /// only pre-v28/profileless threads, via SQL's `IS NULL`), so two
     /// connections sharing a dialect never see each other's threads.
     public func aiThreads(dialect: String? = nil, connectionKey: String? = nil) throws -> [AIThreadRecord] {
-        try dbQueue.read { db in
+        try read { db in
             var request = AIThreadRecord.order(Column("updatedAt").desc)
                 .filter(Column("connectionKey") == connectionKey)
             if let dialect { request = request.filter(Column("dialect") == dialect) }
@@ -1518,7 +2106,7 @@ public final class BerryStore: Sendable {
     }
 
     public func aiThread(id: UUID) throws -> AIThreadRecord? {
-        try dbQueue.read { db in try AIThreadRecord.fetchOne(db, key: id) }
+        try read { db in try AIThreadRecord.fetchOne(db, key: id) }
     }
 
     /// Deletes the thread and everything scoped to it — messages and their
@@ -1526,7 +2114,7 @@ public final class BerryStore: Sendable {
     /// table, which doesn't support foreign keys), so this deletes explicitly
     /// in dependency order, same as the old backend's delete_ai_thread.
     public func deleteAIThread(id: UUID) throws {
-        try dbQueue.write { db in
+        try write { db in
             try db.execute(
                 sql: "DELETE FROM ai_pending_interaction WHERE threadID = ?",
                 arguments: [id]
@@ -1542,12 +2130,12 @@ public final class BerryStore: Sendable {
     }
 
     public func appendAIMessage(_ message: AIMessageRecord) throws {
-        try dbQueue.write { db in try message.insert(db) }
+        try write { db in try message.insert(db) }
     }
 
     /// A thread's messages in conversation order.
     public func aiMessages(threadID: UUID) throws -> [AIMessageRecord] {
-        try dbQueue.read { db in
+        try read { db in
             try AIMessageRecord
                 .filter(Column("threadID") == threadID)
                 .order(Column("seq").asc)
@@ -1563,19 +2151,19 @@ public final class BerryStore: Sendable {
     // which isn't available to this module's simpler call sites.
 
     public func saveAIThreadAsync(_ thread: AIThreadRecord) async throws {
-        try await dbQueue.write { db in try thread.save(db) }
+        try await write { db in try thread.save(db) }
     }
 
     public func aiThreadAsync(id: UUID) async throws -> AIThreadRecord? {
-        try await dbQueue.read { db in try AIThreadRecord.fetchOne(db, key: id) }
+        try await read { db in try AIThreadRecord.fetchOne(db, key: id) }
     }
 
     public func appendAIMessageAsync(_ message: AIMessageRecord) async throws {
-        try await dbQueue.write { db in try message.insert(db) }
+        try await write { db in try message.insert(db) }
     }
 
     public func aiMessagesAsync(threadID: UUID) async throws -> [AIMessageRecord] {
-        try await dbQueue.read { db in
+        try await read { db in
             try AIMessageRecord
                 .filter(Column("threadID") == threadID)
                 .order(Column("seq").asc)
@@ -1591,7 +2179,7 @@ public final class BerryStore: Sendable {
     /// that need the true total count (e.g. seq assignment) or the full
     /// transcript (opening a thread) must keep using that method.
     public func aiRecentMessagesAsync(threadID: UUID, limit: Int) async throws -> [AIMessageRecord] {
-        try await dbQueue.read { db in
+        try await read { db in
             let rows = try AIMessageRecord
                 .filter(Column("threadID") == threadID)
                 .filter(Column("toolCalls") == nil || Column("toolCalls") != "local:interaction")
@@ -1608,7 +2196,7 @@ public final class BerryStore: Sendable {
     /// cursor exists, so a long-lived thread's already-folded prefix is never
     /// re-fetched turn after turn).
     public func aiMessagesAsync(threadID: UUID, sinceSeq: Int) async throws -> [AIMessageRecord] {
-        try await dbQueue.read { db in
+        try await read { db in
             try AIMessageRecord
                 .filter(Column("threadID") == threadID && Column("seq") > sinceSeq)
                 .filter(Column("toolCalls") == nil || Column("toolCalls") != "local:interaction")
@@ -1652,14 +2240,14 @@ public final class BerryStore: Sendable {
     /// The active transcript for a thread, root to `activeLeafMessageID` —
     /// the branch-aware replacement for `aiMessages(threadID:)`.
     public func activeAIMessages(threadID: UUID) throws -> [AIMessageRecord] {
-        try dbQueue.read { db in
+        try read { db in
             guard let thread = try AIThreadRecord.fetchOne(db, key: threadID) else { return [] }
             return try walkActivePath(db: db, threadID: threadID, leafID: thread.activeLeafMessageID)
         }
     }
 
     public func activeAIMessagesAsync(threadID: UUID) async throws -> [AIMessageRecord] {
-        try await dbQueue.read { db in
+        try await read { db in
             guard let thread = try AIThreadRecord.fetchOne(db, key: threadID) else { return [] }
             return try walkActivePath(db: db, threadID: threadID, leafID: thread.activeLeafMessageID)
         }
@@ -1668,7 +2256,7 @@ public final class BerryStore: Sendable {
     /// Branch-aware replacement for `aiRecentMessagesAsync` — the last
     /// `limit` non-interaction messages on the ACTIVE path, oldest first.
     public func activeAIRecentMessagesAsync(threadID: UUID, limit: Int) async throws -> [AIMessageRecord] {
-        try await dbQueue.read { db in
+        try await read { db in
             guard let thread = try AIThreadRecord.fetchOne(db, key: threadID) else { return [] }
             let path = try walkActivePath(db: db, threadID: threadID, leafID: thread.activeLeafMessageID)
             let nonInteraction = path.filter { $0.toolCalls != "local:interaction" }
@@ -1679,7 +2267,7 @@ public final class BerryStore: Sendable {
     /// Branch-aware replacement for `aiMessagesAsync(threadID:sinceSeq:)` —
     /// non-interaction messages strictly after `sinceSeq`, ACTIVE path only.
     public func activeAIMessagesAsync(threadID: UUID, sinceSeq: Int) async throws -> [AIMessageRecord] {
-        try await dbQueue.read { db in
+        try await read { db in
             guard let thread = try AIThreadRecord.fetchOne(db, key: threadID) else { return [] }
             let path = try walkActivePath(db: db, threadID: threadID, leafID: thread.activeLeafMessageID)
             return path.filter { $0.seq > sinceSeq && $0.toolCalls != "local:interaction" }
@@ -1687,14 +2275,14 @@ public final class BerryStore: Sendable {
     }
 
     public func aiMessage(id: UUID) throws -> AIMessageRecord? {
-        try dbQueue.read { db in try AIMessageRecord.fetchOne(db, key: id) }
+        try read { db in try AIMessageRecord.fetchOne(db, key: id) }
     }
 
     /// Retargets a thread's active tip — used both when a normal turn
     /// finishes (advance to the newly-appended assistant reply) and when
     /// editing/switching versions (jump elsewhere in the tree).
     public func setActiveLeafMessage(threadID: UUID, messageID: UUID?) throws {
-        try dbQueue.write { db in
+        try write { db in
             try db.execute(
                 sql: "UPDATE ai_thread SET activeLeafMessageID = ? WHERE id = ?",
                 arguments: [messageID, threadID]
@@ -1706,7 +2294,7 @@ public final class BerryStore: Sendable {
     /// with no children is reached — switching to a version always lands on
     /// that version's own latest content, not necessarily its first reply.
     public func resolveTip(threadID: UUID, from messageID: UUID) throws -> UUID {
-        try dbQueue.read { db in
+        try read { db in
             var current = messageID
             while let child = try AIMessageRecord
                 .filter(Column("threadID") == threadID && Column("parentID") == current)
@@ -1726,7 +2314,7 @@ public final class BerryStore: Sendable {
     /// `parentID` against this map and shows nav only when the group has
     /// more than one entry.
     public func siblingGroups(threadID: UUID) throws -> [UUID?: [UUID]] {
-        try dbQueue.read { db in
+        try read { db in
             let rows = try AIMessageRecord
                 .filter(Column("threadID") == threadID && Column("role") == "user")
                 .order(Column("createdAt").asc)
@@ -1744,13 +2332,13 @@ public final class BerryStore: Sendable {
     public func savePendingAIInteraction(
         _ interaction: AIPendingInteractionRecord
     ) throws {
-        try dbQueue.write { db in try interaction.save(db) }
+        try write { db in try interaction.save(db) }
     }
 
     public func pendingAIInteraction(
         threadID: UUID
     ) throws -> AIPendingInteractionRecord? {
-        try dbQueue.read { db in
+        try read { db in
             try AIPendingInteractionRecord
                 .filter(Column("threadID") == threadID)
                 .fetchOne(db)
@@ -1765,7 +2353,7 @@ public final class BerryStore: Sendable {
         clientRequestID: String,
         requestDigest: String
     ) throws -> Bool {
-        try dbQueue.write { db in
+        try write { db in
             try db.execute(
                 sql: """
                 UPDATE ai_pending_interaction
@@ -1782,7 +2370,7 @@ public final class BerryStore: Sendable {
     }
 
     public func resetPendingAIInteraction(id: String) throws {
-        try dbQueue.write { db in
+        try write { db in
             try db.execute(
                 sql: """
                 UPDATE ai_pending_interaction
@@ -1796,7 +2384,7 @@ public final class BerryStore: Sendable {
 
     @discardableResult
     public func deletePendingAIInteraction(id: String) throws -> Bool {
-        try dbQueue.write { db in
+        try write { db in
             try AIPendingInteractionRecord.deleteOne(db, key: id)
         }
     }
@@ -1805,7 +2393,7 @@ public final class BerryStore: Sendable {
     public func deleteExpiredPendingAIInteractions(
         nowUnix: Int64
     ) throws -> Int {
-        try dbQueue.write { db in
+        try write { db in
             try AIPendingInteractionRecord
                 .filter(Column("expiresAtUnix") <= nowUnix)
                 .deleteAll(db)
@@ -1815,16 +2403,16 @@ public final class BerryStore: Sendable {
     // MARK: - Pending report draft (Task 4.1 pre-refinement consent gate)
 
     public func savePendingReportDraft(_ draft: AIPendingReportDraftRecord) throws {
-        try dbQueue.write { db in try draft.save(db) }
+        try write { db in try draft.save(db) }
     }
 
     public func pendingReportDraft(threadID: UUID) throws -> AIPendingReportDraftRecord? {
-        try dbQueue.read { db in try AIPendingReportDraftRecord.fetchOne(db, key: threadID) }
+        try read { db in try AIPendingReportDraftRecord.fetchOne(db, key: threadID) }
     }
 
     @discardableResult
     public func deletePendingReportDraft(threadID: UUID) throws -> Bool {
-        try dbQueue.write { db in try AIPendingReportDraftRecord.deleteOne(db, key: threadID) }
+        try write { db in try AIPendingReportDraftRecord.deleteOne(db, key: threadID) }
     }
 
     /// sqlite-vec dimension fixed by migration v17 and the configured
@@ -1843,7 +2431,7 @@ public final class BerryStore: Sendable {
         }
         let key = "\(threadID.uuidString)#\(seq)"
         let blob = vector.withUnsafeBufferPointer { Data(buffer: $0) }
-        try dbQueue.write { db in
+        try write { db in
             try db.execute(
                 sql: "INSERT OR REPLACE INTO ai_message_embedding(messageKey, embedding) VALUES (?, ?)",
                 arguments: [key, blob]
@@ -1861,7 +2449,7 @@ public final class BerryStore: Sendable {
         guard vector.count == Self.aiMessageEmbeddingDimension else { return false }
         let key = "\(threadID.uuidString)#\(seq)"
         let blob = vector.withUnsafeBufferPointer { Data(buffer: $0) }
-        return try dbQueue.write { db in
+        return try write { db in
             let exists = try AIMessageRecord
                 .filter(Column("threadID") == threadID && Column("seq") == seq)
                 .fetchCount(db) > 0
@@ -1884,7 +2472,7 @@ public final class BerryStore: Sendable {
         // itself as "missing" every time the background backfill runs.
         let messages = try activeAIMessages(threadID: threadID)
         let prefix = "\(threadID.uuidString)#"
-        let embedded: Set<Int> = try dbQueue.read { db in
+        let embedded: Set<Int> = try read { db in
             let rows = try Row.fetchAll(
                 db,
                 sql: "SELECT messageKey FROM ai_message_embedding WHERE messageKey LIKE ?",
@@ -1913,7 +2501,7 @@ public final class BerryStore: Sendable {
         guard queryVector.count == Self.aiMessageEmbeddingDimension else { return [] }
         let blob = queryVector.withUnsafeBufferPointer { Data(buffer: $0) }
         let prefix = "\(threadID.uuidString)#"
-        return try dbQueue.read { db in
+        return try read { db in
             let rows = try Row.fetchAll(
                 db,
                 sql: "SELECT messageKey, distance FROM ai_message_embedding WHERE embedding MATCH ? AND k = ? ORDER BY distance",
@@ -1934,72 +2522,116 @@ public final class BerryStore: Sendable {
     /// text-embedding-3-small contract as `aiMessageEmbeddingDimension`.
     public static let schemaObjectEmbeddingDimension = 1536
 
-    /// Stores/replaces the embedding for one table/collection name, keyed by
-    /// "profileID#name" in the vec0 virtual table (no composite-key support
-    /// for declared vec0 primary keys, so the pair is encoded as one string).
-    public func saveSchemaObjectEmbedding(profileID: UUID, name: String, vector: [Float]) throws {
-        guard vector.count == Self.schemaObjectEmbeddingDimension else {
+    /// Stores the vector for the object `id` and clears its queue flag, in one
+    /// transaction, unless that row has been closed in the meantime. A drain
+    /// reads the queue, then waits on the provider, and the object can be
+    /// removed during the wait; writing its vector afterwards would leave one
+    /// that nothing deletes. Returns false, writing nothing, for a closed row.
+    public func storeSchemaEmbedding(id: Int64, profileID: UUID, name: String, vector: [Float]) throws -> Bool {
+        let blob = try Self.embeddingBlob(vector)
+        return try write { db in
+            guard try Bool.fetchOne(
+                db, sql: "SELECT EXISTS (SELECT 1 FROM schema_object WHERE id = ? AND removedAt IS NULL)", arguments: [id]
+            ) == true else { return false }
+            try Self.replaceSchemaEmbedding(db, profileID: profileID, name: name, blob: blob)
+            try db.execute(sql: "UPDATE schema_object SET needsEmbedding = 0 WHERE id = ?", arguments: [id])
+            return true
+        }
+    }
+
+    /// Of `names`, in their order and each once, at most `limit` that have no
+    /// vector in the profile's partition; a vector is keyed by the name alone,
+    /// so a name listed in two schemas has one. Nothing reads a vector:
+    /// sqlite-vec 0.1.9 keeps a
+    /// text primary key in the `<table>_rowids` shadow table under a UNIQUE
+    /// constraint (`VEC0_SHADOW_ROWIDS_CREATE_PK_TEXT` in the vendored
+    /// `sqlite-vec.c`), and each name is one lookup in that index. A lookup
+    /// through the vec0 table itself also reads the 6 KB vector of every name
+    /// it finds (`vec0Filter_point` there).
+    public func schemaNamesWithoutEmbedding(profileID: UUID, among names: [String], limit: Int) throws -> [String] {
+        guard !names.isEmpty, limit > 0 else { return [] }
+        var seen = Set<String>()
+        let distinct = names.filter { seen.insert($0).inserted }
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: distinct), as: UTF8.self)
+        return try read { db in
+            try String.fetchAll(db, sql: """
+                SELECT value FROM json_each(?)
+                WHERE NOT EXISTS (SELECT 1 FROM schema_object_embedding_rowids WHERE id = ? || value)
+                ORDER BY key LIMIT ?
+                """, arguments: [json, "\(profileID.uuidString)#", limit])
+        }
+    }
+
+    /// Stores the vector of a name that a search embedded itself, and takes
+    /// the profile's current objects of that name off the embedding queue so
+    /// the drain does not send the name again. The name need not be stored
+    /// as an object: a search embeds the names the sidebar lists, which a
+    /// harvest may never have listed. Such a vector is deleted with the
+    /// profile; a search keeps only names it is given, so one left by a
+    /// dropped table is never returned.
+    public func storeSchemaNameEmbedding(profileID: UUID, name: String, vector: [Float]) throws {
+        let blob = try Self.embeddingBlob(vector)
+        try write { db in
+            try Self.replaceSchemaEmbedding(db, profileID: profileID, name: name, blob: blob)
+            // The queue's partial index holds only flagged rows; without it
+            // SQLite walks the profile's whole history for every name.
+            try db.execute(sql: """
+                UPDATE schema_object INDEXED BY schema_object_embedding_queue SET needsEmbedding = 0
+                WHERE profileID = ? AND needsEmbedding = 1 AND removedAt IS NULL AND name = ?
+                """, arguments: [profileID, name])
+        }
+    }
+
+    private static func embeddingBlob(_ vector: [Float]) throws -> Data {
+        guard vector.count == schemaObjectEmbeddingDimension else {
             throw DatabaseError(
                 resultCode: .SQLITE_MISMATCH,
-                message: "Schema object embedding must contain \(Self.schemaObjectEmbeddingDimension) values"
+                message: "Schema object embedding must contain \(schemaObjectEmbeddingDimension) values"
             )
         }
+        return vector.withUnsafeBufferPointer { Data(buffer: $0) }
+    }
+
+    /// The vector of one table or view name, keyed by "profileID#name" in the
+    /// vec0 virtual table, which has no composite key for a declared primary
+    /// key, and partitioned by the profile so a nearest-name query reads only
+    /// that profile's vectors. A name that already has a vector is deleted
+    /// first: vec0 rejects `INSERT OR REPLACE` on an existing key with a
+    /// UNIQUE constraint error (verified against sqlite-vec 0.1.9), and a
+    /// dropped and re-created table is embedded again under the same key.
+    private static func replaceSchemaEmbedding(_ db: Database, profileID: UUID, name: String, blob: Data) throws {
         let key = "\(profileID.uuidString)#\(name)"
-        let blob = vector.withUnsafeBufferPointer { Data(buffer: $0) }
-        try dbQueue.write { db in
-            try db.execute(
-                sql: "INSERT OR REPLACE INTO schema_object_embedding(objectKey, embedding) VALUES (?, ?)",
-                arguments: [key, blob]
-            )
-        }
+        try db.execute(sql: "DELETE FROM schema_object_embedding WHERE objectKey = ?", arguments: [key])
+        try db.execute(
+            sql: "INSERT INTO schema_object_embedding(objectKey, profileID, embedding) VALUES (?, ?, ?)",
+            arguments: [key, profileID.uuidString, blob]
+        )
     }
 
-    /// Names among `candidateNames` that don't yet have a persisted vector
-    /// for this profile.
-    public func schemaObjectNamesMissingEmbeddings(
-        profileID: UUID, candidateNames: [String]
-    ) throws -> [String] {
-        let prefix = "\(profileID.uuidString)#"
-        let embedded: Set<String> = try dbQueue.read { db in
-            let rows = try Row.fetchAll(
-                db,
-                sql: "SELECT objectKey FROM schema_object_embedding WHERE objectKey LIKE ?",
-                arguments: ["\(prefix)%"]
-            )
-            return Set(rows.compactMap { row -> String? in
-                let key: String = row["objectKey"]
-                guard key.hasPrefix(prefix) else { return nil }
-                return String(key.dropFirst(prefix.count))
-            })
-        }
-        return candidateNames.filter { !embedded.contains($0) }
-    }
-
-    /// Cosine-nearest table/collection names in this profile to
- /// `queryVector` (search_schema), nearest first.
-    /// vec0 has no per-profile partition index here, so this over-fetches a
-    /// generous global top-K and filters/truncates to the profile
-    /// client-side — the same tradeoff `nearestAIMessages` makes, correct at
-    /// the object counts a single connection accumulates.
+    /// The table/collection names in this profile nearest to `queryVector`
+    /// (search_schema), nearest first. The KNN query is constrained to the
+    /// profile's partition, so another connection's vectors cannot crowd this
+    /// one's out of the first `limit` results.
     public func nearestSchemaObjects(
         profileID: UUID, to queryVector: [Float], limit: Int = 8
     ) throws -> [(name: String, distance: Double)] {
-        guard queryVector.count == Self.schemaObjectEmbeddingDimension else { return [] }
+        guard queryVector.count == Self.schemaObjectEmbeddingDimension, limit > 0 else { return [] }
         let blob = queryVector.withUnsafeBufferPointer { Data(buffer: $0) }
         let prefix = "\(profileID.uuidString)#"
-        return try dbQueue.read { db in
+        // vec0 fails a query whose `k` exceeds 4096 (SQLITE_VEC_VEC0_K_MAX in the
+        // vendored sqlite-vec 0.1.9); `k` itself is documented at
+        // https://alexgarcia.xyz/sqlite-vec/features/knn.html.
+        let k = min(limit, 4096)
+        return try read { db in
             let rows = try Row.fetchAll(
                 db,
-                sql: "SELECT objectKey, distance FROM schema_object_embedding WHERE embedding MATCH ? AND k = ? ORDER BY distance",
-                arguments: [blob, 256]
+                sql: "SELECT objectKey, distance FROM schema_object_embedding WHERE embedding MATCH ? AND k = ? AND profileID = ? ORDER BY distance",
+                arguments: [blob, k, profileID.uuidString]
             )
-            return rows.compactMap { row -> (name: String, distance: Double)? in
+            return rows.map { row in
                 let key: String = row["objectKey"]
-                guard key.hasPrefix(prefix) else { return nil }
                 return (name: String(key.dropFirst(prefix.count)), distance: row["distance"])
             }
-            .prefix(limit)
-            .map { $0 }
         }
     }
 }

@@ -5,10 +5,10 @@ import Testing
 
 @testable import BerryAI
 
-/// `graph_query` over a persisted DSG — metadata only,
-/// entirely local (no DBMS). Uses an in-memory GraphStore seeded with a small
-/// FK graph: order_items → orders → customers, order_items → products, and a
-/// view order_summary derived from orders.
+/// `graph_query` over the stored schema — metadata only, entirely local (no
+/// DBMS). Uses an in-memory store seeded with a small FK graph: order_items →
+/// orders → customers, order_items → products, payments → orders, and a view
+/// order_summary, which the stored schema relates to no table.
 @MainActor
 @Suite("GraphToolExecutor")
 struct GraphToolExecutorTests {
@@ -35,23 +35,40 @@ struct GraphToolExecutorTests {
         }
     }
 
-    private func seededStore() throws -> GraphStore {
-        let store = GraphStore(store: try BerryStore(path: ":memory:"))
-        try store.persist(sampleGraph(), profileID: profile, now: Date(timeIntervalSince1970: 1000))
-        return store
+    /// A reader over a store holding `objects` and `relations` the way a
+    /// harvest pass lists them, with `stats` as the latest statistics.
+    private func reader(
+        _ objects: [SchemaListedObject], _ relations: [SchemaListedRelation] = [], stats: [SchemaStatsRecord] = []
+    ) throws -> GraphReader {
+        let store = try BerryStore(path: ":memory:")
+        _ = try store.applySchemaListing(
+            profileID: profile, objects: objects, relations: relations, now: Date(timeIntervalSince1970: 1000)
+        )
+        try store.replaceSchemaStats(profileID: profile, rows: stats)
+        return GraphReader(store: store)
     }
 
-    private func sampleGraph() -> SchemaGraph {
-        var g = SchemaGraph()
-        // ids deliberately differ from names, to exercise name resolution.
-        let tables = ["customers", "orders", "order_items", "products"]
-        for name in tables { g.addNode(GraphNode(id: "tbl:\(name)", kind: .table, name: name)) }
-        g.addNode(GraphNode(id: "view:order_summary", kind: .view, name: "order_summary"))
-        g.addEdge(GraphEdge(src: "tbl:orders", dst: "tbl:customers", kind: .references))
-        g.addEdge(GraphEdge(src: "tbl:order_items", dst: "tbl:orders", kind: .references))
-        g.addEdge(GraphEdge(src: "tbl:order_items", dst: "tbl:products", kind: .references))
-        g.addEdge(GraphEdge(src: "view:order_summary", dst: "tbl:orders", kind: .derivesFrom))
-        return g
+    private func table(_ name: String, in database: String? = nil) -> SchemaListedObject {
+        SchemaListedObject(database: database, name: name, kind: "table", fingerprint: nil)
+    }
+
+    /// `source.<target>_id` referencing `target.id`.
+    private func reference(_ source: String, _ target: String, in database: String? = nil) -> SchemaListedRelation {
+        SchemaListedRelation(
+            srcDatabase: database, srcName: source, srcColumn: "\(target)_id",
+            dstDatabase: database, dstName: target, dstColumn: "id", constraintName: nil
+        )
+    }
+
+    private func seededReader() throws -> GraphReader {
+        try reader(
+            ["customers", "orders", "order_items", "products", "payments"].map { table($0) }
+                + [SchemaListedObject(database: nil, name: "order_summary", kind: "view", fingerprint: nil)],
+            [
+                reference("orders", "customers"), reference("order_items", "orders"),
+                reference("order_items", "products"), reference("payments", "orders"),
+            ]
+        )
     }
 
     private func decode(_ outcome: ToolOutcome) -> [String: Any] {
@@ -66,24 +83,24 @@ struct GraphToolExecutorTests {
     }
 
     @Test func blastRadiusListsEverythingThatDependsOnATable() async throws {
-        let executor = GraphToolExecutor(store: try seededStore(), profileID: profile)
+        let executor = GraphToolExecutor(reader: try seededReader(), profileID: profile)
         let outcome = await executor.execute(call(["op": "blast_radius", "node": "customers"]))
         #expect(outcome.status == "ok")
         let impacted = Set(decode(outcome)["impacted"] as? [String] ?? [])
-        // orders (FK), order_items (transitive FK), order_summary (derives from orders).
-        #expect(impacted == ["orders", "order_items", "order_summary"])
+        // orders (FK), order_items and payments (transitive FKs).
+        #expect(impacted == ["orders", "order_items", "payments"])
         #expect(decode(outcome)["count"] as? Int == 3)
     }
 
     @Test func pathReturnsTheDependencyChain() async throws {
-        let executor = GraphToolExecutor(store: try seededStore(), profileID: profile)
+        let executor = GraphToolExecutor(reader: try seededReader(), profileID: profile)
         let outcome = await executor.execute(call(["op": "path", "from": "order_items", "to": "customers"]))
         #expect(decode(outcome)["reachable"] as? Bool == true)
         #expect(decode(outcome)["path"] as? [String] == ["order_items", "orders", "customers"])
     }
 
     @Test func pathReportsUnreachable() async throws {
-        let executor = GraphToolExecutor(store: try seededStore(), profileID: profile)
+        let executor = GraphToolExecutor(reader: try seededReader(), profileID: profile)
         // customers depends on nothing → cannot reach products following FKs out.
         let outcome = await executor.execute(call(["op": "path", "from": "customers", "to": "products"]))
         #expect(decode(outcome)["reachable"] as? Bool == false)
@@ -91,40 +108,32 @@ struct GraphToolExecutorTests {
     }
 
     @Test func neighborsSplitsDependenciesByDirection() async throws {
-        let executor = GraphToolExecutor(store: try seededStore(), profileID: profile)
+        let executor = GraphToolExecutor(reader: try seededReader(), profileID: profile)
         let outcome = await executor.execute(call(["op": "neighbors", "node": "orders"]))
         #expect(decode(outcome)["depends_on"] as? [String] == ["customers"])
-        #expect(decode(outcome)["depended_on_by"] as? [String] == ["order_items", "order_summary"])
+        #expect(decode(outcome)["depended_on_by"] as? [String] == ["order_items", "payments"])
     }
 
     @Test func topCentralityRanksMostDependedUpon() async throws {
-        let executor = GraphToolExecutor(store: try seededStore(), profileID: profile)
+        let executor = GraphToolExecutor(reader: try seededReader(), profileID: profile)
         let outcome = await executor.execute(call(["op": "top_centrality", "k": "2"]))
         let top = decode(outcome)["top_by_dependents"] as? [[String: Any]] ?? []
         #expect(top.count == 2)
-        // orders has 2 dependents (order_items + order_summary) — the top.
+        // orders has 2 dependents (order_items + payments) — the top.
         #expect(top.first?["node"] as? String == "orders")
         #expect(top.first?["in_degree"] as? Int == 2)
     }
 
     @Test func sccReportsNoCyclesForAcyclicSchema() async throws {
-        let executor = GraphToolExecutor(store: try seededStore(), profileID: profile)
+        let executor = GraphToolExecutor(reader: try seededReader(), profileID: profile)
         let outcome = await executor.execute(call(["op": "scc"]))
         #expect(decode(outcome)["has_cycles"] as? Bool == false)
         #expect((decode(outcome)["circular_dependencies"] as? [[String]])?.isEmpty == true)
     }
 
     @Test func sccDetectsACircularDependency() async throws {
-        var g = SchemaGraph()
-        g.addNode(GraphNode(id: "tbl:a", kind: .table, name: "a"))
-        g.addNode(GraphNode(id: "tbl:b", kind: .table, name: "b"))
-        g.addEdge(GraphEdge(src: "tbl:a", dst: "tbl:b", kind: .references))
-        g.addEdge(GraphEdge(src: "tbl:b", dst: "tbl:a", kind: .references))
-        let store = GraphStore(store: try BerryStore(path: ":memory:"))
-        let p = UUID()
-        try store.persist(g, profileID: p, now: Date(timeIntervalSince1970: 1000))
-
-        let executor = GraphToolExecutor(store: store, profileID: p)
+        let cyclic = try reader([table("a"), table("b")], [reference("a", "b"), reference("b", "a")])
+        let executor = GraphToolExecutor(reader: cyclic, profileID: profile)
         let outcome = await executor.execute(call(["op": "scc"]))
         #expect(decode(outcome)["has_cycles"] as? Bool == true)
         let cycles = decode(outcome)["circular_dependencies"] as? [[String]] ?? []
@@ -132,26 +141,21 @@ struct GraphToolExecutorTests {
     }
 
     @Test func unknownNodeReturnsErrorWithAvailableNames() async throws {
-        let executor = GraphToolExecutor(store: try seededStore(), profileID: profile)
+        let executor = GraphToolExecutor(reader: try seededReader(), profileID: profile)
         let outcome = await executor.execute(call(["op": "blast_radius", "node": "nope"]))
         #expect(outcome.status == "error")
         #expect(outcome.resultJSON?.contains("customers") == true)
     }
 
     @Test func duplicateUnqualifiedNamePreservesLegacyExecutorSelection() async throws {
-        var graph = SchemaGraph()
-        graph.addNode(GraphNode(id: "tbl:alpha:orders", kind: .table, name: "orders", database: "alpha"))
-        graph.addNode(GraphNode(id: "tbl:beta:orders", kind: .table, name: "orders", database: "beta"))
-        graph.addNode(GraphNode(id: "tbl:alpha:customer", kind: .table, name: "alpha_customer"))
-        graph.addNode(GraphNode(id: "tbl:beta:customer", kind: .table, name: "beta_customer"))
-        graph.addEdge(GraphEdge(src: "tbl:alpha:orders", dst: "tbl:alpha:customer", kind: .references))
-        graph.addEdge(GraphEdge(src: "tbl:beta:orders", dst: "tbl:beta:customer", kind: .references))
-
-        let store = GraphStore(store: try BerryStore(path: ":memory:"))
-        let duplicateProfile = UUID()
-        try store.persist(graph, profileID: duplicateProfile, now: Date(timeIntervalSince1970: 1000))
-
-        let executor = GraphToolExecutor(store: store, profileID: duplicateProfile)
+        let duplicated = try reader(
+            [
+                table("orders", in: "alpha"), table("orders", in: "beta"),
+                table("alpha_customer", in: "alpha"), table("beta_customer", in: "beta"),
+            ],
+            [reference("orders", "alpha_customer", in: "alpha"), reference("orders", "beta_customer", in: "beta")]
+        )
+        let executor = GraphToolExecutor(reader: duplicated, profileID: profile)
         let outcome = await executor.execute(call(["op": "neighbors", "node": "orders"]))
 
         #expect(outcome.status == "ok")
@@ -186,29 +190,45 @@ struct GraphToolExecutorTests {
         #expect(source.loadCount == 1)
     }
 
+    /// Each operation reads the stored schema and walks a graph built from
+    /// it, which for a large schema is slow enough to stall the UI.
+    @Test func graphOperationsReadTheSchemaOffTheMainThread() async throws {
+        let threads = ThreadLog()
+        let service = BerryGraphQueryService(loadGraph: { _ in
+            threads.record(Thread.isMainThread)
+            var graph = SchemaGraph()
+            graph.addNode(GraphNode(id: "tbl:shop:orders", kind: .table, name: "orders", database: "shop"))
+            return graph
+        })
+        let executor = GraphToolExecutor(service: service, profileID: profile)
+
+        let outcome = await executor.execute(call(["op": "scc"]))
+
+        #expect(outcome.status == "ok")
+        #expect(threads.onMain == [false])
+    }
+
     @Test func unknownOpIsRejected() async throws {
-        let executor = GraphToolExecutor(store: try seededStore(), profileID: profile)
+        let executor = GraphToolExecutor(reader: try seededReader(), profileID: profile)
         let outcome = await executor.execute(call(["op": "louvain"]))
         #expect(outcome.status == "error")
     }
 
     @Test func nonGraphToolIsNotHandled() async throws {
-        let executor = GraphToolExecutor(store: try seededStore(), profileID: profile)
+        let executor = GraphToolExecutor(reader: try seededReader(), profileID: profile)
         let outcome = await executor.execute(AIToolCall(id: "c", name: "run_sql", args: [:]))
         #expect(outcome.status == "error")
     }
 
     @Test func emptyGraphReportsNothingHarvested() async throws {
-        let store = GraphStore(store: try BerryStore(path: ":memory:"))
-        let executor = GraphToolExecutor(store: store, profileID: UUID())
+        let executor = GraphToolExecutor(reader: GraphReader(store: try BerryStore(path: ":memory:")), profileID: UUID())
         let outcome = await executor.execute(call(["op": "scc"]))
         #expect(outcome.status == "error")
         #expect(outcome.resultJSON?.contains("harvested") == true)
     }
 
     @Test func emptyGraphStillPrecedesUnknownOperationValidation() async throws {
-        let store = GraphStore(store: try BerryStore(path: ":memory:"))
-        let executor = GraphToolExecutor(store: store, profileID: UUID())
+        let executor = GraphToolExecutor(reader: GraphReader(store: try BerryStore(path: ":memory:")), profileID: UUID())
         let outcome = await executor.execute(call(["op": "louvain"]))
         #expect(outcome.status == "error")
         #expect(decode(outcome)["error"] as? String ==
@@ -217,23 +237,19 @@ struct GraphToolExecutorTests {
 
  // MARK: - get_stats
 
-    private func statsStore() throws -> GraphStore {
-        let store = GraphStore(store: try BerryStore(path: ":memory:"))
-        var g = SchemaGraph()
-        g.addNode(GraphNode(id: "tbl:orders", kind: .table, name: "orders",
-                            attrs: ["rows": "1000", "size_bytes": "40960"]))
-        g.addNode(GraphNode(id: "idx:pk", kind: .index, name: "orders_pk",
-                            attrs: ["idx_scan": "50", "unused": "false"]))
-        g.addNode(GraphNode(id: "idx:dead", kind: .index, name: "orders_dead_idx",
-                            attrs: ["idx_scan": "0", "unused": "true"]))
-        g.addEdge(GraphEdge(src: "tbl:orders", dst: "idx:pk", kind: .hasIndex))
-        g.addEdge(GraphEdge(src: "tbl:orders", dst: "idx:dead", kind: .hasIndex))
-        try store.persist(g, profileID: profile, now: Date(timeIntervalSince1970: 1000))
-        return store
+    /// `orders` with its counters and two indexes, one of them never scanned.
+    private func statsReader() throws -> GraphReader {
+        try reader([table("orders")], stats: [
+            SchemaStatsRecord(
+                profileID: profile, database: nil, name: "orders", rows: 1000, sizeBytes: 40960,
+                indexStats: #"{"orders_pk":{"idxScan":50},"orders_dead_idx":{"idxScan":0}}"#,
+                updatedAt: Date(timeIntervalSince1970: 1000)
+            ),
+        ])
     }
 
     @Test func getStatsSummaryListsTablesAndUnusedIndexes() async throws {
-        let executor = GraphToolExecutor(store: try statsStore(), profileID: profile)
+        let executor = GraphToolExecutor(reader: try statsReader(), profileID: profile)
         let outcome = await executor.execute(AIToolCall(id: "c", name: "get_stats", args: [:]))
         #expect(outcome.status == "ok")
         let tables = decode(outcome)["tables"] as? [[String: Any]] ?? []
@@ -243,7 +259,7 @@ struct GraphToolExecutorTests {
     }
 
     @Test func getStatsForTableIncludesItsIndexes() async throws {
-        let executor = GraphToolExecutor(store: try statsStore(), profileID: profile)
+        let executor = GraphToolExecutor(reader: try statsReader(), profileID: profile)
         let outcome = await executor.execute(
             AIToolCall(id: "c", name: "get_stats", args: ["table": "orders"])
         )
@@ -283,4 +299,12 @@ struct ToolRouterTests {
         let outcome = await router.execute(AIToolCall(id: "1", name: "mystery", args: [:]))
         #expect(outcome.status == "error")
     }
+}
+
+/// Whether each graph load ran on the main thread.
+private final class ThreadLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [Bool] = []
+    var onMain: [Bool] { lock.withLock { recorded } }
+    func record(_ isMain: Bool) { lock.withLock { recorded.append(isMain) } }
 }

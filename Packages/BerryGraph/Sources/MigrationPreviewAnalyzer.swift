@@ -6,7 +6,7 @@ import Foundation
 /// hypothetical version of the DSG where one table's design has been replaced
 /// by an edited `TableDesign` — before any DDL runs ("Migration Preview
 /// Analyzer"). Pure — never touches the DBMS; the
-/// caller supplies the already-harvested graph (e.g. from `GraphStore`).
+/// caller supplies the already-harvested graph (e.g. from `GraphReader`).
 public enum MigrationPreviewAnalyzer {
     /// Aggregate risk for a set of findings, for a one-line "Overall Risk"
     /// summary (the `07.md #3` example) — derived straight from severity, not

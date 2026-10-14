@@ -1,9 +1,11 @@
+import BerryStore
 import Foundation
 
 /// Headless, metadata-only queries over a persisted schema graph.
 ///
-/// The service deliberately contains no UI or AI concerns. It loads one
-/// snapshot per operation and delegates traversal to `SchemaGraph`.
+/// The service deliberately contains no UI or AI concerns. Each graph
+/// operation loads one table-level graph and delegates traversal to
+/// `SchemaGraph`; a schema listing reads only the page it returns.
 public struct BerryGraphQueryService: Sendable {
     /// Edge kinds that count as a dependency for neighbors, paths, blast
     /// radius, cycles and centrality; workload edges such as `.reads` are
@@ -25,32 +27,39 @@ public struct BerryGraphQueryService: Sendable {
     }
 
     private let loadGraph: @Sendable (UUID) throws -> SchemaGraph
-    private let harvestedAt: @Sendable (UUID) throws -> Date?
+    /// Per-table statistics, the source of every index counter: the
+    /// table-level graph has no index nodes to carry them. `stats` reads the
+    /// rows of the tables a summary keeps; `objectStats` reads one by its key.
+    private let stats: @Sendable (UUID, [(database: String?, name: String)]) throws -> [SchemaStatsValues]
+    private let objectStats: @Sendable (UUID, String?, String) throws -> SchemaStatsRecord?
+    /// Serves `schema(...)`; nil for a service built from closures, which
+    /// answers graph operations only.
+    private let reader: GraphReader?
 
-    /// Reads snapshots and harvest times from `store`; never opens a
-    /// database connection.
-    public init(store: GraphStore) {
-        self.loadGraph = { try store.loadGraph(profileID: $0) }
-        self.harvestedAt = { try store.snapshots(profileID: $0).map(\.takenAt).max() }
+    /// Reads everything from `reader`; never opens a database connection.
+    public init(reader: GraphReader) {
+        self.init(reader: reader, tableGraph: { try reader.tableGraph(profileID: $0) })
     }
 
-    /// Injectable snapshot source for adapters and deterministic tests. Every
-    /// public operation invokes this closure exactly once. `harvestedAt`
-    /// always reports `nil`; use `init(loadGraph:harvestedAt:)` to stub it.
+    /// Reads listings and statistics from `reader` and takes the table-level
+    /// graph every graph operation traverses from `tableGraph`, such as a
+    /// cache of `reader.tableGraph(profileID:)`.
+    public init(reader: GraphReader, tableGraph: @escaping @Sendable (UUID) throws -> SchemaGraph) {
+        self.loadGraph = tableGraph
+        self.stats = { try reader.stats(profileID: $0, objects: $1) }
+        self.objectStats = { try reader.stats(profileID: $0, database: $1, name: $2) }
+        self.reader = reader
+    }
+
+    /// Injectable graph source for adapters and deterministic tests. Every
+    /// graph operation invokes this closure exactly once. The service has no
+    /// schema listing and no index statistics, and its table statistics are
+    /// the counters the graph's nodes carry.
     public init(loadGraph: @escaping @Sendable (UUID) throws -> SchemaGraph) {
-        self.init(loadGraph: loadGraph, harvestedAt: { _ in nil })
-    }
-
-    /// Injectable snapshot and harvest-time sources for adapters and
-    /// deterministic tests. Every public operation invokes `loadGraph` exactly
-    /// once; `schema(...)` additionally invokes `harvestedAt` exactly once,
-    /// after `loadGraph` succeeds.
-    public init(
-        loadGraph: @escaping @Sendable (UUID) throws -> SchemaGraph,
-        harvestedAt: @escaping @Sendable (UUID) throws -> Date?
-    ) {
         self.loadGraph = loadGraph
-        self.harvestedAt = harvestedAt
+        self.stats = { _, _ in [] }
+        self.objectStats = { _, _, _ in nil }
+        self.reader = nil
     }
 
     /// Expected failures of a graph query. Messages name schema objects
@@ -164,10 +173,11 @@ public struct BerryGraphQueryService: Sendable {
     }
 
     /// One table or view surfaced by `schema(...)`. Under `.overview` detail,
-    /// `columns`, `indexes`, and `foreignKeys` are always empty.
+    /// `columns`, `indexes`, and `foreignKeys` are always empty. They are
+    /// empty too while `detailPending` is true: the object is listed but its
+    /// columns have not been read yet.
     public struct SchemaObject: Equatable, Sendable, Codable {
-        /// One column of the object, as harvested by `SchemaGraphBuilder`
-        /// from a `.hasColumn` node's attrs.
+        /// One column of the object.
         public struct Column: Equatable, Sendable, Codable {
             public let name: String
             public let type: String
@@ -182,9 +192,8 @@ public struct BerryGraphQueryService: Sendable {
             }
         }
 
-        /// One index on the object, as harvested by `SchemaGraphBuilder`
-        /// from a `.hasIndex` node's attrs. `columns` preserves harvest order
-        /// (the key order for a composite index), not alphabetical order.
+        /// One index on the object. `columns` preserves harvest order (the
+        /// key order for a composite index), not alphabetical order.
         public struct Index: Equatable, Sendable, Codable {
             public let name: String
             public let columns: [String]
@@ -197,10 +206,9 @@ public struct BerryGraphQueryService: Sendable {
             }
         }
 
-        /// One outgoing foreign key of the object, as harvested by
-        /// `SchemaGraphBuilder` onto the `.references` edge to the parent
-        /// table. `referencedDatabase` is the parent table's database, which
-        /// can differ from the child's for a cross-database reference.
+        /// One outgoing foreign key column of the object. `referencedDatabase`
+        /// is the parent table's database, which can differ from the child's
+        /// for a cross-database reference.
         public struct ForeignKey: Equatable, Sendable, Codable {
             public let column: String
             public let referencedDatabase: String?
@@ -224,10 +232,11 @@ public struct BerryGraphQueryService: Sendable {
         public let columns: [Column]
         public let indexes: [Index]
         public let foreignKeys: [ForeignKey]
+        public let detailPending: Bool
 
         public init(
             name: String, database: String?, kind: NodeKind,
-            columns: [Column] = [], indexes: [Index] = [], foreignKeys: [ForeignKey] = []
+            columns: [Column] = [], indexes: [Index] = [], foreignKeys: [ForeignKey] = [], detailPending: Bool = false
         ) {
             self.name = name
             self.database = database
@@ -235,21 +244,55 @@ public struct BerryGraphQueryService: Sendable {
             self.columns = columns
             self.indexes = indexes
             self.foreignKeys = foreignKeys
+            self.detailPending = detailPending
         }
     }
 
-    /// Result of `schema(...)`: the objects within `limit`, how many matching
-    /// objects were cut by it, and when the underlying graph was last
-    /// harvested (`nil` when the store can't report a snapshot time).
+    /// Result of `schema(...)`: one page of objects, how many objects match
+    /// in all (`total`) and after this page (`omittedCount`), the offset of
+    /// the next page (nil on the last one), when the schema last changed
+    /// (`harvestedAt`) and was last checked, and whether that check is stale.
+    ///
+    /// Encodes `nextOffset` and `checkedAt` as null when they are nil, so a
+    /// client paging by `nextOffset` reads an explicit end rather than a
+    /// missing key; `harvestedAt` is left out when nil.
     public struct SchemaListing: Equatable, Sendable, Codable {
         public let objects: [SchemaObject]
         public let omittedCount: Int
         public let harvestedAt: Date?
+        public let total: Int
+        public let nextOffset: Int?
+        public let checkedAt: Date?
+        public let stale: Bool
 
-        public init(objects: [SchemaObject], omittedCount: Int, harvestedAt: Date?) {
+        /// `total` defaults to the objects plus the omitted ones, which is
+        /// the total of a first page; a listing with no `checkedAt` is stale.
+        public init(
+            objects: [SchemaObject], omittedCount: Int, harvestedAt: Date?,
+            total: Int? = nil, nextOffset: Int? = nil, checkedAt: Date? = nil, stale: Bool = true
+        ) {
             self.objects = objects
             self.omittedCount = omittedCount
             self.harvestedAt = harvestedAt
+            self.total = total ?? objects.count + omittedCount
+            self.nextOffset = nextOffset
+            self.checkedAt = checkedAt
+            self.stale = stale
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case objects, omittedCount, harvestedAt, total, nextOffset, checkedAt, stale
+        }
+
+        public func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(objects, forKey: .objects)
+            try container.encode(omittedCount, forKey: .omittedCount)
+            try container.encodeIfPresent(harvestedAt, forKey: .harvestedAt)
+            try container.encode(total, forKey: .total)
+            try container.encode(nextOffset, forKey: .nextOffset)
+            try container.encode(checkedAt, forKey: .checkedAt)
+            try container.encode(stale, forKey: .stale)
         }
     }
 
@@ -321,18 +364,56 @@ public struct BerryGraphQueryService: Sendable {
         }
     }
 
-    /// Harvested statistics of every table, sorted by name then stable id.
-    public func statistics(profileID: UUID) throws -> StatisticsSummary {
+    /// Harvested statistics of every table, sorted by name then stable id, or
+    /// of the first `limit` of them, and the indexes of those tables that
+    /// were never scanned, sorted by name.
+    ///
+    /// The tables are taken from the graph before any statistics are read,
+    /// and only their rows are then read, as plain values; their index
+    /// counters are decoded with one decoder. At 20,000 tables, decoding
+    /// every row as a record and every row's index counters with a decoder
+    /// of its own, to keep 500 tables, cost hundreds of milliseconds.
+    public func statistics(profileID: UUID, limit: Int? = nil) throws -> StatisticsSummary {
         let graph = try loadedGraph(profileID: profileID)
-        let tables = graph.nodes.values
-            .filter { $0.kind == .table }
-            .sorted(by: nodeOrder)
-            .map { NodeStatistics(name: $0.name, fields: statFields($0.attrs)) }
-        let unusedIndexes = graph.nodes.values
-            .filter { $0.kind == .index && $0.attrs["unused"] == "true" }
-            .map(\.name)
-            .sorted()
-        return StatisticsSummary(tables: tables, unusedIndexes: unusedIndexes)
+        let tables = Self.leading(limit.map { max(0, $0) }, of: graph.nodes.values.filter { $0.kind == .table }, by: nodeOrder)
+        let rows = try stats(profileID, tables.map { (database: $0.database, name: $0.name) })
+        let rowsByObject = Dictionary(
+            rows.map { (ObjectKey(database: $0.database, name: $0.name), $0) }, uniquingKeysWith: { first, _ in first }
+        )
+        let decoder = JSONDecoder()
+        var unusedIndexes: [String] = []
+        let entries = tables.map { node -> NodeStatistics in
+            let row = rowsByObject[ObjectKey(database: node.database, name: node.name)]
+            if let row {
+                unusedIndexes += GraphReader.indexCounters(of: row.indexStats, decoder: decoder).filter { $0.value == 0 }.map(\.key)
+            }
+            return NodeStatistics(name: node.name, fields: counters(of: node, row: row.map(GraphReader.counterAttributes(of:))))
+        }
+        return StatisticsSummary(tables: entries, unusedIndexes: unusedIndexes.sorted())
+    }
+
+    /// The first `limit` of `nodes` in `order`, sorted, or every node when
+    /// `limit` is nil. A sorted buffer of `limit` nodes is kept while the
+    /// nodes are read, so a large schema is not sorted whole to keep a few
+    /// hundred of its tables.
+    private static func leading(
+        _ limit: Int?, of nodes: [GraphNode], by order: (GraphNode, GraphNode) -> Bool
+    ) -> [GraphNode] {
+        guard let limit, nodes.count > limit else { return nodes.sorted(by: order) }
+        var kept: [GraphNode] = []
+        kept.reserveCapacity(limit + 1)
+        for node in nodes {
+            if kept.count == limit, let last = kept.last, !order(node, last) { continue }
+            var low = 0
+            var high = kept.count
+            while low < high {
+                let middle = (low + high) / 2
+                if order(node, kept[middle]) { high = middle } else { low = middle + 1 }
+            }
+            kept.insert(node, at: low)
+            if kept.count > limit { kept.removeLast() }
+        }
+        return kept
     }
 
     /// Harvested statistics of one table and its indexes.
@@ -341,108 +422,101 @@ public struct BerryGraphQueryService: Sendable {
     ) throws -> TableStatistics {
         let graph = try loadedGraph(profileID: profileID)
         let table = try resolve(name, in: graph, policy: resolution)
-        let indexes = graph.neighbors(of: table.id, direction: .outgoing, kinds: [.hasIndex])
-            .compactMap { graph.nodes[$0] }
-            .sorted(by: nodeOrder)
-            .map { NodeStatistics(name: $0.name, fields: statFields($0.attrs)) }
-        return TableStatistics(table: table.name, fields: statFields(table.attrs), indexes: indexes)
-    }
-
-    /// Lists tables and views from the persisted graph, without opening a
-    /// database connection. `objectNames`, when given, filters case-
-    /// insensitively: an entry containing a `.` matches the qualified
-    /// `database.name` (empty string for a nil database, e.g. `.orders`);
-    /// an entry without a `.` matches the bare name in every database.
-    /// Unmatched names are silently dropped, not reported as errors. Results
-    /// are sorted by (`database ?? ""`, `name`) and cut at `limit` — `0`
-    /// returns no objects and reports every match as omitted — with the
-    /// remainder reported in `omittedCount`.
-    public func schema(
-        profileID: UUID, objectNames: [String]?, detail: SchemaDetail, limit: Int
-    ) throws -> SchemaListing {
-        let graph = try loadedGraph(profileID: profileID)
-        let harvestedAt = try self.harvestedAt(profileID)
-        let wanted = objectNames?.map { $0.lowercased() }
-        let matches = graph.nodes.values
-            .filter { $0.kind == .table || $0.kind == .view }
-            .filter { matchesWanted($0, wanted: wanted) }
-            .sorted { ($0.database ?? "", $0.name) < ($1.database ?? "", $1.name) }
-        let included = Array(matches.prefix(max(0, limit)))
-        // Single pass over all edges, not one filter per object: keeps
-        // schema() linear in graph size instead of quadratic in object count.
-        let referencesBySource = detail == .full ? referenceEdgesBySource(in: graph) : [:]
-        return SchemaListing(
-            objects: included.map { schemaObject(for: $0, in: graph, detail: detail, referencesBySource: referencesBySource) },
-            omittedCount: matches.count - included.count,
-            harvestedAt: harvestedAt
+        let row = try objectStats(profileID, table.database, table.name)
+        let indexes = (row.map(GraphReader.indexCounters(of:)) ?? [:])
+            .sorted { $0.key < $1.key }
+            .map { NodeStatistics(name: $0.key, fields: GraphReader.indexAttributes(scans: $0.value)) }
+        return TableStatistics(
+            table: table.name, fields: counters(of: table, row: row.map(GraphReader.counterAttributes(of:))), indexes: indexes
         )
     }
 
-    private func matchesWanted(_ node: GraphNode, wanted: [String]?) -> Bool {
-        guard let wanted else { return true }
-        let bare = node.name.lowercased()
-        let qualified = "\(node.database ?? "").\(node.name)".lowercased()
-        return wanted.contains { $0.contains(".") ? $0 == qualified : $0 == bare }
+    /// A table's counters. A service that reads a store takes them from the
+    /// statistics row, not from the graph: the graph can be a cached one,
+    /// and a statistics refresh replaces the rows without changing the
+    /// schema, so the node's copy can be out of date or belong to a row
+    /// since dropped. A service built from a graph closure has no rows.
+    private func counters(of node: GraphNode, row: [String: String]?) -> [String: String] {
+        guard reader != nil else { return statFields(node.attrs) }
+        return row ?? [:]
     }
 
-    private func referenceEdgesBySource(in graph: SchemaGraph) -> [String: [GraphEdge]] {
-        var result: [String: [GraphEdge]] = [:]
-        for edge in graph.edges where edge.kind == .references {
-            result[edge.src, default: []].append(edge)
+    /// One page of tables and views from the stored schema, without opening a
+    /// database connection, ordered by namespace and name.
+    ///
+    /// `objectNames`, when given, selects objects by name: an entry matches
+    /// an object of that name in every namespace, or `namespace.name` (split
+    /// at the last `.`) in one; an empty namespace, as in `.orders`, is an
+    /// object without one. An entry is compared exactly first and, only when
+    /// that matches nothing, again ignoring case, so `ORDERS` finds `orders`
+    /// while `orders` never also lists `Orders`. Unmatched names are silently
+    /// dropped, not reported as errors.
+    ///
+    /// A page holds `limit` objects, clamped to 1...200, and a full listing
+    /// also stops before an object whose estimated size would take it past
+    /// `maxBytes`, though never below one object.
+    ///
+    /// Throws `noSnapshot` when no object of the profile was ever stored, and
+    /// for a service built from closures, which has no stored schema to list.
+    public func schema(
+        profileID: UUID, objectNames: [String]?, detail: SchemaDetail, offset: Int, limit: Int, maxBytes: Int
+    ) throws -> SchemaListing {
+        guard let reader else { throw QueryError.noSnapshot }
+        let state = try reader.state(profileID: profileID)
+        guard state.objectCount > 0 else { throw QueryError.noSnapshot }
+        // An overview serialises no definitions, so they do not count
+        // against its byte budget.
+        let page = try reader.objects(
+            profileID: profileID, names: objectNames, offset: offset, limit: limit,
+            maxBytes: detail == .full ? maxBytes : .max, includeRelations: detail == .full
+        )
+        let foreignKeys = detail == .full ? foreignKeysBySource(page.relations) : [:]
+        let objects = page.objects.map { schemaObject(for: $0, detail: detail, foreignKeys: foreignKeys) }
+        return SchemaListing(
+            objects: objects,
+            omittedCount: max(0, page.total - (max(0, offset) + objects.count)),
+            harvestedAt: state.changedAt,
+            total: page.total, nextOffset: page.nextOffset, checkedAt: state.checkedAt, stale: state.stale
+        )
+    }
+
+    /// The page's foreign keys grouped by source in one pass, not one filter
+    /// per object.
+    private func foreignKeysBySource(_ relations: [SchemaRelationRecord]) -> [ObjectKey: [SchemaObject.ForeignKey]] {
+        var result: [ObjectKey: [SchemaObject.ForeignKey]] = [:]
+        for relation in relations {
+            result[ObjectKey(database: relation.srcDatabase, name: relation.srcName), default: []].append(
+                SchemaObject.ForeignKey(
+                    column: relation.srcColumn, referencedDatabase: relation.dstDatabase,
+                    referencedTable: relation.dstName, referencedColumn: relation.dstColumn
+                )
+            )
         }
         return result
     }
 
+    /// Columns are listed by name, as the listing has always ordered them;
+    /// foreign keys keep the store's order, which is by column.
     private func schemaObject(
-        for node: GraphNode, in graph: SchemaGraph, detail: SchemaDetail,
-        referencesBySource: [String: [GraphEdge]]
+        for row: SchemaObjectRecord, detail: SchemaDetail, foreignKeys: [ObjectKey: [SchemaObject.ForeignKey]]
     ) -> SchemaObject {
+        let kind: NodeKind = row.kind == "view" ? .view : .table
+        // An overview shows no columns, so it needs only whether a definition
+        // exists, not the decoded definition.
         guard detail == .full else {
-            return SchemaObject(name: node.name, database: node.database, kind: node.kind)
+            return SchemaObject(name: row.name, database: row.database, kind: kind, detailPending: row.definition == nil)
         }
-        let columns = graph.neighbors(of: node.id, direction: .outgoing, kinds: [.hasColumn])
-            .compactMap { graph.nodes[$0] }
-            .sorted { $0.name < $1.name }
-            .map {
-                SchemaObject.Column(
-                    name: $0.name,
-                    type: $0.attrs["type"] ?? "",
-                    nullable: $0.attrs["nullable"] == "true",
-                    primaryKey: $0.attrs["primaryKey"] == "true"
-                )
-            }
-        let indexes = graph.neighbors(of: node.id, direction: .outgoing, kinds: [.hasIndex])
-            .compactMap { graph.nodes[$0] }
-            .sorted { $0.name < $1.name }
-            .map {
-                SchemaObject.Index(
-                    name: $0.name,
-                    columns: indexColumns($0.attrs["columns"]),
-                    unique: $0.attrs["unique"] == "true"
-                )
-            }
-        let foreignKeys = (referencesBySource[node.id] ?? [])
-            .sorted { ($0.attrs["column"] ?? "") < ($1.attrs["column"] ?? "") }
-            .map { edge -> SchemaObject.ForeignKey in
-                let parent = graph.nodes[edge.dst]
-                return SchemaObject.ForeignKey(
-                    column: edge.attrs["column"] ?? "",
-                    referencedDatabase: parent?.database,
-                    referencedTable: parent?.name ?? edge.dst,
-                    referencedColumn: edge.attrs["referencedColumn"] ?? ""
-                )
-            }
+        guard let definition = GraphReader.definition(of: row) else {
+            return SchemaObject(name: row.name, database: row.database, kind: kind, detailPending: true)
+        }
         return SchemaObject(
-            name: node.name, database: node.database, kind: node.kind,
-            columns: columns, indexes: indexes, foreignKeys: foreignKeys
+            name: row.name, database: row.database, kind: kind,
+            columns: definition.columns.sorted { $0.name < $1.name }.map {
+                SchemaObject.Column(name: $0.name, type: $0.type, nullable: $0.nullable, primaryKey: $0.primaryKey)
+            },
+            indexes: definition.indexes.map { SchemaObject.Index(name: $0.name, columns: $0.columns, unique: $0.unique) },
+            foreignKeys: foreignKeys[ObjectKey(database: row.database, name: row.name)] ?? []
         )
-    }
-
-    private func indexColumns(_ attr: String?) -> [String] {
-        (attr ?? "")
-            .components(separatedBy: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
     }
 
     private func loadedGraph(profileID: UUID) throws -> SchemaGraph {
@@ -464,11 +538,22 @@ public struct BerryGraphQueryService: Sendable {
 
         let key = query.lowercased()
         let allNodes = graph.nodes.values
-        let qualified = allNodes.filter {
-            guard let database = $0.database else { return false }
-            return "\(database).\($0.name)".lowercased() == key
+        // Every step scans every node, and the graph the MCP helper keeps
+        // between queries can hold tens of thousands, so the qualified step,
+        // which builds and lower-cases a string per node, runs only for a key
+        // it can match. A qualified name holds the scalar U+002E between
+        // namespace and name, and no other scalar lower-cases to text that
+        // holds it or decomposes canonically into it (checked over every
+        // scalar with Swift 6.3.3), so a key whose scalars hold no dot matches
+        // no qualified name. The test is on scalars: a dot followed by a
+        // combining mark is one Character, which `contains(".")` misses.
+        if key.unicodeScalars.contains(".") {
+            let qualified = allNodes.filter {
+                guard let database = $0.database else { return false }
+                return "\(database).\($0.name)".lowercased() == key
+            }
+            if let match = try select(qualified, raw: query, policy: policy) { return match }
         }
-        if let match = try select(qualified, raw: query, policy: policy) { return match }
 
         let preferred = allNodes.filter {
             ($0.kind == .table || $0.kind == .view) && $0.name.lowercased() == key

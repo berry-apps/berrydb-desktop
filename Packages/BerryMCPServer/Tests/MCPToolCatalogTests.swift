@@ -1,11 +1,12 @@
 import BerryGraph
 import BerryMCP
-import BerryStore
 import Foundation
+import GRDB
 import MCP
 import Testing
 
 @testable import BerryMCPServer
+@testable import BerryStore
 
 /// A non-metadata failure whose every rendering contains a file path, the way
 /// a database error can.
@@ -13,6 +14,59 @@ private struct PathLeakingError: Error, LocalizedError, CustomStringConvertible 
     static let path = "/Users/someone/Library/Application Support/BerryDB/store.sqlite"
     var errorDescription: String? { "disk I/O error at \(Self.path)" }
     var description: String { "PathLeakingError(\(Self.path))" }
+}
+
+/// A stored schema written the way a harvest pass writes it: the listing of
+/// tables, views and foreign keys, the definitions of the tables whose
+/// columns were read, and statistics.
+struct StoredSchema {
+    var objects: [SchemaListedObject] = []
+    var relations: [SchemaListedRelation] = []
+    var definitions: [SchemaDetailWrite] = []
+    var rows: [String: Int64] = [:]
+
+    static func column(_ name: String, _ type: String, nullable: Bool, primaryKey: Bool = false) -> SchemaDefinition.Column {
+        SchemaDefinition.Column(name: name, type: type, nullable: nullable, defaultValue: nil, primaryKey: primaryKey)
+    }
+
+    /// A table, with a definition when `columns` is given and pending otherwise.
+    mutating func table(_ name: String, columns: [SchemaDefinition.Column]? = nil, rows: Int64? = nil) throws {
+        objects.append(SchemaListedObject(database: nil, name: name, kind: "table", fingerprint: nil))
+        if let columns {
+            let definition = SchemaDefinition(columns: columns, indexes: [])
+            definitions.append(SchemaDetailWrite(
+                database: nil, name: name, kind: "table", fingerprint: nil, definitionHash: definition.hash,
+                definition: try definition.json(), columnText: definition.columnText, indexText: definition.indexText
+            ))
+        }
+        self.rows[name] = rows
+    }
+
+    /// A view whose columns were never read.
+    mutating func view(_ name: String) {
+        objects.append(SchemaListedObject(database: nil, name: name, kind: "view", fingerprint: nil))
+    }
+
+    mutating func reference(_ source: String, _ column: String, _ target: String, _ targetColumn: String) {
+        relations.append(SchemaListedRelation(
+            srcDatabase: nil, srcName: source, srcColumn: column, dstDatabase: nil, dstName: target,
+            dstColumn: targetColumn, constraintName: nil
+        ))
+    }
+
+    /// Writes the schema as one pass at `at`, recorded as the last change and
+    /// as the last check at `checkedAt`.
+    func write(to store: BerryStore, profileID: UUID, at: Date, checkedAt: Date) throws {
+        let listing = try store.applySchemaListing(profileID: profileID, objects: objects, relations: relations, now: at)
+        _ = try store.applySchemaDetails(profileID: profileID, details: definitions, now: at, changeID: listing.changeID)
+        try store.replaceSchemaStats(profileID: profileID, rows: rows.map {
+            SchemaStatsRecord(profileID: profileID, database: nil, name: $0.key, rows: $0.value, updatedAt: at)
+        })
+        try store.updateSchemaGraphState(profileID: profileID) {
+            $0.lastChangedAt = at
+            $0.lastCheckedAt = checkedAt
+        }
+    }
 }
 
 @Suite("MCP tool catalog")
@@ -41,44 +95,37 @@ struct MCPToolCatalogTests {
         .selected(project(integrity: integrity, roots: roots), source: .workingDirectory, workspace: "/work/shop")
     }
 
-    /// `orders` references `customers`; `orders` has an `id` and a `createdAt`
-    /// column and `customers` has no columns.
-    func shopGraph() -> SchemaGraph {
-        var graph = SchemaGraph()
-        graph.addNode(GraphNode(id: "t:orders", kind: .table, name: "orders", attrs: ["rows": "10"]))
-        graph.addNode(GraphNode(id: "t:customers", kind: .table, name: "customers", attrs: ["rows": "3"]))
-        graph.addNode(GraphNode(
-            id: "c:orders.id", kind: .column, name: "id",
-            attrs: ["type": "int", "nullable": "false", "primaryKey": "true"]
-        ))
-        graph.addNode(GraphNode(
-            id: "c:orders.createdAt", kind: .column, name: "createdAt",
-            attrs: ["type": "timestamp", "nullable": "true", "primaryKey": "false"]
-        ))
-        graph.addEdge(GraphEdge(src: "t:orders", dst: "c:orders.id", kind: .hasColumn))
-        graph.addEdge(GraphEdge(src: "t:orders", dst: "c:orders.createdAt", kind: .hasColumn))
-        graph.addEdge(GraphEdge(src: "t:orders", dst: "t:customers", kind: .references))
-        return graph
+    /// `orders` (10 rows) references `customers` (3 rows); `orders` has an
+    /// `id` and a `createdAt` column and `customers` has no columns.
+    func shopSchema() throws -> StoredSchema {
+        var schema = StoredSchema()
+        try schema.table("orders", columns: [
+            StoredSchema.column("id", "int", nullable: false, primaryKey: true),
+            StoredSchema.column("createdAt", "timestamp", nullable: true),
+        ], rows: 10)
+        try schema.table("customers", columns: [], rows: 3)
+        schema.reference("orders", "customer_id", "customers", "id")
+        return schema
     }
 
-    func service(graph: SchemaGraph? = nil, failure: Error? = nil, harvested: Bool = true) -> MCPMetadataService {
-        let built = graph ?? shopGraph()
-        let profiles = [shop, outsider]
-        let harvestedAt: Date? = harvested ? Self.harvestTime : nil
-        let load: @Sendable (UUID) throws -> SchemaGraph = { _ in
-            if let failure { throw failure }
-            return built
+    /// A service over a store holding both profiles, with `schema` (the shop
+    /// unless given) harvested for `shop` when `harvested`. A `broken` store
+    /// fails every schema read with a database error.
+    func service(schema: StoredSchema? = nil, harvested: Bool = true, broken: Bool = false) throws -> MCPMetadataService {
+        let store = try BerryStore(path: ":memory:")
+        try store.save(shop)
+        try store.save(outsider)
+        if harvested {
+            try (schema ?? shopSchema()).write(to: store, profileID: shop.id, at: Self.harvestTime, checkedAt: Date())
         }
-        return MCPMetadataService(
-            profiles: { profiles },
-            graph: BerryGraphQueryService(loadGraph: load, harvestedAt: { _ in harvestedAt }),
-            harvestedAt: { _ in harvestedAt },
-            loadGraph: load
-        )
+        if broken {
+            try #require(store.dbQueue).write { try $0.execute(sql: "DROP TABLE schema_graph_state") }
+        }
+        return MCPMetadataService(store: store)
     }
 
-    func router(graph: SchemaGraph? = nil, failure: Error? = nil) -> MCPToolRouter {
-        MCPToolRouter(metadata: service(graph: graph, failure: failure))
+    func router(schema: StoredSchema? = nil, harvested: Bool = true, broken: Bool = false) throws -> MCPToolRouter {
+        MCPToolRouter(metadata: try service(schema: schema, harvested: harvested, broken: broken))
     }
 
     func call(
@@ -138,7 +185,7 @@ struct MCPToolCatalogTests {
         }
         #expect(MCPToolName.allCases.map(\.rawValue) == [
             "berrydb_status", "berrydb_list_connections", "berrydb_get_schema",
-            "berrydb_search_schema", "berrydb_graph_query", "berrydb_get_graph_stats",
+            "berrydb_search_schema", "berrydb_graph_query", "berrydb_get_graph_stats", "berrydb_get_schema_changes",
         ])
     }
 
@@ -147,7 +194,7 @@ struct MCPToolCatalogTests {
         #expect(tools.map(\.name) == ["berrydb_status"])
     }
 
-    @Test func selectedContextListsAllSixToolsWithStrictSchemas() throws {
+    @Test func selectedContextListsEveryToolWithStrictSchemas() throws {
         let tools = MCPToolCatalog.tools(for: selected())
         #expect(tools.map(\.name) == MCPToolName.allCases.map(\.rawValue))
         for tool in tools {
@@ -179,6 +226,10 @@ struct MCPToolCatalogTests {
         #expect(schema["object_names"]?.objectValue?["maxItems"]?.intValue == 50)
         #expect(schema["detail"]?.objectValue?["enum"]?.arrayValue?.compactMap(\.stringValue) == ["overview", "full"])
         #expect(schema["detail"]?.objectValue?["default"]?.stringValue == "overview")
+        #expect(schema["offset"]?.objectValue?["type"]?.stringValue == "integer")
+        #expect(schema["offset"]?.objectValue?["minimum"]?.intValue == 0)
+        #expect(schema["offset"]?.objectValue?["default"]?.intValue == 0)
+        #expect(Set(schema.keys) == ["connection_id", "object_names", "detail", "offset"])
         #expect(required(.getSchema) == ["connection_id"])
 
         let search = try properties(.searchSchema)
@@ -195,6 +246,15 @@ struct MCPToolCatalogTests {
         #expect(graph["limit"]?.objectValue?["maximum"]?.intValue == 50)
         #expect(Set(graph.keys) == ["connection_id", "operation", "node", "from", "to", "limit"])
         #expect(required(.graphQuery) == ["connection_id", "operation"])
+
+        let changes = try properties(.getSchemaChanges)
+        #expect(Set(changes.keys) == ["connection_id", "since", "limit"])
+        #expect(changes["since"]?.objectValue?["type"]?.stringValue == "string")
+        #expect(changes["since"]?.objectValue?["maxLength"]?.intValue == 64)
+        #expect(changes["limit"]?.objectValue?["minimum"]?.intValue == 1)
+        #expect(changes["limit"]?.objectValue?["maximum"]?.intValue == 200)
+        #expect(changes["limit"]?.objectValue?["default"]?.intValue == 50)
+        #expect(required(.getSchemaChanges) == ["connection_id"])
 
         let stats = try properties(.getGraphStats)
         #expect(Set(stats.keys) == ["connection_id", "object"])
@@ -274,6 +334,18 @@ struct MCPToolCatalogTests {
         #expect(graph(["limit": .int(51)]) == "limit must be between 1 and 50")
         #expect(graph(["operation": .int(1)]) == "operation must be a string")
         #expect(invalidParamsMessage("berrydb_get_graph_stats", ["connection_id": id, "object": .int(1)]) == "object must be a string")
+
+        #expect(schema(["offset": .int(-1)]) == "offset must be 0 or greater")
+        #expect(schema(["offset": "1"]) == "offset must be an integer")
+        func changes(_ extra: [String: Value]) -> String? {
+            invalidParamsMessage("berrydb_get_schema_changes", ["connection_id": id].merging(extra) { $1 })
+        }
+        #expect(changes(["since": .int(5)]) == "since must be a string")
+        #expect(changes(["since": .string(String(repeating: "9", count: 65))]) == "since must be at most 64 characters")
+        #expect(changes(["limit": .int(0)]) == "limit must be between 1 and 200")
+        #expect(changes(["limit": .int(201)]) == "limit must be between 1 and 200")
+        #expect(changes(["limit": "ten"]) == "limit must be an integer")
+        #expect(changes(["cursor": "id:1"]) == "Unexpected argument: cursor")
     }
 
     @Test func unknownToolIsInvalidParams() {
@@ -326,42 +398,47 @@ struct MCPToolCatalogTests {
         #expect(unassigned == missing)
         let search = try call(.searchSchema, ["connection_id": .string(UUID().uuidString), "query": "ord"])
         #expect(text(search) == "Unknown connection for this project")
+        let changes = try call(.getSchemaChanges, ["connection_id": .string(outsider.id.uuidString)])
+        #expect(text(changes) == "Unknown connection for this project")
     }
 
     @Test func metadataErrorTextReachesTheAgent() throws {
         let result = try call(.graphQuery, ["connection_id": connectionID, "operation": "neighbors", "node": "missing"])
         #expect(result.isError == true)
         #expect(text(result).hasPrefix("Node 'missing' not found"))
-        let empty = try call(.getSchema, ["connection_id": connectionID], router: router(graph: SchemaGraph()))
+        let empty = try call(.getSchema, ["connection_id": connectionID], router: router(harvested: false))
         #expect(empty.isError == true)
         #expect(text(empty) == MCPMetadataError.noSnapshot.description)
         let noGraph = try call(
-            .searchSchema, ["connection_id": connectionID, "query": "x"], router: router(graph: SchemaGraph())
+            .searchSchema, ["connection_id": connectionID, "query": "x"], router: router(harvested: false)
         )
         #expect(noGraph.isError == true)
         #expect(text(noGraph) == MCPMetadataError.noSnapshot.description)
     }
 
     @Test func nonMetadataErrorsNeverLeakTheirDetail() throws {
-        let failing = router(failure: PathLeakingError())
+        let failing = try router(broken: true)
         let calls: [(MCPToolName, [String: Value])] = [
             (.getSchema, ["connection_id": connectionID]),
             (.searchSchema, ["connection_id": connectionID, "query": "ord"]),
             (.graphQuery, ["connection_id": connectionID, "operation": "circular_dependencies"]),
             (.getGraphStats, ["connection_id": connectionID]),
+            (.getSchemaChanges, ["connection_id": connectionID]),
         ]
         for (name, arguments) in calls {
             let result = try call(name, arguments, router: failing)
             #expect(result.isError == true)
             #expect(text(result) == "BerryDB could not read its store for this request.")
-            #expect(!String(describing: result).contains("/Users"))
-            #expect(!String(describing: result).contains("sqlite"))
+            // GRDB writes "SQLite error 1: no such table: schema_graph_state".
+            let rendered = String(describing: result).lowercased()
+            #expect(!rendered.contains("/users"))
+            #expect(!rendered.contains("sqlite"))
+            #expect(!rendered.contains("schema_graph_state"))
         }
 
+        let reader = GraphReader(store: try BerryStore(path: ":memory:"))
         let throwingProfiles = MCPMetadataService(
-            profiles: { throw PathLeakingError() },
-            graph: BerryGraphQueryService(loadGraph: { _ in SchemaGraph() }),
-            harvestedAt: { _ in nil }, loadGraph: { _ in SchemaGraph() }
+            profiles: { throw PathLeakingError() }, reader: reader, graph: BerryGraphQueryService(reader: reader)
         )
         let listed = try MCPToolRouter(metadata: throwingProfiles)
             .call("berrydb_list_connections", arguments: nil, context: selected())
@@ -369,22 +446,14 @@ struct MCPToolCatalogTests {
         #expect(text(listed) == "BerryDB could not read its store for this request.")
     }
 
+    /// A page always holds at least one object, so one table whose columns
+    /// alone exceed 1 MiB still reaches the result ceiling.
     @Test func oversizedResultIsToolError() throws {
-        var graph = SchemaGraph()
-        for table in 0 ..< 200 {
-            let tableID = "t:\(table)"
-            graph.addNode(GraphNode(id: tableID, kind: .table, name: "table_\(table)"))
-            for column in 0 ..< 80 {
-                let columnID = "c:\(table).\(column)"
-                let name = "column_with_a_deliberately_long_name_\(table)_\(column)"
-                graph.addNode(GraphNode(
-                    id: columnID, kind: .column, name: name,
-                    attrs: ["type": "character varying", "nullable": "true", "primaryKey": "false"]
-                ))
-                graph.addEdge(GraphEdge(src: tableID, dst: columnID, kind: .hasColumn))
-            }
-        }
-        let big = router(graph: graph)
+        var schema = StoredSchema()
+        try schema.table("table_0", columns: (0 ..< 12_000).map {
+            StoredSchema.column("column_with_a_deliberately_long_name_\($0)", "character varying", nullable: true)
+        })
+        let big = try router(schema: schema)
         let result = try call(.getSchema, ["connection_id": connectionID, "detail": "full"], router: big)
         #expect(result.isError == true)
         #expect(text(result) == "Result too large; narrow the request")
@@ -396,6 +465,161 @@ struct MCPToolCatalogTests {
         #expect(object(overview)["omitted_count"]?.intValue == 0)
     }
 
+    // MARK: Paging and changes
+
+    @Test func getSchemaPagesFromAnOffset() throws {
+        let first = try call(.getSchema, ["connection_id": connectionID])
+        #expect(object(first)["total"]?.intValue == 2)
+        #expect(object(first)["next_offset"] == .null)
+        #expect(object(first)["stale"] == .bool(false))
+        #expect(object(first)["checked_at"]?.stringValue != nil)
+
+        let last = try call(.getSchema, ["connection_id": connectionID, "offset": .int(1)])
+        expectJSONText(last)
+        #expect(object(last)["objects"]?.arrayValue?.compactMap { $0.objectValue?["name"]?.stringValue } == ["orders"])
+        #expect(object(last)["total"]?.intValue == 2)
+        #expect(object(last)["next_offset"] == .null)
+        #expect(text(last).contains(#""next_offset":null"#))
+
+        let past = try call(.getSchema, ["connection_id": connectionID, "offset": .int(5)])
+        #expect(object(past)["objects"]?.arrayValue == [])
+        #expect(object(past)["next_offset"] == .null)
+    }
+
+    /// A definition of about 600 KB fills a full page on its own; the next
+    /// object comes on the page `next_offset` points to.
+    @Test func aFullPageStopsBeforeHalfAMebibyte() throws {
+        var schema = StoredSchema()
+        try schema.table("a_wide", columns: (0 ..< 6_500).map {
+            StoredSchema.column(String(format: "column_with_a_long_name_%05d", $0), "varchar(255)", nullable: true)
+        })
+        try schema.table("b_narrow", columns: [StoredSchema.column("id", "int", nullable: false, primaryKey: true)])
+        let router = try router(schema: schema)
+
+        let first = try call(.getSchema, ["connection_id": connectionID, "detail": "full"], router: router)
+        #expect(first.isError != true)
+        #expect(text(first).utf8.count > 600_000)
+        #expect(object(first)["objects"]?.arrayValue?.compactMap { $0.objectValue?["name"]?.stringValue } == ["a_wide"])
+        #expect(object(first)["next_offset"]?.intValue == 1)
+        #expect(object(first)["total"]?.intValue == 2)
+
+        let next = try call(
+            .getSchema, ["connection_id": connectionID, "detail": "full", "offset": .int(1)], router: router
+        )
+        #expect(object(next)["objects"]?.arrayValue?.compactMap { $0.objectValue?["name"]?.stringValue } == ["b_narrow"])
+        #expect(object(next)["next_offset"] == .null)
+
+        let overview = try call(.getSchema, ["connection_id": connectionID], router: router)
+        #expect(object(overview)["objects"]?.arrayValue?.count == 2)
+    }
+
+    @Test func detailPendingMarksObjectsWhoseColumnsWereNotRead() throws {
+        var schema = try shopSchema()
+        schema.view("recent_orders")
+        let result = try call(.getSchema, ["connection_id": connectionID, "detail": "full"], router: router(schema: schema))
+        let pending = try #require(object(result)["objects"]?.arrayValue).compactMap(\.objectValue).map {
+            ($0["name"]?.stringValue ?? "", $0["detail_pending"])
+        }
+        #expect(pending.map(\.0) == ["customers", "orders", "recent_orders"])
+        #expect(pending.map(\.1) == [.bool(false), .bool(false), .bool(true)])
+    }
+
+    @Test func schemaChangesReturnTheFeedAndWhereToContinue() throws {
+        let first = try call(.getSchemaChanges, ["connection_id": connectionID, "limit": .int(2)])
+        expectJSONText(first)
+        #expect(first.isError != true)
+        let changes = try #require(object(first)["changes"]?.arrayValue).compactMap(\.objectValue)
+        #expect(changes.map { $0["kind"]?.stringValue } == ["added", "added"])
+        #expect(changes.map { $0["name"]?.stringValue } == ["customers", "orders"])
+        #expect(changes.map { $0["object_kind"]?.stringValue } == ["table", "table"])
+        #expect(changes.first?["at"]?.stringValue == "2023-11-14T22:13:20Z")
+        let next = try #require(object(first)["next_since"]?.stringValue)
+        #expect(object(first)["stale"] == .bool(false))
+
+        let rest = try call(.getSchemaChanges, ["connection_id": connectionID, "since": .string(next)])
+        expectJSONText(rest)
+        let relation = try #require(object(rest)["changes"]?.arrayValue?.first?.objectValue)
+        #expect(relation["kind"]?.stringValue == "relation_added")
+        #expect(relation["relation"]?.stringValue == "orders.customer_id -> customers.id")
+        #expect(object(rest)["next_since"] == .null)
+        #expect(text(rest).contains(#""next_since":null"#))
+    }
+
+    /// `since` is limited to 64 characters, so `next_since` must fit in them
+    /// whatever the names of the entry it resumes at: PostgreSQL keeps up to
+    /// 63 bytes of an identifier by default
+    /// (https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS).
+    /// Paging one entry at a time passes every cursor back through the
+    /// tool's own argument check.
+    @Test func everyNextSinceFitsTheSinceArgument() throws {
+        var schema = StoredSchema()
+        let names = ["a", "b", "c"].map { String(repeating: $0, count: 63) }
+        for name in names { try schema.table(name, columns: []) }
+        schema.reference(names[1], String(repeating: "x", count: 63), names[0], String(repeating: "y", count: 63))
+        let router = try router(schema: schema)
+
+        var arguments: [String: Value] = ["connection_id": connectionID, "limit": .int(1)]
+        var kinds: [String] = []
+        while true {
+            let page = try call(.getSchemaChanges, arguments, router: router)
+            #expect(page.isError != true)
+            kinds += try #require(object(page)["changes"]?.arrayValue).compactMap { $0.objectValue?["kind"]?.stringValue }
+            guard let next = object(page)["next_since"]?.stringValue else { break }
+            #expect(next.count <= 64, "\(next.count) characters")
+            arguments["since"] = .string(next)
+        }
+        #expect(kinds == ["added", "added", "added", "relation_added"])
+    }
+
+    /// A changed table carries its diff, which the output schema describes.
+    @Test func aChangedTableCarriesItsDiffInTheSchemaChangesOutput() throws {
+        let store = try BerryStore(path: ":memory:")
+        try store.save(shop)
+        let later = Self.harvestTime.addingTimeInterval(120)
+        try shopSchema().write(to: store, profileID: shop.id, at: Self.harvestTime, checkedAt: Self.harvestTime)
+        var changed = StoredSchema()
+        try changed.table("orders", columns: [
+            StoredSchema.column("id", "bigint", nullable: false, primaryKey: true),
+            StoredSchema.column("createdAt", "timestamp", nullable: true),
+            StoredSchema.column("note", "text", nullable: true),
+        ])
+        _ = try store.applySchemaDetails(profileID: shop.id, details: changed.definitions, now: later, changeID: nil)
+        try store.updateSchemaGraphState(profileID: shop.id) { $0.lastCheckedAt = later }
+
+        let result = try call(
+            .getSchemaChanges, ["connection_id": connectionID], router: MCPToolRouter(metadata: MCPMetadataService(store: store))
+        )
+        expectJSONText(result)
+        let entry = try #require(object(result)["changes"]?.arrayValue?.last?.objectValue)
+        #expect(entry["kind"]?.stringValue == "changed")
+        let diff = try #require(entry["diff"]?.objectValue)
+        #expect(diff["columns_added"]?.arrayValue == [.string("note")])
+        let typeChange = try #require(diff["columns_changed"]?.arrayValue?.first?.objectValue)
+        #expect(typeChange["name"]?.stringValue == "id")
+        #expect(typeChange["to"]?.objectValue?["type"]?.stringValue == "bigint")
+
+        let tools = Dictionary(uniqueKeysWithValues: MCPToolCatalog.tools(for: selected()).map { ($0.name, $0) })
+        let schema = try #require(tools["berrydb_get_schema_changes"]?.outputSchema)
+        let structured = try #require(result.structuredContent)
+        #expect(violation(structured, against: schema) == nil, "\(violation(structured, against: schema) ?? "")")
+    }
+
+    @Test func aSinceCursorThatDoesNotParseIsAToolErrorNotEchoed() throws {
+        let result = try call(.getSchemaChanges, ["connection_id": connectionID, "since": "last tuesday"])
+        #expect(result.isError == true)
+        #expect(text(result) == "Invalid since cursor")
+        #expect(!String(describing: result).contains("tuesday"))
+    }
+
+    @Test func aConnectionNeverCheckedHasAnEmptyStaleFeed() throws {
+        let result = try call(.getSchemaChanges, ["connection_id": connectionID], router: router(harvested: false))
+        #expect(result.isError != true)
+        #expect(object(result)["changes"]?.arrayValue == [])
+        #expect(object(result)["next_since"] == .null)
+        #expect(object(result)["checked_at"] == .null)
+        #expect(object(result)["stale"] == .bool(true))
+    }
+
     // MARK: Status
 
     @Test func statusReportsSelectedProject() throws {
@@ -403,7 +627,7 @@ struct MCPToolCatalogTests {
         let status = object(result)
         #expect(result.isError != true)
         #expect(Set(status.keys) == [
-            "state", "reason", "project", "selected_by", "workspace", "live_reads", "integrity",
+            "state", "reason", "project", "selected_by", "workspace", "live_reads", "integrity", "connections",
         ])
         #expect(status["state"]?.stringValue == "selected")
         #expect(status["reason"]?.isNull == true)
@@ -415,6 +639,43 @@ struct MCPToolCatalogTests {
         #expect(Set(project.keys) == ["id", "name"])
         #expect(project["name"]?.stringValue == "Shop project")
         #expect(project["id"]?.stringValue == Self.projectID.uuidString)
+    }
+
+    /// The status reports, for each connection of the selected project, how
+    /// fresh its stored schema is and the large-schema hint, and for a stale
+    /// one why: the code of the failure that stopped its last pass, one of a
+    /// fixed set, never text a server wrote.
+    @Test func statusReportsEachConnectionsFreshnessAndWhyItIsStale() throws {
+        let store = try BerryStore(path: ":memory:")
+        try store.save(shop)
+        try store.save(outsider)
+        try shopSchema().write(to: store, profileID: shop.id, at: Self.harvestTime, checkedAt: Date())
+        let router = MCPToolRouter(metadata: MCPMetadataService(store: store))
+        func connections() throws -> [[String: Value]] {
+            try #require(object(try call(.status, nil, router: router))["connections"]?.arrayValue).compactMap(\.objectValue)
+        }
+
+        let fresh = try #require(try connections().first)
+        #expect(try connections().count == 1)
+        #expect(Set(fresh.keys) == ["id", "name", "checked_at", "stale", "stale_reason", "hint"])
+        #expect(fresh["id"]?.stringValue == shop.id.uuidString && fresh["name"]?.stringValue == "Shop")
+        #expect(fresh["stale"]?.boolValue == false && fresh["stale_reason"]?.isNull == true && fresh["hint"]?.isNull == true)
+
+        try store.updateSchemaGraphState(profileID: shop.id) {
+            $0.lastCheckedAt = Self.harvestTime
+            $0.lastErrorCode = "timeout"
+            $0.hint = "selectSchemas"
+        }
+        let stale = try #require(try connections().first)
+        #expect(stale["stale"]?.boolValue == true && stale["stale_reason"]?.stringValue == "timeout")
+        #expect(stale["hint"]?.stringValue == "selectSchemas")
+        let listed = try #require(object(try call(.listConnections, nil, router: router))["connections"]?.arrayValue?.first?.objectValue)
+        #expect(listed["stale_reason"]?.stringValue == "timeout")
+
+        // Only a code the harvest records is passed on.
+        try store.updateSchemaGraphState(profileID: shop.id) { $0.lastErrorCode = "FATAL: password authentication failed" }
+        #expect(try connections().first?["stale_reason"]?.isNull == true)
+        #expect(try connections().first?["stale"]?.boolValue == true)
     }
 
     @Test func statusReportsUnconfiguredReasonAndWorkspace() throws {
@@ -466,7 +727,7 @@ struct MCPToolCatalogTests {
         let result = try call(.status, nil, context: selected(roots: [secretRoot]))
         let rendered = String(describing: result)
         #expect(!rendered.contains(secretRoot))
-        #expect(!rendered.contains(shop.id.uuidString))
+        #expect(!rendered.contains(outsider.id.uuidString))
         #expect(!rendered.contains("db.internal.example"))
 
         let unconfigured = try call(.status, nil, context: .unconfigured(.noMatchingProject, workspace: "/work/app"))
@@ -499,7 +760,7 @@ struct MCPToolCatalogTests {
     /// null value, so every connection has the same fields.
     @Test func unharvestedGraphIsReportedAsNull() throws {
         let tools = Dictionary(uniqueKeysWithValues: MCPToolCatalog.tools(for: selected()).map { ($0.name, $0) })
-        let result = try call(.listConnections, [:], router: MCPToolRouter(metadata: service(harvested: false)))
+        let result = try call(.listConnections, [:], router: router(harvested: false))
         expectJSONText(result)
         let first = try #require(object(result)["connections"]?.arrayValue?.first?.objectValue)
         #expect(first["graph_harvested_at"] == .null)
@@ -580,11 +841,11 @@ struct MCPToolCatalogTests {
     }
 
     @Test func textContentIsTheCompactJSONOfTheStructuredResult() throws {
-        var graph = shopGraph()
-        graph.addNode(GraphNode(id: "t:evil", kind: .table, name: "evil\nname\r\nwith breaks"))
+        var schema = try shopSchema()
+        try schema.table("evil\nname\r\nwith breaks")
         let result = try call(
             .graphQuery, ["connection_id": connectionID, "operation": "neighbors", "node": "evil\nname\r\nwith breaks"],
-            router: router(graph: graph)
+            router: router(schema: schema)
         )
         #expect(result.isError != true)
         expectJSONText(result)
@@ -601,17 +862,12 @@ struct MCPToolCatalogTests {
     /// and writes it back as base64, so a name of that shape would differ
     /// between the structured result and the text block.
     @Test func dataURLShapedNamesStayStrings() throws {
-        var graph = shopGraph()
-        graph.addNode(GraphNode(id: "t:data", kind: .table, name: "data:,x"))
-        graph.addNode(GraphNode(
-            id: "c:data.y", kind: .column, name: "data:text/plain;base64,eA==",
-            attrs: ["type": "text", "nullable": "true", "primaryKey": "false"]
-        ))
-        graph.addEdge(GraphEdge(src: "t:data", dst: "c:data.y", kind: .hasColumn))
+        var schema = try shopSchema()
+        try schema.table("data:,x", columns: [StoredSchema.column("data:text/plain;base64,eA==", "text", nullable: true)])
 
         let result = try call(
             .getSchema, ["connection_id": connectionID, "object_names": ["data:,x"], "detail": "full"],
-            router: router(graph: graph)
+            router: router(schema: schema)
         )
 
         #expect(result.isError != true)
@@ -703,6 +959,8 @@ struct MCPToolCatalogTests {
             (.graphQuery, graph("top_centrality", [:])),
             (.getGraphStats, ["connection_id": id]),
             (.getGraphStats, ["connection_id": id, "object": "orders"]),
+            (.getSchemaChanges, ["connection_id": id]),
+            (.getSchemaChanges, ["connection_id": id, "limit": .int(1)]),
         ]
         for (name, arguments) in calls {
             let result = try call(name, arguments)
@@ -752,7 +1010,9 @@ struct MCPToolCatalogTests {
 
         let listing = BerryGraphQueryService.SchemaListing(objects: [], omittedCount: 3, harvestedAt: Self.harvestTime)
         let listingValue = try MCPStructuredEncoding.value(listing)
-        #expect(Set(listingValue.objectValue?.keys.map { $0 } ?? []) == ["objects", "omitted_count", "harvested_at"])
+        #expect(Set(listingValue.objectValue?.keys.map { $0 } ?? []) == [
+            "objects", "omitted_count", "harvested_at", "total", "next_offset", "checked_at", "stale",
+        ])
         let neighbors = BerryGraphQueryService.Neighbors(node: "n", dependsOn: [], dependedOnBy: [])
         #expect(Set(try #require(MCPStructuredEncoding.value(neighbors).objectValue).keys) == ["node", "depends_on", "depended_on_by"])
     }
@@ -761,25 +1021,27 @@ struct MCPToolCatalogTests {
 
     @Test func unconfiguredContextHasNoResources() throws {
         let context = MCPProjectContext.unconfigured(.noMatchingProject, workspace: nil)
-        #expect(try MCPResourceCatalog.resources(for: context, metadata: service()).isEmpty)
+        let metadata = try service()
+        #expect(try MCPResourceCatalog.resources(for: context, metadata: metadata).isEmpty)
         #expect(throws: MCPError.invalidParams("Unknown resource")) {
-            try MCPResourceCatalog.read(uri: "berrydb://project", context: context, metadata: service())
+            try MCPResourceCatalog.read(uri: "berrydb://project", context: context, metadata: metadata)
         }
     }
 
     @Test func selectedContextListsProjectAndGraphResources() throws {
-        let resources = try MCPResourceCatalog.resources(for: selected(), metadata: service())
+        let service = try service()
+        let resources = try MCPResourceCatalog.resources(for: selected(), metadata: service)
         #expect(resources.map(\.uri) == ["berrydb://project", "berrydb://connections/\(shop.id.uuidString)/graph"])
         #expect(resources.allSatisfy { $0.mimeType == "application/json" })
 
-        let project = try MCPResourceCatalog.read(uri: "berrydb://project", context: selected(), metadata: service())
+        let project = try MCPResourceCatalog.read(uri: "berrydb://project", context: selected(), metadata: service)
         let projectJSON = try jsonObject(project)
         #expect((projectJSON["project"] as? [String: Any])?["name"] as? String == "Shop project")
         #expect((projectJSON["connections"] as? [[String: Any]])?.count == 1)
         #expect(project.first?.uri == "berrydb://project")
 
         let graphURI = "berrydb://connections/\(shop.id.uuidString)/graph"
-        let graph = try MCPResourceCatalog.read(uri: graphURI, context: selected(), metadata: service())
+        let graph = try MCPResourceCatalog.read(uri: graphURI, context: selected(), metadata: service)
         let graphJSON = try jsonObject(graph)
         #expect(graphJSON["harvested_at"] as? String == "2023-11-14T22:13:20Z")
         #expect((graphJSON["tables"] as? [Any])?.count == 2)
@@ -787,12 +1049,28 @@ struct MCPToolCatalogTests {
         #expect(graph.first?.mimeType == "application/json")
     }
 
+    /// A schema never confirmed against the database has its `checked_at`
+    /// written as null, as every tool writes it, rather than left out.
+    @Test func theGraphResourceWritesANullCheckWhenThereIsNone() throws {
+        let store = try BerryStore(path: ":memory:")
+        try store.save(shop)
+        try shopSchema().write(to: store, profileID: shop.id, at: Self.harvestTime, checkedAt: Date())
+        try store.updateSchemaGraphState(profileID: shop.id) { $0.lastCheckedAt = nil }
+        let graph = try MCPResourceCatalog.read(
+            uri: "berrydb://connections/\(shop.id.uuidString)/graph", context: selected(),
+            metadata: MCPMetadataService(store: store)
+        )
+        let json = try jsonObject(graph)
+        #expect(json.keys.contains("checked_at") && json["checked_at"] is NSNull)
+        #expect(json["stale"] as? Bool == true)
+    }
+
     @Test func unharvestedConnectionHasNoGraphResource() throws {
-        let unharvested = service(harvested: false)
+        let unharvested = try service(harvested: false)
         let resources = try MCPResourceCatalog.resources(for: selected(), metadata: unharvested)
         #expect(resources.map(\.uri) == ["berrydb://project"])
 
-        let empty = service(graph: SchemaGraph(), harvested: false)
+        let empty = unharvested
         #expect(throws: MCPError.invalidParams(MCPMetadataError.noSnapshot.description)) {
             try MCPResourceCatalog.read(
                 uri: "berrydb://connections/\(shop.id.uuidString)/graph", context: selected(), metadata: empty
@@ -806,9 +1084,9 @@ struct MCPToolCatalogTests {
     @Test func aHarvestThatFoundNothingListsNoGraph() throws {
         let store = try BerryStore(path: ":memory:")
         try store.save(shop)
-        let graphStore = GraphStore(store: store)
-        try graphStore.persist(shopGraph(), profileID: shop.id, now: Self.harvestTime)
-        try graphStore.persist(SchemaGraph(), profileID: shop.id, now: Self.harvestTime.addingTimeInterval(60))
+        let emptied = Self.harvestTime.addingTimeInterval(60)
+        try shopSchema().write(to: store, profileID: shop.id, at: Self.harvestTime, checkedAt: Self.harvestTime)
+        try StoredSchema().write(to: store, profileID: shop.id, at: emptied, checkedAt: emptied)
         let metadata = MCPMetadataService(store: store)
         let router = MCPToolRouter(metadata: metadata)
 
@@ -822,6 +1100,7 @@ struct MCPToolCatalogTests {
 
     @Test func resourceReadRejectsUnassignedConnectionLikeUnknownURI() throws {
         let unknownMessage = "Unknown resource"
+        let metadata = try service()
         let uris = [
             "berrydb://connections/\(outsider.id.uuidString)/graph",
             "berrydb://connections/\(UUID().uuidString)/graph",
@@ -834,7 +1113,7 @@ struct MCPToolCatalogTests {
         ]
         for uri in uris {
             do {
-                _ = try MCPResourceCatalog.read(uri: uri, context: selected(), metadata: service())
+                _ = try MCPResourceCatalog.read(uri: uri, context: selected(), metadata: metadata)
                 Issue.record("Expected an error for \(uri)")
             } catch let MCPError.invalidParams(message) {
                 #expect(message == unknownMessage)
@@ -843,7 +1122,7 @@ struct MCPToolCatalogTests {
     }
 
     @Test func resourceStoreFailuresAreGeneric() throws {
-        let failing = service(failure: PathLeakingError())
+        let failing = try service(broken: true)
         let uri = "berrydb://connections/\(shop.id.uuidString)/graph"
         do {
             _ = try MCPResourceCatalog.read(uri: uri, context: selected(), metadata: failing)

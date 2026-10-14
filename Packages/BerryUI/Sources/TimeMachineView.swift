@@ -2,20 +2,29 @@ import BerryGraph
 import BerryStore
 import SwiftUI
 
-/// Time Machine Timeline
-/// pick a recorded Digital-Twin snapshot and see what changed since the
-/// one before it. Existence-only (added/removed tables, columns, indexes) —
-/// see `TimelineChange`'s doc comment for why attribute-level changes (e.g. a
-/// column's type) aren't tracked. Reads through the viewModel — presentation
-/// only.
+/// Time Machine Timeline: pick a recorded change of the schema and see what
+/// changed since the one before it. Existence-only (added/removed tables,
+/// columns, indexes) — see `TimelineChange`'s doc comment for why
+/// attribute-level changes (e.g. a column's type) aren't tracked. Reads
+/// through the viewModel — presentation only. The marks and the changes are
+/// loaded in tasks into state, never computed in `body`: a comparison loads
+/// two whole graphs, and `body` runs on the main actor on every redraw.
 struct TimeMachineView: View {
-    let snapshots: () -> [GraphSnapshotRecord]
-    let changes: (Date, Date) -> [TimelineChange]
+    /// When the stored schema last changed; a new value reloads the marks.
+    let graphChangedAt: Date?
+    let marks: () async -> [SchemaChangeRecord]
+    let changes: (Date, Date) async -> [TimelineChange]
     let onReveal: (String) -> Void
     let onClose: () -> Void
 
-    @State private var allSnapshots: [GraphSnapshotRecord] = []
-    @State private var selectedID: GraphSnapshotRecord.ID?
+    private struct Shown {
+        let markID: SchemaChangeRecord.ID
+        let changes: [TimelineChange]
+    }
+
+    @State private var allMarks: [SchemaChangeRecord] = []
+    @State private var selectedID: SchemaChangeRecord.ID?
+    @State private var shown: Shown?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -26,7 +35,7 @@ struct TimeMachineView: View {
             }
             .padding()
             Divider()
-            if allSnapshots.count < 2 {
+            if allMarks.count < 2 {
                 ContentUnavailableView(
                     L("Not enough history yet"),
                     systemImage: "clock.arrow.circlepath",
@@ -35,45 +44,58 @@ struct TimeMachineView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 HStack(spacing: 0) {
-                    snapshotPicker
+                    markPicker
                     Divider()
                     detail
                 }
             }
         }
-        .onAppear {
-            allSnapshots = snapshots()
-            selectedID = allSnapshots.first?.id
+        .task(id: graphChangedAt) {
+            let loaded = await marks()
+            guard !Task.isCancelled else { return }
+            allMarks = loaded
+            if !loaded.contains(where: { $0.id == selectedID }) { selectedID = loaded.first?.id }
+        }
+        // A mark's changes do not move once it is listed, so only a new
+        // selection loads them again.
+        .task(id: selectedID) {
+            guard let selectedID, let index = allMarks.firstIndex(where: { $0.id == selectedID }),
+                  index + 1 < allMarks.count
+            else { return }
+            // Newest first: the mark right after this one is the baseline.
+            let loaded = await changes(allMarks[index + 1].at, allMarks[index].at)
+            guard !Task.isCancelled else { return }
+            shown = Shown(markID: selectedID, changes: loaded)
         }
     }
 
-    private var snapshotPicker: some View {
-        List(allSnapshots, selection: $selectedID) { snapshot in
+    private var markPicker: some View {
+        List(allMarks, selection: $selectedID) { mark in
             VStack(alignment: .leading, spacing: 2) {
-                Text(snapshot.takenAt, format: .dateTime.year().month().day().hour().minute())
+                Text(mark.at, format: .dateTime.year().month().day().hour().minute())
                     .font(.callout)
-                Text("\(snapshot.nodeCount) \(L("nodes"))")
+                Text(L("\(mark.added) added · \(mark.changed) changed · \(mark.removed) removed"))
                     .font(.caption).foregroundStyle(.secondary)
             }
-            .tag(snapshot.id)
+            .tag(mark.id)
         }
         .frame(width: 220)
     }
 
     @ViewBuilder private var detail: some View {
-        if let selectedID, let index = allSnapshots.firstIndex(where: { $0.id == selectedID }) {
-            let current = allSnapshots[index]
-            // Newest first: the snapshot right before this one (higher index) is the baseline.
-            if index + 1 < allSnapshots.count {
-                let previous = allSnapshots[index + 1]
-                changeList(from: previous.takenAt, to: current.takenAt)
-            } else {
+        if let selectedID, let index = allMarks.firstIndex(where: { $0.id == selectedID }) {
+            if index + 1 >= allMarks.count {
                 ContentUnavailableView(
                     L("First recorded snapshot"),
                     systemImage: "flag.checkered",
                     description: Text(L("Nothing earlier to compare against."))
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let shown, shown.markID == selectedID {
+                changeList(shown.changes)
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
             ContentUnavailableView(
@@ -85,8 +107,8 @@ struct TimeMachineView: View {
         }
     }
 
-    private func changeList(from earlier: Date, to later: Date) -> some View {
-        let grouped = Dictionary(grouping: changes(earlier, later)) { $0.tableName ?? $0.name }
+    private func changeList(_ changes: [TimelineChange]) -> some View {
+        let grouped = Dictionary(grouping: changes) { $0.tableName ?? $0.name }
         return ScrollView {
             VStack(alignment: .leading, spacing: BerryTheme.Space.lg) {
                 if grouped.isEmpty {

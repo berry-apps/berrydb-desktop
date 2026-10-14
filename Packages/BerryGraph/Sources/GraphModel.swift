@@ -9,9 +9,9 @@ public enum NodeKind: String, Sendable, Hashable, Codable {
     case query, plan, migration
  // UI-state only — built fresh per AI tool call
     // from live WorkspaceViewModel state + the bounded workspace_action log.
-    // NEVER written via GraphStore/store.sqlite's graph_node/graph_edge
-    // tables (those stay DB-schema-only so DSG analyzers iterating by
-    // profileID aren't mixed with UI nodes).
+    // NEVER persisted in the per-table schema store (that stays
+    // DB-schema-only so DSG analyzers iterating by profileID aren't mixed
+    // with UI nodes).
     case pane, tab, action
 }
 

@@ -1,26 +1,32 @@
 import BerryGraph
 import Foundation
 
-/// Answers the `graph_query` tool against the
-/// persisted DSG. **Metadata only, runs entirely local** — never touches the
-/// DBMS: it loads the latest harvested snapshot for the active profile via
-/// `GraphStore.loadGraph` and runs the pure-Swift graph algorithms. Callers
-/// name tables/views by their plain name; the executor resolves them to node
-/// ids and answers with names so the model never sees internal keys.
+/// Answers the `graph_query` tool against the stored schema. **Metadata
+/// only, runs entirely local** — never touches the DBMS: each operation reads
+/// the profile's current tables, views and foreign keys through `GraphReader`
+/// and runs the pure-Swift graph algorithms over them. Callers name
+/// tables/views by their plain name; the executor resolves them to node ids
+/// and answers with names so the model never sees internal keys.
 ///
 /// Ops: `neighbors`, `path`, `blast_radius`, `scc`, `top_centrality`.
+///
+/// Every operation reads the stored schema and walks a graph built from it,
+/// which for a large schema takes long enough to stall the UI, so the work
+/// runs in a detached task and the main actor only waits for the answer.
 @MainActor
 public final class GraphToolExecutor: AIToolExecutor {
-    private static let topKDefault = 10
+    nonisolated private static let topKDefault = 10
 
     private let service: BerryGraphQueryService
     private let profileID: UUID
 
-    public init(store: GraphStore, profileID: UUID) {
-        self.service = BerryGraphQueryService(store: store)
+    public init(reader: GraphReader, profileID: UUID) {
+        self.service = BerryGraphQueryService(reader: reader)
         self.profileID = profileID
     }
 
+    /// Answers from `service`, so a test can supply graphs that the stored
+    /// schema cannot produce, such as two snapshots that disagree.
     init(service: BerryGraphQueryService, profileID: UUID) {
         self.service = service
         self.profileID = profileID
@@ -34,6 +40,10 @@ public final class GraphToolExecutor: AIToolExecutor {
     }
 
     public func execute(_ call: AIToolCall) async -> ToolOutcome {
+        await Task.detached(priority: .userInitiated) { [self] in answer(call) }.value
+    }
+
+    nonisolated private func answer(_ call: AIToolCall) -> ToolOutcome {
         guard call.name == "graph_query" || call.name == "get_stats" else {
             return .failed("Unknown tool '\(call.name)'")
         }
@@ -70,7 +80,7 @@ public final class GraphToolExecutor: AIToolExecutor {
 
     // MARK: - Ops
 
-    private func neighbors(_ args: [String: String]) throws -> ToolOutcome {
+    nonisolated private func neighbors(_ args: [String: String]) throws -> ToolOutcome {
         let result = try service.neighbors(
             profileID: profileID, node: args["node"] ?? "", resolution: .legacyFirstStableID
         )
@@ -81,7 +91,7 @@ public final class GraphToolExecutor: AIToolExecutor {
         ]))
     }
 
-    private func path(_ args: [String: String]) throws -> ToolOutcome {
+    nonisolated private func path(_ args: [String: String]) throws -> ToolOutcome {
         let result = try service.path(
             profileID: profileID, from: args["from"] ?? "", to: args["to"] ?? "",
             resolution: .legacyFirstStableID
@@ -94,7 +104,7 @@ public final class GraphToolExecutor: AIToolExecutor {
         ]))
     }
 
-    private func blastRadius(_ args: [String: String]) throws -> ToolOutcome {
+    nonisolated private func blastRadius(_ args: [String: String]) throws -> ToolOutcome {
         let result = try service.blastRadius(
             profileID: profileID, node: args["node"] ?? "", resolution: .legacyFirstStableID
         )
@@ -105,7 +115,7 @@ public final class GraphToolExecutor: AIToolExecutor {
         ]))
     }
 
-    private func scc() throws -> ToolOutcome {
+    nonisolated private func scc() throws -> ToolOutcome {
         let result = try service.circularDependencies(profileID: profileID)
         return .ok(Self.json([
             "circular_dependencies": result.components,
@@ -113,7 +123,7 @@ public final class GraphToolExecutor: AIToolExecutor {
         ]))
     }
 
-    private func topCentrality(_ args: [String: String]) throws -> ToolOutcome {
+    nonisolated private func topCentrality(_ args: [String: String]) throws -> ToolOutcome {
         let k = args["k"].flatMap(Int.init) ?? Self.topKDefault
         let top = try service.topCentrality(profileID: profileID, limit: k).map {
             ["node": $0.node, "in_degree": $0.inDegree] as [String: Any]
@@ -123,11 +133,11 @@ public final class GraphToolExecutor: AIToolExecutor {
 
     // MARK: - get_stats
 
-    /// Reads harvested statistics off the persisted DSG node attrs — table size /
-    /// rows / scan counts and unused indexes. Metadata only; no DBMS access.
+    /// Reads the harvested statistics rows — table size / rows / scan counts
+    /// and unused indexes. Metadata only; no DBMS access.
     /// With `table`, returns that table's stats plus its indexes; without,
     /// returns a per-table summary and the list of unused indexes.
-    private func getStats(_ args: [String: String]) throws -> ToolOutcome {
+    nonisolated private func getStats(_ args: [String: String]) throws -> ToolOutcome {
         if let name = args["table"], !name.trimmingCharacters(in: .whitespaces).isEmpty {
             let result = try service.statistics(
                 profileID: profileID, table: name, resolution: .legacyFirstStableID
@@ -147,7 +157,7 @@ public final class GraphToolExecutor: AIToolExecutor {
         return .ok(Self.json(["tables": tables, "unused_indexes": result.unusedIndexes]))
     }
 
-    private static func json(_ object: [String: Any]) -> String {
+    nonisolated private static func json(_ object: [String: Any]) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: object),
               let string = String(data: data, encoding: .utf8) else { return "{}" }
         return string

@@ -7,6 +7,13 @@ import Foundation
 /// identity and label are enough to choose it, and everything else stays in
 /// the app.
 public struct MCPConnectionDescriptor: Codable, Equatable, Sendable {
+    /// How many of the connection's stored tables and views have had their
+    /// columns read.
+    public struct Coverage: Codable, Equatable, Sendable {
+        public let detailed: Int
+        public let total: Int
+    }
+
     public let id: UUID
     public let name: String
     public let driver: String
@@ -15,19 +22,39 @@ public struct MCPConnectionDescriptor: Codable, Equatable, Sendable {
     public let environment: String
     /// What the connection can serve without opening it: "schema" and "graph".
     public let capabilities: [String]
-    /// The time of the last harvest that changed the persisted graph's
-    /// structure, the graph the graph tools read; nil when there is none or
-    /// that harvest found no tables or views. A later harvest that only
-    /// refreshed statistics does not move it.
+    /// The time of the last pass that changed the stored schema, the schema
+    /// the graph tools read; nil when there is none or the stored schema
+    /// holds no table or view. A pass that found the schema unchanged, or a
+    /// refresh of statistics alone, does not move it.
     public let graphHarvestedAt: Date?
+    /// When a pass last confirmed the stored schema against the database; nil
+    /// when none has.
+    public let checkedAt: Date?
+    /// Whether the schema was never checked or last checked more than
+    /// `GraphReader.staleAfter` ago.
+    public let stale: Bool
+    /// Why a stale schema was not checked again: the code of the failure
+    /// that stopped the profile's last pass, such as `timeout` or
+    /// `connection_failed`, one of the fixed `HarvestErrorCode` values and
+    /// never text a server wrote. Nil when the schema is not stale or no
+    /// failure was recorded.
+    public let staleReason: String?
+    public let detailCoverage: Coverage
+    /// The schemas the harvest is limited to, or nil for the driver's
+    /// default scope (`SchemaScope.allUserSchemas`).
+    public let scope: [String]?
+    /// `"selectSchemas"` when the catalog is too large to harvest whole and
+    /// schemas should be selected in the app, else nil.
+    public let hint: String?
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, driver, environment, capabilities, graphHarvestedAt
+        case id, name, driver, environment, capabilities, graphHarvestedAt, checkedAt, stale, staleReason, detailCoverage
+        case scope, hint
     }
 
-    /// Writes `graphHarvestedAt` as null when it is nil; the synthesized
+    /// Writes every optional field as null when it is nil; the synthesized
     /// encoder would leave the key out, so connections would differ in their
-    /// fields depending on whether a graph exists.
+    /// fields depending on whether a schema was harvested.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
@@ -35,11 +62,13 @@ public struct MCPConnectionDescriptor: Codable, Equatable, Sendable {
         try container.encode(driver, forKey: .driver)
         try container.encode(environment, forKey: .environment)
         try container.encode(capabilities, forKey: .capabilities)
-        if let graphHarvestedAt {
-            try container.encode(graphHarvestedAt, forKey: .graphHarvestedAt)
-        } else {
-            try container.encodeNil(forKey: .graphHarvestedAt)
-        }
+        try container.encode(graphHarvestedAt, forKey: .graphHarvestedAt)
+        try container.encode(checkedAt, forKey: .checkedAt)
+        try container.encode(stale, forKey: .stale)
+        try container.encode(staleReason, forKey: .staleReason)
+        try container.encode(detailCoverage, forKey: .detailCoverage)
+        try container.encode(scope, forKey: .scope)
+        try container.encode(hint, forKey: .hint)
     }
 }
 
@@ -48,8 +77,46 @@ public struct MCPSchemaMatch: Codable, Equatable, Sendable {
     public let name: String
     public let kind: String
     public let database: String?
-    /// The owning table for a column, nil for every other kind.
+    /// The table or view a column or index belongs to; nil for a table or
+    /// view.
     public let table: String?
+}
+
+/// An answer read from the stored schema, with when that schema was last
+/// confirmed against the database and whether that is too long ago to rely
+/// on.
+public struct MCPAnswer<Value: Sendable>: Sendable {
+    public let value: Value
+    public let checkedAt: Date?
+    public let stale: Bool
+}
+
+extension MCPAnswer: Equatable where Value: Equatable {}
+
+/// One page of a connection's schema change feed, oldest change first.
+/// `nextSince` is passed back as `since` for the next page and is nil once
+/// no entry remains; the feed lists the changes of passes completed by
+/// `checkedAt`.
+public struct MCPSchemaChanges: Codable, Equatable, Sendable {
+    public let changes: [GraphReader.ChangeEntry]
+    public let nextSince: String?
+    public let checkedAt: Date?
+    public let stale: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case changes, nextSince, checkedAt, stale
+    }
+
+    /// Writes `nextSince` and `checkedAt` as null when they are nil, so an
+    /// agent paging by `nextSince` reads an explicit end rather than a
+    /// missing key.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(changes, forKey: .changes)
+        try container.encode(nextSince, forKey: .nextSince)
+        try container.encode(checkedAt, forKey: .checkedAt)
+        try container.encode(stale, forKey: .stale)
+    }
 }
 
 /// A traversal of the persisted dependency graph.
@@ -137,15 +204,18 @@ public enum MCPGraphStats: Equatable, Sendable, Encodable {
 /// Serves schema and graph metadata for one project's connections,
 /// independent of any wire protocol.
 ///
-/// Invariants: it reads only persisted profiles and the persisted schema
-/// graph, never opening a database connection or reading a credential; and
-/// every method checks that the connection is assigned to the project before
-/// any store access, so the error for an unassigned profile is identical to
-/// the one for a profile that does not exist and cannot be used to probe for
-/// either.
+/// Invariants: it reads only persisted profiles and the stored schema, never
+/// opening a database connection or reading a credential; and every method
+/// checks that the connection is assigned to the project before any store
+/// access, so the error for an unassigned profile is identical to the one for
+/// a profile that does not exist and cannot be used to probe for either.
 public struct MCPMetadataService: Sendable {
     /// Schema objects returned by one `schema` call.
     static let schemaObjectLimit = 200
+    /// Estimated bytes of one full `schema` page: half the 1 MiB ceiling on a
+    /// tool result, so the page's own keys and an estimate that runs short
+    /// still leave it below the ceiling.
+    static let schemaPageBytes = 512 * 1024
     /// Object names one `schema` call may filter by.
     static let maximumObjectNames = 50
     /// Longest accepted search query, in characters.
@@ -158,76 +228,88 @@ public struct MCPMetadataService: Sendable {
     static let maximumCentralityEntries = 50
 
     private let profiles: @Sendable () throws -> [ConnectionProfile]
+    private let reader: GraphReader
     private let graph: BerryGraphQueryService
-    private let harvestedAt: @Sendable (UUID) throws -> Date?
-    private let loadGraph: @Sendable (UUID) throws -> SchemaGraph
+    private let cache: TableGraphCache?
 
     /// - Parameters:
     ///   - profiles: Reads the saved connection profiles; called once per
     ///     `listConnections`.
-    ///   - graph: Runs graph queries and schema listings.
-    ///   - harvestedAt: A profile's `graphHarvestedAt`: the time of the
-    ///     graph the graph tools read, nil when they would find none.
-    ///   - loadGraph: The persisted graph of a profile, read once per
-    ///     `searchSchema`; an empty graph means none was harvested.
+    ///   - reader: Reads the stored schema: state, listings, search and the
+    ///     change feed.
+    ///   - graph: Runs graph queries, statistics and schema listings.
     public init(
-        profiles: @escaping @Sendable () throws -> [ConnectionProfile],
-        graph: BerryGraphQueryService,
-        harvestedAt: @escaping @Sendable (UUID) throws -> Date?,
-        loadGraph: @escaping @Sendable (UUID) throws -> SchemaGraph
+        profiles: @escaping @Sendable () throws -> [ConnectionProfile], reader: GraphReader, graph: BerryGraphQueryService
     ) {
-        self.profiles = profiles
-        self.graph = graph
-        self.harvestedAt = harvestedAt
-        self.loadGraph = loadGraph
+        self.init(profiles: profiles, reader: reader, graph: graph, cache: nil)
     }
 
-    /// Reads `store`: its saved profiles and each profile's persisted graph.
-    ///
-    /// A profile's harvest time is that of its latest graph snapshot, and
-    /// none when that snapshot holds no nodes. The graph tools read the
-    /// graph as of that snapshot and answer that no graph was harvested when
-    /// it is empty, so a harvest that found no tables or views must not be
-    /// reported as one. The store records a snapshot only when a harvest
-    /// changes the graph's structure (`saveGraph`), so the time is that of
-    /// the last such harvest, not of the latest refresh of statistics.
+    /// Reads `store`: its saved profiles and each profile's stored schema.
+    /// The graph operations take their table-level graph from a
+    /// `TableGraphCache`, so a run of graph queries on one connection builds
+    /// it once.
     public init(store: BerryStore) {
-        let graphStore = GraphStore(store: store)
+        let reader = GraphReader(store: store)
+        let cache = TableGraphCache(reader: reader)
         self.init(
-            profiles: { try store.allProfiles() },
-            graph: BerryGraphQueryService(store: graphStore),
-            harvestedAt: { profileID in
-                guard let latest = try store.latestGraphSnapshot(profileID: profileID), latest.nodeCount > 0 else {
-                    return nil
-                }
-                return latest.takenAt
-            },
-            loadGraph: { try graphStore.loadGraph(profileID: $0) }
+            profiles: { try store.allProfiles() }, reader: reader,
+            graph: BerryGraphQueryService(reader: reader, tableGraph: { try cache.graph(profileID: $0) }),
+            cache: cache
         )
     }
 
-    /// The project's connections, in the project's order. A profile deleted
-    /// since it was assigned is skipped.
+    private init(
+        profiles: @escaping @Sendable () throws -> [ConnectionProfile], reader: GraphReader,
+        graph: BerryGraphQueryService, cache: TableGraphCache?
+    ) {
+        self.profiles = profiles
+        self.reader = reader
+        self.graph = graph
+        self.cache = cache
+    }
+
+    /// Drops the cached table-level graphs, for when the system asks for
+    /// memory back; the next graph query builds its graph again.
+    public func dropCachedGraphs() {
+        cache?.dropAll()
+    }
+
+    /// The project's connections, in the project's order, each with the
+    /// state of its stored schema. A profile deleted since it was assigned is
+    /// skipped.
+    ///
+    /// `graphHarvestedAt` is nil while the stored schema holds no table or
+    /// view, because the graph tools then answer that no graph was
+    /// harvested: a pass that found none must not be reported as one.
     public func listConnections(in project: MCPVerifiedProject) throws -> [MCPConnectionDescriptor] {
         let saved = Dictionary(try profiles().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return try project.project.profiles.compactMap { access in
             guard let profile = saved[access.profileID] else { return nil }
+            let state = try reader.state(profileID: profile.id)
             return MCPConnectionDescriptor(
                 id: profile.id,
                 name: profile.name,
                 driver: profile.driverID,
                 environment: profile.envColor == "production" ? "production" : "unlabeled",
                 capabilities: ["schema", "graph"],
-                graphHarvestedAt: try harvestedAt(profile.id)
+                graphHarvestedAt: state.objectCount > 0 ? state.changedAt : nil,
+                checkedAt: state.checkedAt,
+                stale: state.stale,
+                staleReason: state.stale ? state.lastErrorCode.flatMap { HarvestErrorCode(rawValue: $0)?.rawValue } : nil,
+                detailCoverage: .init(detailed: state.detailedCount, total: state.objectCount),
+                scope: state.selectedSchemas,
+                hint: state.hint
             )
         }
     }
 
-    /// Tables and views of one connection, at most 200 per call; the listing
-    /// reports how many more matched. `objectNames` takes at most 50 names.
+    /// One page of a connection's tables and views from `offset` on: at most
+    /// 200, and for full detail as many as fit an estimated 512 KB, though
+    /// never fewer than one. The listing reports how many matched in all and
+    /// the offset of the next page. `objectNames` takes at most 50 names.
     public func schema(
         in project: MCPVerifiedProject, connectionID: UUID, objectNames: [String]?,
-        detail: BerryGraphQueryService.SchemaDetail
+        detail: BerryGraphQueryService.SchemaDetail, offset: Int = 0
     ) throws -> BerryGraphQueryService.SchemaListing {
         try requireAssigned(connectionID, in: project)
         if let objectNames, objectNames.count > Self.maximumObjectNames {
@@ -236,7 +318,7 @@ public struct MCPMetadataService: Sendable {
         return try mappingErrors(connectionID) {
             try graph.schema(
                 profileID: connectionID, objectNames: objectNames, detail: detail,
-                limit: Self.schemaObjectLimit
+                offset: offset, limit: Self.schemaObjectLimit, maxBytes: Self.schemaPageBytes
             )
         }
     }
@@ -247,36 +329,21 @@ public struct MCPMetadataService: Sendable {
     /// index), then database, owning table and name.
     public func searchSchema(
         in project: MCPVerifiedProject, connectionID: UUID, query: String, limit: Int
-    ) throws -> [MCPSchemaMatch] {
+    ) throws -> MCPAnswer<[MCPSchemaMatch]> {
         try requireAssigned(connectionID, in: project)
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (1 ... Self.maximumQueryLength).contains(needle.count) else {
             throw MCPMetadataError.invalidArgument("Query must be 1 to \(Self.maximumQueryLength) characters")
         }
-        let cap = min(max(limit, 1), Self.maximumSearchResults)
-        let graph = try mappingErrors(connectionID) { try loadGraph(connectionID) }
-        guard graph.nodeCount > 0 else { throw MCPMetadataError.noSnapshot }
-
-        var ownerByColumn: [String: String] = [:]
-        for edge in graph.edges where edge.kind == .hasColumn {
-            if let owner = graph.nodes[edge.src] {
-                ownerByColumn[edge.dst] = owner.name
-            }
-        }
-        let matches = graph.nodes.values.compactMap { node -> (rank: Int, match: MCPSchemaMatch)? in
-            guard let rank = Self.searchRank(of: node.kind),
-                  node.name.range(of: needle, options: [.caseInsensitive, .literal]) != nil
-            else { return nil }
-            let table = node.kind == .column ? ownerByColumn[node.id] : nil
-            return (rank, MCPSchemaMatch(name: node.name, kind: node.kind.rawValue, database: node.database, table: table))
-        }
-        return matches
-            .sorted { lhs, rhs in
-                (lhs.rank, lhs.match.database ?? "", lhs.match.table ?? "", lhs.match.name)
-                    < (rhs.rank, rhs.match.database ?? "", rhs.match.table ?? "", rhs.match.name)
-            }
-            .prefix(cap)
-            .map(\.match)
+        let state = try reader.state(profileID: connectionID)
+        guard state.objectCount > 0 else { throw MCPMetadataError.noSnapshot }
+        let matches = try reader.search(
+            profileID: connectionID, needle: needle, limit: min(max(limit, 1), Self.maximumSearchResults)
+        )
+        return MCPAnswer(
+            value: matches.map { MCPSchemaMatch(name: $0.name, kind: $0.kind, database: $0.database, table: $0.table) },
+            checkedAt: state.checkedAt, stale: state.stale
+        )
     }
 
     /// Runs one dependency-graph operation with strict name resolution: a
@@ -288,9 +355,10 @@ public struct MCPMetadataService: Sendable {
     /// count. Centrality takes at most 50 entries.
     public func graphQuery(
         in project: MCPVerifiedProject, connectionID: UUID, operation: MCPGraphOperation
-    ) throws -> MCPGraphResult {
+    ) throws -> MCPAnswer<MCPGraphResult> {
         try requireAssigned(connectionID, in: project)
-        return try mappingErrors(connectionID) {
+        let state = try reader.state(profileID: connectionID)
+        let result: MCPGraphResult = try mappingErrors(connectionID) {
             switch operation {
             case let .neighbors(node):
                 let found = try graph.neighbors(profileID: connectionID, node: node, resolution: .strict)
@@ -316,27 +384,55 @@ public struct MCPMetadataService: Sendable {
                 return .topCentrality(try graph.topCentrality(profileID: connectionID, limit: clamped))
             }
         }
+        return MCPAnswer(value: result, checkedAt: state.checkedAt, stale: state.stale)
     }
 
     /// Harvested statistics: every table when `object` is nil, otherwise one
     /// table and its indexes, resolved strictly.
     ///
-    /// The summary lists at most 500 tables and 500 unused index names, each
-    /// keeping its sorted order; the result has no truncation marker.
+    /// The summary lists the first 500 tables by name and the unused indexes
+    /// of those tables, at most 500 names in name order; the result has no
+    /// truncation marker.
     public func graphStats(
         in project: MCPVerifiedProject, connectionID: UUID, object: String?
-    ) throws -> MCPGraphStats {
+    ) throws -> MCPAnswer<MCPGraphStats> {
         try requireAssigned(connectionID, in: project)
-        return try mappingErrors(connectionID) {
+        let state = try reader.state(profileID: connectionID)
+        let stats: MCPGraphStats = try mappingErrors(connectionID) {
             if let object {
                 return .table(try graph.statistics(profileID: connectionID, table: object, resolution: .strict))
             }
-            let summary = try graph.statistics(profileID: connectionID)
+            let summary = try graph.statistics(profileID: connectionID, limit: Self.maximumGraphNames)
             return .summary(.init(
-                tables: Array(summary.tables.prefix(Self.maximumGraphNames)),
+                tables: summary.tables,
                 unusedIndexes: Array(summary.unusedIndexes.prefix(Self.maximumGraphNames))
             ))
         }
+        return MCPAnswer(value: stats, checkedAt: state.checkedAt, stale: state.stale)
+    }
+
+    /// The schema changes recorded for a connection from `since` on, at most
+    /// `limit` entries, clamped to 1...200. `since` is nil for every change,
+    /// an ISO 8601 time, or the `nextSince` of an earlier page. A connection
+    /// whose schema was never checked has no changes yet, which is an empty
+    /// page rather than an error.
+    ///
+    /// A `since` that is neither is an argument error whose text does not
+    /// repeat it.
+    public func schemaChanges(
+        in project: MCPVerifiedProject, connectionID: UUID, since: String?, limit: Int
+    ) throws -> MCPSchemaChanges {
+        try requireAssigned(connectionID, in: project)
+        let page: GraphReader.ChangePage
+        do {
+            page = try reader.changes(profileID: connectionID, since: since, limit: limit)
+        } catch is GraphReader.InvalidChangeCursor {
+            throw MCPMetadataError.invalidArgument("Invalid since cursor")
+        }
+        return MCPSchemaChanges(
+            changes: page.entries, nextSince: page.nextSince, checkedAt: page.checkedAt,
+            stale: GraphReader.isStale(checkedAt: page.checkedAt, now: Date())
+        )
     }
 
     private func requireAssigned(_ connectionID: UUID, in project: MCPVerifiedProject) throws {
@@ -348,8 +444,9 @@ public struct MCPMetadataService: Sendable {
     /// Maps graph query errors to agent-facing ones. An ambiguous name is
     /// answered from the graph read again, because the graph service's own
     /// message lists every match, unbounded, by a qualified name that can
-    /// itself be ambiguous: three thousand tables with an `id` column give
-    /// three thousand copies of `public.id`.
+    /// itself be ambiguous: a table and a view of one name in one schema
+    /// share it, and a table name used in a thousand schemas gives a
+    /// thousand matches.
     private func mappingErrors<T>(_ connectionID: UUID, _ body: () throws -> T) throws -> T {
         do {
             return try body()
@@ -360,7 +457,7 @@ public struct MCPMetadataService: Sendable {
             case .nodeNotFound:
                 throw MCPMetadataError.notFound(error.localizedDescription)
             case let .ambiguousNode(name, _):
-                let graph = try loadGraph(connectionID)
+                let graph = try cache?.graph(profileID: connectionID) ?? reader.tableGraph(profileID: connectionID)
                 throw MCPMetadataError.notFound(Self.ambiguityMessage(for: name, in: graph))
             }
         }
@@ -373,8 +470,8 @@ public struct MCPMetadataService: Sendable {
     /// otherwise the node's stable id, which always does; no two suggestions
     /// are therefore alike. Columns and indexes are never offered, since
     /// graph operations and statistics work on tables and views; a name that
-    /// matched only those (the only other kinds a harvested graph holds) is
-    /// answered with that rule instead.
+    /// matched only those, which a graph service built from a whole graph
+    /// can hold, is answered with that rule instead.
     static func ambiguityMessage(for name: String, in graph: SchemaGraph) -> String {
         let lookup = StrictLookup(graph)
         let candidates = lookup.matches(name)
@@ -391,16 +488,6 @@ public struct MCPMetadataService: Sendable {
         let rest = offered.count - listed.count
         let more = rest > 0 ? ", and \(rest) more" : ""
         return "Node '\(name)' is ambiguous. Use one of: \(listed.joined(separator: ", "))\(more)"
-    }
-
-    private static func searchRank(of kind: NodeKind) -> Int? {
-        switch kind {
-        case .table: return 0
-        case .view: return 1
-        case .column: return 2
-        case .index: return 3
-        default: return nil
-        }
     }
 
     /// Keeps whole components while they fit and cuts the one that crosses

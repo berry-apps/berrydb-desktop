@@ -52,6 +52,7 @@ struct AIPanelView: View {
         }
         .frame(minWidth: 300)
         .background(.background)
+        .onChange(of: useOnDeviceModel) { controller.onDeviceModelChanged() }
     }
 
     private var header: some View {

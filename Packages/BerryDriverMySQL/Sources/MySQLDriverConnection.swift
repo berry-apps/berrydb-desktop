@@ -21,13 +21,18 @@ final class MySQLCancelBox: @unchecked Sendable {
     }
 }
 
-public actor MySQLDriverConnection: DriverConnection {
+public actor MySQLDriverConnection: StatementBoundingConnection {
     public nonisolated let id = UUID()
 
     private var connection: MySQLConnection
     private let config: ConnectionConfig
     private nonisolated let cancelBox: MySQLCancelBox
     private var isClosed = false
+    /// How the server sets a variable for one statement, learned from its
+    /// version the first time it matters.
+    private var perStatementForm: PerStatementForm?
+    /// Set by `boundEachStatement(by:)`.
+    private var statementTimeout: Duration?
 
     static let batchSize = 500
     private static let logger: Logger = {
@@ -146,11 +151,12 @@ public actor MySQLDriverConnection: DriverConnection {
         var affectedRows: Int64?
     }
 
-    private func run(sql: String, continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation) async {
+    private func run(sql statement: String, continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation) async {
         guard !isClosed else {
             continuation.finish(throwing: DriverError.notConnected)
             return
         }
+        let sql = bounded(statement)
         let clock = ContinuousClock()
         let started = clock.now
 
@@ -378,12 +384,120 @@ public actor MySQLDriverConnection: DriverConnection {
     // MARK: - Internal query for introspection (text protocol, small results)
 
     func queryAll(_ sql: String) async throws -> [[BerryValue]] {
+        try await textQuery(bounded(sql))
+    }
+
+    /// `sql` with `GROUP_CONCAT` results allowed up to `groupConcatMaxLength`
+    /// characters. Set for the statement alone where the server can, so the
+    /// session keeps its own limit and a pooled server session never carries
+    /// it to another client; otherwise set for the session first.
+    func queryAll(_ sql: String, groupConcatMaxLength: Int) async throws -> [[BerryValue]] {
+        let form = await serverForm()
+        guard form != .none else {
+            _ = try await queryAll("SET SESSION group_concat_max_len = \(groupConcatMaxLength)")
+            return try await queryAll(sql)
+        }
+        return try await textQuery(
+            Self.statement(sql, form: form, timeout: statementTimeout, groupConcatMaxLength: groupConcatMaxLength)
+        )
+    }
+
+    private func textQuery(_ sql: String) async throws -> [[BerryValue]] {
         guard !isClosed else { throw DriverError.notConnected }
         do {
             let rows = try await connection.simpleQuery(sql).get()
             return rows.map(Self.berryValues(from:))
         } catch {
             throw Self.mapError(error)
+        }
+    }
+
+    // MARK: - Settings for one statement
+
+    /// How a server sets a variable for one statement.
+    enum PerStatementForm: Equatable {
+        /// MySQL 8.0.3 and later: `MAX_EXECUTION_TIME` and `SET_VAR` optimizer
+        /// hints after `SELECT`
+        /// (https://dev.mysql.com/doc/refman/8.4/en/optimizer-hints.html#optimizer-hints-execution-time,
+        /// https://dev.mysql.com/doc/refman/8.4/en/optimizer-hints.html#optimizer-hints-set-var).
+        /// Hints apply to `SELECT` only, so a `SHOW` statement runs as it is.
+        case optimizerHints
+        /// MariaDB 10.1.2 and later: `SET STATEMENT ... FOR`
+        /// (https://mariadb.com/kb/en/set-statement/). MariaDB reads MySQL's
+        /// hints as plain comments.
+        case setStatement
+        /// An older server, or a version that could not be read: a setting
+        /// can only be made for the session.
+        case none
+    }
+
+    /// Bounds every later statement by `timeout` on its own, leaving nothing
+    /// on the server session, where the server offers a per-statement form.
+    /// Verified against MySQL 8.4.11 (mysql:8.4), where the hint interrupts a
+    /// `SELECT` with error 3024, and MariaDB 11.8.9 (mariadb:11), where
+    /// `SET STATEMENT max_statement_time` interrupts it with error 1969; on
+    /// both the session's own setting reads 0 afterwards.
+    public func boundEachStatement(by timeout: Duration) async -> Bool {
+        guard await serverForm() != .none else { return false }
+        statementTimeout = timeout
+        return true
+    }
+
+    private func bounded(_ sql: String) -> String {
+        guard let statementTimeout, let perStatementForm else { return sql }
+        return Self.statement(sql, form: perStatementForm, timeout: statementTimeout, groupConcatMaxLength: nil)
+    }
+
+    private func serverForm() async -> PerStatementForm {
+        if let perStatementForm { return perStatementForm }
+        let version: String? = if case .text(let text)? = try? await textQuery("SELECT VERSION()").first?.first {
+            text
+        } else {
+            nil
+        }
+        let form = Self.perStatementForm(version: version)
+        perStatementForm = form
+        return form
+    }
+
+    /// `VERSION()` reads `8.4.11` on MySQL and `11.8.9-MariaDB-ubu2404` on
+    /// MariaDB (verified against mysql:8.4 and mariadb:11).
+    static func perStatementForm(version: String?) -> PerStatementForm {
+        guard let version else { return .none }
+        let numbers = version.prefix { $0.isNumber || $0 == "." }.split(separator: ".").compactMap { Int($0) }
+        guard numbers.count >= 3 else { return .none }
+        let release = (numbers[0], numbers[1], numbers[2])
+        if version.contains("MariaDB") { return release >= (10, 1, 2) ? .setStatement : .none }
+        return release >= (8, 0, 3) ? .optimizerHints : .none
+    }
+
+    /// `sql` with the given settings for itself alone, or as it is when it is
+    /// not a statement the form applies to.
+    static func statement(
+        _ sql: String, form: PerStatementForm, timeout: Duration?, groupConcatMaxLength: Int?
+    ) -> String {
+        let trimmed = sql.drop { $0.isWhitespace }
+        let keyword = trimmed.prefix { $0.isLetter }.uppercased()
+        let seconds = timeout.map { Double($0.components.seconds) + Double($0.components.attoseconds) / 1e18 }
+        switch form {
+        case .optimizerHints:
+            guard keyword == "SELECT" else { return sql }
+            var hints: [String] = []
+            if let seconds { hints.append("MAX_EXECUTION_TIME(\(Int((seconds * 1_000).rounded())))") }
+            if let groupConcatMaxLength { hints.append("SET_VAR(group_concat_max_len = \(groupConcatMaxLength))") }
+            guard !hints.isEmpty else { return sql }
+            // MySQL 8.4.11 ignored the hints of a second comment without a
+            // warning, so every hint goes in one.
+            return "SELECT /*+ \(hints.joined(separator: " ")) */" + trimmed.dropFirst("SELECT".count)
+        case .setStatement:
+            guard keyword == "SELECT" || keyword == "SHOW" else { return sql }
+            var settings: [String] = []
+            if let seconds { settings.append("max_statement_time=\(String(format: "%g", seconds))") }
+            if let groupConcatMaxLength { settings.append("group_concat_max_len=\(groupConcatMaxLength)") }
+            guard !settings.isEmpty else { return sql }
+            return "SET STATEMENT \(settings.joined(separator: ", ")) FOR " + trimmed
+        case .none:
+            return sql
         }
     }
 }

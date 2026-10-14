@@ -436,12 +436,20 @@
 "total calls" = "total calls";
 "No recent queries in history touch this table." = "No recent queries in history touch this table.";
 
+/* Schema scope sheet */
+"Schemas to Index…" = "Schemas to Index…";
+"Schemas to Index" = "Schemas to Index";
+"All schemas" = "All schemas";
+"This connection has no schemas to choose from." = "This connection has no schemas to choose from.";
+"Nothing is indexed for this connection yet. Every schema is indexed when it connects." = "Nothing is indexed for this connection yet. Every schema is indexed when it connects.";
+"More than 20,000 tables — pick the schemas to index" = "More than 20,000 tables — pick the schemas to index";
+
 /* Time Machine Timeline */
 "Time Machine" = "Time Machine";
 "Schema change history" = "Schema change history";
 "Not enough history yet" = "Not enough history yet";
 "Time Machine needs at least two recorded schema snapshots — keep refreshing the schema as it evolves." = "Time Machine needs at least two recorded schema snapshots — keep refreshing the schema as it evolves.";
-"nodes" = "nodes";
+"%lld added · %lld changed · %lld removed" = "%lld added · %lld changed · %lld removed";
 "First recorded snapshot" = "First recorded snapshot";
 "Nothing earlier to compare against." = "Nothing earlier to compare against.";
 "Select a snapshot" = "Select a snapshot";

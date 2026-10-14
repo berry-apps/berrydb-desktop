@@ -17,18 +17,23 @@ public enum BerryMCPServerFactory {
         let workingDirectory: String
         let version: String
         let diagnostics: @Sendable (String) -> Void
+        let onRequest: @Sendable () -> Void
 
         /// - Parameters:
         ///   - version: Reported to the host as the server version.
         ///   - diagnostics: Receives diagnostic lines; standard error unless
         ///     replaced, never standard output.
+        ///   - onRequest: Called once for every tool or resource request the
+        ///     server answers, listings included, each of which reads the
+        ///     store.
         public init(
             resolver: MCPProjectContextResolver,
             metadata: MCPMetadataService,
             explicitProject: MCPProjectReference?,
             workingDirectory: String,
             version: String,
-            diagnostics: @escaping @Sendable (String) -> Void = MCPSessionContext.standardError
+            diagnostics: @escaping @Sendable (String) -> Void = MCPSessionContext.standardError,
+            onRequest: @escaping @Sendable () -> Void = {}
         ) {
             self.resolver = resolver
             self.metadata = metadata
@@ -36,6 +41,7 @@ public enum BerryMCPServerFactory {
             self.workingDirectory = workingDirectory
             self.version = version
             self.diagnostics = diagnostics
+            self.onRequest = onRequest
         }
     }
 
@@ -83,19 +89,26 @@ public enum BerryMCPServerFactory {
         )
         let router = MCPToolRouter(metadata: dependencies.metadata)
         let metadata = dependencies.metadata
+        let onRequest = dependencies.onRequest
 
+        // Each handler resolves the session's project, which reads the store,
+        // so each counts as store activity before it starts.
         await server.withMethodHandler(ListTools.self) { _ in
-            ListTools.Result(tools: MCPToolCatalog.tools(for: await session.context()))
+            onRequest()
+            return ListTools.Result(tools: MCPToolCatalog.tools(for: await session.context()))
         }
         await server.withMethodHandler(CallTool.self) { params in
+            onRequest()
             let context = await session.context()
             return try router.call(params.name, arguments: params.arguments, context: context)
         }
         await server.withMethodHandler(ListResources.self) { _ in
+            onRequest()
             let context = await session.context()
             return ListResources.Result(resources: try MCPResourceCatalog.resources(for: context, metadata: metadata))
         }
         await server.withMethodHandler(ReadResource.self) { params in
+            onRequest()
             let context = await session.context()
             return ReadResource.Result(
                 contents: try MCPResourceCatalog.read(uri: params.uri, context: context, metadata: metadata)

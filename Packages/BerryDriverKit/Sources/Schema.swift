@@ -111,6 +111,57 @@ public struct TableDetail: Sendable {
     }
 }
 
+/// Which schemas a harvest reads. `allUserSchemas` is the default scope:
+/// every schema except the engine's own system schemas, which each driver
+/// names. On MySQL and MariaDB, where a schema is a database, it is the
+/// connection's database when one is selected, and every database but the
+/// system ones only when none is. Engines with a single namespace ignore the
+/// scope.
+public enum SchemaScope: Sendable, Hashable {
+    case allUserSchemas
+    case schemas([String])
+}
+
+/// One table or view as the catalog lists it, with the engine's own
+/// fingerprint of its definition, computed in the same query that lists the
+/// object. Two equal fingerprints mean the definition did not change; the
+/// value is otherwise opaque. Nil when the engine has no such signal, in
+/// which case the table is fetched in full on every change of the catalog
+/// version.
+public struct SchemaObjectSummary: Sendable, Hashable {
+    public let ref: TableRef
+    public let kind: SchemaObjectKind
+    public let fingerprint: String?
+
+    public init(ref: TableRef, kind: SchemaObjectKind, fingerprint: String?) {
+        self.ref = ref
+        self.kind = kind
+        self.fingerprint = fingerprint
+    }
+}
+
+/// One column pair of a foreign key, listed for a whole scope at once. A
+/// multi-column key is one element per pair, as `ForeignKeyInfo` models it
+/// per table.
+public struct ForeignKeyRelation: Sendable, Hashable {
+    public let source: TableRef
+    public let column: String
+    public let target: TableRef
+    public let referencedColumn: String
+    public let constraintName: String?
+
+    public init(
+        source: TableRef, column: String, target: TableRef, referencedColumn: String,
+        constraintName: String? = nil
+    ) {
+        self.source = source
+        self.column = column
+        self.target = target
+        self.referencedColumn = referencedColumn
+        self.constraintName = constraintName
+    }
+}
+
 /// Best-effort quick-info stats for a table. `estimatedRowCount` is a
 /// cheap catalog estimate where the DBMS tracks one (Postgres/MySQL/DynamoDB),
 /// an exact `COUNT(*)` for SQLite (no catalog estimate available there). Any

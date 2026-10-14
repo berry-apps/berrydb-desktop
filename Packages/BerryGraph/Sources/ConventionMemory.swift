@@ -30,9 +30,17 @@ public enum ConventionMemory {
     public static func hasEstablishedIndexNamingConvention(
         current: SchemaGraph, history: [SchemaGraph]
     ) -> Bool {
-        let allGraphs = [current] + history
-        let agreeingCount = allGraphs.filter(hasIndexNamingConvention).count
-        return agreeingCount * 2 > allGraphs.count
+        hasEstablishedIndexNamingConvention(current: current, historyHeldConvention: history.map(hasIndexNamingConvention))
+    }
+
+    /// The same majority, with each prior snapshot already judged by
+    /// `hasIndexNamingConvention`, so a caller can judge large graphs one at
+    /// a time instead of holding them all.
+    public static func hasEstablishedIndexNamingConvention(
+        current: SchemaGraph, historyHeldConvention history: [Bool]
+    ) -> Bool {
+        let votes = [hasIndexNamingConvention(current)] + history
+        return votes.filter { $0 }.count * 2 > votes.count
     }
 
     /// The name the canonical template produces for a new index on
@@ -49,9 +57,15 @@ public enum ConventionMemory {
     /// "Database Memory") — when supplied, requires the convention to hold
     /// across most of that history too, not just the current snapshot alone.
     public static func namingMismatches(_ graph: SchemaGraph, history: [SchemaGraph] = []) -> [Insight] {
+        namingMismatches(graph, historyHeldConvention: history.map(hasIndexNamingConvention))
+    }
+
+    /// `namingMismatches(_:history:)` with each prior snapshot already judged
+    /// by `hasIndexNamingConvention`.
+    public static func namingMismatches(_ graph: SchemaGraph, historyHeldConvention history: [Bool]) -> [Insight] {
         let established = history.isEmpty
             ? hasIndexNamingConvention(graph)
-            : hasEstablishedIndexNamingConvention(current: graph, history: history)
+            : hasEstablishedIndexNamingConvention(current: graph, historyHeldConvention: history)
         guard established else { return [] }
         return judgedIndexes(in: graph)
             .filter { !$0.followsConvention }

@@ -39,8 +39,8 @@ public struct QueryReplaySnapshotRecord: Codable, Sendable, Equatable, Fetchable
 
 public enum QueryReplayRecord {
     /// Deterministic content hash so re-running the same query (modulo
-    /// whitespace) groups under one `queryHash` — no crypto dependency, same
-    /// FNV-1a approach as `GraphStore.digest` (keeps the module Linux-clean).
+    /// whitespace) groups under one `queryHash` — no crypto dependency, FNV-1a
+    /// (keeps the module Linux-clean).
     public static func hash(of sql: String) -> String {
         let normalized = sql
             .trimmingCharacters(in: .whitespacesAndNewlines)

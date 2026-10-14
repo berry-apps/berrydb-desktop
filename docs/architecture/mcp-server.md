@@ -1,7 +1,7 @@
 # Local MCP Server Architecture
 
 Status: **metadata tools**. `berrydb-mcp` runs as a stdio MCP server over
-the app's store opened read-only and serves six metadata tools and two
+the app's store opened read-only and serves seven metadata tools and two
 kinds of resources for one selected project (see
 [Tools and resources](#tools-and-resources)). The project is selected by
 an explicit `--project`, which takes a project ID or name, or else from
@@ -73,6 +73,10 @@ returned data on the Mac.
 
 Every tool is read-only and reads only the store: the schema and dependency
 graph the app last harvested for a connection, never the database itself.
+Every answer that reads the stored schema carries `checked_at` (when a pass
+last confirmed that schema against the database, or null if none has) and
+`stale` (true when it was never checked or was last checked more than 60 s
+ago), so an agent can tell a stored answer from a current one.
 Each tool declares a closed input schema (`additionalProperties: false`)
 and an output schema, carries the annotations `readOnlyHint: true`,
 `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`,
@@ -84,11 +88,12 @@ structured content
 | Tool | Arguments | Returns |
 |---|---|---|
 | `berrydb_status` | none | Which project the session serves, or why none (see [Status](#status)). Always listed. |
-| `berrydb_list_connections` | none | The project's connections: ID, name, driver, `environment` (`production` or `unlabeled`), capabilities and `graph_harvested_at`: the time of the last harvest that changed the graph's structure (a harvest that only refreshes statistics does not move it), or null when the connection was never harvested or its latest harvest found no tables or views. |
-| `berrydb_get_schema` | `connection_id`; optional `object_names` (at most 50), `detail` (`overview` or `full`) | Tables and views, at most 200 per call with an `omitted_count` and `harvested_at`, which means the same as `graph_harvested_at`; `full` adds columns, indexes and foreign keys. |
-| `berrydb_search_schema` | `connection_id`, `query` (1–200 characters); optional `limit` (1–200, default 50) | Case-insensitive substring matches over table, view, column and index names. |
+| `berrydb_list_connections` | none | The project's connections: ID, name, driver, `environment` (`production` or `unlabeled`), capabilities and the state of the stored schema. `graph_harvested_at` is the time of the last pass that changed the schema (a pass that found it unchanged, or that only refreshed statistics, does not move it), or null when the connection was never harvested or its stored schema holds no table or view. `checked_at` and `stale` are as above. `stale_reason` is, for a stale schema, the code of the failure that stopped its last pass (`connection_failed`, `timeout`, `cancelled`, `store_write_failed` or `introspection_failed`), never text a server wrote, and null otherwise. `detail_coverage` is `{detailed, total}`: how many stored tables and views have had their columns read. `scope` lists the schemas the harvest is limited to, or is null for the default scope: every user schema, except on MySQL and MariaDB, where it is the connection's database when the profile names one. `hint` is `selectSchemas` when the catalog is too large to harvest whole and schemas should be selected in the app, else null. |
+| `berrydb_get_schema` | `connection_id`; optional `object_names` (at most 50), `detail` (`overview` or `full`, default `overview`), `offset` (0 or more, default 0) | One page of tables and views from `offset`: at most 200 objects, and at `full` detail as many as fit an estimated 512 KB, never fewer than one. The page reports `total` (all matching objects), `omitted_count` (those after the page), `next_offset` (pass it back as `offset`; null on the last page), `harvested_at` (when the schema last changed, as `graph_harvested_at`, omitted when none), `checked_at` and `stale`. `full` adds columns, indexes and foreign keys. An object with `detail_pending: true` is listed but its columns have not been read yet, so its `columns`, `indexes` and `foreign_keys` are empty: at `overview` the flag says whether a definition exists, at `full` it marks a definition still missing. |
+| `berrydb_search_schema` | `connection_id`, `query` (1–200 characters after trimming); optional `limit` (1–200, default 50) | Case-insensitive, literal substring matches over table, view, column and index names, each with `name`, `kind` and, where known, `database` and `table` (the owner of a column or index), ordered by kind (table, view, column, index), then database, owning table and name; plus `checked_at` and `stale`. |
 | `berrydb_graph_query` | `connection_id`, `operation`; `node` for `neighbors` and `blast_radius`, `from` and `to` for `path`, optional `limit` (1–50) for `top_centrality` | The dependency-graph answer. The name lists of `neighbors`, `blast_radius` and `circular_dependencies` are capped at 500; a `path` is returned whole, bounded only by the 1 MiB result ceiling. `circular_dependencies` takes no further argument. |
-| `berrydb_get_graph_stats` | `connection_id`; optional `object` | Harvested statistics (rows, size, scans) for every table, or for one table and its indexes; at most 500 tables and 500 unused index names. |
+| `berrydb_get_graph_stats` | `connection_id`; optional `object` | Harvested statistics (rows, size, scans) for every table, or for one table and its indexes. A summary lists the first 500 tables by name and the unused indexes of those tables, at most 500 names. |
+| `berrydb_get_schema_changes` | `connection_id`; optional `since` (at most 64 characters), `limit` (1–200, default 50) | The schema changes the app recorded, oldest first, with `next_since`, `checked_at` and `stale`. Each entry has `at`, `kind` (`added`, `changed`, `removed`, `relation_added` or `relation_removed`), `name`, `database` where it has one and `object_kind` (`table` or `view`). A `changed` entry carries `diff` (columns and indexes added, removed or changed, and whether the columns were reordered) when both versions have a readable definition; a relation entry carries `relation`, as `source.column -> target.column`, and is named after its source table. `since` left out lists every change, an ISO 8601 time for the changes written at or after it, or the `next_since` of an earlier page; `next_since` is opaque, is null once no entry remains, and resumes at the same entry however many changes are written later. A page can stop inside one change, since a first harvest records every object as one change. Only the changes of passes that completed are listed, those written at or before `checked_at`, so a pass still running is not listed until a later one completes; a connection never checked returns an empty page. |
 
 With no project selected, `tools/list` returns only `berrydb_status` and
 every other tool answers that no project is selected; nothing about any
@@ -99,7 +104,14 @@ nodes is an `isError` result that lists at most 50 tables or views. Each is
 named so that it resolves to that one node: its `database.name`, or its
 stable id (for example `table:shop.orders`) when that name is shared. A
 count of the rest follows. A name that matches only columns or indexes is
-told to pass a table or view name. An unknown tool, or (while a project
+told to pass a table or view name. A `since` that is neither an ISO 8601
+time nor a cursor from an earlier page is a tool result with `isError`,
+`Invalid since cursor`, which does not repeat it; one longer than 64
+characters, or a negative `offset`, is an invalid-params error. A
+connection whose stored schema holds no table or view answers the schema,
+search and graph tools with `No schema graph has been harvested for this
+connection. Open it in BerryDB to refresh.`
+An unknown tool, or (while a project
 is selected) an argument that breaks the input schema, is a JSON-RPC
 invalid-params error (`-32602`) whose message names the argument but never
 echoes its value. This departs from
@@ -115,9 +127,9 @@ returns a fixed text, never SQLite's message, which can contain a path.
 Resources: `berrydb://project` (the project and its connections) and, for
 each connection with a non-null `graph_harvested_at`,
 `berrydb://connections/<connection-id>/graph` (harvested table and index
-statistics). An unconfigured session lists no resources, and any unknown,
-malformed or out-of-project URI gets the identical `Unknown resource`
-error.
+statistics, with `harvested_at`, `checked_at` and `stale`). An
+unconfigured session lists no resources, and any unknown, malformed or
+out-of-project URI gets the identical `Unknown resource` error.
 
 Tool names use `[a-z0-9_]` only. MCP itself allows `.` in tool names
 ([Tool Names](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names)),
@@ -424,7 +436,7 @@ host that its tool list changed
 ([Tools: Capabilities](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#capabilities)).
 A host that keeps the `tools/list` answer it fetched when the session
 started goes on showing only `berrydb_status` after its project is enabled,
-or all six tools after it is disabled, until a new agent session starts;
+or all seven tools after it is disabled, until a new agent session starts;
 the settings pane says so.
 
 ### Status
@@ -440,6 +452,7 @@ the settings pane says so.
 | `workspace` | the location that decided the selection: the host root or working directory that a workspace folder matched for `roots` or `working_directory`, null for `explicit`; the same location when that project is now `project_disabled` or `no_matching_project`. Otherwise, when unconfigured: the working directory when it was the input that failed, null for the rest |
 | `live_reads` | always `not_available` in this version |
 | `integrity` | when selected: `verified` if the project row's tag verifies under the stored key, `unavailable` if it does not or no key could be read; when unconfigured: `unavailable` for `integrity_unavailable` (the store could not be read), null for every other reason |
+| `connections` | when selected: one entry per connection of the project, `{"id", "name", "checked_at", "stale", "stale_reason", "hint"}` as `berrydb_list_connections` reports them, so an agent learns how fresh each stored schema is, why a stale one is, and which needs its schemas selected in the app; null when unconfigured or when the store could not be read |
 
 The project row's tag covers the project's ID, its enabled flag and its
 workspace folders, and nothing else. It does not cover the project's name,
@@ -670,7 +683,15 @@ over from the verified editing copy, so a save never turns one on.
 | Serialized result | 1 MiB | 256 KiB |
 | Encoded cell | 64 KiB | 64 KiB |
 | Schema objects per response | 200 | 200 |
+| Estimated size of a full-detail schema page | 512 KiB | 512 KiB |
 | Graph nodes / edges | 500 / 1,000 | 500 / 1,000 |
+
+A schema page ends at 200 objects or, at `full` detail, at an estimated
+512 KiB, whichever comes first, and `next_offset` continues it; the
+estimate is half the 1 MiB result ceiling so that the page's own keys and
+an estimate that runs short still fit. Graph queries share a per-process
+cache of table-level graphs, at most 4 entries and 32 MB, each dropped
+after 60 s unused.
 
 Projects may configure stricter values only. Truncation is explicit
 (`truncated`, omitted counts, an opaque continuation cursor where supported);
@@ -686,8 +707,12 @@ Implemented:
 - `berrydb-mcp` as a stdio MCP server over the store opened read-only, with
   the host compatibility rules recorded in
   [`../mcp-server-compatibility.md`](../mcp-server-compatibility.md).
-- The six metadata tools and the two kinds of resources above, served from
+- The seven metadata tools and the two kinds of resources above, served from
   the persisted schema and dependency graph.
+- A versioned catalog store with one row per table, incremental harvest that
+  rereads only what changed, and the schema change feed behind
+  `berrydb_get_schema_changes`; the helper reads them through narrow, paged
+  queries instead of loading a whole graph.
 - Project selection by `--project` (a project ID or name), roots or
   working directory, matched against registered workspace folders;
   selection on the first request, verification on every request, and
@@ -706,6 +731,9 @@ Implemented:
 
 Not implemented:
 
+- A freshness channel from the app to the helper, so the helper can tell a
+  stale answer from a current one by more than the age of the last check, and
+  lazy connection and refresh timers in the app.
 - Live reads: `berrydb_execute_read_query` for PostgreSQL and MySQL
   (session read-only plus the least-privilege check,
   [gate G3](../mcp-server-compatibility.md#g3-privilege-checks)) and SQLite

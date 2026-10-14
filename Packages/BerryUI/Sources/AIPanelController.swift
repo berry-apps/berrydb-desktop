@@ -197,7 +197,7 @@ public final class AIPanelController {
     public var previewNewColumn: ((String, ColumnDesign) async -> [Insight]?)?
  /// Impact Simulator (`simulate_impact`)
     /// `WorkspaceViewModel.simulateImpact`, same as Graph Explorer uses.
-    public var simulateImpact: ((String) -> ImpactSimulator.Report?)?
+    public var simulateImpact: ((String) async -> ImpactSimulator.Report?)?
  /// Daily Review digest (`get_daily_review`)
     /// `WorkspaceViewModel.maybeGenerateDailyReview`/`latestDailyReview`, same
     /// as the Insight Panel's "Today's Summary" uses.
@@ -366,7 +366,10 @@ public final class AIPanelController {
 
  // Per-connection settings. Changes persist unless restoring.
     public var enabledForConnection = false {
-        didSet { persistSettings() }
+        didSet {
+            persistSettings()
+            schemaEmbeddingConsentChanged()
+        }
     }
     public var allowSampleRows = false {
         didSet {
@@ -381,7 +384,10 @@ public final class AIPanelController {
         }
     }
     private var consentGiven = false {
-        didSet { persistSettings() }
+        didSet {
+            persistSettings()
+            schemaEmbeddingConsentChanged()
+        }
     }
 
     /// Profile for persistence — nil for quick-open (memory only).
@@ -650,6 +656,59 @@ public final class AIPanelController {
         }
     }
 
+    /// Whether a connection's table and view names may be sent to the backend
+    /// to be embedded for `search_schema`: only for the connection the panel
+    /// is bound to, with the panel ready (AI enabled for the connection and
+    /// its metadata policy accepted, the same condition a chat request meets),
+    /// under a licence that unlocks AI, and with the on-device model not
+    /// selected. A ready panel does not imply the licence: an expired trial
+    /// still reaches it to show its top-up prompt, and Apple Intelligence
+    /// stands in for a licence only for the on-device model.
+    nonisolated static func allowsSchemaEmbedding(
+        profileID: UUID, currentProfileID: UUID?, availability: Availability, license: LicenseStatus, onDevice: Bool
+    ) -> Bool {
+        currentProfileID == profileID && availability == .ready && license.isEntitled && !onDevice
+    }
+
+    /// Whether the connection's names may be embedded now. Asked again before
+    /// every batch of a drain, so it builds nothing.
+    public func allowsSchemaEmbedding(profileID: UUID) -> Bool {
+        Self.allowsSchemaEmbedding(
+            profileID: profileID, currentProfileID: currentProfileID, availability: availability,
+            license: license.status, onDevice: UserDefaults.standard.bool(forKey: "berry.ai.onDevice")
+        )
+    }
+
+    /// A transport for the requests of one embedding drain. Its URL session
+    /// is the drain's: every batch sends through it, and releasing it when
+    /// the drain ends invalidates the session once its requests are done.
+    public func makeSchemaEmbeddingTransport() -> SchemaEmbeddingTransport {
+        let client = AIClient(
+            baseURL: backendURL,
+            token: { LicenseManager.apiToken() ?? "dev-token" },
+            reauthenticate: { [license] in await license.syncFromBackend() }
+        )
+        return SchemaEmbeddingTransport(transport: client, release: { client.invalidateSession() })
+    }
+
+    /// Called with the bound connection's profile when something that decides
+    /// whether its names may be embedded changes, so a drain in progress stops
+    /// at once rather than at its next batch, and one starts when the names
+    /// may now be embedded.
+    public var onSchemaEmbeddingConsentChange: ((UUID) -> Void)?
+
+    /// The on-device toggle is stored by the panel view, which reports a
+    /// change here.
+    public func onDeviceModelChanged() {
+        schemaEmbeddingConsentChanged()
+    }
+
+    /// Restoring a connection's saved settings is not a change of mind.
+    private func schemaEmbeddingConsentChanged() {
+        guard !isRestoring, let currentProfileID else { return }
+        onSchemaEmbeddingConsentChange?(currentProfileID)
+    }
+
     /// True once an AI session exists — false when there is no connection or no
     /// token yet. Used to rebuild after a license activation without disrupting
     /// an already-running conversation.
@@ -887,7 +946,7 @@ public final class AIPanelController {
             // Intelligence-tier availability, since it also reads the
             // harvested DSG (plus query history).
             routes["simulate_impact"] = SimulateImpactToolExecutor(simulateImpact: { [weak self] table in
-                self?.simulateImpact?(table) ?? nil
+                await self?.simulateImpact?(table) ?? nil
             })
  // get_daily_review — same
             // Intelligence-tier availability as the other bridges here.
@@ -1031,7 +1090,7 @@ public final class AIPanelController {
             routes["graph_query"] = graphExecutor
             routes["get_stats"] = graphExecutor
             routes["simulate_impact"] = SimulateImpactToolExecutor(simulateImpact: { [weak self] table in
-                self?.simulateImpact?(table) ?? nil
+                await self?.simulateImpact?(table) ?? nil
             })
             routes["preview_migration"] = PreviewMigrationToolExecutor(previewNewColumn: { [weak self] table, column in
                 await self?.previewNewColumn?(table, column) ?? nil

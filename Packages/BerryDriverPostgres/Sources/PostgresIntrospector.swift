@@ -4,9 +4,18 @@ import Foundation
 /// Introspection via pg_catalog — faster and more accurate than
 /// information_schema. For Postgres, SchemaObject's
 /// `database` field means SCHEMA (namespace).
-public struct PostgresIntrospector: Introspector {
+public struct PostgresIntrospector: Introspector, CatalogReadScoping {
     let connection: PostgresDriverConnection
     private let dialect = PostgresDialect()
+
+    /// A pass reads through the connection's scope.
+    public func beginCatalogReads() async throws -> CatalogReadScope? {
+        try await connection.beginCatalogReads()
+    }
+
+    public func endCatalogReads(_ scope: CatalogReadScope, commit: Bool) async {
+        await connection.endCatalogReads(scope, commit: commit)
+    }
 
     public func databases() async throws -> [DatabaseInfo] {
         let rows = try await connection.queryAll(
@@ -274,6 +283,233 @@ public struct PostgresIntrospector: Introspector {
             }
             let qualified = "\(dialect.quoteIdentifier(schema)).\(dialect.quoteIdentifier(object.name))"
             return "CREATE TABLE \(qualified) (\n\(lines.joined(separator: ",\n"))\n)"
+        }
+    }
+
+    // MARK: - Bulk introspection
+
+    public var bulkIntrospection: Bool { true }
+
+    /// Always nil, so the caller lists the catalog on every check. The cheap
+    /// candidate is the row-change counters of `pg_class`, `pg_attribute`,
+    /// `pg_constraint` and `pg_index` in `pg_stat_sys_tables`, summed with the
+    /// number of relations in scope, but those counters can trail a DDL
+    /// statement of a session that stays connected
+    /// (https://www.postgresql.org/docs/16/monitoring-stats.html). Measured
+    /// against PostgreSQL 16 (postgres:16-alpine), polling from a second
+    /// connection every 100 ms: a CREATE TABLE showed after 2 to 5 ms, only
+    /// because the relation count moves at once. An ALTER TABLE ADD COLUMN
+    /// showed after 2 to 4 ms when its session disconnected right after it, and
+    /// not within 3 s when the session stayed connected. A psql session that
+    /// ran the ALTER at once after connecting moved the counters after 10.2 s;
+    /// one that waited 2 s first moved them at once. So the lag appears when a
+    /// statement follows another within about a second, and a token that
+    /// misses an ALTER typed into a connected SQL editor would report the
+    /// catalog as unchanged until some later change.
+    public func schemaVersionToken(scope: SchemaScope) async throws -> String? { nil }
+
+    /// Partition children are left out and a partitioned table is listed as a
+    /// table. The fingerprint hashes, per relation, each live column's name,
+    /// formatted type, NOT NULL flag and default expression, in column order,
+    /// and each index's oid, name, uniqueness, primary-key flag and key
+    /// columns, so a changed default or a renamed index changes it. It does
+    /// not see a replaced view body that keeps the same columns. System
+    /// columns are skipped, and `attisdropped` hides dropped ones, which stay
+    /// in `pg_attribute` (https://www.postgresql.org/docs/16/catalog-pg-attribute.html).
+    ///
+    /// The type is hashed as `format_type` writes it, with its modifier,
+    /// rather than as its oid: renaming a user-defined type keeps the oid and
+    /// changes the name every column of that type reads as. The primary-key
+    /// flag is hashed because `ADD PRIMARY KEY USING INDEX` on columns already
+    /// `NOT NULL` changes nothing else the fingerprint sees
+    /// (https://www.postgresql.org/docs/16/sql-altertable.html). Both were
+    /// checked against PostgreSQL 16 (postgres:16-alpine) by the tests.
+    public func objectSummaries(scope: SchemaScope) async throws -> [SchemaObjectSummary] {
+        let rows = try await connection.queryAll(
+            """
+            SELECT n.nspname, c.relname, c.relkind::text,
+                   md5(COALESCE((SELECT string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod)
+                                                   || ':' || a.attnotnull::text || ':' || a.atthasdef::text
+                                                   || ':' || COALESCE(pg_get_expr(d.adbin, d.adrelid), ''),
+                                                   ',' ORDER BY a.attnum)
+                                   FROM pg_attribute a
+                                   LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+                                  WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped), '')
+                       || '|' ||
+                       COALESCE((SELECT string_agg(i.indexrelid::text || ':' || i.indisunique::text
+                                                   || ':' || i.indisprimary::text || ':' || i.indkey::text
+                                                   || ':' || ic.relname,
+                                                   ',' ORDER BY i.indexrelid)
+                                   FROM pg_index i
+                                   JOIN pg_class ic ON ic.oid = i.indexrelid
+                                  WHERE i.indrelid = c.oid), '')) AS fingerprint
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind IN ('r', 'p', 'v', 'm') AND NOT c.relispartition AND \(scopeFilter(scope))
+            ORDER BY n.nspname, c.relname
+            """
+        )
+        return rows.compactMap { row in
+            guard case .text(let schema) = row[0],
+                  case .text(let name) = row[1],
+                  case .text(let kind) = row[2] else { return nil }
+            let fingerprint: String? = if case .text(let value) = row[3] { value } else { nil }
+            return SchemaObjectSummary(
+                ref: TableRef(database: schema, name: name),
+                kind: (kind == "v" || kind == "m") ? .view : .table,
+                fingerprint: fingerprint
+            )
+        }
+    }
+
+    /// One element per column pair, in key order, for keys whose own table is
+    /// in scope; the referenced table may lie in any schema. PostgreSQL copies
+    /// a key onto every partition of a partitioned table, on the referencing
+    /// side and on the referenced side, and links each copy to the original
+    /// through `conparentid`; keeping only the originals lists each key once
+    /// and never names a partition child (verified against PostgreSQL 16,
+    /// postgres:16-alpine; https://www.postgresql.org/docs/16/catalog-pg-constraint.html).
+    public func foreignKeys(scope: SchemaScope) async throws -> [ForeignKeyRelation] {
+        let rows = try await connection.queryAll(
+            """
+            SELECT sn.nspname, sc.relname, att.attname, tn.nspname, tc.relname, fatt.attname, con.conname
+            FROM pg_constraint con
+            JOIN pg_class sc ON sc.oid = con.conrelid
+            JOIN pg_namespace sn ON sn.oid = sc.relnamespace
+            JOIN pg_class tc ON tc.oid = con.confrelid
+            JOIN pg_namespace tn ON tn.oid = tc.relnamespace
+            JOIN unnest(con.conkey) WITH ORDINALITY AS ck(attnum, ord) ON TRUE
+            JOIN unnest(con.confkey) WITH ORDINALITY AS fk(attnum, ord) ON fk.ord = ck.ord
+            JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = ck.attnum
+            JOIN pg_attribute fatt ON fatt.attrelid = con.confrelid AND fatt.attnum = fk.attnum
+            WHERE con.contype = 'f' AND con.conparentid = 0 AND \(scopeFilter(scope, namespace: "sn.nspname"))
+            ORDER BY sn.nspname, sc.relname, con.conname, ck.ord
+            """
+        )
+        return rows.compactMap { row in
+            guard case .text(let sourceSchema) = row[0],
+                  case .text(let sourceTable) = row[1],
+                  case .text(let column) = row[2],
+                  case .text(let targetSchema) = row[3],
+                  case .text(let targetTable) = row[4],
+                  case .text(let referencedColumn) = row[5] else { return nil }
+            let constraintName: String? = if case .text(let name) = row[6] { name } else { nil }
+            return ForeignKeyRelation(
+                source: TableRef(database: sourceSchema, name: sourceTable),
+                column: column,
+                target: TableRef(database: targetSchema, name: targetTable),
+                referencedColumn: referencedColumn,
+                constraintName: constraintName
+            )
+        }
+    }
+
+    /// Columns and indexes of `refs` in three queries, whatever their number:
+    /// one resolves the oids, one reads the columns and one the indexes. Each
+    /// detail carries the ref it was asked for, and an empty `foreignKeys`,
+    /// because the keys of a whole scope come from `foreignKeys(scope:)`. A
+    /// table that no longer exists is left out.
+    public func tableDetails(_ refs: [TableRef]) async throws -> [TableDetail] {
+        guard !refs.isEmpty else { return [] }
+        func resolved(_ ref: TableRef) -> TableRef { TableRef(database: ref.database ?? "public", name: ref.name) }
+
+        let pairs = Set(refs.map(resolved)).map { "('\(escaped($0.database ?? ""))', '\(escaped($0.name))')" }
+        let oidRows = try await connection.queryAll(
+            """
+            SELECT n.nspname, c.relname, c.oid::bigint
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE (n.nspname, c.relname) IN (\(pairs.joined(separator: ", ")))
+            """
+        )
+        var oidByRef: [TableRef: Int64] = [:]
+        for row in oidRows {
+            guard case .text(let schema) = row[0], case .text(let name) = row[1], case .int(let oid) = row[2] else {
+                continue
+            }
+            oidByRef[TableRef(database: schema, name: name)] = oid
+        }
+        guard !oidByRef.isEmpty else { return [] }
+        let oidList = "ARRAY[" + oidByRef.values.map(String.init).joined(separator: ", ") + "]::oid[]"
+
+        let columnRows = try await connection.queryAll(
+            """
+            SELECT a.attrelid::bigint, a.attname,
+                   format_type(a.atttypid, a.atttypmod),
+                   NOT a.attnotnull,
+                   pg_get_expr(d.adbin, d.adrelid),
+                   EXISTS (
+                       SELECT 1 FROM pg_index i
+                       WHERE i.indrelid = a.attrelid AND i.indisprimary AND a.attnum = ANY(i.indkey)
+                   )
+            FROM pg_attribute a
+            LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+            WHERE a.attrelid = ANY(\(oidList)) AND a.attnum > 0 AND NOT a.attisdropped
+            ORDER BY a.attrelid, a.attnum
+            """
+        )
+        var columnsByOID: [Int64: [ColumnInfo]] = [:]
+        for row in columnRows {
+            guard case .int(let oid) = row[0], case .text(let name) = row[1], case .text(let type) = row[2] else {
+                continue
+            }
+            let nullable: Bool = if case .bool(let b) = row[3] { b } else { true }
+            let pk: Bool = if case .bool(let b) = row[5] { b } else { false }
+            columnsByOID[oid, default: []].append(ColumnInfo(
+                name: name, declaredType: type, isNullable: nullable,
+                defaultValue: row[4].displayString, isPrimaryKey: pk
+            ))
+        }
+
+        let indexRows = try await connection.queryAll(
+            """
+            SELECT i.indrelid::bigint, ic.relname, i.indisunique,
+                   array_to_string(ARRAY(
+                       SELECT a.attname FROM unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
+                       JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+                       ORDER BY k.ord
+                   ), ',')
+            FROM pg_index i
+            JOIN pg_class ic ON ic.oid = i.indexrelid
+            WHERE i.indrelid = ANY(\(oidList))
+            ORDER BY i.indrelid, ic.relname
+            """
+        )
+        var indexesByOID: [Int64: [IndexInfo]] = [:]
+        for row in indexRows {
+            guard case .int(let oid) = row[0], case .text(let name) = row[1] else { continue }
+            let unique: Bool = if case .bool(let b) = row[2] { b } else { false }
+            let columns: [String] = if case .text(let joined) = row[3] {
+                joined.split(separator: ",").map(String.init)
+            } else { [] }
+            indexesByOID[oid, default: []].append(IndexInfo(name: name, isUnique: unique, columns: columns))
+        }
+
+        var seen = Set<TableRef>()
+        return refs.compactMap { ref in
+            let key = resolved(ref)
+            guard let oid = oidByRef[key], seen.insert(key).inserted else { return nil }
+            return TableDetail(
+                ref: ref, columns: columnsByOID[oid] ?? [], indexes: indexesByOID[oid] ?? [], foreignKeys: []
+            )
+        }
+    }
+
+    /// SQL condition on the schema name `column` for `scope`. The system
+    /// schemas, and the per-session temporary ones, are never part of
+    /// `allUserSchemas`; the underscores of the temporary prefixes are
+    /// escaped so a schema such as `pgxtemp1` is not mistaken for one.
+    private func scopeFilter(_ scope: SchemaScope, namespace column: String = "n.nspname") -> String {
+        switch scope {
+        case .allUserSchemas:
+            return """
+                \(column) NOT IN ('pg_catalog', 'information_schema', 'pg_toast') \
+                AND \(column) NOT LIKE 'pg!_temp!_%' ESCAPE '!' \
+                AND \(column) NOT LIKE 'pg!_toast!_temp!_%' ESCAPE '!'
+                """
+        case .schemas(let names):
+            guard !names.isEmpty else { return "FALSE" }
+            return "\(column) IN (" + names.map { "'\(escaped($0))'" }.joined(separator: ", ") + ")"
         }
     }
 

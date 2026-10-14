@@ -8,13 +8,17 @@ test:
 
 # Performance benchmarks against the Docker matrix.
 # Reports throughput / connect latency / memory; needs the test containers up
-# (Tests/docker/compose.yml). Override row count with BENCH_ROWS=...
+# (Tests/docker/compose.yml). Override row count with BENCH_ROWS=..., the
+# schema graph scale suite's table count with BENCH_TABLES=..., and the number
+# of tables it generates on the Postgres server with BENCH_PG_TABLES=...
+# A budget a measurement is known to miss is reported as a known issue.
 bench:
 	BERRYDB_BENCH=1 \
 	BERRYDB_BENCH_ROWS=$${BENCH_ROWS:-200000} \
+	BERRYDB_BENCH_TABLES=$${BENCH_TABLES:-20000} \
 	BERRYDB_TEST_POSTGRES=$${BERRYDB_TEST_POSTGRES:-127.0.0.1:54329:berry:berrypass:berrydb_test} \
 	BERRYDB_TEST_MYSQL=$${BERRYDB_TEST_MYSQL:-127.0.0.1:33069:root:berrypass:berrydb_test} \
-	swift test --filter Benchmarks 2>&1 | grep -E 'BENCH |Test .* (passed|failed)|Suite'
+	swift test --filter Benchmarks 2>&1 | grep -E 'BENCH |Test .* (passed|failed)|Suite|known issue'
 
 # Build once and (re)launch the app — no file watching. Stops a previous dev
 # instance first so you always see the fresh build.

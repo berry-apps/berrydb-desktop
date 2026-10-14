@@ -19,13 +19,23 @@ final class PostgresCancelBox: @unchecked Sendable {
     }
 }
 
-public actor PostgresDriverConnection: DriverConnection {
+public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadScoping {
     public nonisolated let id = UUID()
 
     private var connection: PostgresConnection
     private var config: ConnectionConfig
     private nonisolated let cancelBox: PostgresCancelBox
     private var isClosed = false
+    /// Set by `boundEachStatement(by:)`.
+    private var statementTimeout: Duration?
+    /// The catalog read scope whose transaction is open.
+    private var openScope: CatalogReadScope?
+    /// On a bounded connection a scope, or a statement made outside every
+    /// scope, holds the connection's turn until it ends: a statement sent
+    /// while another scope's transaction is open would run inside it, and a
+    /// scope opened inside another would be ended by its COMMIT.
+    private var turnTaken = false
+    private var turnWaiters: [CheckedContinuation<Void, Never>] = []
 
     static let batchSize = 500
     private static let logger: Logger = {
@@ -145,30 +155,32 @@ public actor PostgresDriverConnection: DriverConnection {
         let clock = ContinuousClock()
         let started = clock.now
         do {
-            let rows = try await connection.query(
-                PostgresQuery(unsafeSQL: sql),
-                logger: Self.logger
-            )
-            var sentColumns = false
-            var batch: [[BerryValue]] = []
-            batch.reserveCapacity(Self.batchSize)
+            try await inTurn {
+                let rows = try await connection.query(
+                    PostgresQuery(unsafeSQL: sql),
+                    logger: Self.logger
+                )
+                var sentColumns = false
+                var batch: [[BerryValue]] = []
+                batch.reserveCapacity(Self.batchSize)
 
-            for try await row in rows {
-                let cells = Array(row)
-                if !sentColumns {
-                    sentColumns = true
-                    continuation.yield(.columns(cells.map {
-                        ColumnMeta(name: $0.columnName, declaredType: String(describing: $0.dataType))
-                    }))
+                for try await row in rows {
+                    let cells = Array(row)
+                    if !sentColumns {
+                        sentColumns = true
+                        continuation.yield(.columns(cells.map {
+                            ColumnMeta(name: $0.columnName, declaredType: String(describing: $0.dataType))
+                        }))
+                    }
+                    batch.append(cells.map(Self.berryValue(from:)))
+                    if batch.count >= Self.batchSize {
+                        continuation.yield(.rows(batch))
+                        batch.removeAll(keepingCapacity: true)
+                        await Task.yield()
+                    }
                 }
-                batch.append(cells.map(Self.berryValue(from:)))
-                if batch.count >= Self.batchSize {
-                    continuation.yield(.rows(batch))
-                    batch.removeAll(keepingCapacity: true)
-                    await Task.yield()
-                }
+                if !batch.isEmpty { continuation.yield(.rows(batch)) }
             }
-            if !batch.isEmpty { continuation.yield(.rows(batch)) }
             continuation.yield(.complete(QueryStats(
  rowsAffected: nil, // PostgresNIO does not expose the command tag yet — note
                 duration: clock.now - started
@@ -301,14 +313,121 @@ public actor PostgresDriverConnection: DriverConnection {
     func queryAll(_ sql: String) async throws -> [[BerryValue]] {
         guard !isClosed else { throw DriverError.notConnected }
         do {
-            let rows = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger)
-            var result: [[BerryValue]] = []
-            for try await row in rows {
-                result.append(Array(row).map(Self.berryValue(from:)))
+            return try await inTurn {
+                let rows = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger)
+                var result: [[BerryValue]] = []
+                for try await row in rows {
+                    result.append(Array(row).map(Self.berryValue(from:)))
+                }
+                return result
             }
-            return result
         } catch {
             throw Self.mapError(error)
+        }
+    }
+
+    // MARK: - Catalog read scopes
+
+    /// Bounds the statements of every later catalog read scope: a scope runs
+    /// as one read-only transaction that sets `statement_timeout` with SET
+    /// LOCAL, which bounds each statement in it
+    /// (https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-STATEMENT-TIMEOUT)
+    /// and ends with the transaction
+    /// (https://www.postgresql.org/docs/current/sql-set.html), so nothing
+    /// stays on a server session that a pooler in transaction mode hands to
+    /// another client. Verified against PostgreSQL 16.15
+    /// (postgres:16-alpine): a statement is cancelled at the timeout and the
+    /// session's `statement_timeout` reads 0 after the scope. A scope costs
+    /// three round trips besides its statements, BEGIN, SET LOCAL and COMMIT:
+    /// PostgresNIO sends every statement with the extended query protocol,
+    /// which carries one statement per message
+    /// (https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY).
+    /// A pass and a statistics refresh, the metadata connection's only
+    /// readers, each read in one scope; a statement outside every scope runs
+    /// unbounded, in its turn.
+    ///
+    /// A pass keeps its transaction open while it writes the store between
+    /// two reads. A server whose `idle_in_transaction_session_timeout` is
+    /// shorter than such a gap ends the session
+    /// (https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-IDLE-IN-TRANSACTION-SESSION-TIMEOUT),
+    /// as a pooler's limit on idle transactions can; the pass then fails as a
+    /// connection failure, its connection is dropped, and the next pass
+    /// resumes from the rows already written.
+    public func boundEachStatement(by timeout: Duration) async -> Bool {
+        statementTimeout = timeout
+        return true
+    }
+
+    /// Opens a scope on a bounded connection once the connection's turn is
+    /// free, and nil on any other. A server that refuses BEGIN or SET LOCAL
+    /// also gets nil, after a rollback, and the reads run unscoped and
+    /// unbounded: PgBouncer in statement pooling mode refuses a transaction of
+    /// more than one statement (https://www.pgbouncer.org/features.html), and
+    /// the bound is a safeguard, not a requirement.
+    public func beginCatalogReads() async throws -> CatalogReadScope? {
+        guard let timeout = statementTimeout, !isClosed else { return nil }
+        await takeTurn()
+        let milliseconds = timeout.components.seconds * 1_000 + timeout.components.attoseconds / 1_000_000_000_000_000
+        do {
+            try await command("BEGIN READ ONLY")
+            try await command("SET LOCAL statement_timeout = '\(milliseconds)ms'")
+        } catch {
+            await finishTransaction(commit: false)
+            giveTurn()
+            return nil
+        }
+        let scope = CatalogReadScope()
+        openScope = scope
+        return scope
+    }
+
+    /// Ends the scope's transaction and gives the turn back. A read-only
+    /// transaction has nothing to lose, so a failed COMMIT is not reported;
+    /// a failed statement left the transaction aborted, and its ROLLBACK
+    /// ends it.
+    public func endCatalogReads(_ scope: CatalogReadScope, commit: Bool) async {
+        guard openScope == scope else { return }
+        openScope = nil
+        await finishTransaction(commit: commit)
+        giveTurn()
+    }
+
+    /// Also sent when the scope's task was cancelled: PostgresNIO 1.33.0
+    /// still sends a statement from a cancelled task, and the session was
+    /// observed idle, outside any transaction, after a cancelled scope ended.
+    private func finishTransaction(commit: Bool) async {
+        try? await command(commit ? "COMMIT" : "ROLLBACK")
+    }
+
+    /// `body` at once on an unbounded connection or for a read of the open
+    /// scope, and otherwise once the connection's turn is free.
+    private func inTurn<T: Sendable>(_ body: () async throws -> T) async throws -> T {
+        guard statementTimeout != nil else { return try await body() }
+        if let openScope, CatalogReadScope.current == openScope { return try await body() }
+        await takeTurn()
+        defer { giveTurn() }
+        return try await body()
+    }
+
+    private func command(_ sql: String) async throws {
+        for try await _ in try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger) {}
+    }
+
+    private func takeTurn() async {
+        guard turnTaken else {
+            turnTaken = true
+            return
+        }
+        await withCheckedContinuation { turnWaiters.append($0) }
+    }
+
+    /// Hands the turn straight to the next waiter, so nothing can slip in
+    /// between.
+    private func giveTurn() {
+        if turnWaiters.isEmpty {
+            turnTaken = false
+        } else {
+            turnWaiters.removeFirst().resume()
         }
     }
 }

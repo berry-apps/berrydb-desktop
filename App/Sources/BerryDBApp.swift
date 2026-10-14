@@ -254,6 +254,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `applicationShouldTerminate` to return, so this actually runs before
     /// the process exits rather than racing it.
     ///
+    /// Each workspace's schema harvest passes stop and their catalog
+    /// connections, one per open session, close alongside.
+    ///
     /// Bounded at 3s: quitting the app must never hang if an external driver
     /// connection close takes longer than expected. Whichever finishes first wins;
     /// any uncompleted cleanup is abandoned as the process terminates.
@@ -267,7 +270,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task {
             await withTaskGroup(of: Void.self) { group in
-                group.addTask { await ConnectionManager.shared.closeAll() }
+                group.addTask {
+                    async let sessions: Void = ConnectionManager.shared.closeAll()
+                    async let catalogs: Void = WorkspaceViewModel.closeAllMetadataConnections()
+                    _ = await (sessions, catalogs)
+                }
                 group.addTask { try? await Task.sleep(nanoseconds: 3_000_000_000) }
                 await group.next()
                 group.cancelAll()

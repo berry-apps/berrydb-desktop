@@ -57,6 +57,115 @@ public struct DynamoDBIntrospector: Introspector {
         return TableDetail(ref: ref, columns: columns, indexes: indexes, foreignKeys: [])
     }
 
+    /// DynamoDB has a single namespace per region, so `scope` selects nothing.
+    /// There is no per-table fingerprint to report: `DescribeTable` returns no
+    /// definition version or modification time
+    /// (https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_DescribeTable.html).
+    public func objectSummaries(scope: SchemaScope) async throws -> [SchemaObjectSummary] {
+        try await client.listTables().map {
+            SchemaObjectSummary(ref: TableRef(name: $0), kind: .table, fingerprint: nil)
+        }
+    }
+
+    /// DynamoDB has no foreign keys. Stated here rather than inherited,
+    /// because the inherited default would describe every table to find them.
+    public func foreignKeys(scope: SchemaScope) async throws -> [ForeignKeyRelation] { [] }
+
+    /// False because nothing here can tell which tables changed: without a
+    /// fingerprint every pass describes every table again, one `DescribeTable`
+    /// call each. That cost is proportional to the table count, which stays
+    /// small for the development accounts this is used with.
+    public var bulkIntrospection: Bool { false }
+
+    /// `DescribeTable` is a control-plane operation, and DynamoDB may answer
+    /// control-plane calls made too rapidly with `ThrottlingException`
+    /// (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html).
+    /// A small window overlaps network latency without bursting.
+    private static let maxConcurrentDescribes = 4
+
+    /// Retries after the first attempt. The AWS documentation lists both
+    /// throttling errors and `RequestLimitExceeded`, the account-level
+    /// throughput limit, as retryable ("OK to retry? Yes") and recommends
+    /// growing waits between attempts (same page); three retries, 200 ms
+    /// then 400 ms then 600 ms, ride out a short burst and fail the batch if
+    /// throttling persists.
+    private static let maxThrottleRetries = 3
+    private static let throttleBackoffStepNanoseconds: UInt64 = 200_000_000
+
+    /// Describes `refs` with at most `maxConcurrentDescribes` calls in flight,
+    /// returning details in the order of `refs`. A table that no longer exists
+    /// is left out; any other failure fails the whole batch.
+    public func tableDetails(_ refs: [TableRef]) async throws -> [TableDetail] {
+        try await withThrowingTaskGroup(of: (index: Int, detail: TableDetail?).self) { group in
+            var pending = refs.enumerated().makeIterator()
+            var inFlight = 0
+            var details = [TableDetail?](repeating: nil, count: refs.count)
+            while true {
+                while inFlight < Self.maxConcurrentDescribes, let (index, ref) = pending.next() {
+                    try Task.checkCancellation()
+                    group.addTask { (index, try await describeRetryingThrottling(ref)) }
+                    inFlight += 1
+                }
+                guard let finished = try await group.next() else { break }
+                inFlight -= 1
+                details[finished.index] = finished.detail
+            }
+            return details.compactMap { $0 }
+        }
+    }
+
+    /// Nil when the table vanished after it was listed: `DescribeTable` then
+    /// answers `ResourceNotFoundException`
+    /// (https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_DescribeTable.html).
+    private func describeRetryingThrottling(_ ref: TableRef) async throws -> TableDetail? {
+        var retries = 0
+        while true {
+            do {
+                return try await tableDetail(ref)
+            } catch {
+                // A cancelled URLSession task surfaces as a driver error; the
+                // caller asked to stop, so report that instead.
+                try Task.checkCancellation()
+                if Self.isMissingTable(error) { return nil }
+                guard Self.isThrottled(error), retries < Self.maxThrottleRetries else { throw error }
+                retries += 1
+                // `Task.sleep(nanoseconds:)` rather than the `Clock`-generic
+                // overload, which crashes release builds that specialize it in
+                // more than one module (swiftlang/swift#86204).
+                try await Task.sleep(nanoseconds: Self.throttleBackoffStepNanoseconds * UInt64(retries))
+            }
+        }
+    }
+
+    /// `DynamoDBHTTPClient` renders a service error as
+    /// `"<ExceptionType>: <Message>"` with the HTTP status as the code, and as
+    /// `"HTTP <status>: ..."` when the body names no exception. DynamoDB
+    /// answers the errors handled here with status 400, so the exception name
+    /// is the only way to tell them apart
+    /// (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html).
+    private static func isMissingTable(_ error: Error) -> Bool {
+        guard let driverError = error as? DriverError,
+              case .queryFailed(let message, _) = driverError
+        else { return false }
+        return message.hasPrefix("ResourceNotFoundException:")
+    }
+
+    /// DynamoDB itself reports throttling as status 400 with an exception name:
+    /// `ProvisionedThroughputExceededException` and `ThrottlingException` for a
+    /// table or the control plane, `RequestLimitExceeded` for the account
+    /// (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html).
+    /// Status 429, the standard HTTP rate-limit status, is retried as well
+    /// because a proxy in front of the endpoint may answer with it instead.
+    private static func isThrottled(_ error: Error) -> Bool {
+        guard let driverError = error as? DriverError,
+              case .queryFailed(let message, let code) = driverError
+        else { return false }
+        return code == 429
+            || message.hasPrefix("ProvisionedThroughputExceededException:")
+            || message.hasPrefix("ThrottlingException:")
+            || message.hasPrefix("RequestLimitExceeded:")
+    }
+
     /// Best-effort pseudo-DDL synthesized from `KeySchema`/`AttributeDefinitions`
     /// — DynamoDB has no `SHOW CREATE TABLE`/`pg_get_*def()` equivalent to
     /// read back, so unlike the SQL drivers this is NOT authoritative; the

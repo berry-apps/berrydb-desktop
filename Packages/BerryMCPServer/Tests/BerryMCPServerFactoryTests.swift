@@ -82,15 +82,11 @@ struct BerryMCPServerFactoryTests {
         )
     }
 
-    func metadata() -> MCPMetadataService {
+    /// Both profiles over an empty schema store.
+    func metadata() throws -> MCPMetadataService {
         let profiles = [shop, billing]
-        let load: @Sendable (UUID) throws -> SchemaGraph = { _ in SchemaGraph() }
-        return MCPMetadataService(
-            profiles: { profiles },
-            graph: BerryGraphQueryService(loadGraph: load, harvestedAt: { _ in nil }),
-            harvestedAt: { _ in nil },
-            loadGraph: load
-        )
+        let reader = GraphReader(store: try BerryStore(path: ":memory:"))
+        return MCPMetadataService(profiles: { profiles }, reader: reader, graph: BerryGraphQueryService(reader: reader))
     }
 
     /// Connects an in-process client to a freshly built server, runs `body`
@@ -104,12 +100,14 @@ struct BerryMCPServerFactoryTests {
         explicitProject: MCPProjectReference? = nil,
         rootsRequests: Locked<Int> = Locked(0),
         diagnostics: Locked<[String]> = Locked([]),
+        requests: Locked<Int> = Locked(0),
         _ body: @escaping @Sendable (Client) async throws -> Void
     ) async throws {
         let dependencies = BerryMCPServerFactory.Dependencies(
-            resolver: resolver(store), metadata: metadata(),
+            resolver: resolver(store), metadata: try metadata(),
             explicitProject: explicitProject, workingDirectory: workingDirectory, version: "test",
-            diagnostics: { line in diagnostics.update { $0.append(line) } }
+            diagnostics: { line in diagnostics.update { $0.append(line) } },
+            onRequest: { requests.update { $0 += 1 } }
         )
         let (server, start) = await BerryMCPServerFactory.makeServer(dependencies)
 
@@ -171,7 +169,7 @@ struct BerryMCPServerFactoryTests {
         let expectedB = projectB.id.uuidString
         try await withSession(store: store, roots: .declared(["file:///work/b"])) { client in
             let tools = try await client.listTools().tools
-            #expect(tools.count == 6)
+            #expect(tools.count == MCPToolName.allCases.count)
             let status = try await Self.status(client)
             #expect(status["selected_by"] == "roots")
             #expect(Self.projectID(status) == expectedB)
@@ -266,7 +264,7 @@ struct BerryMCPServerFactoryTests {
             let first = try await Self.status(client)
             #expect(first["selected_by"] == "explicit")
             #expect(Self.projectID(first) == named.uuidString)
-            #expect(try await client.listTools().tools.count == 6)
+            #expect(try await client.listTools().tools.count == MCPToolName.allCases.count)
 
             store.update { state in
                 state.projects = state.projects.map { project in
@@ -327,6 +325,25 @@ struct BerryMCPServerFactoryTests {
             #expect(status["state"] == "unconfigured")
             #expect(status["reason"] == "no_matching_project")
             #expect(status["workspace"] == "/elsewhere")
+        }
+    }
+
+    /// Every request the server answers reads the store, so each one is
+    /// reported as activity, and nothing else is.
+    @Test func everyRequestIsReportedOnceAsActivity() async throws {
+        let store = Locked(Store(projects: [projectA, projectB]))
+        let requests = Locked(0)
+        try await withSession(store: store, roots: .undeclared([]), requests: requests) { client in
+            #expect(requests.value == 0)
+            _ = try await Self.call(client, .status)
+            #expect(requests.value == 1)
+            _ = try await Self.call(client, .listConnections)
+            #expect(requests.value == 2)
+            _ = try await client.listTools()
+            #expect(requests.value == 3)
+            _ = try await client.listResources()
+            _ = try await client.readResource(uri: "berrydb://project")
+            #expect(requests.value == 5)
         }
     }
 
@@ -404,7 +421,7 @@ struct BerryMCPServerFactoryTests {
             #expect(second["state"] == "selected")
             #expect(second["selected_by"] == "roots")
             #expect(Self.projectID(second) == enabled.uuidString)
-            #expect(try await client.listTools().tools.count == 6)
+            #expect(try await client.listTools().tools.count == MCPToolName.allCases.count)
         }
         #expect(requests.value == 1)
     }
