@@ -33,6 +33,14 @@ struct AIConsentMessageTests {
         #expect(AIPanelView.consentMessage.contains("up to 100 rows"))
     }
 
+    /// Whether a statement needs approval rests on a read-only check of its
+    /// text, so the screen promises approval only for what that check does
+    /// not pass, not for every other statement.
+    @Test func promisesApprovalOnlyForWhatTheReadOnlyCheckDoesNotPass() {
+        #expect(!AIPanelView.consentMessage.contains("always need"))
+        #expect(AIPanelView.consentMessage.contains("can't tell are read-only"))
+    }
+
     @Test func noLongerClaimsRowDataStaysLocal() {
         #expect(!AIPanelView.consentMessage.contains("never sent"))
         #expect(!AIPanelView.consentMessage.contains("only after you approve"))
