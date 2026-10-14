@@ -200,11 +200,18 @@ struct AIPanelView: View {
         .padding(24).frame(maxHeight: .infinity)
     }
 
+    /// What the consent screen says leaves the Mac. It has to match the
+    /// executor's defaults: read-only queries run without a prompt unless
+    /// "Auto-run safe SELECTs" is off, and every query the assistant runs
+    /// returns up to 100 rows to it. A static so a test can hold the text to
+    /// those defaults; it is also the localization key.
+    static let consentMessage = "The assistant sends your schema (table and column names), the database type, and your questions to BerryDB's AI service. By default it may run read-only queries without asking, and it sees up to 100 rows of each query it runs. To approve every query first, turn off “Auto-run safe SELECTs” in AI settings. Other statements always need your approval. Sample rows are sent only if you turn them on."
+
     private var consent: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label(L("Before you start"), systemImage: "hand.raised")
                 .font(.headline)
-            Text(L("The assistant sends your schema (table and column names), the database type, and your questions to BerryDB's AI service. Row data is never sent unless you turn on sample rows. Any SQL the assistant proposes runs only after you approve it."))
+            Text(L(String.LocalizationValue(Self.consentMessage)))
                 .font(.callout).foregroundStyle(.secondary)
             if controller.isProduction {
                 Label(L("This is a production connection — review every statement carefully."), systemImage: "exclamationmark.triangle.fill")
