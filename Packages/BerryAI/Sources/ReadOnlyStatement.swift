@@ -13,9 +13,11 @@ import BerryDriverKit
 /// (https://www.postgresql.org/docs/current/sql-explain.html), `SELECT ...
 /// INTO`, a locking read, and a second statement all begin like a read.
 ///
-/// The check is lexical. A read that calls a side-effecting function
-/// (`nextval`, `pg_terminate_backend`, `dblink_exec`) still passes it; only a
-/// database-enforced read-only transaction closes that gap.
+/// The check is lexical. Calls to known side-effecting built-ins
+/// (`nextval`, `pg_terminate_backend`, `dblink_exec`) are denied by name, but
+/// a user-defined function that writes, or a built-in missing from the list,
+/// still passes. Only a database-enforced read-only connection closes that
+/// gap; the deny list is defense in depth until one exists.
 enum ReadOnlyStatement {
     // MARK: - SQL
 
@@ -39,10 +41,11 @@ enum ReadOnlyStatement {
     /// listed. Statements of the other dialects need a `;` between them,
     /// which already fails the single-statement rule; their keywords are
     /// listed as a second line of defense. A read that names a column after
-    /// one of them (`comment`, `load`) goes to the approval card. Not listed:
-    /// keywords that only shape a read (`DECLARE`, `FETCH`, `OPEN`, `CLOSE`,
-    /// `WAITFOR`), because `OFFSET ... FETCH` paging and `open` and `close`
-    /// price columns are common in reads that should keep running.
+    /// one of them (`comment`, `load`) goes to the approval card. `WAITFOR`
+    /// holds the shared connection like the sleep functions below. Not listed:
+    /// keywords that only shape a read (`DECLARE`, `FETCH`, `OPEN`, `CLOSE`),
+    /// because `OFFSET ... FETCH` paging and `open` and `close` price columns
+    /// are common in reads that should keep running.
     private static let disqualifyingKeywords: Set<String> = [
         // Writes, DDL and privileges.
         "INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "REPLACE", "CREATE", "ALTER", "DROP",
@@ -56,8 +59,91 @@ enum ReadOnlyStatement {
         // Maintenance, server control, queues and notifications.
         "VACUUM", "REINDEX", "CLUSTER", "REFRESH", "COMMENT", "PRAGMA", "ATTACH", "DETACH", "LOAD",
         "LISTEN", "NOTIFY", "UNLISTEN", "CHECKPOINT", "DBCC", "BACKUP", "RESTORE", "KILL", "SHUTDOWN",
-        "RECONFIGURE", "TRIGGER", "SEND", "RECEIVE", "CONVERSATION", "SIGNATURE",
+        "RECONFIGURE", "TRIGGER", "SEND", "RECEIVE", "CONVERSATION", "SIGNATURE", "WAITFOR",
     ]
+
+    /// Built-in functions that act outside the rows a read returns: they run
+    /// text on another server or connection, signal or reconfigure sessions,
+    /// advance sequences, touch large objects or server files, take locks that
+    /// outlive the statement, sleep, or load native code. Calling one sends
+    /// the statement to the approval card. This is a deny list of known
+    /// built-ins, not a guarantee: a database-enforced read-only connection is
+    /// the real control. `currval`/`lastval` only read, and `txid_current`
+    /// only assigns the transaction its id, so they are not listed.
+    /// PostgreSQL: https://www.postgresql.org/docs/current/functions-admin.html,
+    /// https://www.postgresql.org/docs/current/functions-sequence.html,
+    /// https://www.postgresql.org/docs/current/lo-funcs.html,
+    /// https://www.postgresql.org/docs/current/dblink.html,
+    /// https://www.postgresql.org/docs/current/postgres-fdw.html#POSTGRES-FDW-FUNCTIONS,
+    /// https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-DELAY,
+    /// https://www.postgresql.org/docs/current/functions-xml.html#FUNCTIONS-XML-MAPPING,
+    /// https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-STATS-FUNCTIONS,
+    /// https://www.postgresql.org/docs/16/adminpack.html.
+    /// MySQL: https://dev.mysql.com/doc/refman/8.4/en/locking-functions.html,
+    /// https://dev.mysql.com/doc/refman/8.4/en/miscellaneous-functions.html#function_sleep,
+    /// https://dev.mysql.com/doc/refman/8.4/en/information-functions.html#function_benchmark,
+    /// https://dev.mysql.com/doc/refman/8.4/en/string-functions.html#function_load-file,
+    /// https://dev.mysql.com/doc/refman/8.4/en/gtid-functions.html,
+    /// https://dev.mysql.com/doc/refman/8.4/en/replication-functions-synchronization.html;
+    /// MariaDB sequences: https://mariadb.com/kb/en/sequence-functions/.
+    /// SQL Server: https://learn.microsoft.com/en-us/sql/t-sql/functions/openquery-transact-sql,
+    /// https://learn.microsoft.com/en-us/sql/t-sql/functions/openrowset-transact-sql,
+    /// https://learn.microsoft.com/en-us/sql/t-sql/functions/opendatasource-transact-sql,
+    /// https://learn.microsoft.com/en-us/sql/t-sql/functions/next-value-for-transact-sql,
+    /// https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/xp-cmdshell-transact-sql;
+    /// `sp_` and `xp_` name stored procedures, never a read's function.
+    /// SQLite: https://www.sqlite.org/lang_corefunc.html#load_extension,
+    /// https://www.sqlite.org/cli.html#file_i_o_functions.
+    private static let sideEffectFunctions: Set<String> = [
+        // Remote and pass-through execution.
+        "OPENQUERY", "OPENROWSET", "OPENDATASOURCE",
+        // Process and session control.
+        "PG_TERMINATE_BACKEND", "PG_CANCEL_BACKEND", "PG_RELOAD_CONF", "PG_ROTATE_LOGFILE",
+        "PG_LOG_BACKEND_MEMORY_CONTEXTS", "PG_PROMOTE", "PG_SWITCH_WAL", "PG_START_BACKUP",
+        "PG_STOP_BACKUP", "PG_DROP_REPLICATION_SLOT", "PG_REPLICATION_SLOT_ADVANCE",
+        "PG_IMPORT_SYSTEM_COLLATIONS", "PG_SYNC_REPLICATION_SLOTS", "PG_NOTIFY", "SET_CONFIG",
+        "PG_STAT_STATEMENTS_RESET",
+        // Large objects and server files.
+        "LOWRITE", "PG_STAT_FILE", "PG_LOGDIR_LS", "LOAD_FILE",
+        // Locks and sleeps.
+        "GET_LOCK", "RELEASE_LOCK", "RELEASE_ALL_LOCKS", "SLEEP", "BENCHMARK",
+        "SOURCE_POS_WAIT", "MASTER_POS_WAIT", "WAIT_FOR_EXECUTED_GTID_SET",
+        "WAIT_UNTIL_SQL_THREAD_AFTER_GTIDS",
+        // Native code and files outside the database.
+        "LOAD_EXTENSION", "WRITEFILE", "READFILE",
+    ]
+
+    /// Sequence advances, denied wherever the word appears: MariaDB also
+    /// accepts `seq.NEXTVAL` without parentheses.
+    private static let sequenceAdvanceFunctions: Set<String> = ["NEXTVAL", "SETVAL"]
+
+    /// Families of the same kinds, matched by name prefix.
+    private static let sideEffectFunctionPrefixes: [String] = [
+        "DBLINK", "QUERY_TO_XML", "POSTGRES_FDW_DISCONNECT",
+        "PG_CREATE_", "PG_COPY_", "PG_LOGICAL_", "PG_REPLICATION_ORIGIN_", "PG_BACKUP_",
+        "PG_WAL_REPLAY_", "PG_STAT_RESET", "PG_RESTORE_", "PG_CLEAR_",
+        "LO_", "PG_READ_", "PG_LS_", "PG_FILE_",
+        "PG_ADVISORY_", "PG_TRY_ADVISORY_", "PG_SLEEP",
+        "XP_", "SP_",
+    ]
+
+    private static func isSideEffectFunction(_ name: String) -> Bool {
+        if sideEffectFunctions.contains(name) { return true }
+        return sideEffectFunctionPrefixes.contains { name.hasPrefix($0) }
+    }
+
+    /// The `(` at `open` calls the word before it, or the last word of a
+    /// bracketed name before it. A quoted name could be any function.
+    private static func callsSideEffectFunction(_ tokens: [SQLToken], open: Int) -> Bool {
+        guard open > 0 else { return false }
+        var nameIndex = open - 1
+        if tokens[nameIndex] == .punctuation("]"), nameIndex > 0 { nameIndex -= 1 }
+        switch tokens[nameIndex] {
+        case .quoted: return true
+        case .word(let name): return isSideEffectFunction(name)
+        case .punctuation, .number: return false
+        }
+    }
 
     private static let sharedLockWords: Set<String> = ["SHARE", "KEY"]
 
@@ -69,12 +155,19 @@ enum ReadOnlyStatement {
             return false
         }
         for (index, token) in tokens.enumerated() {
+            if token == .punctuation("("), callsSideEffectFunction(tokens, open: index) { return false }
             guard case .word(let word) = token else { continue }
             let next = index + 1 < tokens.count ? tokens[index + 1] : nil
             // `replace(...)` is the string function every dialect has; the
             // REPLACE statement never takes a parenthesis right after it.
             if word == "REPLACE", next == .punctuation("(") { continue }
             if disqualifyingKeywords.contains(word) { return false }
+            if sequenceAdvanceFunctions.contains(word) { return false }
+            // NEXT VALUE FOR advances a SQL Server or MariaDB sequence.
+            if word == "NEXT", index + 2 < tokens.count, tokens[index + 1] == .word("VALUE"),
+               tokens[index + 2] == .word("FOR") {
+                return false
+            }
             // FOR SHARE / FOR KEY SHARE; FOR [NO KEY] UPDATE is caught by UPDATE.
             if word == "FOR", case .word(let following)? = next, sharedLockWords.contains(following) { return false }
         }
