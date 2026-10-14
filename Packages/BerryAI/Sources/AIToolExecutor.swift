@@ -50,19 +50,26 @@ public struct AIToolSpec: Sendable, Equatable {
     public let parametersJSON: String
     public let version: String
     public let handlerVersion: String
+    /// True when running the tool sends its arguments or local data to
+    /// BerryDB's AI service, e.g. to embed a search query. A turn of Apple's
+    /// on-device model never offers such a tool, so that turn sends nothing
+    /// off the Mac. Local only; never advertised to the gateway.
+    public let requiresBackend: Bool
 
     public init(
         name: String,
         description: String,
         parametersJSON: String,
         version: String = "1.0.0",
-        handlerVersion: String = "1.0.0"
+        handlerVersion: String = "1.0.0",
+        requiresBackend: Bool = false
     ) {
         self.name = name
         self.description = description
         self.parametersJSON = parametersJSON
         self.version = version
         self.handlerVersion = handlerVersion
+        self.requiresBackend = requiresBackend
     }
 }
 

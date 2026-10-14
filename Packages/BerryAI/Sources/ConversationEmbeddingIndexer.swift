@@ -39,7 +39,9 @@ public struct ConversationEmbeddingIndexer: Sendable {
         // Interaction questions/answers remain ordinary local chat records for
         // continuity, but are never sent to embedding or semantic-search
         // services. The metadata contains no resume token or tool arguments.
-        let indexable = messages.filter { $0.toolCalls != "local:interaction" }
+        // Messages of on-device turns are kept off the service as well, which
+        // leaves them out of semantic search.
+        let indexable = messages.filter(Self.isIndexable)
         guard !indexable.isEmpty else { return }
         var start = indexable.startIndex
         while start < indexable.endIndex {
@@ -64,8 +66,12 @@ public struct ConversationEmbeddingIndexer: Sendable {
         await index(missing)
     }
 
+    private static func isIndexable(_ message: AIMessageRecord) -> Bool {
+        message.toolCalls != "local:interaction" && message.toolCalls != AIMessageRecord.onDeviceMarker
+    }
+
     private func index(_ message: AIMessageRecord) async {
-        guard message.toolCalls != "local:interaction" else { return }
+        guard Self.isIndexable(message) else { return }
         let vector = await transport.embed(text: message.content)
         guard vector.count == BerryStore.aiMessageEmbeddingDimension else { return }
         _ = try? store.saveAIMessageEmbeddingIfMessageExists(

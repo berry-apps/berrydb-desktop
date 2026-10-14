@@ -48,6 +48,18 @@ struct SchemaSearchToolExecutorTests {
         }
     }
 
+    /// Every search embeds its query on BerryDB's AI service, so the tool
+    /// must say so to be kept out of on-device turns.
+    @MainActor
+    @Test func declaresThatItNeedsTheBackend() {
+        let executor = SchemaSearchToolExecutor(
+            store: makeStore(), transport: StubTransport(),
+            profileID: { nil }, candidateNames: { [] }
+        )
+        #expect(!executor.toolSpecs.isEmpty)
+        #expect(executor.toolSpecs.allSatisfy { $0.requiresBackend })
+    }
+
     @MainActor
     @Test func returnsEmptyMatchesWhenNoProfileIsActive() async {
         let executor = SchemaSearchToolExecutor(

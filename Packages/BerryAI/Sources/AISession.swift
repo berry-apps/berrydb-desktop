@@ -2275,7 +2275,7 @@ public final class AISession {
             drainQueuedMessageIfReady()
         }
 
-        let tools = executor.toolSpecs
+        let tools = localTurnTools()
         let capabilityHost = executor as? LocalCapabilityHost
         do {
             let thread = try await ensureThread()
@@ -2298,15 +2298,16 @@ public final class AISession {
                 if answer.isEmpty, transcript[assistant].text.isEmpty {
                     lastError = "The on-device model didn't return an answer."
                 }
+                // Not handed to the embedding indexer: it would send both
+                // messages to BerryDB's AI service. The marker also keeps a
+                // later backfill from embedding them.
                 let persisted = await persistTurn(
                     threadID: thread, userText: trimmed,
-                    assistantText: transcript[assistant].text
+                    assistantText: transcript[assistant].text,
+                    userMetadata: AIMessageRecord.onDeviceMarker,
+                    assistantMetadata: AIMessageRecord.onDeviceMarker
                 )
                 applyPersistedMessageIDs(persisted, assistant: assistant)
-                if !persisted.isEmpty {
-                    let indexer = embeddingIndexer
-                    Task { await indexer.index(persisted) }
-                }
             case let .clarification(clarification):
                 let pending = try prepareLocalInteraction(
                     clarification, threadID: thread, provider: provider
@@ -2317,6 +2318,7 @@ public final class AISession {
                 let persisted = await persistTurn(
                     threadID: thread, userText: trimmed,
                     assistantText: clarification.question,
+                    userMetadata: AIMessageRecord.onDeviceMarker,
                     assistantMetadata: "local:interaction"
                 )
                 applyPersistedMessageIDs(persisted, assistant: assistant)
@@ -2329,6 +2331,14 @@ public final class AISession {
                 transcript.removeLast(transcript.count - transcriptCount)
             }
         }
+    }
+
+    /// The tools an on-device turn may call: every tool except those that
+    /// send data to BerryDB's AI service, so that the turn sends nothing off
+    /// the Mac. `LocalCapabilityHost` refuses to run a tool left out of the
+    /// turn's snapshot even when the model names it.
+    private func localTurnTools() -> [AIToolSpec] {
+        executor.toolSpecs.filter { !$0.requiresBackend }
     }
 
     private func localPromptTranscript() -> String {
@@ -3268,7 +3278,7 @@ public final class AISession {
             runningTool = nil
         }
 
-        let tools = executor.toolSpecs
+        let tools = localTurnTools()
         let capabilityHost = executor as? LocalCapabilityHost
         do {
             try capabilityHost?.beginLocalTurn(with: tools)

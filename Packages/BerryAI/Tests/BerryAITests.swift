@@ -5857,6 +5857,107 @@ private func makeSessionWithConfirmedReport(
     #expect(session.lastError != nil)
 }
 
+/// The on-device model is offered as running entirely on the Mac, so a turn
+/// of it must not reach BerryDB's AI service in any way, including the
+/// embedding of its messages that a cloud turn triggers right afterwards.
+@MainActor
+@Test func onDeviceTurnSendsNothingToTheBackend() async throws {
+    let transport = MockTransport(before: [], after: [])
+    transport.embedReply = Array(repeating: 0.1, count: BerryStore.aiMessageEmbeddingDimension)
+    let store = makeStore()
+    let session = AISession(
+        transport: transport,
+        executor: LocalCapabilityHost(executor: CapabilityExecutor(toolSpecs: [])),
+        dialect: "postgres", schemaDigest: "d", store: store
+    )
+
+    await session.sendLocal("which customers churned?", provider: SessionScriptedLocal(["Three of them."]))
+    // Indexing runs in a task of its own after the turn; give it the same
+    // chance to run as successfulTurnEagerlyIndexesBothPersistedMessages.
+    for _ in 0..<1_000 {
+        if !transport.embedInputs().isEmpty { break }
+        await Task.yield()
+    }
+
+    #expect(transport.embedInputs().isEmpty)
+    #expect(transport.messageRequests.isEmpty)
+    #expect(transport.summarizeCalls.isEmpty)
+    #expect(transport.rankCallCount == 0)
+    let threadID = try #require(UUID(uuidString: session.currentThreadID ?? ""))
+    let saved = try store.aiMessages(threadID: threadID)
+    #expect(saved.map(\.content) == ["which customers churned?", "Three of them."])
+    #expect(saved.allSatisfy { $0.toolCalls == AIMessageRecord.onDeviceMarker })
+}
+
+/// A clarifying question ends an on-device turn early. The prompt that led
+/// to it is still on-device text and must be kept from a later backfill.
+@MainActor
+@Test func onDeviceClarificationMarksThePromptThatLedToIt() async throws {
+    let store = makeStore()
+    let session = AISession(
+        transport: MockTransport(before: [], after: []),
+        executor: LocalCapabilityHost(executor: CapabilityExecutor(toolSpecs: [])),
+        dialect: "postgres", schemaDigest: "d", store: store
+    )
+
+    await session.sendLocal("drop the old table", provider: SessionScriptedLocal([
+        #"{"tool":"clarify_request","args":{"question":"Which table?"}}"#,
+    ]))
+
+    #expect(session.pendingClarification?.question == "Which table?")
+    let threadID = try #require(UUID(uuidString: session.currentThreadID ?? ""))
+    let prompt = try #require(try store.aiMessages(threadID: threadID).first)
+    #expect(prompt.content == "drop the old table")
+    #expect(prompt.toolCalls == AIMessageRecord.onDeviceMarker)
+}
+
+/// Semantic search embeds its query on BerryDB's AI service, so an on-device
+/// turn must not be able to call it, even when the model names it.
+@MainActor
+@Test func onDeviceTurnNeverRunsAToolThatNeedsTheBackend() async {
+    let executor = CapabilityExecutor(toolSpecs: [
+        AIToolSpec(name: "get_schema", description: "Schema", parametersJSON: #"{"type":"object"}"#),
+        AIToolSpec(
+            name: "search_conversation", description: "Search",
+            parametersJSON: #"{"type":"object"}"#, requiresBackend: true
+        ),
+    ])
+    let session = AISession(
+        transport: MockTransport(before: [], after: []),
+        executor: LocalCapabilityHost(executor: executor),
+        dialect: "postgres", schemaDigest: "d", store: makeStore()
+    )
+
+    await session.sendLocal("what did we say earlier?", provider: SessionScriptedLocal([
+        #"{"tool":"search_conversation","args":{"query":"earlier"}}"#,
+        #"{"tool":"get_schema","args":{}}"#,
+        "Answered on the Mac.",
+    ]))
+
+    #expect(executor.calls.map(\.name) == ["get_schema"])
+    #expect(session.transcript.last?.text == "Answered on the Mac.")
+}
+
+/// Guard for the test above: hiding such tools is for on-device turns only.
+@MainActor
+@Test func cloudTurnStillOffersToolsThatNeedTheBackend() async {
+    let transport = MockTransport(before: [.delta("ok"), .complete(totalTokens: 1)], after: [])
+    let executor = CapabilityExecutor(toolSpecs: [
+        AIToolSpec(
+            name: "search_conversation", description: "Search",
+            parametersJSON: #"{"type":"object"}"#, requiresBackend: true
+        ),
+    ])
+    let session = AISession(
+        transport: transport, executor: LocalCapabilityHost(executor: executor),
+        dialect: "postgres", schemaDigest: "d", store: makeStore()
+    )
+
+    await session.send("what did we say earlier?")
+
+    #expect(transport.receivedTools.map(\.name) == ["search_conversation"])
+}
+
 @MainActor
 @Test func describeTranslatesToolResultRejectedControlTokenExpiredOrUnknown() {
     // 1. When server returns {"code":"tool_result_rejected","reason":"control_token_unknown"}
