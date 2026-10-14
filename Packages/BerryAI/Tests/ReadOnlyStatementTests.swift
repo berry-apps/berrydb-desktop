@@ -273,6 +273,29 @@ struct ReadOnlyStatementTests {
         #expect(!Self.sql(text))
     }
 
+    /// Functions that run their text argument as a query. The classifier
+    /// never reads inside a literal, so whatever that query calls would run
+    /// unchecked.
+    @Test(arguments: [
+        "SELECT * FROM ts_stat('SELECT to_tsvector(body) FROM docs')",
+        "SELECT ts_rewrite('a'::tsquery, 'SELECT t, s FROM aliases')",
+        "SELECT * FROM crosstab('SELECT row_name, cat, value FROM t ORDER BY 1, 2') AS ct(row_name text, a int, b int)",
+        "SELECT * FROM crosstab3('SELECT row_name, cat, value FROM t ORDER BY 1, 2')",
+        "SELECT * FROM connectby('tree', 'id', 'parent_id', '1', 0) AS t(id text, parent_id text, level int)",
+        "SELECT * FROM run_command_on_workers('SELECT 1')",
+        "SELECT pg_background_launch('SELECT 1')",
+        "SELECT pglogical.replicate_ddl_command('SELECT 1')",
+        "SELECT graphql.resolve('{ __typename }')",
+        "SELECT eval('SELECT 1')",
+    ])
+    func functionRunningItsTextAsAQueryIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text))
+    }
+
+    @Test func textSearchReadStaysReadOnly() {
+        #expect(Self.sql("SELECT ts_rank(to_tsvector(body), q), ts_headline(body, q) FROM docs, to_tsquery('cat') q"))
+    }
+
     /// Session state, waits and index maintenance that a read can reach.
     @Test(arguments: [
         "SELECT LAST_INSERT_ID(42)",

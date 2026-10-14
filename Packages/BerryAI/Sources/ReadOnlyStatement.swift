@@ -191,6 +191,29 @@ enum ReadOnlyStatement {
         "VERSION_TOKENS_LOCK_SHARED", "VERSION_TOKENS_LOCK_EXCLUSIVE", "VERSION_TOKENS_UNLOCK",
     ]
 
+    /// Functions that run a text argument as a query, like `query_to_xml`
+    /// and the `dblink` functions above. The lexer never reads inside a
+    /// literal, so any call in that text, a denied one included, would run
+    /// unchecked. Some run the text read-only, but a function it calls still
+    /// does its work. The three-argument `ts_rewrite` and the `crosstab`
+    /// forms that take a category query are listed with the rest, since
+    /// telling the forms apart by arity is not worth the risk.
+    /// PostgreSQL text search: https://www.postgresql.org/docs/current/functions-textsearch.html,
+    /// https://www.postgresql.org/docs/current/textsearch-features.html;
+    /// tablefunc: https://www.postgresql.org/docs/current/tablefunc.html;
+    /// Citus: https://docs.citusdata.com/en/stable/develop/reference_propagation.html;
+    /// pg_background: https://github.com/vibhorkum/pg_background;
+    /// pglogical: https://github.com/2ndQuadrant/pglogical;
+    /// pg_graphql, whose mutations write: https://supabase.github.io/pg_graphql/api/;
+    /// SQLite's eval extension: https://sqlite.org/src/file/ext/misc/eval.c.
+    private static let queryTextFunctions: Set<String> = [
+        "TS_STAT", "TS_REWRITE", "CONNECTBY", "REPLICATE_DDL_COMMAND", "RESOLVE", "EVAL",
+    ]
+
+    /// Families of query-text functions, matched by name prefix: `crosstab`
+    /// and its `crosstabN` forms, Citus `run_command_on_…`, and pg_background.
+    private static let queryTextFunctionPrefixes: [String] = ["CROSSTAB", "RUN_COMMAND_ON_", "PG_BACKGROUND_"]
+
     /// Sequence advances, denied wherever the word appears: MariaDB also
     /// accepts `seq.NEXTVAL` without parentheses.
     private static let sequenceAdvanceFunctions: Set<String> = ["NEXTVAL", "SETVAL"]
@@ -235,6 +258,9 @@ enum ReadOnlyStatement {
 
     private static func isSideEffectFunction(_ name: String) -> Bool {
         if sideEffectFunctions.contains(name) || extensionSideEffectFunctions.contains(name) { return true }
+        if queryTextFunctions.contains(name) || queryTextFunctionPrefixes.contains(where: { name.hasPrefix($0) }) {
+            return true
+        }
         if name.hasPrefix("GROUP_REPLICATION_GET_") { return false }
         if policyVerbs.contains(where: { name.hasPrefix($0) }), policyNouns.contains(where: { name.hasSuffix($0) }) {
             return true
