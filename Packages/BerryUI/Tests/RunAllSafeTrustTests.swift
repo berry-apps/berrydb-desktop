@@ -77,6 +77,28 @@ struct RunAllSafeTrustTests {
         #expect(rows == 2)
     }
 
+    /// The text for `key` in one localization of the BerryUI resource bundle,
+    /// or nil when that localization has no entry for it.
+    private func localized(_ key: String, in language: String) -> String? {
+        guard let path = berryModuleBundle.path(forResource: language, ofType: "lproj"),
+              let bundle = Bundle(path: path)
+        else { return nil }
+        let missing = "\u{0}missing"
+        let value = bundle.localizedString(forKey: key, value: missing, table: nil)
+        return value == missing ? nil : value
+    }
+
+    /// The button's help names what it covers: read-only statements, not
+    /// every statement rated safe.
+    @Test func helpSaysTheButtonCoversReadOnlyStatementsOnly() throws {
+        let key = AIPanelView.runAllSafeHelp
+        #expect(key.contains("read-only"))
+        #expect(!key.contains("safe statement"))
+        #expect(localized(key, in: "en") == key)
+        let vietnamese = try #require(localized(key, in: "vi"), "vi.lproj has no entry for the Run All Safe help")
+        #expect(vietnamese.contains("chỉ đọc"))
+    }
+
     @Test func buttonAppearsOnlyOnAReadOnlyCard() {
         typealias Card = AIPanelController.PendingApproval
         #expect(Card(sql: "SELECT 1", danger: .safe, readOnly: true).offersRunAllSafe)

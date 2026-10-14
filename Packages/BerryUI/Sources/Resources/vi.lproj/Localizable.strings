@@ -341,7 +341,7 @@
 "Run" = "Chạy";
 "Run anyway" = "Vẫn chạy";
 "Run All Safe" = "Chạy tất cả (an toàn)";
-"Run this and every other safe statement in this turn without asking again." = "Chạy câu này và mọi câu an toàn khác trong lượt này, không hỏi lại nữa.";
+"Run this and every other read-only statement in this turn without asking again. Other statements still need your approval." = "Chạy câu này và mọi câu chỉ đọc khác trong lượt này mà không hỏi lại. Các câu khác vẫn cần bạn phê duyệt.";
 "Ask the assistant…" = "Hỏi trợ lý…";
 "File a bug report from this conversation." = "Gửi báo cáo lỗi từ cuộc trò chuyện này.";
 "Auto-run safe SELECTs" = "Tự chạy SELECT an toàn";

@@ -140,6 +140,41 @@ struct ReadOnlyStatementTests {
         #expect(Self.sql("SELECT @@VERSION", driver: .sqlserver))
     }
 
+    /// SQL Server runs a batch whose statements need no separator, so a read
+    /// can be followed by any statement at all.
+    @Test(arguments: [
+        "SELECT 1 WHILE 1 = 1 SELECT 2",
+        "SELECT 1 IF 1 = 1 SELECT 2",
+        "SELECT 1 ADD SENSITIVITY CLASSIFICATION TO dbo.t.c WITH (LABEL = 'x')",
+        "SELECT 1 DECLARE c CURSOR GLOBAL FOR SELECT id FROM t",
+        "SELECT 1 OPEN SYMMETRIC KEY k DECRYPTION BY PASSWORD = 'p'",
+        "SELECT 1 CLOSE c",
+        "SELECT 1 FETCH NEXT FROM c",
+        "SELECT 1 PRINT 'x'",
+        "SELECT 1 RAISERROR('x', 16, 1)",
+        "SELECT 1 GOTO done",
+        "SELECT 1 RETURN",
+        "SELECT 1 READTEXT t.c @ptr 0 10",
+    ])
+    func sqlServerStatementAfterAReadIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text, driver: .sqlserver))
+    }
+
+    /// Paging, bracketed names that are reserved words, and expressions that
+    /// share a keyword with a statement keep running on SQL Server; other
+    /// engines read `open` and `close` as plain column names.
+    @Test func sqlServerReadsThatShareAStatementKeywordStayReadOnly() {
+        #expect(Self.sql("SELECT id FROM t ORDER BY id OFFSET 10 ROWS FETCH NEXT 10 ROWS ONLY", driver: .sqlserver))
+        #expect(Self.sql(
+            "SELECT * FROM (SELECT id FROM t ORDER BY id OFFSET 0 ROWS FETCH FIRST 1 ROW ONLY) AS s", driver: .sqlserver
+        ))
+        #expect(Self.sql("SELECT [open], [close], [add], [print] FROM prices", driver: .sqlserver))
+        #expect(Self.sql("SELECT IIF(a > 0, 'p', 'n'), DATEADD(day, 1, d) FROM t", driver: .sqlserver))
+        #expect(Self.sql("SELECT CASE WHEN a > 0 THEN 1 ELSE 0 END FROM t", driver: .sqlserver))
+        #expect(Self.sql("SELECT open, close FROM prices", driver: .postgres))
+        #expect(Self.sql("SELECT open, close FROM prices", driver: .mysql))
+    }
+
     // MARK: Built-in functions with side effects
 
     @Test(arguments: [
@@ -226,6 +261,109 @@ struct ReadOnlyStatementTests {
         #expect(!Self.sql(text))
     }
 
+    /// Extension and engine functions that delete rows, change schema,
+    /// schedule work, call out of the database or reconfigure a cluster when
+    /// a plain SELECT calls them.
+    @Test(arguments: [
+        // TimescaleDB.
+        "SELECT drop_chunks('metrics', INTERVAL '3 months')",
+        "SELECT add_retention_policy('metrics', INTERVAL '90 days')",
+        "SELECT remove_compression_policy('metrics')",
+        "SELECT create_hypertable('metrics', 'time')",
+        "SELECT compress_chunk(c) FROM show_chunks('metrics') c",
+        "SELECT add_job('cleanup', '1 day')",
+        "SELECT alter_job(1000, scheduled => false)",
+        "SELECT delete_job(1000)",
+        // PostGIS.
+        "SELECT DropGeometryTable('public', 'parcels')",
+        "SELECT DropGeometryColumn('parcels', 'geom')",
+        "SELECT AddGeometryColumn('parcels', 'geom', 4326, 'POINT', 2)",
+        "SELECT UpdateGeometrySRID('parcels', 'geom', 3857)",
+        "SELECT Populate_Geometry_Columns()",
+        "SELECT topology.CreateTopology('roads', 4326)",
+        "SELECT topology.TopoGeo_AddPoint('roads', 'POINT(0 0)')",
+        "SELECT DropRasterConstraints('elevation', 'rast')",
+        // pg_cron.
+        "SELECT cron.schedule('nightly', '0 3 * * *', 'TRUNCATE logs')",
+        "SELECT cron.unschedule('nightly')",
+        // Amazon RDS and Aurora.
+        "SELECT aws_s3.table_import_from_s3('t', '', '(format csv)', aws_commons.create_s3_uri('b', 'k', 'us-east-1'))",
+        "SELECT * FROM aws_lambda.invoke(aws_commons.create_lambda_function_arn('f'), '{}'::json)",
+        // Citus and pg_partman.
+        "SELECT create_distributed_table('events', 'tenant_id')",
+        "SELECT citus_add_node('worker-1', 5432)",
+        "SELECT partman.run_maintenance()",
+        // HTTP from the server, and pg_surgery.
+        "SELECT * FROM http_post('https://example.invalid', 'x', 'text/plain')",
+        "SELECT net.http_get('https://example.invalid')",
+        "SELECT heap_force_kill('t'::regclass, tids) FROM damaged",
+        // MySQL replication administration and the locking service.
+        "SELECT group_replication_set_as_primary('00000000-0000-0000-0000-000000000000')",
+        "SELECT group_replication_switch_to_single_primary_mode()",
+        "SELECT asynchronous_connection_failover_add_source('ch', 'h', 3306, '', 50)",
+        "SELECT service_get_write_locks('ns', 'lock1', 10)",
+        "SELECT version_tokens_lock_exclusive('t', 10)",
+    ])
+    func extensionWriteOrAdministrationIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text))
+    }
+
+    /// Functions that run their text argument as a query. The classifier
+    /// never reads inside a literal, so whatever that query calls would run
+    /// unchecked.
+    @Test(arguments: [
+        "SELECT * FROM ts_stat('SELECT to_tsvector(body) FROM docs')",
+        "SELECT ts_rewrite('a'::tsquery, 'SELECT t, s FROM aliases')",
+        "SELECT * FROM crosstab('SELECT row_name, cat, value FROM t ORDER BY 1, 2') AS ct(row_name text, a int, b int)",
+        "SELECT * FROM crosstab3('SELECT row_name, cat, value FROM t ORDER BY 1, 2')",
+        "SELECT * FROM connectby('tree', 'id', 'parent_id', '1', 0) AS t(id text, parent_id text, level int)",
+        "SELECT * FROM run_command_on_workers('SELECT 1')",
+        "SELECT pg_background_launch('SELECT 1')",
+        "SELECT pglogical.replicate_ddl_command('SELECT 1')",
+        "SELECT graphql.resolve('{ __typename }')",
+        "SELECT eval('SELECT 1')",
+    ])
+    func functionRunningItsTextAsAQueryIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text))
+    }
+
+    @Test func textSearchReadStaysReadOnly() {
+        #expect(Self.sql("SELECT ts_rank(to_tsvector(body), q), ts_headline(body, q) FROM docs, to_tsquery('cat') q"))
+    }
+
+    /// Session state, waits and index maintenance that a read can reach.
+    @Test(arguments: [
+        "SELECT LAST_INSERT_ID(42)",
+        "SELECT @total := @total + amount FROM orders",
+        "SELECT MASTER_GTID_WAIT('0-1-100', 10)",
+        "SELECT pg_switch_xlog()",
+        "SELECT pg_xlog_replay_pause()",
+        "SELECT pg_xlog_replay_resume()",
+        "SELECT gin_clean_pending_list('docs_body_idx')",
+        "SELECT brin_summarize_new_values('events_ts_idx')",
+        "SELECT brin_summarize_range('events_ts_idx', 0)",
+        "SELECT brin_desummarize_range('events_ts_idx', 0)",
+    ])
+    func sessionStateOrIndexMaintenanceIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text))
+    }
+
+    /// Reads from the same extensions and engines keep running without a card.
+    @Test(arguments: [
+        "SELECT LAST_INSERT_ID()",
+        "SELECT time_bucket('1 day', ts), avg(v) FROM metrics GROUP BY 1",
+        "SELECT * FROM show_chunks('metrics')",
+        "SELECT hypertable_size('metrics')",
+        "SELECT ST_AsText(geom), ST_Area(geom) FROM parcels",
+        "SELECT Find_SRID('public', 'parcels', 'geom')",
+        "SELECT group_replication_get_write_concurrency()",
+        "SELECT make_interval(days => 10)",
+        "SELECT ADDDATE(created_at, 1), ADDTIME(t, '01:00') FROM orders",
+    ])
+    func extensionReadStaysReadOnly(_ text: String) {
+        #expect(Self.sql(text))
+    }
+
     /// Call forms that keep the function's name from reading as a plain word.
     @Test(arguments: [
         #"SELECT "nextval"('s')"#,
@@ -268,6 +406,22 @@ struct ReadOnlyStatementTests {
         let select = "SELECT \(columns) FROM t WHERE note = 'a [b] -- c'"
         #expect(Self.sql(select))
         #expect(ReadOnlyStatement.sqlLexingSteps(select) <= 5 * select.unicodeScalars.count)
+    }
+
+    /// Long text of the shape each lexer loop scans. Every read of the text
+    /// is counted where it happens, so a loop that rescans what it already
+    /// read raises the count however it is written.
+    @Test(arguments: [
+        "SELECT " + String(repeating: "@a::", count: 3_000) + "b FROM t",
+        "SELECT " + String(repeating: "[a]", count: 3_000) + " FROM t",
+        "SELECT 1 " + String(repeating: "/* c */ -- d\n", count: 1_000),
+        "SELECT " + String(repeating: "'a''b', ", count: 1_000) + "1",
+        "SELECT " + String(repeating: "f(", count: 1_000) + "1" + String(repeating: ")", count: 1_000),
+        "SELECT " + String(repeating: "1234567890 + ", count: 1_000) + "1",
+    ])
+    func everyLexerLoopRunsInLinearSteps(_ text: String) {
+        #expect(Self.sql(text))
+        #expect(ReadOnlyStatement.sqlLexingSteps(text) <= 5 * text.unicodeScalars.count)
     }
 
     // MARK: Mongo shell

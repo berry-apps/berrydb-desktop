@@ -18,6 +18,11 @@ import BerryDriverKit
 /// a user-defined function that writes, or a built-in missing from the list,
 /// still passes. Only a database-enforced read-only connection closes that
 /// gap; the deny list is defense in depth until one exists.
+///
+/// Some reads go to the card by design, each noted at the rule that sends
+/// it there: a column named after a listed keyword, a quoted name followed
+/// by `(`, a PostgreSQL named argument written with `:=`, and the few
+/// functions in a listed family that only read.
 enum ReadOnlyStatement {
     // MARK: - SQL
 
@@ -45,7 +50,8 @@ enum ReadOnlyStatement {
     /// holds the shared connection like the sleep functions below. Not listed:
     /// keywords that only shape a read (`DECLARE`, `FETCH`, `OPEN`, `CLOSE`),
     /// because `OFFSET ... FETCH` paging and `open` and `close` price columns
-    /// are common in reads that should keep running.
+    /// are common in reads that should keep running. SQL Server reserves
+    /// them, and `transactSQLStatementKeywords` covers them there.
     private static let disqualifyingKeywords: Set<String> = [
         // Writes, DDL and privileges.
         "INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "REPLACE", "CREATE", "ALTER", "DROP",
@@ -78,14 +84,19 @@ enum ReadOnlyStatement {
     /// https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-DELAY,
     /// https://www.postgresql.org/docs/current/functions-xml.html#FUNCTIONS-XML-MAPPING,
     /// https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-STATS-FUNCTIONS,
-    /// https://www.postgresql.org/docs/16/adminpack.html.
+    /// https://www.postgresql.org/docs/16/adminpack.html; the index
+    /// maintenance functions write the index:
+    /// https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-INDEX;
+    /// servers up to 9.6 name the WAL functions `xlog`:
+    /// https://www.postgresql.org/docs/9.6/functions-admin.html.
     /// MySQL: https://dev.mysql.com/doc/refman/8.4/en/locking-functions.html,
     /// https://dev.mysql.com/doc/refman/8.4/en/miscellaneous-functions.html#function_sleep,
     /// https://dev.mysql.com/doc/refman/8.4/en/information-functions.html#function_benchmark,
     /// https://dev.mysql.com/doc/refman/8.4/en/string-functions.html#function_load-file,
     /// https://dev.mysql.com/doc/refman/8.4/en/gtid-functions.html,
     /// https://dev.mysql.com/doc/refman/8.4/en/replication-functions-synchronization.html;
-    /// MariaDB sequences: https://mariadb.com/kb/en/sequence-functions/.
+    /// MariaDB sequences: https://mariadb.com/kb/en/sequence-functions/, and
+    /// its blocking GTID wait: https://mariadb.com/kb/en/master_gtid_wait/.
     /// SQL Server: https://learn.microsoft.com/en-us/sql/t-sql/functions/openquery-transact-sql,
     /// https://learn.microsoft.com/en-us/sql/t-sql/functions/openrowset-transact-sql,
     /// https://learn.microsoft.com/en-us/sql/t-sql/functions/opendatasource-transact-sql,
@@ -102,16 +113,112 @@ enum ReadOnlyStatement {
         "PG_LOG_BACKEND_MEMORY_CONTEXTS", "PG_PROMOTE", "PG_SWITCH_WAL", "PG_START_BACKUP",
         "PG_STOP_BACKUP", "PG_DROP_REPLICATION_SLOT", "PG_REPLICATION_SLOT_ADVANCE",
         "PG_IMPORT_SYSTEM_COLLATIONS", "PG_SYNC_REPLICATION_SLOTS", "PG_NOTIFY", "SET_CONFIG",
-        "PG_STAT_STATEMENTS_RESET",
+        "PG_STAT_STATEMENTS_RESET", "PG_SWITCH_XLOG",
+        // Index maintenance.
+        "GIN_CLEAN_PENDING_LIST", "BRIN_SUMMARIZE_NEW_VALUES", "BRIN_SUMMARIZE_RANGE",
+        "BRIN_DESUMMARIZE_RANGE",
         // Large objects and server files.
         "LOWRITE", "PG_STAT_FILE", "PG_LOGDIR_LS", "LOAD_FILE",
         // Locks and sleeps.
         "GET_LOCK", "RELEASE_LOCK", "RELEASE_ALL_LOCKS", "SLEEP", "BENCHMARK",
-        "SOURCE_POS_WAIT", "MASTER_POS_WAIT", "WAIT_FOR_EXECUTED_GTID_SET",
+        "SOURCE_POS_WAIT", "MASTER_POS_WAIT", "MASTER_GTID_WAIT", "WAIT_FOR_EXECUTED_GTID_SET",
         "WAIT_UNTIL_SQL_THREAD_AFTER_GTIDS",
         // Native code and files outside the database.
         "LOAD_EXTENSION", "WRITEFILE", "READFILE",
     ]
+
+    /// Functions of common extensions and engine plugins that delete rows,
+    /// change schema or cluster topology, schedule work, take locks, or call
+    /// services outside the database, all from a plain SELECT. Procedures
+    /// such as TimescaleDB's `run_job` and `refresh_continuous_aggregate`
+    /// are left out: they need `CALL`, which is denied as a keyword.
+    private static let extensionSideEffectFunctions: Set<String> = [
+        // TimescaleDB hypertables, chunks, columnstore, continuous aggregates
+        // and jobs; policies are matched by pattern in `isSideEffectFunction`:
+        // https://www.tigerdata.com/docs/api/latest/hypertable,
+        // https://www.tigerdata.com/docs/api/latest/hypercore,
+        // https://www.tigerdata.com/docs/api/latest/continuous-aggregates,
+        // https://www.tigerdata.com/docs/api/latest/data-retention,
+        // https://www.tigerdata.com/docs/api/latest/jobs-automation,
+        // https://github.com/timescale/docs/tree/latest/api/compression.
+        "CREATE_HYPERTABLE", "CREATE_CHUNK", "DROP_CHUNK", "DROP_CHUNKS", "MOVE_CHUNK",
+        "REORDER_CHUNK", "MERGE_CHUNKS", "MERGE_CHUNKS_CONCURRENTLY", "SPLIT_CHUNK", "ATTACH_CHUNK",
+        "DETACH_CHUNK", "CHUNK_REWRITE_CLEANUP", "SET_CHUNK_TIME_INTERVAL", "SET_INTEGER_NOW_FUNC",
+        "ADD_DIMENSION", "ATTACH_TABLESPACE", "DETACH_TABLESPACE", "DETACH_TABLESPACES",
+        "ENABLE_CHUNK_SKIPPING", "DISABLE_CHUNK_SKIPPING", "COMPRESS_CHUNK", "DECOMPRESS_CHUNK",
+        "RECOMPRESS_CHUNK", "CONVERT_TO_COLUMNSTORE", "CONVERT_TO_ROWSTORE", "CAGG_MIGRATE",
+        "ADD_JOB", "ALTER_JOB", "DELETE_JOB",
+        // PostGIS table, raster and topology management:
+        // https://postgis.net/docs/reference.html#Management_Functions,
+        // https://postgis.net/docs/RT_reference.html#Raster_Management_Functions,
+        // https://postgis.net/docs/Topology.html.
+        "ADDGEOMETRYCOLUMN", "DROPGEOMETRYCOLUMN", "DROPGEOMETRYTABLE", "UPDATEGEOMETRYSRID",
+        "POPULATE_GEOMETRY_COLUMNS", "ADDRASTERCONSTRAINTS", "DROPRASTERCONSTRAINTS",
+        "ADDOVERVIEWCONSTRAINTS", "DROPOVERVIEWCONSTRAINTS", "UPDATERASTERSRID", "ST_CREATEOVERVIEW",
+        "CREATETOPOLOGY", "COPYTOPOLOGY", "DROPTOPOLOGY", "RENAMETOPOLOGY", "UPGRADETOPOLOGY",
+        "ADDTOPOGEOMETRYCOLUMN", "DROPTOPOGEOMETRYCOLUMN", "RENAMETOPOGEOMETRYCOLUMN",
+        "FIXCORRUPTTOPOGEOMETRYCOLUMN", "POPULATE_TOPOLOGY_LAYER", "MAKETOPOLOGYPRECISE",
+        "ST_INITTOPOGEO", "ST_CREATETOPOGEO", "ST_ADDISONODE", "ST_ADDISOEDGE", "ST_ADDEDGENEWFACES",
+        "ST_ADDEDGEMODFACE", "ST_REMEDGENEWFACE", "ST_REMEDGEMODFACE", "ST_CHANGEEDGEGEOM",
+        "ST_MODEDGESPLIT", "ST_MODEDGEHEAL", "ST_NEWEDGEHEAL", "ST_MOVEISONODE", "ST_NEWEDGESSPLIT",
+        "ST_REMOVEISONODE", "ST_REMOVEISOEDGE", "CREATETOPOGEOM", "TOTOPOGEOM", "CLEARTOPOGEOM",
+        "TOPOGEO_ADDPOINT", "TOPOGEO_ADDLINESTRING", "TOPOGEO_ADDPOLYGON", "TOPOGEO_LOADGEOMETRY",
+        "TOPOGEOM_ADDELEMENT", "TOPOGEOM_REMELEMENT", "TOPOGEOM_ADDTOPOGEOM",
+        // pg_cron: https://github.com/citusdata/pg_cron.
+        "SCHEDULE", "SCHEDULE_IN_DATABASE", "UNSCHEDULE",
+        // Amazon RDS and Aurora PostgreSQL import from and export to S3, and
+        // Lambda calls. The `aws_commons` helpers only build argument values.
+        // https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_PostgreSQL.S3Import.html,
+        // https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/postgresql-s3-export.html,
+        // https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/PostgreSQL-Lambda.html.
+        "TABLE_IMPORT_FROM_S3", "QUERY_EXPORT_TO_S3", "INVOKE",
+        // Citus table distribution; node and shard management is matched by
+        // the `CITUS_` and `MASTER_` prefixes:
+        // https://docs.citusdata.com/en/stable/develop/api_udf.html.
+        "CREATE_DISTRIBUTED_TABLE", "CREATE_REFERENCE_TABLE", "CREATE_DISTRIBUTED_FUNCTION",
+        "UNDISTRIBUTE_TABLE", "ALTER_DISTRIBUTED_TABLE", "ALTER_TABLE_SET_ACCESS_METHOD",
+        "TRUNCATE_LOCAL_DATA_AFTER_DISTRIBUTING_TABLE", "REMOVE_LOCAL_TABLES_FROM_METADATA",
+        "UPDATE_DISTRIBUTED_TABLE_COLOCATION", "ALTER_COLUMNAR_TABLE_SET", "CREATE_TIME_PARTITIONS",
+        "DROP_OLD_TIME_PARTITIONS", "ALTER_OLD_PARTITIONS_SET_ACCESS_METHOD", "REBALANCE_TABLE_SHARDS",
+        "ISOLATE_TENANT_TO_NEW_SHARD",
+        // HTTP requests from the server, pgsql-http and Supabase pg_net:
+        // https://github.com/pramsey/pgsql-http, https://github.com/supabase/pg_net.
+        "HTTP", "HTTP_GET", "HTTP_POST", "HTTP_PUT", "HTTP_PATCH", "HTTP_DELETE", "HTTP_HEAD",
+        "HTTP_SET_CURLOPT", "HTTP_RESET_CURLOPT",
+        // pg_surgery rewrites heap tuples:
+        // https://www.postgresql.org/docs/current/pgsurgery.html.
+        "HEAP_FORCE_KILL", "HEAP_FORCE_FREEZE",
+        // MySQL locking service and version tokens, which hold locks past
+        // the statement like `GET_LOCK`:
+        // https://dev.mysql.com/doc/refman/8.4/en/locking-service.html,
+        // https://dev.mysql.com/doc/refman/8.4/en/version-tokens-reference.html.
+        "SERVICE_GET_READ_LOCKS", "SERVICE_GET_WRITE_LOCKS", "SERVICE_RELEASE_LOCKS",
+        "VERSION_TOKENS_SET", "VERSION_TOKENS_EDIT", "VERSION_TOKENS_DELETE",
+        "VERSION_TOKENS_LOCK_SHARED", "VERSION_TOKENS_LOCK_EXCLUSIVE", "VERSION_TOKENS_UNLOCK",
+    ]
+
+    /// Functions that run a text argument as a query, like `query_to_xml`
+    /// and the `dblink` functions above. The lexer never reads inside a
+    /// literal, so any call in that text, a denied one included, would run
+    /// unchecked. Some run the text read-only, but a function it calls still
+    /// does its work. The three-argument `ts_rewrite` and the `crosstab`
+    /// forms that take a category query are listed with the rest, since
+    /// telling the forms apart by arity is not worth the risk.
+    /// PostgreSQL text search: https://www.postgresql.org/docs/current/functions-textsearch.html,
+    /// https://www.postgresql.org/docs/current/textsearch-features.html;
+    /// tablefunc: https://www.postgresql.org/docs/current/tablefunc.html;
+    /// Citus: https://docs.citusdata.com/en/stable/develop/reference_propagation.html;
+    /// pg_background: https://github.com/vibhorkum/pg_background;
+    /// pglogical: https://github.com/2ndQuadrant/pglogical;
+    /// pg_graphql, whose mutations write: https://supabase.github.io/pg_graphql/api/;
+    /// SQLite's eval extension: https://sqlite.org/src/file/ext/misc/eval.c.
+    private static let queryTextFunctions: Set<String> = [
+        "TS_STAT", "TS_REWRITE", "CONNECTBY", "REPLICATE_DDL_COMMAND", "RESOLVE", "EVAL",
+    ]
+
+    /// Families of query-text functions, matched by name prefix: `crosstab`
+    /// and its `crosstabN` forms, Citus `run_command_on_…`, and pg_background.
+    private static let queryTextFunctionPrefixes: [String] = ["CROSSTAB", "RUN_COMMAND_ON_", "PG_BACKGROUND_"]
 
     /// Sequence advances, denied wherever the word appears: MariaDB also
     /// accepts `seq.NEXTVAL` without parentheses.
@@ -121,19 +228,57 @@ enum ReadOnlyStatement {
     private static let sideEffectFunctionPrefixes: [String] = [
         "DBLINK", "QUERY_TO_XML", "POSTGRES_FDW_DISCONNECT",
         "PG_CREATE_", "PG_COPY_", "PG_LOGICAL_", "PG_REPLICATION_ORIGIN_", "PG_BACKUP_",
-        "PG_WAL_REPLAY_", "PG_STAT_RESET", "PG_RESTORE_", "PG_CLEAR_",
+        "PG_WAL_REPLAY_", "PG_XLOG_REPLAY_", "PG_STAT_RESET", "PG_RESTORE_", "PG_CLEAR_",
         "LO_", "PG_READ_", "PG_LS_", "PG_FILE_",
         "PG_ADVISORY_", "PG_TRY_ADVISORY_", "PG_SLEEP",
         "XP_", "SP_",
+        // Citus node, shard and metadata management, and its legacy
+        // `master_` names. The few `citus_` functions that only report sizes
+        // or statistics go to the approval card too:
+        // https://docs.citusdata.com/en/stable/develop/api_udf.html.
+        "CITUS_", "MASTER_",
+        // pg_partman partition creation, maintenance and removal, under
+        // both the current names and those before version 5:
+        // https://github.com/pgpartman/pg_partman/blob/master/doc/pg_partman.md,
+        // https://github.com/pgpartman/pg_partman/blob/v4.7.4/doc/pg_partman.md.
+        "CREATE_PARENT", "CREATE_SUB_PARENT", "CREATE_PARTITION", "CREATE_SUB_PARTITION",
+        "CREATE_FUNCTION_", "PARTITION_DATA_", "PARTITION_GAP_FILL", "RUN_MAINTENANCE",
+        "APPLY_CONSTRAINTS", "APPLY_FOREIGN_KEYS", "DROP_CONSTRAINTS", "REAPPLY_", "STOP_SUB_PARTITION",
+        "UNDO_PARTITION", "CONFIG_CLEANUP", "DROP_PARTITION_",
+        // MySQL group replication changes the group's primary, mode and
+        // member actions; only `group_replication_get_…` reads, and
+        // `isSideEffectFunction` exempts it. Asynchronous connection
+        // failover edits a replica's list of sources:
+        // https://dev.mysql.com/doc/refman/8.4/en/group-replication-functions.html,
+        // https://dev.mysql.com/doc/refman/8.4/en/replication-functions-async-failover.html.
+        "GROUP_REPLICATION_", "ASYNCHRONOUS_CONNECTION_FAILOVER_",
     ]
 
+    /// TimescaleDB names its policy functions `add_…_policy` and
+    /// `remove_…_policy`, and those that manage several at once
+    /// `add_policies`, `alter_policies` and `remove_…policies`
+    /// (https://www.tigerdata.com/docs/api/latest/data-retention,
+    /// https://www.tigerdata.com/docs/api/latest/continuous-aggregates).
+    private static let policyVerbs: [String] = ["ADD_", "ALTER_", "REMOVE_"]
+    private static let policyNouns: [String] = ["_POLICY", "_POLICIES"]
+
     private static func isSideEffectFunction(_ name: String) -> Bool {
-        if sideEffectFunctions.contains(name) { return true }
+        if sideEffectFunctions.contains(name) || extensionSideEffectFunctions.contains(name) { return true }
+        if queryTextFunctions.contains(name) || queryTextFunctionPrefixes.contains(where: { name.hasPrefix($0) }) {
+            return true
+        }
+        if name.hasPrefix("GROUP_REPLICATION_GET_") { return false }
+        if policyVerbs.contains(where: { name.hasPrefix($0) }), policyNouns.contains(where: { name.hasSuffix($0) }) {
+            return true
+        }
         return sideEffectFunctionPrefixes.contains { name.hasPrefix($0) }
     }
 
     /// The `(` at `open` calls the word before it, or the last word of a
-    /// bracketed name before it. A quoted name could be any function.
+    /// bracketed name before it. A quoted name could be any function, so it
+    /// fails closed, which also sends a read to the card when the quoted
+    /// name is followed by a column-alias list rather than called:
+    /// `WITH "recent"(id) AS (...)` or `FROM generate_series(1, 3) AS "g"(n)`.
     private static func callsSideEffectFunction(_ tokens: [SQLToken], open: Int) -> Bool {
         guard open > 0 else { return false }
         var nameIndex = open - 1
@@ -147,6 +292,40 @@ enum ReadOnlyStatement {
 
     private static let sharedLockWords: Set<String> = ["SHARE", "KEY"]
 
+    /// SQL Server statements that can follow a read in the same batch with
+    /// no separator and that `disqualifyingKeywords` does not already
+    /// cover: control of flow, which can hold the shared connection in a
+    /// loop, cursors and keys, which stay open on it, messages, and `ADD
+    /// SENSITIVITY CLASSIFICATION`, which writes metadata. All are reserved
+    /// (https://learn.microsoft.com/en-us/sql/t-sql/language-elements/reserved-keywords-transact-sql),
+    /// so outside a bracketed or quoted name none of them names a column.
+    /// Not listed: `ELSE` and `END`, which also close a `CASE` expression
+    /// and start nothing without an `IF` or a `BEGIN` before them, and
+    /// `BREAK` and `CONTINUE`, which occur only inside a `WHILE`.
+    private static let transactSQLStatementKeywords: Set<String> = [
+        "IF", "WHILE", "GOTO", "RETURN", "PRINT", "RAISERROR", "DECLARE", "OPEN", "CLOSE", "FETCH",
+        "READTEXT", "ADD",
+    ]
+
+    /// True when a SQL Server batch goes on past its read into another
+    /// statement. Words between `[` and `]` are a name there, never a
+    /// keyword, and `FETCH` after `ROW` or `ROWS` is a read's paging clause.
+    private static func startsAnotherTransactSQLStatement(_ tokens: [SQLToken]) -> Bool {
+        var insideBrackets = false
+        for (index, token) in tokens.enumerated() {
+            guard case .word(let word) = token else {
+                if token == .punctuation("[") { insideBrackets = true }
+                if token == .punctuation("]") { insideBrackets = false }
+                continue
+            }
+            guard !insideBrackets, transactSQLStatementKeywords.contains(word) else { continue }
+            let previous = index > 0 ? tokens[index - 1] : nil
+            if word == "FETCH", previous == .word("ROWS") || previous == .word("ROW") { continue }
+            return true
+        }
+        return false
+    }
+
     static func isReadOnlySQL(_ sql: String, driver: DriverID?) -> Bool {
         guard let tokens = sqlTokens(sql), case .word(let lead)? = tokens.first,
               readLeads(for: driver).contains(lead)
@@ -154,10 +333,25 @@ enum ReadOnlyStatement {
         if let separator = tokens.firstIndex(of: .punctuation(";")), separator != tokens.count - 1 {
             return false
         }
+        if driver == .sqlserver, startsAnotherTransactSQLStatement(tokens) { return false }
         for (index, token) in tokens.enumerated() {
-            if token == .punctuation("("), callsSideEffectFunction(tokens, open: index) { return false }
-            guard case .word(let word) = token else { continue }
             let next = index + 1 < tokens.count ? tokens[index + 1] : nil
+            if token == .punctuation("("), callsSideEffectFunction(tokens, open: index) { return false }
+            // `:=` assigns a MySQL user variable, which stays set on the
+            // shared connection like `SET`
+            // (https://dev.mysql.com/doc/refman/8.4/en/assignment-operators.html#operator_assign-value).
+            // PostgreSQL also accepts it before a named argument
+            // (https://www.postgresql.org/docs/current/sql-syntax-calling-funcs.html#SQL-SYNTAX-CALLING-FUNCS-NAMED);
+            // such a read goes to the approval card, and one written with `=>` does not.
+            if token == .punctuation(":"), next == .punctuation("=") { return false }
+            guard case .word(let word) = token else { continue }
+            // With an argument, `LAST_INSERT_ID` sets the value the session's
+            // later calls return; only the call without one just reads
+            // (https://dev.mysql.com/doc/refman/8.4/en/information-functions.html#function_last-insert-id).
+            if word == "LAST_INSERT_ID", next == .punctuation("("),
+               index + 2 >= tokens.count || tokens[index + 2] != .punctuation(")") {
+                return false
+            }
             // `replace(...)` is the string function every dialect has; the
             // REPLACE statement never takes a parenthesis right after it.
             if word == "REPLACE", next == .punctuation("(") { continue }
@@ -211,7 +405,7 @@ enum ReadOnlyStatement {
         return lexer.tokens()
     }
 
-    /// Scalars visited while lexing `sql`. Classification runs on the main
+    /// Scalar reads made while lexing `sql`. Classification runs on the main
     /// actor before any query timeout applies, so tests hold this linear in
     /// the length of the text.
     static func sqlLexingSteps(_ sql: String) -> Int {
@@ -220,62 +414,76 @@ enum ReadOnlyStatement {
         return lexer.steps
     }
 
+    /// The text a lexer reads. Its scalars are reachable only through
+    /// `at(_:)`, which counts every read, so a loop that rescans the text is
+    /// counted however it is written and cannot slip past the linear bound
+    /// the tests hold. A counter each loop had to increment itself missed a
+    /// rescan that did not.
+    private struct CountedScalars {
+        private let storage: [Unicode.Scalar]
+        private(set) var reads = 0
+
+        init(_ sql: String) { storage = Array(sql.unicodeScalars) }
+
+        var count: Int { storage.count }
+
+        mutating func at(_ position: Int) -> Unicode.Scalar? {
+            reads += 1
+            return storage.indices.contains(position) ? storage[position] : nil
+        }
+    }
+
     private struct SQLLexer {
-        let scalars: [Unicode.Scalar]
+        var text: CountedScalars
         var index = 0
-        var steps = 0
         /// Whether SQLite's parameter scan reaches a `(` from each position
         /// with no name characters read yet; see `computeParameterSuffixes`.
         var suffixAfterEmptyName: [Bool]?
 
-        init(_ sql: String) { scalars = Array(sql.unicodeScalars) }
+        init(_ sql: String) { text = CountedScalars(sql) }
 
-        func at(_ position: Int) -> Unicode.Scalar? { position < scalars.count ? scalars[position] : nil }
+        var steps: Int { text.reads }
+
+        mutating func at(_ position: Int) -> Unicode.Scalar? { text.at(position) }
 
         mutating func tokens() -> [SQLToken]? {
-            for (position, scalar) in scalars.enumerated() {
-                steps += 1
+            var position = 0
+            while let scalar = at(position) {
+                position += 1
                 switch scalar.value {
                 case 0x09, 0x0A: continue
-                case 0x0D where at(position + 1) == "\n": continue
+                case 0x0D where at(position) == "\n": continue
                 case 0x00...0x1F, 0x7F, 0x85, 0x2028, 0x2029: return nil
                 default: continue
                 }
             }
 
             var tokens: [SQLToken] = []
-            while index < scalars.count {
-                steps += 1
-                let scalar = scalars[index]
+            while let scalar = at(index) {
                 switch scalar {
                 case " ", "\t", "\n", "\r":
                     index += 1
                 case "-" where at(index + 1) == "-":
                     // MySQL needs whitespace or a control character after `--`.
                     if let follower = at(index + 2), !" \t\n\r".unicodeScalars.contains(follower) { return nil }
-                    while index < scalars.count, scalars[index] != "\n" {
-                        steps += 1
-                        index += 1
-                    }
+                    while let commented = at(index), commented != "\n" { index += 1 }
                 case "/" where at(index + 1) == "*":
                     let marker = at(index + 2).map { String($0) } ?? ""
                     if marker == "!" { return nil }
                     if marker.lowercased() == "m", at(index + 3) == "!" { return nil }
                     index += 2
                     while true {
-                        steps += 1
-                        guard index + 1 < scalars.count else { return nil }
-                        if scalars[index] == "/", scalars[index + 1] == "*" { return nil }
-                        if scalars[index] == "*", scalars[index + 1] == "/" { break }
+                        guard let current = at(index), let following = at(index + 1) else { return nil }
+                        if current == "/", following == "*" { return nil }
+                        if current == "*", following == "/" { break }
                         index += 1
                     }
                     index += 2
                 case "'", "\"", "`":
                     index += 1
                     while true {
-                        steps += 1
-                        guard index < scalars.count, scalars[index] != "\\" else { return nil }
-                        if scalars[index] == scalar {
+                        guard let current = at(index), current != "\\" else { return nil }
+                        if current == scalar {
                             if at(index + 1) == scalar {
                                 index += 2
                                 continue
@@ -297,19 +505,16 @@ enum ReadOnlyStatement {
                 case "#", "$", "\\":
                     return nil
                 case "0"..."9":
-                    while index < scalars.count, ReadOnlyStatement.isASCIIDigit(scalars[index]) {
-                        steps += 1
-                        index += 1
-                    }
+                    while let digit = at(index), ReadOnlyStatement.isASCIIDigit(digit) { index += 1 }
                     tokens.append(.number)
                 default:
                     if ReadOnlyStatement.isWordCharacter(scalar), !ReadOnlyStatement.isASCIIDigit(scalar) {
-                        let start = index
-                        while index < scalars.count, isWordContinuation(scalars[index]) {
-                            steps += 1
+                        var word = String.UnicodeScalarView()
+                        while let character = at(index), isWordContinuation(character) {
+                            word.append(character)
                             index += 1
                         }
-                        tokens.append(.word(String(String.UnicodeScalarView(scalars[start..<index])).uppercased()))
+                        tokens.append(.word(String(word).uppercased()))
                     } else if scalar.isASCII {
                         tokens.append(.punctuation(scalar))
                         index += 1
@@ -330,9 +535,7 @@ enum ReadOnlyStatement {
         mutating func bracketIsUnambiguous(from open: Int) -> Bool {
             var position = open + 1
             var previous: Unicode.Scalar = " "
-            while position < scalars.count {
-                steps += 1
-                let scalar = scalars[position]
+            while let scalar = at(position) {
                 if scalar == "]" { return at(position + 1) != "]" }
                 if ReadOnlyStatement.bracketBreakers.contains(scalar) { return false }
                 if previous == "-", scalar == "-" { return false }
@@ -356,13 +559,11 @@ enum ReadOnlyStatement {
         /// forward from every `:` instead revisits the whole rest of a
         /// `x::a::a…` cast chain once per colon.
         mutating func computeParameterSuffixes() {
-            let count = scalars.count
+            let count = text.count
             var afterEmptyName = [Bool](repeating: false, count: count + 2)
             var afterName = [Bool](repeating: false, count: count + 2)
             var position = count - 1
-            while position >= 0 {
-                steps += 1
-                let scalar = scalars[position]
+            while position >= 0, let scalar = at(position) {
                 if !scalar.isASCII || isWordContinuation(scalar) {
                     afterEmptyName[position] = afterName[position + 1]
                     afterName[position] = afterName[position + 1]
@@ -409,14 +610,15 @@ enum ReadOnlyStatement {
         "find", "findOne", "aggregate", "countDocuments", "estimatedDocumentCount", "distinct",
     ]
     /// Cursor modifiers the resolver accepts after `find`.
-    private static let mongoCursorMethods: Set<String> = ["sort", "limit"]
+    static let mongoCursorMethods: Set<String> = ["sort", "limit"]
     /// Pipeline stages that write their output to a collection
     /// (https://www.mongodb.com/docs/manual/reference/operator/aggregation/out/,
     /// https://www.mongodb.com/docs/manual/reference/operator/aggregation/merge/).
     private static let mongoWritingStages: Set<String> = ["$out", "$merge"]
 
-    /// True for one `db.<collection>.<read method>(...)` call, optionally
-    /// followed by cursor modifiers, that names no writing pipeline stage.
+    /// True for one `db.<collection>.<read method>(...)` call, with cursor
+    /// modifiers only after `find` as the resolver allows, that names no
+    /// writing pipeline stage.
     /// The method actually called decides, not a substring anywhere in the
     /// text. Elasticsearch and Qdrant scripts arrive on the same path and
     /// never match, so they always need approval.
@@ -429,6 +631,7 @@ enum ReadOnlyStatement {
               let close = mongoClosingIndex(tokens, open: 5)
         else { return false }
         var index = close + 1
+        if index < tokens.count, method != "find" { return false }
         while index < tokens.count {
             guard tokens[index] == .punctuation("."), index + 2 < tokens.count,
                   case .word(let modifier) = tokens[index + 1], mongoCursorMethods.contains(modifier),
