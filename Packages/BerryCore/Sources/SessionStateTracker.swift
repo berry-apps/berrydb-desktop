@@ -110,7 +110,12 @@ public final class SessionStateTracker: @unchecked Sendable {
             return kind == "TEMP" || kind == "TEMPORARY" ? .sessionLocal : nil
         case "SET":
             let target = rest.first { $0 != "SESSION" && $0 != "LOCAL" }
-            return ["SEARCH_PATH", "ROLE", "AUTHORIZATION"].contains(target ?? "") ? .sessionLocal : nil
+            if target == "AUTOCOMMIT" {
+                return autocommitEffect(rest.drop { $0 != "AUTOCOMMIT" }.dropFirst().first)
+            }
+            // SET SCHEMA is PostgreSQL's alias for setting search_path
+            // (https://www.postgresql.org/docs/current/sql-set.html).
+            return ["SEARCH_PATH", "SCHEMA", "ROLE", "AUTHORIZATION"].contains(target ?? "") ? .sessionLocal : nil
         case "USE", "ATTACH", "PREPARE", "DECLARE":
             return .sessionLocal
         case "SELECT", "WITH":
@@ -122,6 +127,21 @@ public final class SessionStateTracker: @unchecked Sendable {
             return createsTemporary ? .sessionLocal : nil
         default:
             return nil
+        }
+    }
+
+    /// MySQL's `SET autocommit`. Turned off, it keeps a transaction open from
+    /// the next statement on (https://dev.mysql.com/doc/refman/8.4/en/commit.html);
+    /// turned back on, it commits that transaction
+    /// (https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html). A
+    /// COMMIT or ROLLBACK clears the flag as for any transaction, although
+    /// with autocommit still off the server opens the next one at once; a
+    /// write in it goes unseen, like any other state this tracker misses.
+    private static func autocommitEffect(_ value: String?) -> Effect? {
+        switch value {
+        case "0", "OFF", "FALSE": .beginsTransaction
+        case "1", "ON", "TRUE": .endsTransaction
+        default: nil
         }
     }
 

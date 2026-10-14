@@ -18,6 +18,8 @@ struct SessionStateTrackerTests {
         "select a into temporary table t from b",
         "SET search_path TO app, public",
         "SET SESSION search_path = app",
+        "SET SCHEMA 'app'",
+        "SET SESSION SCHEMA 'app'",
         "SET ROLE reporting",
         "SET SESSION AUTHORIZATION alice",
         "USE shop",
@@ -47,6 +49,33 @@ struct SessionStateTrackerTests {
         tracker.recordSucceeded(sql, sessionID: session)
 
         #expect(tracker.state(for: session) == State(hasSessionLocalState: false, hasOpenTransaction: true))
+    }
+
+    /// With autocommit off, MySQL keeps a transaction open from the next
+    /// statement on; turning it back on commits that transaction. Verified
+    /// against MySQL 8.4.11 and MariaDB 11.8.9, which accept each spelling.
+    @Test(arguments: [
+        "SET autocommit = 0", "SET autocommit=0", "set autocommit = OFF", "SET autocommit = FALSE",
+        "SET SESSION autocommit = 0", "SET LOCAL autocommit = 0", "SET @@autocommit = 0", "SET @@session.autocommit = off",
+    ])
+    func turningAutocommitOffOpensATransaction(_ sql: String) {
+        let tracker = SessionStateTracker()
+        let session = UUID()
+
+        tracker.recordSucceeded(sql, sessionID: session)
+
+        #expect(tracker.state(for: session) == State(hasSessionLocalState: false, hasOpenTransaction: true))
+    }
+
+    @Test(arguments: ["SET autocommit = 1", "SET autocommit=ON", "set @@autocommit = true", "COMMIT", "ROLLBACK"])
+    func turningAutocommitBackOnOrEndingTheTransactionClearsIt(_ sql: String) {
+        let tracker = SessionStateTracker()
+        let session = UUID()
+        tracker.recordSucceeded("SET autocommit = 0", sessionID: session)
+
+        tracker.recordSucceeded(sql, sessionID: session)
+
+        #expect(tracker.state(for: session) == State())
     }
 
     @Test(arguments: [
@@ -92,6 +121,7 @@ struct SessionStateTrackerTests {
         "INSERT INTO t VALUES (1)",
         "CREATE TABLE t (a int)",
         "SET TIME ZONE 'UTC'",
+        "SET GLOBAL autocommit = 0",
         "SAVEPOINT s1",
         "EXPLAIN SELECT 1",
         "",
