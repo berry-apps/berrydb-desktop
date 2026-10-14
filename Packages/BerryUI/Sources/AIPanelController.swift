@@ -96,6 +96,8 @@ public final class AIPanelController {
                 return String(localized: "the session is closed", bundle: bundle)
             case ReadOnlyUnavailableReason.cancelledDetail:
                 return String(localized: "cancelled", bundle: bundle)
+            case ReadOnlyUnavailableReason.openTimedOutDetail:
+                return String(localized: "no answer within 15 seconds", bundle: bundle)
             default:
                 return nil
             }

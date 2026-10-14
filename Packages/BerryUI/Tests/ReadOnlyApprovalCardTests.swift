@@ -96,7 +96,10 @@ struct ReadOnlyApprovalCardTests {
         await pool.close(sessionID: session.id)
         let router = ReadOnlyRouter(connections: pool, tracker: SessionStateTracker(), transactionIsActive: { false })
         let closedSessionRoute = await router.route(for: session)
-        var reasons: [ReadOnlyUnavailableReason] = [.connectionFailed(ReadOnlyUnavailableReason.cancelledDetail)]
+        var reasons: [ReadOnlyUnavailableReason] = [
+            .connectionFailed(ReadOnlyUnavailableReason.cancelledDetail),
+            .connectionFailed(ReadOnlyUnavailableReason.openTimedOutDetail),
+        ]
         for route in [ReadOnlyRoute.withoutConnections(for: session), closedSessionRoute] {
             guard case .unavailable(let reason) = route else {
                 Issue.record("expected the card's route, got \(route)")

@@ -347,6 +347,7 @@
 "no read-only connection is set up for this session" = "phiên này chưa có kết nối chỉ đọc";
 "the session is closed" = "phiên đã đóng";
 "cancelled" = "đã hủy";
+"no answer within 15 seconds" = "không có phản hồi trong 15 giây";
 "Ask the assistant…" = "Hỏi trợ lý…";
 "File a bug report from this conversation." = "Gửi báo cáo lỗi từ cuộc trò chuyện này.";
 "Auto-run safe SELECTs" = "Tự chạy SELECT an toàn";

@@ -87,6 +87,88 @@ struct ReadOnlyConnectionsTests {
         }
     }
 
+    /// A tunnel whose SSH channel never opens, or a pooler with no free
+    /// server, leaves a connect or its setup without an answer. After 15
+    /// seconds the open counts as failed, like one the server refused, and
+    /// the connection it makes later is closed rather than handed out.
+    @Test func anOpenWithoutAnAnswerFailsAfterFifteenSecondsAndIsNotTriedAgainForFiveMinutes() async throws {
+        let time = ManualTime()
+        let gate = ROGate()
+        let script = ROScript(gate: gate)
+        let session = await Self.session(script: script)
+        try await Self.withPool(time: time) { pool in
+            let waiting = Self.leaseTask(pool, session)
+            await gate.waitUntilReached()
+            await Self.waitUntil { time.sleepers == 1 }
+            time.advance(by: .seconds(14))
+            #expect(await pool.leasesWaiting == 1)
+
+            time.advance(by: .seconds(1))
+            let outcome = await Self.value(of: waiting)
+            #expect(throws: ReadOnlyConnectionUnavailable(reason: ReadOnlyUnavailableReason.openTimedOutDetail)) {
+                _ = try outcome?.get()
+            }
+            time.advance(by: .seconds(299))
+            let retried = await Self.value(of: Task { await Self.reason(pool, session) })
+            #expect(retried == .some(ReadOnlyUnavailableReason.openTimedOutDetail))
+            #expect(await script.connects == 1)
+
+            await gate.open()
+            await Self.waitUntil { await script.closes == 1 }
+            #expect(await pool.cachedSessionCount == 0)
+            time.advance(by: .seconds(1))
+            await (try await pool.lease(for: session)).finish(failed: false)
+            #expect(await script.connects == 2)
+        }
+    }
+
+    /// A statement stopped while the connection opens stops waiting at once.
+    /// The open goes on, and its connection serves the next statement.
+    @Test func aCallerStoppedWhileTheConnectionOpensStopsWaiting() async throws {
+        let gate = ROGate()
+        let script = ROScript(gate: gate)
+        let session = await Self.session(script: script)
+        try await Self.withPool { pool in
+            let stopped = Self.leaseTask(pool, session)
+            await gate.waitUntilReached()
+            await Self.waitUntil { await pool.leasesWaiting == 1 }
+            stopped.cancel()
+
+            let outcome = await Self.value(of: stopped)
+            #expect(throws: CancellationError.self) { _ = try outcome?.get() }
+            #expect(await pool.leasesWaiting == 0)
+            await gate.open()
+            let next = try await pool.lease(for: session)
+            #expect(await script.connects == 1)
+            await next.finish(failed: false)
+        }
+    }
+
+    /// A connection whose only caller stopped waiting is held by no lease;
+    /// it closes like one idle since it opened.
+    @Test func aConnectionNobodyTookClosesWhenIdle() async throws {
+        let time = ManualTime()
+        let gate = ROGate()
+        let script = ROScript(gate: gate)
+        let session = await Self.session(script: script)
+        try await Self.withPool(time: time) { pool in
+            let stopped = Self.leaseTask(pool, session)
+            await gate.waitUntilReached()
+            await Self.waitUntil { await pool.leasesWaiting == 1 }
+            stopped.cancel()
+            _ = await Self.value(of: stopped)
+            await gate.open()
+            await Self.waitUntil { await pool.idleTimersArmed == 1 }
+            await Self.waitUntil { time.sleepers == 1 }
+
+            time.advance(by: .seconds(299))
+            #expect(await script.closes == 0)
+            time.advance(by: .seconds(1))
+            await Self.waitUntil { await script.closes == 1 }
+            #expect(await pool.cachedSessionCount == 0)
+        }
+    }
+
     @Test func anIdleConnectionClosesFiveMinutesAfterItsLastStatement() async throws {
         let time = ManualTime()
         let script = ROScript()

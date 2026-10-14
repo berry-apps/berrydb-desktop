@@ -222,7 +222,8 @@ struct QueryToolExecutorReadOnlyLeaseTests {
     private func executor(
         _ fixture: Fixture, gate: CardRecorder,
         route: (@MainActor (Session) async -> ReadOnlyRoute)? = nil,
-        tab: [String] = [], queryTimeoutSeconds: TimeInterval = 90
+        tab: [String] = [], queryTimeoutSeconds: TimeInterval = 90,
+        executionDeadlineSeconds: TimeInterval = 110
     ) -> QueryToolExecutor {
         QueryToolExecutor(
             session: fixture.session, gate: gate,
@@ -230,8 +231,26 @@ struct QueryToolExecutorReadOnlyLeaseTests {
             onPropose: { _, _ in },
             activeTabStatements: { _ in tab },
             readOnlyRoute: route ?? router(fixture),
-            queryTimeoutSeconds: queryTimeoutSeconds
+            queryTimeoutSeconds: queryTimeoutSeconds,
+            executionDeadlineSeconds: executionDeadlineSeconds
         )
+    }
+
+    /// The panel's routing over the fixture's pool, on a task of its own:
+    /// it answers neither a Stop nor a deadline, as a route that waits on
+    /// something that ignores cancellation would not.
+    private func unstoppableRouter(_ fixture: Fixture) -> @MainActor (Session) async -> ReadOnlyRoute {
+        let route = router(fixture)
+        return { session in await Task { @MainActor in await route(session) }.value }
+    }
+
+    /// The task's value, waited for no longer than `waitUntil` waits; nil
+    /// when it has not finished by then.
+    private func finished<T: Sendable>(_ task: Task<T, Never>) async -> T? {
+        let box = FinishedBox<T>()
+        Task { box.store(await task.value) }
+        await waitUntil { box.value != nil }
+        return box.value
     }
 
     private func runSQL(_ sql: String) -> AIToolCall {
@@ -349,24 +368,22 @@ struct QueryToolExecutorReadOnlyLeaseTests {
         await tearDown(fixture)
     }
 
-    /// A route can hand out a lease to a turn already cancelled, since the
-    /// pool goes on opening the connection for it. The executor gives it
-    /// back without running anything on it.
+    /// Stop ends the tool call while the connection still opens, even
+    /// through a route that does not answer it. The lease that route hands
+    /// out later is given back without anything running on it.
     @Test func aLeaseHandedOutAfterTheTurnWasCancelledIsGivenBack() async {
         let fixture = await fixture(LeaseScript(holdsConnects: true))
         let gate = CardRecorder()
-        let pool = fixture.pool
-        let executor = executor(fixture, gate: gate, route: { session in
-            guard let lease = try? await pool.lease(for: session) else { return .notSupported }
-            return .readOnly(lease)
-        })
+        let executor = executor(fixture, gate: gate, route: unstoppableRouter(fixture))
 
         let call = Task { await executor.execute(runSQL("SELECT id FROM t")) }
         await waitUntil { await fixture.script.connects == 1 }
+        let stopped = ContinuousClock.now
         call.cancel()
-        await fixture.script.release()
 
-        #expect(await call.value.status == "denied")
+        #expect(await finished(call)?.status == "denied")
+        #expect(ContinuousClock.now - stopped < .seconds(10))
+        await fixture.script.release()
         await waitUntil { await fixture.pool.unfinishedLeases == 0 }
         #expect(await fixture.script.ran.isEmpty)
         #expect(gate.cards.isEmpty)
@@ -374,9 +391,8 @@ struct QueryToolExecutorReadOnlyLeaseTests {
         await tearDown(fixture)
     }
 
-    /// The router gives back a lease that arrives after its caller was
-    /// cancelled and answers that the connection is unavailable. A turn
-    /// that was stopped asks for no card.
+    /// A turn stopped while the connection opens returns at once and asks
+    /// for no card.
     @Test func aTurnCancelledWhileTheConnectionOpensAsksForNoCard() async {
         let fixture = await fixture(LeaseScript(holdsConnects: true))
         let gate = CardRecorder()
@@ -384,13 +400,50 @@ struct QueryToolExecutorReadOnlyLeaseTests {
 
         let call = Task { await executor.execute(runSQL("SELECT id FROM t")) }
         await waitUntil { await fixture.script.connects == 1 }
+        let stopped = ContinuousClock.now
         call.cancel()
-        await fixture.script.release()
 
-        #expect(await call.value.status == "denied")
+        #expect(await finished(call)?.status == "denied")
+        #expect(ContinuousClock.now - stopped < .seconds(10))
+        await fixture.script.release()
         await waitUntil { await fixture.pool.unfinishedLeases == 0 }
         #expect(gate.cards.isEmpty)
         #expect(await fixture.main.ran.isEmpty)
         await tearDown(fixture)
+    }
+
+    /// The pool gives an open 15 seconds; a tool call with less of its
+    /// deadline left stops waiting when the deadline passes, and reports it,
+    /// without a card that would only expire.
+    @Test func aToolCallEndsAtItsDeadlineWhileTheConnectionOpens() async {
+        let fixture = await fixture(LeaseScript(holdsConnects: true))
+        let gate = CardRecorder()
+        let executor = executor(fixture, gate: gate, executionDeadlineSeconds: 1)
+
+        let started = ContinuousClock.now
+        let outcome = await finished(Task { await executor.execute(runSQL("SELECT id FROM t")) })
+
+        #expect(ContinuousClock.now - started < .seconds(10))
+        #expect(outcome?.status == "error")
+        #expect(outcome?.resultJSON?.contains("tool deadline") == true, "\(String(describing: outcome?.resultJSON))")
+        #expect(gate.cards.isEmpty)
+        await fixture.script.release()
+        await waitUntil { await fixture.pool.unfinishedLeases == 0 }
+        #expect(await fixture.main.ran.isEmpty)
+        await tearDown(fixture)
+    }
+}
+
+/// Holds what one test's task stores for another to read.
+private final class FinishedBox<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: T?
+
+    var value: T? {
+        lock.withLock { stored }
+    }
+
+    func store(_ value: T) {
+        lock.withLock { stored = value }
     }
 }

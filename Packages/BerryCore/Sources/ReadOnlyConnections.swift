@@ -57,8 +57,9 @@ struct ReadOnlyClock: Sendable {
 /// its SSH tunnel's local port, never prompts for a credential or opens a
 /// second tunnel, opens on first use and never reopens for a closed
 /// session. It also closes a connection idle for `idleTimeout`, and after a
-/// failed open or setup answers with the failure's reason, without trying
-/// again, for `retryAfter`.
+/// failed open or setup, or one that took longer than `openTimeout`,
+/// answers with the failure's reason, without trying again, for
+/// `retryAfter`.
 ///
 /// A connection is never closed or pinged while a lease on it is
 /// unfinished. A driver's `ping()` does not take the connection's turn, so
@@ -74,6 +75,19 @@ struct ReadOnlyClock: Sendable {
 public actor ReadOnlyConnections {
     public static let idleTimeout: Duration = .seconds(300)
     public static let retryAfter: Duration = .seconds(300)
+    /// How long the connect and the read-only setup together may take; an
+    /// open that takes longer fails like one the server refused. Only the
+    /// TCP connect has a bound of its own: PostgresNIO 1.33.0's
+    /// `connectTimeout` covers the socket alone
+    /// (https://github.com/vapor/postgres-nio/blob/1.33.0/Sources/PostgresNIO/Connection/PostgresConnection%2BConfiguration.swift),
+    /// MySQLNIO 1.9.1 sets no bound on its handshake (verified in its
+    /// `MySQLConnection.connect`), and the setup's statements have none. An
+    /// SSH tunnel whose local listener accepts while its channel never opens
+    /// leaves the driver waiting for a greeting that never comes, and
+    /// PgBouncer with no free server holds the setup's BEGIN for
+    /// `query_wait_timeout`, 120 seconds by default
+    /// (https://www.pgbouncer.org/config.html#query_wait_timeout).
+    static let openTimeout: Duration = .seconds(15)
     /// What the server lists the connection as (`pg_stat_activity` on
     /// Postgres), so a database administrator can tell it from the session's
     /// own connection.
@@ -140,9 +154,10 @@ public actor ReadOnlyConnections {
 
     /// The session's read-only connection for one statement, opened and set
     /// up on first use. Throws `CancellationError` for a session that was
-    /// closed, before or while its connection opened, and
-    /// `ReadOnlyConnectionUnavailable` when the open or the setup failed,
-    /// to every caller that waited on it.
+    /// closed, before or while its connection opened, and to a caller
+    /// cancelled while it waits; and `ReadOnlyConnectionUnavailable` when the
+    /// open or the setup failed or took longer than `openTimeout`, to every
+    /// caller that waited on it.
     public func lease(for session: Session) async throws -> ReadOnlyLease {
         while true {
             guard !closed.contains(session.id) else { throw CancellationError() }
@@ -160,23 +175,25 @@ public actor ReadOnlyConnections {
             if let check = slot.check {
                 // Nothing may start on the connection while it is pinged.
                 leasesWaiting += 1
-                await check.value
-                leasesWaiting -= 1
+                defer { leasesWaiting -= 1 }
+                try await Self.unlessCancelled { await check.value }
                 continue
             }
+            let opening = slot.opening
             leasesWaiting += 1
-            let opened = await slot.opening.result
+            let opened: Result<PooledReadOnlyConnection, any Error>
+            do {
+                opened = try await Self.unlessCancelled { await opening.result }
+            } catch {
+                leasesWaiting -= 1
+                settleWhenOpened(slotID)
+                throw error
+            }
             leasesWaiting -= 1
             guard !closed.contains(session.id) else { throw CancellationError() }
             switch opened {
             case .failure(let error):
-                let reason = Self.reason(of: error)
-                if current[session.id] == slotID {
-                    current[session.id] = nil
-                    slots[slotID] = nil
-                    failures[session.id] = Failure(reason: reason, until: clock.now() + Self.retryAfter)
-                }
-                throw ReadOnlyConnectionUnavailable(reason: reason)
+                throw ReadOnlyConnectionUnavailable(reason: failedToOpen(slotID, sessionID: session.id, error: error))
             case .success(let connection):
                 // Dropped, closed for idleness or put under a check while
                 // this caller waited: start over from the current state.
@@ -214,6 +231,9 @@ public actor ReadOnlyConnections {
     /// How many idle checks have run, so a test can wait for one that
     /// decided to keep the connection.
     private(set) var idleChecks = 0
+    /// How many idle countdowns have started, so a test can tell that one
+    /// is running before it moves time on.
+    private(set) var idleTimersArmed = 0
     /// How many leases wait for a connection to open or to answer its
     /// check, so a test can tell that one is waiting.
     private(set) var leasesWaiting = 0
@@ -226,14 +246,54 @@ public actor ReadOnlyConnections {
 
     private func startOpening(_ session: Session) -> UUID {
         let driverType = driverType
+        let clock = clock
         let slotID = UUID()
         slots[slotID] = Slot(
             sessionID: session.id,
-            opening: Task { try await Self.open(session, driverType: driverType) },
+            opening: Task { try await Self.open(session, driverType: driverType, within: Self.openTimeout, clock: clock) },
             lastFinished: clock.now()
         )
         current[session.id] = slotID
         return slotID
+    }
+
+    /// Takes the slot out of service after its open failed, unless a later
+    /// slot already serves the session, and remembers the reason for
+    /// `retryAfter`. Returns the reason.
+    private func failedToOpen(_ slotID: UUID, sessionID: UUID, error: any Error) -> String {
+        let reason = Self.reason(of: error)
+        if current[sessionID] == slotID {
+            current[sessionID] = nil
+            slots[slotID] = nil
+            failures[sessionID] = Failure(reason: reason, until: clock.now() + Self.retryAfter)
+        }
+        return reason
+    }
+
+    /// A caller stopped waiting for the open, which goes on. Its outcome is
+    /// settled as a waiting caller would have: a failure is remembered, and
+    /// a connection no lease has taken starts its idle countdown, so it
+    /// closes like any other unused one.
+    private func settleWhenOpened(_ slotID: UUID) {
+        guard let slot = slots[slotID] else { return }
+        let opening = slot.opening
+        let sessionID = slot.sessionID
+        Task { [weak self] in
+            let opened = await opening.result
+            await self?.settle(slotID, sessionID: sessionID, opened: opened)
+        }
+    }
+
+    private func settle(_ slotID: UUID, sessionID: UUID, opened: Result<PooledReadOnlyConnection, any Error>) {
+        switch opened {
+        case .failure(let error):
+            _ = failedToOpen(slotID, sessionID: sessionID, error: error)
+        case .success(let connection):
+            guard let slot = slots[slotID], !slot.retiring, slot.connection == nil else { return }
+            slots[slotID]?.connection = connection
+            slots[slotID]?.lastFinished = clock.now()
+            armIdleTimer(slotID)
+        }
     }
 
     private func finished(_ leaseID: UUID, slotID: UUID, failed: Bool) async {
@@ -285,6 +345,7 @@ public actor ReadOnlyConnections {
     }
 
     private func armIdleTimer(_ slotID: UUID) {
+        idleTimersArmed += 1
         slots[slotID]?.idleTimer?.cancel()
         let clock = clock
         slots[slotID]?.idleTimer = Task { [weak self] in
@@ -352,6 +413,59 @@ public actor ReadOnlyConnections {
         return driverError.detail
     }
 
+    /// `open(_:driverType:)`, failed with `openTimedOutDetail` once `bound`
+    /// passes. The open is not awaited past the bound, because nothing may
+    /// ever end it; a connection it makes after that is closed, never
+    /// handed out.
+    private static func open(
+        _ session: Session,
+        driverType: @escaping @Sendable (DriverID) -> (any DatabaseDriver.Type)?,
+        within bound: Duration,
+        clock: ReadOnlyClock
+    ) async throws -> PooledReadOnlyConnection {
+        let answer = FirstAnswer<Result<PooledReadOnlyConnection, any Error>>()
+        let opening = Task {
+            let opened: Result<PooledReadOnlyConnection, any Error>
+            do {
+                opened = .success(try await open(session, driverType: driverType))
+            } catch {
+                opened = .failure(error)
+            }
+            if !answer.give(opened), case .success(let late) = opened {
+                await late.base.close()
+            }
+        }
+        let timer = Task {
+            do {
+                try await clock.sleep(bound)
+            } catch {
+                // Cancelled because the open answered first.
+                return
+            }
+            answer.give(.failure(DriverError.readOnlyUnavailable(ReadOnlyUnavailableReason.openTimedOutDetail)))
+            opening.cancel()
+        }
+        let opened = await answer.value()
+        timer.cancel()
+        return try opened.get()
+    }
+
+    /// What `wait` returns, unless the caller is cancelled first; `wait`
+    /// itself goes on. Awaiting a task's value does not respond to the
+    /// caller's cancellation, so a statement stopped while the connection
+    /// opens would otherwise wait out the open.
+    private static func unlessCancelled<T: Sendable>(_ wait: @escaping @Sendable () async -> T) async throws -> T {
+        let answer = FirstAnswer<T?>()
+        Task { answer.give(await wait()) }
+        let value = await withTaskCancellationHandler {
+            await answer.value()
+        } onCancel: {
+            answer.give(nil)
+        }
+        guard let value else { throw CancellationError() }
+        return value
+    }
+
     /// Connects, then sets the connection up read-only; a connection that
     /// fails the setup is closed and never handed out.
     private static func open(
@@ -385,7 +499,7 @@ public actor ReadOnlyConnections {
     private static func answers(
         _ connection: any ReadOnlyExecuting, within bound: Duration, clock: ReadOnlyClock
     ) async -> Bool {
-        let answer = FirstAnswer()
+        let answer = FirstAnswer<Bool>()
         let ping = Task { answer.give(await connection.ping()) }
         let timer = Task {
             do {
@@ -403,25 +517,35 @@ public actor ReadOnlyConnections {
 }
 
 /// The first of several answers, for a race whose losers keep running.
-private final class FirstAnswer: @unchecked Sendable {
+private final class FirstAnswer<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
-    private var answer: Bool?
-    private var waiter: CheckedContinuation<Bool, Never>?
+    /// Kept apart from `answer`, which an optional `Value` may set to nil.
+    private var answered = false
+    private var answer: Value?
+    private var waiter: CheckedContinuation<Value, Never>?
 
-    func give(_ value: Bool) {
-        let waiter: CheckedContinuation<Bool, Never>? = lock.withLock {
-            guard answer == nil else { return nil }
+    /// False when another answer came first; `value` is then dropped, and
+    /// whatever it holds stays the giver's to dispose of.
+    @discardableResult
+    func give(_ value: Value) -> Bool {
+        let given: (first: Bool, waiter: CheckedContinuation<Value, Never>?) = lock.withLock {
+            guard !answered else { return (false, nil) }
+            answered = true
             answer = value
             defer { self.waiter = nil }
-            return self.waiter
+            return (true, self.waiter)
         }
-        waiter?.resume(returning: value)
+        given.waiter?.resume(returning: value)
+        return given.first
     }
 
-    func value() async -> Bool {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            let ready: Bool? = lock.withLock {
-                if answer == nil { waiter = continuation }
+    func value() async -> Value {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Value, Never>) in
+            let ready: Value? = lock.withLock {
+                guard answered else {
+                    waiter = continuation
+                    return nil
+                }
                 return answer
             }
             if let ready { continuation.resume(returning: ready) }

@@ -180,6 +180,30 @@ struct ReadOnlyRouterTests {
         #expect(await script.closes == 1)
     }
 
+    /// Stop answers at once while the connection still opens, as cancelled
+    /// rather than as a closed session.
+    @Test func aCallerStoppedWhileTheConnectionOpensIsAnsweredAtOnce() async {
+        let gate = ROGate()
+        let script = ROScript(gate: gate)
+        let session = await ReadOnlyConnectionsTests.session(script: script)
+        let pool = ReadOnlyConnectionsTests.pool()
+        let router = router(pool)
+
+        let routing = Task { @MainActor in await router.route(for: session) }
+        await gate.waitUntilReached()
+        await Self.waitForWaiters(1, on: pool)
+        routing.cancel()
+        let route = await ReadOnlyConnectionsTests.value(of: routing)
+
+        if case .unavailable(.connectionFailed(let detail))? = route {
+            #expect(detail == ReadOnlyUnavailableReason.cancelledDetail)
+        } else {
+            Issue.record("expected a cancelled route before the connection opened, got \(String(describing: route))")
+        }
+        await gate.open()
+        await pool.closeAll()
+    }
+
     /// A caller that was given no routing never runs an automatic statement
     /// on the session's own connection of an engine that has the contract.
     @Test func withoutRoutingAnEngineWithTheContractGetsTheCard() async {

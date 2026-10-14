@@ -20,6 +20,7 @@ public enum ReadOnlyUnavailableReason: Sendable, Equatable {
     public static let notSetUpDetail = "no read-only connection is set up for this session"
     public static let sessionClosedDetail = "the session is closed"
     public static let cancelledDetail = "cancelled"
+    public static let openTimedOutDetail = "no answer within 15 seconds"
 }
 
 /// Where a statement that runs without its own approval card goes.
@@ -76,9 +77,9 @@ public struct ReadOnlyRouter {
         }
         do {
             let lease = try await connections.lease(for: session)
-            // The pool hands the lease out even to a caller cancelled while
-            // it waited, and a lease nobody finishes keeps the connection
-            // open for good.
+            // A cancel that lands as the open completes still gets the
+            // lease, and a lease nobody finishes keeps the connection open
+            // for good.
             guard !Task.isCancelled else {
                 await lease.finish(failed: false)
                 return .unavailable(.connectionFailed(ReadOnlyUnavailableReason.cancelledDetail))
@@ -87,8 +88,12 @@ public struct ReadOnlyRouter {
         } catch let unavailable as ReadOnlyConnectionUnavailable {
             return .unavailable(.connectionFailed(unavailable.reason))
         } catch {
-            // Only a session that closed makes the pool throw anything else.
-            return .unavailable(.connectionFailed(ReadOnlyUnavailableReason.sessionClosedDetail))
+            // The pool throws nothing else but a cancel: this caller's, or
+            // that of a session that closed.
+            let detail = Task.isCancelled
+                ? ReadOnlyUnavailableReason.cancelledDetail
+                : ReadOnlyUnavailableReason.sessionClosedDetail
+            return .unavailable(.connectionFailed(detail))
         }
     }
 }

@@ -634,18 +634,24 @@ public final class QueryToolExecutor: AIToolExecutor {
         // Built here from a quoted table name and a LIMIT, so no model text
         // reaches it: it runs without a card, on the read-only connection
         // when it can and otherwise on the session's own connection.
+        let startTime = Date()
+        let maxDuration = executionDeadlineSeconds
+        func remaining() -> TimeInterval? {
+            maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
+        }
         do {
-            if case .readOnly(let readOnly) = await route(for: session) {
+            let route = try await route(for: session, within: maxDuration, deadline: maxDuration ?? 110)
+            if case .readOnly(let readOnly) = route {
                 do {
                     return .ok(Self.json(try await drainReadOnly(
-                        sql, on: readOnly, lease: lease, timeoutOverrideSeconds: executionDeadlineSeconds
+                        sql, on: readOnly, lease: lease, timeoutOverrideSeconds: remaining()
                     )))
                 } catch DriverError.readOnlyUnavailable {
                     // The read-only mode did not start, so the statement did
                     // not run; it runs on the session's own connection below.
                 }
             }
-            return .ok(Self.json(try await drainSample(sql, lease: lease, timeoutOverrideSeconds: executionDeadlineSeconds)))
+            return .ok(Self.json(try await drainSample(sql, lease: lease, timeoutOverrideSeconds: remaining())))
         }
         catch is CancellationError { return .denied }
         catch {
@@ -1300,7 +1306,7 @@ public final class QueryToolExecutor: AIToolExecutor {
             )
         }
         let reason: ReadOnlyUnavailableReason
-        switch await route(for: session) {
+        switch try await route(for: session, within: remaining(), deadline: maxDuration ?? 110) {
         case .notSupported:
             return try await drainSample(sql, lease: lease, timeoutOverrideSeconds: remaining())
         case .readOnly(let readOnly):
@@ -1328,6 +1334,72 @@ public final class QueryToolExecutor: AIToolExecutor {
     private func route(for session: Session) async -> ReadOnlyRoute {
         guard let readOnlyRoute else { return ReadOnlyRoute.withoutConnections(for: session) }
         return await readOnlyRoute(session)
+    }
+
+    /// The route, waited for no longer than `seconds` and not past a Stop:
+    /// opening the read-only connection can take as long as the pool's open
+    /// bound, more than a tool call may have left, and a route may not
+    /// answer a cancel at all. Throws `DeadlineExceeded` (reporting
+    /// `deadline`) or `CancellationError`; the route goes on, and a lease it
+    /// hands out after that is given straight back.
+    private func route(
+        for session: Session, within seconds: TimeInterval?, deadline: TimeInterval
+    ) async throws -> ReadOnlyRoute {
+        let wait = RouteWait()
+        let routing = Task { @MainActor in
+            let route = await self.route(for: session)
+            guard !wait.answer(.success(route)), case .readOnly(let late) = route else { return }
+            await late.finish(failed: false)
+        }
+        var timer: Task<Void, Never>?
+        if let seconds {
+            timer = Task {
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
+                } catch {
+                    // Cancelled because the route answered first.
+                    return
+                }
+                if wait.answer(.failure(DeadlineExceeded(seconds: deadline))) { routing.cancel() }
+            }
+        }
+        defer { timer?.cancel() }
+        return try await withTaskCancellationHandler {
+            try await wait.value()
+        } onCancel: {
+            if wait.answer(.failure(CancellationError())) { routing.cancel() }
+        }
+    }
+
+    /// The first answer to one wait for a route: the route itself, the
+    /// deadline or a Stop. The losers keep running.
+    private final class RouteWait: @unchecked Sendable {
+        private let lock = NSLock()
+        private var outcome: Result<ReadOnlyRoute, any Error>?
+        private var waiter: CheckedContinuation<ReadOnlyRoute, any Error>?
+
+        /// False when another answer came first; a lease `result` holds is
+        /// then the caller's to give back.
+        func answer(_ result: Result<ReadOnlyRoute, any Error>) -> Bool {
+            let answered: (first: Bool, waiter: CheckedContinuation<ReadOnlyRoute, any Error>?) = lock.withLock {
+                guard outcome == nil else { return (false, nil) }
+                outcome = result
+                defer { waiter = nil }
+                return (true, waiter)
+            }
+            answered.waiter?.resume(with: result)
+            return answered.first
+        }
+
+        func value() async throws -> ReadOnlyRoute {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ReadOnlyRoute, any Error>) in
+                let ready: Result<ReadOnlyRoute, any Error>? = lock.withLock {
+                    if outcome == nil { waiter = continuation }
+                    return outcome
+                }
+                if let ready { continuation.resume(with: ready) }
+            }
+        }
     }
 
     /// Drains `sql` on the read-only connection and hands the connection
