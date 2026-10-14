@@ -18,6 +18,11 @@ import BerryDriverKit
 /// a user-defined function that writes, or a built-in missing from the list,
 /// still passes. Only a database-enforced read-only connection closes that
 /// gap; the deny list is defense in depth until one exists.
+///
+/// Some reads go to the card by design, each noted at the rule that sends
+/// it there: a column named after a listed keyword, a quoted name followed
+/// by `(`, a PostgreSQL named argument written with `:=`, and the few
+/// functions in a listed family that only read.
 enum ReadOnlyStatement {
     // MARK: - SQL
 
@@ -270,7 +275,10 @@ enum ReadOnlyStatement {
     }
 
     /// The `(` at `open` calls the word before it, or the last word of a
-    /// bracketed name before it. A quoted name could be any function.
+    /// bracketed name before it. A quoted name could be any function, so it
+    /// fails closed, which also sends a read to the card when the quoted
+    /// name is followed by a column-alias list rather than called:
+    /// `WITH "recent"(id) AS (...)` or `FROM generate_series(1, 3) AS "g"(n)`.
     private static func callsSideEffectFunction(_ tokens: [SQLToken], open: Int) -> Bool {
         guard open > 0 else { return false }
         var nameIndex = open - 1
