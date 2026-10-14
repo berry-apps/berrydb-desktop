@@ -341,7 +341,7 @@
 "Run" = "Run";
 "Run anyway" = "Run anyway";
 "Run All Safe" = "Run All Safe";
-"Run this and every other safe statement in this turn without asking again." = "Run this and every other safe statement in this turn without asking again.";
+"Run this and every other read-only statement in this turn without asking again. Other statements still need your approval." = "Run this and every other read-only statement in this turn without asking again. Other statements still need your approval.";
 "Ask the assistant…" = "Ask the assistant…";
 "File a bug report from this conversation." = "File a bug report from this conversation.";
 "Auto-run safe SELECTs" = "Auto-run safe SELECTs";

@@ -529,6 +529,10 @@ struct AIPanelView: View {
 
  // MARK: - Inline approval
 
+    /// The Run All Safe button's help, also its localization key. A static
+    /// so a test can hold it to the rule the button applies.
+    static let runAllSafeHelp = "Run this and every other read-only statement in this turn without asking again. Other statements still need your approval."
+
     private func approvalCard(_ approval: AIPanelController.PendingApproval) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(L("The assistant wants to run this SQL"), systemImage: "play.rectangle")
@@ -556,7 +560,7 @@ struct AIPanelView: View {
                     Button(L("Run All Safe")) {
                         controller.resolveApproval(true, trustRemainingSafeThisTurn: true)
                     }
-                    .help(L("Run this and every other safe statement in this turn without asking again."))
+                    .help(L(String.LocalizationValue(Self.runAllSafeHelp)))
                 }
                 Button(approval.isDangerous ? L("Run anyway") : L("Run")) {
                     controller.resolveApproval(true)
