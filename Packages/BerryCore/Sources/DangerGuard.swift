@@ -128,7 +128,7 @@ public enum DangerGuard {
             return firstDataModifyingIndex(in: upper, from: 1)
         case "EXPLAIN":
             guard let target = upper.indices.dropFirst().first(where: { explainTargets.contains(upper[$0]) }),
-                  upper[1..<target].contains(where: { $0 == "ANALYZE" || $0 == "ANALYSE" })
+                  upper[1..<target].contains(where: { analyzeSpellings.contains($0) })
             else { return nil }
             if upper[target] == "WITH" { return firstDataModifyingIndex(in: upper, from: target + 1) }
             return writeKeywords.contains(upper[target]) ? target : nil
@@ -141,11 +141,15 @@ public enum DangerGuard {
     /// they change no data.
     private static func firstDataModifyingIndex(in upper: [String], from start: Int) -> Int? {
         guard start < upper.count else { return nil }
-        return (start..<upper.count).first { index in
-            dataModifyingKeywords.contains(upper[index])
-                && !(upper[index] == "UPDATE" && ["FOR", "KEY"].contains(upper[index - 1]))
+        for index in start..<upper.count where dataModifyingKeywords.contains(upper[index]) {
+            let locksRows = upper[index] == "UPDATE" && lockingUpdatePrefixes.contains(upper[index - 1])
+            if !locksRows { return index }
         }
+        return nil
     }
+
+    private static let lockingUpdatePrefixes: Set<String> = ["FOR", "KEY"]
+    private static let analyzeSpellings: Set<String> = ["ANALYZE", "ANALYSE"]
 
     /// Object name for typed confirmation: the last identifier of the
     /// statement head, unqualified ("schema"."name" → name), original casing.

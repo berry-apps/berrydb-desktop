@@ -59,6 +59,8 @@ enum ReadOnlyStatement {
         "RECONFIGURE", "TRIGGER", "SEND", "RECEIVE", "CONVERSATION", "SIGNATURE",
     ]
 
+    private static let sharedLockWords: Set<String> = ["SHARE", "KEY"]
+
     static func isReadOnlySQL(_ sql: String, driver: DriverID?) -> Bool {
         guard let tokens = sqlTokens(sql), case .word(let lead)? = tokens.first,
               readLeads(for: driver).contains(lead)
@@ -74,7 +76,7 @@ enum ReadOnlyStatement {
             if word == "REPLACE", next == .punctuation("(") { continue }
             if disqualifyingKeywords.contains(word) { return false }
             // FOR SHARE / FOR KEY SHARE; FOR [NO KEY] UPDATE is caught by UPDATE.
-            if word == "FOR", next == .word("SHARE") || next == .word("KEY") { return false }
+            if word == "FOR", case .word(let following)? = next, sharedLockWords.contains(following) { return false }
         }
         return true
     }
@@ -136,8 +138,9 @@ enum ReadOnlyStatement {
                 if let follower = at(index + 2), !" \t\n\r".unicodeScalars.contains(follower) { return nil }
                 while index < scalars.count, scalars[index] != "\n" { index += 1 }
             case "/" where at(index + 1) == "*":
-                let marker = at(index + 2)
-                if marker == "!" || ((marker == "M" || marker == "m") && at(index + 3) == "!") { return nil }
+                let marker = at(index + 2).map { String($0) } ?? ""
+                if marker == "!" { return nil }
+                if marker.lowercased() == "m", at(index + 3) == "!" { return nil }
                 index += 2
                 while true {
                     guard index + 1 < scalars.count else { return nil }
@@ -163,10 +166,7 @@ enum ReadOnlyStatement {
                 tokens.append(.quoted)
             case "[":
                 guard let close = scalars[index...].firstIndex(of: "]"), at(close + 1) != "]" else { return nil }
-                let contents = scalars[(index + 1)..<close]
-                let opensQuoteOrComment = contents.contains { bracketBreakers.contains($0) }
-                    || zip(contents, contents.dropFirst()).contains { ($0 == "-" && $1 == "-") || ($0 == "/" && $1 == "*") }
-                if opensQuoteOrComment { return nil }
+                if bracketContentsCanQuoteOrComment(Array(scalars[(index + 1)..<close])) { return nil }
                 tokens.append(.punctuation(scalar))
                 index += 1
             case "@", ":":
@@ -176,10 +176,10 @@ enum ReadOnlyStatement {
             case "#", "$", "\\":
                 return nil
             case "0"..."9":
-                while index < scalars.count, ("0"..."9").contains(scalars[index]) { index += 1 }
+                while index < scalars.count, isASCIIDigit(scalars[index]) { index += 1 }
                 tokens.append(.number)
             default:
-                if isWordCharacter(scalar), !("0"..."9").contains(scalar) {
+                if isWordCharacter(scalar), !isASCIIDigit(scalar) {
                     let start = index
                     while index < scalars.count, isWordCharacter(scalars[index]) || scalars[index] == "$" {
                         index += 1
@@ -198,11 +198,28 @@ enum ReadOnlyStatement {
 
     private static let bracketBreakers: Set<Unicode.Scalar> = ["'", "\"", "`", "[", "#", "$", "\\", ";"]
 
+    private static func bracketContentsCanQuoteOrComment(_ contents: [Unicode.Scalar]) -> Bool {
+        var previous: Unicode.Scalar = " "
+        for scalar in contents {
+            if bracketBreakers.contains(scalar) { return true }
+            let pair = String(String.UnicodeScalarView([previous, scalar]))
+            if pair == "--" || pair == "/*" { return true }
+            previous = scalar
+        }
+        return false
+    }
+
+    private static func isASCIIDigit(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.value >= 0x30 && scalar.value <= 0x39
+    }
+
     /// ASCII letters, digits and `_`, and non-ASCII letters, marks and digits.
     private static func isWordCharacter(_ scalar: Unicode.Scalar) -> Bool {
         if scalar.isASCII {
-            return ("a"..."z").contains(scalar) || ("A"..."Z").contains(scalar)
-                || ("0"..."9").contains(scalar) || scalar == "_"
+            switch scalar.value {
+            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x5F: return true
+            default: return false
+            }
         }
         switch scalar.properties.generalCategory {
         case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter,
@@ -308,8 +325,7 @@ enum ReadOnlyStatement {
                 let value = String(characters[(index + 1)..<close])
                 // A control character could end a NUL-terminated BSON key
                 // early and turn it into a stage name.
-                guard !value.unicodeScalars.contains(where: { $0 == "\\" || $0.value < 0x20 || $0.value == 0x7F })
-                else { return nil }
+                guard !value.unicodeScalars.contains(where: { isEscapeOrControl($0) }) else { return nil }
                 tokens.append(.string(value))
                 index = close + 1
             case "(", ")", "{", "}", "[", "]", ",", ":", ".", ";":
@@ -324,13 +340,9 @@ enum ReadOnlyStatement {
                     }
                     guard Double(String(characters[start..<index])) != nil else { return nil }
                     tokens.append(.number)
-                } else if character == "_" || character == "$" || character.isLetter {
+                } else if isMongoIdentifierCharacter(character), !character.isNumber {
                     index += 1
-                    while index < characters.count,
-                          characters[index].isLetter || characters[index].isNumber
-                          || characters[index] == "_" || characters[index] == "$" {
-                        index += 1
-                    }
+                    while index < characters.count, isMongoIdentifierCharacter(characters[index]) { index += 1 }
                     tokens.append(.word(String(characters[start..<index])))
                 } else {
                     return nil
@@ -338,6 +350,18 @@ enum ReadOnlyStatement {
             }
         }
         return tokens
+    }
+
+    /// What the shell lexer reads as part of an identifier: letters,
+    /// numbers, `_` and `$`.
+    private static func isMongoIdentifierCharacter(_ character: Character) -> Bool {
+        if character.isLetter || character.isNumber { return true }
+        return character == "_" || character == "$"
+    }
+
+    private static func isEscapeOrControl(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar == "\\" { return true }
+        return scalar.value < 0x20 || scalar.value == 0x7F
     }
 
     private static func mongoClosingIndex(_ tokens: [MongoToken], open: Int) -> Int? {
