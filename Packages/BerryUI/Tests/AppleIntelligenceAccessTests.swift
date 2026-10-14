@@ -102,22 +102,37 @@ struct AppleIntelligenceAccessTests {
         return try await ConnectionManager().open(.sqlite(path: path))
     }
 
+    private func makeLicense() -> LicenseManager {
+        LicenseManager(client: LicenseClient(baseURL: URL(string: "https://example.invalid")!))
+    }
+
     /// A controller bound to a real (but license-less) connection, with
-    /// consent already given — the only way `availability` can still reach
-    /// `.ready` from here is the Apple Intelligence bypass, since
-    /// `license.status` stays `.none` throughout (no network call is ever
-    /// made in this suite).
-    private func makeBoundController() async throws -> AIPanelController {
-        let client = LicenseClient(baseURL: URL(string: "https://example.invalid")!)
-        let license = LicenseManager(client: client)
+    /// consent given unless `consent` is false — the only way `availability`
+    /// can still reach `.ready` from here is the Apple Intelligence bypass,
+    /// since `license.status` stays `.none` throughout (no request ever
+    /// succeeds against `example.invalid`). The on-device model counts as
+    /// available, so these tests run the same on a Mac without Apple
+    /// Intelligence, which includes the CI runners.
+    private func makeBoundController(
+        license: LicenseManager? = nil, consent: Bool = true
+    ) async throws -> AIPanelController {
         let controller = AIPanelController(
-            license: license, backendURL: URL(string: "https://example.invalid")!,
+            license: license ?? makeLicense(), backendURL: URL(string: "https://example.invalid")!,
             store: try BerryStore(path: ":memory:")
         )
+        controller.onDeviceModelAvailable = { true }
         let session = try await makeSQLiteSession()
         controller.bind(session: session, catalog: nil, objects: [], profileID: nil)
-        controller.giveConsentAndEnable()
+        if consent { controller.giveConsentAndEnable() }
         return controller
+    }
+
+    /// Runs `body` with the on-device toggle set to `on`, then restores it.
+    private func withOnDeviceToggle(_ on: Bool, _ body: () async throws -> Void) async rethrows {
+        let previous = UserDefaults.standard.bool(forKey: "berry.ai.onDevice")
+        UserDefaults.standard.set(on, forKey: "berry.ai.onDevice")
+        defer { UserDefaults.standard.set(previous, forKey: "berry.ai.onDevice") }
+        try await body()
     }
 
     @Test func withNoGrantSendingStaysBlocked() async throws {
@@ -145,88 +160,52 @@ struct AppleIntelligenceAccessTests {
         }
     }
 
-    /// Reported live, three times over as each fix uncovered the next:
-    /// first that the toggle had no effect on sending; then that gating
-    /// `availability` on it locked the user out of the very menu that
-    /// controls it; then that once the panel stayed reachable, sending
-    /// with the toggle off returned `nil` from `prepareSend()` — the
-    /// message vanished with no bubble and no error at all. Nothing should
-    /// ever disappear silently: this must show the user's own bubble like
-    /// any other send.
+    /// Sending with the on-device toggle off once returned `nil` from
+    /// `prepareSend()`, and the message vanished with no bubble and no error.
+    /// It must show like any other send, with a reply that says why it went
+    /// nowhere.
     ///
-    /// A later clarifying answer added a fourth layer: toggling off must
-    /// not just show a static "no trial" message — it must attempt a real
-    /// trial for the grant's own email first (`.backendAfterTrial`) and
-    /// only fall back to an explanation if that attempt itself fails. This
-    /// test pins the synchronous half (`prepareSend()` routes to
-    /// `.backendAfterTrial`, bubble appears immediately); the async
-    /// attempt-then-fail half is `toggleOffFailsTheBubbleWhenTheTrialAttemptCannotReachTheServer` below.
-    @Test func togglingOnDeviceOffBlocksSendingButStillShowsTheBubble() async throws {
+    /// It must not start a trial either. The grant's email was captured for
+    /// on-device access and is documented as never leaving the Mac; using it
+    /// to start a cloud trial posted it to the license server on an ordinary
+    /// send that never mentioned a trial. A trial starts only from the
+    /// License sheet's trial button.
+    @Test func togglingOnDeviceOffBlocksSendingWithoutStartingATrial() async throws {
         try await withCleanGrant {
-            guard AppleFoundationProvider.isAvailable() else { return }
             AppleIntelligenceAccess.grant(email: "dev@example.com")
-            let previousToggle = UserDefaults.standard.bool(forKey: "berry.ai.onDevice")
-            UserDefaults.standard.set(false, forKey: "berry.ai.onDevice")
-            defer { UserDefaults.standard.set(previousToggle, forKey: "berry.ai.onDevice") }
+            try await withOnDeviceToggle(false) {
+                let license = makeLicense()
+                let controller = try await makeBoundController(license: license)
+                #expect(controller.availability == .ready, "the panel/settings menu must stay reachable so the toggle can be turned back on")
+                controller.draft = "hello"
+                let prepared = try #require(controller.prepareSend(), "must not silently discard the message")
+                guard case .handled = prepared else {
+                    Issue.record("expected .handled (shown, sent nowhere), got \(prepared)")
+                    return
+                }
+                await controller.send(prepared)
 
-            let controller = try await makeBoundController()
-            #expect(controller.availability == .ready, "the panel/settings menu must stay reachable so the toggle can be turned back on")
-            controller.draft = "hello"
-            let prepared = try #require(controller.prepareSend(), "must not silently discard the message")
-            guard case let .backendAfterTrial(_, email) = prepared else {
-                Issue.record("expected .backendAfterTrial (try a real trial before giving up), got \(prepared)")
-                return
+                #expect(controller.transcript.count == 2, "the user's message and a reply must both appear")
+                #expect(controller.transcript.first?.text == "hello")
+                #expect(controller.transcript.last?.text == L("On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on above, or add a trial, license, or credit in License settings to use cloud AI instead."))
+                #expect(license.lastError == nil, "no trial request may have been attempted")
+                #expect(license.status == .none)
             }
-            #expect(email == "dev@example.com")
-            #expect(controller.transcript.count == 2, "the user's message and a placeholder reply must both appear")
-            #expect(controller.transcript.first?.text == "hello")
-        }
-    }
-
-    /// Full async half of the test above: `example.invalid` never resolves,
-    /// so `license.startTrial` fails deterministically and `send(_:)` must
-    /// fail the already-shown assistant turn in place with an explanation —
-    /// never a permanent spinner, never a fall-through to the backend with
-    /// no valid token.
-    @Test func toggleOffFailsTheBubbleWhenTheTrialAttemptCannotReachTheServer() async throws {
-        try await withCleanGrant {
-            guard AppleFoundationProvider.isAvailable() else { return }
-            AppleIntelligenceAccess.grant(email: "dev@example.com")
-            let previousToggle = UserDefaults.standard.bool(forKey: "berry.ai.onDevice")
-            UserDefaults.standard.set(false, forKey: "berry.ai.onDevice")
-            defer { UserDefaults.standard.set(previousToggle, forKey: "berry.ai.onDevice") }
-
-            let controller = try await makeBoundController()
-            controller.draft = "hello"
-            let prepared = try #require(controller.prepareSend())
-            guard case .backendAfterTrial = prepared else {
-                Issue.record("expected .backendAfterTrial, got \(prepared)")
-                return
-            }
-            await controller.send(prepared)
-            #expect(controller.isStreaming == false)
-            #expect(controller.transcript.count == 2)
-            #expect(controller.transcript.first?.text == "hello")
-            // Must be the specific, actionable message mapped from the
-            // backend's stable error code (LicenseSupport.licenseErrorMessage
-            // — same mapping LicenseView already uses), not a generic
-            // catch-all that would bury e.g. "this device already used its
-            // trial with a different account" behind "check your connection".
-            #expect(controller.transcript.last?.text == licenseErrorMessage("transport"))
         }
     }
 
     @Test func reenablingTheToggleRestoresSending() async throws {
         try await withCleanGrant {
-            guard AppleFoundationProvider.isAvailable() else { return }
             AppleIntelligenceAccess.grant(email: "dev@example.com")
+            let previousToggle = UserDefaults.standard.bool(forKey: "berry.ai.onDevice")
             UserDefaults.standard.set(false, forKey: "berry.ai.onDevice")
+            defer { UserDefaults.standard.set(previousToggle, forKey: "berry.ai.onDevice") }
             let controller = try await makeBoundController()
             #expect(controller.availability == .ready)
             controller.draft = "hello"
             let blocked = try #require(controller.prepareSend())
-            guard case .backendAfterTrial = blocked else {
-                Issue.record("expected .backendAfterTrial while the toggle is off, got \(blocked)")
+            guard case .handled = blocked else {
+                Issue.record("expected .handled while the toggle is off, got \(blocked)")
                 return
             }
 

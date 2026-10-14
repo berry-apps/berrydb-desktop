@@ -477,15 +477,6 @@ public final class AISession {
     /// ad-hoc pending fields and makes retry behavior atomic.
     private var activeInteraction: ActiveInteraction?
 
-    /// Whether `admitSend` would run a message immediately (true) or queue
-    /// it (false) — the same condition its own guards check, exposed so a
- /// caller can decide whether a precondition (starting a real
-    /// trial before running the turn) is safe to attempt without leaving a
-    /// queued message orphaned if that precondition then fails.
-    public var canRunImmediately: Bool {
-        activeInteraction == nil && pendingReportDraft == nil && !isStreaming
-    }
-
     public var pendingReport: PendingReport? {
         guard case let .report(report) = activeInteraction?.payload else {
             return nil
@@ -801,20 +792,6 @@ public final class AISession {
         guard !trimmed.isEmpty else { return }
         transcript.append(AITurn(role: .user, text: trimmed))
         transcript.append(AITurn(role: .assistant, text: reason))
-    }
-
-    /// Fails a turn `admitSend` already began (assistant bubble already on
-    /// the transcript, `isStreaming` already true) before any network call
- /// happened — for a precondition that turned out not to hold
-    /// an auto-trial-start attempt that failed before `runTurn` ever ran).
-    /// `assistantTurnID` guards against a stale call landing on a
-    /// different turn that has since taken the same index.
-    public func failActiveTurn(assistantIndex: Int, assistantTurnID: UUID, reason: String) {
-        isStreaming = false
-        defer { drainQueuedMessageIfReady() }
-        guard transcript.indices.contains(assistantIndex),
-              transcript[assistantIndex].id == assistantTurnID else { return }
-        transcript[assistantIndex].text = reason
     }
 
     /// Runs the async continuation for an admission already decided by

@@ -3030,55 +3030,6 @@ private final class VersionedSkillRanker: SkillRanking {
     #expect(session.transcript.isEmpty)
 }
 
-/// lets `AIPanelController` check, before committing to a
-/// send, whether `admitSend` would run immediately or queue — needed
-/// because an auto-trial attempt (starting a real trial before actually
-/// running the turn) must not be interleaved with a message that's about
-/// to queue instead of run, which would leave the queued message
-/// orphaned if the trial attempt then failed.
-@MainActor
-@Test func canRunImmediatelyReflectsWhetherATurnIsAlreadyActive() async {
-    let session = AISession(
-        transport: MockTransport(before: [.delta("hi"), .complete(totalTokens: 1)], after: []),
-        executor: SchemaExecutor(outcome: .ok("{}")),
-        dialect: "postgres", schemaDigest: "abc", store: makeStore()
-    )
-    #expect(session.canRunImmediately)
-
-    let task = Task { await session.send("first") }
-    while !session.isStreaming { await Task.yield() }
-    #expect(!session.canRunImmediately)
-
-    await task.value
-    #expect(session.canRunImmediately)
-}
-
-@MainActor
-@Test func failActiveTurnFillsInTheReasonAndDrainsTheQueue() async {
-    let session = AISession(
-        transport: MockTransport(before: [], after: []),
-        executor: SchemaExecutor(outcome: .ok("{}")),
-        dialect: "postgres", schemaDigest: "abc", store: makeStore()
-    )
-    guard case let .run(_, assistantIndex, assistantTurnID) = session.admitSend("hello") else {
-        Issue.record("expected .run for an immediate send")
-        return
-    }
-    // A message queued behind the active turn must still surface once
-    // the turn ends — same as any other way a turn can end.
-    _ = session.admitSend("queued one") // .queued, since the first turn is "active" (isStreaming true)
-
-    session.failActiveTurn(assistantIndex: assistantIndex, assistantTurnID: assistantTurnID, reason: "couldn't start trial")
-
-    #expect(session.transcript[assistantIndex].text == "couldn't start trial")
-    // The queued message auto-drains immediately (synchronously, inside
-    // failActiveTurn's own defer) — isStreaming can already be true again
-    // for ITS turn by the time failActiveTurn returns, same as runTurn's
-    // own defer. Wait for that drained turn to actually finish too.
-    while session.isStreaming { await Task.yield() }
-    #expect(session.transcript.contains { $0.text == "queued one" })
-}
-
 /// Pausable on-device provider — mirrors `PausableExecutor` above, but for
 /// `LocalCompletionProvider.stream(prompt:)` instead of a tool executor, so
 /// a test can hold a local turn open exactly like `PausableExecutor` holds
