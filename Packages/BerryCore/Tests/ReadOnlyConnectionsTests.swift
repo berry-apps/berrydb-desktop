@@ -225,6 +225,21 @@ struct ReadOnlyConnectionsTests {
         }
     }
 
+    /// Closing the pool, as closing a window or quitting does, stops every
+    /// later open, for sessions it never opened a connection for too.
+    @Test func aClosedPoolNeverOpensAgain() async throws {
+        let script = ROScript()
+        let session = await Self.session(script: script)
+        let pool = Self.pool()
+        await pool.closeAll()
+
+        await #expect(throws: CancellationError.self) { _ = try await pool.lease(for: session) }
+
+        #expect(await script.connects == 0)
+        #expect(await pool.cachedSessionCount == 0)
+        await pool.closeAll()
+    }
+
     @Test func closingWhileConnectingClosesTheConnectionOnceItExists() async throws {
         let gate = ROGate()
         let script = ROScript(gate: gate)

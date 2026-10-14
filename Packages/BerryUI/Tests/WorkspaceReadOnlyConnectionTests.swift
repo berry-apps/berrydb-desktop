@@ -147,6 +147,26 @@ struct WorkspaceReadOnlyConnectionTests {
         #expect(await viewModel.readOnlyConnections.cachedSessionCount == 0)
     }
 
+    /// The session outlives its window, and an assistant turn still running
+    /// can ask for the read-only connection after the window closed. None
+    /// opens: nothing would close it at quit, since a closed workspace is no
+    /// longer among those the quit path closes.
+    @Test func closingTheWindowStopsLaterOpens() async throws {
+        defer { store.remove() }
+        let (viewModel, session) = try await openWorkspace()
+
+        viewModel.closeWorkspace()
+        await viewModel.closingGraphWork?.value
+        let route = await viewModel.readOnlyRoute(for: session)
+
+        if case .readOnly(let lease) = route {
+            Issue.record("a closed workspace opened a read-only connection")
+            await lease.finish(failed: false)
+            await viewModel.readOnlyConnections.closeAll()
+        }
+        #expect(await viewModel.readOnlyConnections.cachedSessionCount == 0)
+    }
+
     // MARK: What the session's own connection held
 
     @Test func disconnectingForgetsWhatTheSessionHeld() async throws {

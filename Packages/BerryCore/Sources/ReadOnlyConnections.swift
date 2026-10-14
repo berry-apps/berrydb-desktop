@@ -131,6 +131,8 @@ public actor ReadOnlyConnections {
     /// Sessions closed most recently, oldest first; see
     /// `MetadataConnections` for why only the last few are kept.
     private var closed: [UUID] = []
+    /// Set by `closeAll()`: the pool opens nothing after it, for any session.
+    private var isShutDown = false
     private let driverType: @Sendable (DriverID) -> (any DatabaseDriver.Type)?
     private let clock: ReadOnlyClock
 
@@ -154,13 +156,14 @@ public actor ReadOnlyConnections {
 
     /// The session's read-only connection for one statement, opened and set
     /// up on first use. Throws `CancellationError` for a session that was
-    /// closed, before or while its connection opened, and to a caller
+    /// closed, or a pool closed with `closeAll()`, before or while its
+    /// connection opened, and to a caller
     /// cancelled while it waits; and `ReadOnlyConnectionUnavailable` when the
     /// open or the setup failed or took longer than `openTimeout`, to every
     /// caller that waited on it.
     public func lease(for session: Session) async throws -> ReadOnlyLease {
         while true {
-            guard !closed.contains(session.id) else { throw CancellationError() }
+            guard !isShutDown, !closed.contains(session.id) else { throw CancellationError() }
             if let failure = failures[session.id] {
                 guard clock.now() >= failure.until else {
                     throw ReadOnlyConnectionUnavailable(reason: failure.reason)
@@ -190,7 +193,7 @@ public actor ReadOnlyConnections {
                 throw error
             }
             leasesWaiting -= 1
-            guard !closed.contains(session.id) else { throw CancellationError() }
+            guard !isShutDown, !closed.contains(session.id) else { throw CancellationError() }
             switch opened {
             case .failure(let error):
                 throw ReadOnlyConnectionUnavailable(reason: failedToOpen(slotID, sessionID: session.id, error: error))
@@ -219,7 +222,11 @@ public actor ReadOnlyConnections {
         await retire(slotID)
     }
 
+    /// Closes every connection, as `close(sessionID:)` does, and opens none
+    /// afterwards, for any session: the workspace that owns the pool is
+    /// closing, and nothing would close a connection opened after this.
     public func closeAll() async {
+        isShutDown = true
         for sessionID in current.keys { remember(closed: sessionID) }
         let slotIDs = Array(current.values)
         current.removeAll()

@@ -562,9 +562,11 @@ public final class WorkspaceViewModel {
     /// and read-only connections close, and the full graph it cached is
     /// dropped whatever the graph views reported. The session itself is left
     /// open; what the tracker recorded of its connection is forgotten, since
-    /// the read-only connection, the one thing that reads it, never opens
-    /// for the session again. Nothing else stops them, because the view
-    /// model is not released with its window (see `WindowCloseObserver`).
+    /// the tracker only decides whether a statement may go to a read-only
+    /// connection, and once closed the pool opens none again, for any
+    /// session, so a turn still running gets the card. Nothing else stops
+    /// them, because the view model is not released with its window (see
+    /// `WindowCloseObserver`).
     public func closeWorkspace() {
         guard !isClosed else { return }
         isClosed = true
