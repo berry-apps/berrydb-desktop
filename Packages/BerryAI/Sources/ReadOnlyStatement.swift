@@ -114,100 +114,178 @@ enum ReadOnlyStatement {
     /// A number is split from letters that follow it, so `1DELETE` still
     /// exposes the keyword.
     private static func sqlTokens(_ sql: String) -> [SQLToken]? {
-        let scalars = Array(sql.unicodeScalars)
-        func at(_ index: Int) -> Unicode.Scalar? { index < scalars.count ? scalars[index] : nil }
+        var lexer = SQLLexer(sql)
+        return lexer.tokens()
+    }
 
-        for (index, scalar) in scalars.enumerated() {
-            switch scalar.value {
-            case 0x09, 0x0A: continue
-            case 0x0D where at(index + 1) == "\n": continue
-            case 0x00...0x1F, 0x7F, 0x85, 0x2028, 0x2029: return nil
-            default: continue
-            }
-        }
+    /// Scalars visited while lexing `sql`. Classification runs on the main
+    /// actor before any query timeout applies, so tests hold this linear in
+    /// the length of the text.
+    static func sqlLexingSteps(_ sql: String) -> Int {
+        var lexer = SQLLexer(sql)
+        _ = lexer.tokens()
+        return lexer.steps
+    }
 
-        var tokens: [SQLToken] = []
+    private struct SQLLexer {
+        let scalars: [Unicode.Scalar]
         var index = 0
-        while index < scalars.count {
-            let scalar = scalars[index]
-            switch scalar {
-            case " ", "\t", "\n", "\r":
-                index += 1
-            case "-" where at(index + 1) == "-":
-                // MySQL needs whitespace or a control character after `--`.
-                if let follower = at(index + 2), !" \t\n\r".unicodeScalars.contains(follower) { return nil }
-                while index < scalars.count, scalars[index] != "\n" { index += 1 }
-            case "/" where at(index + 1) == "*":
-                let marker = at(index + 2).map { String($0) } ?? ""
-                if marker == "!" { return nil }
-                if marker.lowercased() == "m", at(index + 3) == "!" { return nil }
-                index += 2
-                while true {
-                    guard index + 1 < scalars.count else { return nil }
-                    if scalars[index] == "/", scalars[index + 1] == "*" { return nil }
-                    if scalars[index] == "*", scalars[index + 1] == "/" { break }
-                    index += 1
+        var steps = 0
+        /// Whether SQLite's parameter scan reaches a `(` from each position
+        /// with no name characters read yet; see `computeParameterSuffixes`.
+        var suffixAfterEmptyName: [Bool]?
+
+        init(_ sql: String) { scalars = Array(sql.unicodeScalars) }
+
+        func at(_ position: Int) -> Unicode.Scalar? { position < scalars.count ? scalars[position] : nil }
+
+        mutating func tokens() -> [SQLToken]? {
+            for (position, scalar) in scalars.enumerated() {
+                steps += 1
+                switch scalar.value {
+                case 0x09, 0x0A: continue
+                case 0x0D where at(position + 1) == "\n": continue
+                case 0x00...0x1F, 0x7F, 0x85, 0x2028, 0x2029: return nil
+                default: continue
                 }
-                index += 2
-            case "'", "\"", "`":
-                index += 1
-                while true {
-                    guard index < scalars.count, scalars[index] != "\\" else { return nil }
-                    if scalars[index] == scalar {
-                        if at(index + 1) == scalar {
-                            index += 2
-                            continue
-                        }
-                        break
-                    }
+            }
+
+            var tokens: [SQLToken] = []
+            while index < scalars.count {
+                steps += 1
+                let scalar = scalars[index]
+                switch scalar {
+                case " ", "\t", "\n", "\r":
                     index += 1
-                }
-                index += 1
-                tokens.append(.quoted)
-            case "[":
-                guard let close = scalars[index...].firstIndex(of: "]"), at(close + 1) != "]" else { return nil }
-                if bracketContentsCanQuoteOrComment(Array(scalars[(index + 1)..<close])) { return nil }
-                tokens.append(.punctuation(scalar))
-                index += 1
-            case "@", ":":
-                if opensSQLiteParameterSuffix(scalars, at: index) { return nil }
-                tokens.append(.punctuation(scalar))
-                index += 1
-            case "#", "$", "\\":
-                return nil
-            case "0"..."9":
-                while index < scalars.count, isASCIIDigit(scalars[index]) { index += 1 }
-                tokens.append(.number)
-            default:
-                if isWordCharacter(scalar), !isASCIIDigit(scalar) {
-                    let start = index
-                    while index < scalars.count, isWordCharacter(scalars[index]) || scalars[index] == "$" {
+                case "-" where at(index + 1) == "-":
+                    // MySQL needs whitespace or a control character after `--`.
+                    if let follower = at(index + 2), !" \t\n\r".unicodeScalars.contains(follower) { return nil }
+                    while index < scalars.count, scalars[index] != "\n" {
+                        steps += 1
                         index += 1
                     }
-                    tokens.append(.word(String(String.UnicodeScalarView(scalars[start..<index])).uppercased()))
-                } else if scalar.isASCII {
+                case "/" where at(index + 1) == "*":
+                    let marker = at(index + 2).map { String($0) } ?? ""
+                    if marker == "!" { return nil }
+                    if marker.lowercased() == "m", at(index + 3) == "!" { return nil }
+                    index += 2
+                    while true {
+                        steps += 1
+                        guard index + 1 < scalars.count else { return nil }
+                        if scalars[index] == "/", scalars[index + 1] == "*" { return nil }
+                        if scalars[index] == "*", scalars[index + 1] == "/" { break }
+                        index += 1
+                    }
+                    index += 2
+                case "'", "\"", "`":
+                    index += 1
+                    while true {
+                        steps += 1
+                        guard index < scalars.count, scalars[index] != "\\" else { return nil }
+                        if scalars[index] == scalar {
+                            if at(index + 1) == scalar {
+                                index += 2
+                                continue
+                            }
+                            break
+                        }
+                        index += 1
+                    }
+                    index += 1
+                    tokens.append(.quoted)
+                case "[":
+                    guard bracketIsUnambiguous(from: index) else { return nil }
                     tokens.append(.punctuation(scalar))
                     index += 1
-                } else {
+                case "@", ":":
+                    if opensSQLiteParameterSuffix(at: index) { return nil }
+                    tokens.append(.punctuation(scalar))
+                    index += 1
+                case "#", "$", "\\":
                     return nil
+                case "0"..."9":
+                    while index < scalars.count, ReadOnlyStatement.isASCIIDigit(scalars[index]) {
+                        steps += 1
+                        index += 1
+                    }
+                    tokens.append(.number)
+                default:
+                    if ReadOnlyStatement.isWordCharacter(scalar), !ReadOnlyStatement.isASCIIDigit(scalar) {
+                        let start = index
+                        while index < scalars.count, isWordContinuation(scalars[index]) {
+                            steps += 1
+                            index += 1
+                        }
+                        tokens.append(.word(String(String.UnicodeScalarView(scalars[start..<index])).uppercased()))
+                    } else if scalar.isASCII {
+                        tokens.append(.punctuation(scalar))
+                        index += 1
+                    } else {
+                        return nil
+                    }
                 }
             }
+            return tokens
         }
-        return tokens
+
+        func isWordContinuation(_ scalar: Unicode.Scalar) -> Bool {
+            scalar == "$" || ReadOnlyStatement.isWordCharacter(scalar)
+        }
+
+        /// True when the `[` at `open` closes before anything inside it could
+        /// open a quote or a comment, and not with SQL Server's `]]` escape.
+        mutating func bracketIsUnambiguous(from open: Int) -> Bool {
+            var position = open + 1
+            var previous: Unicode.Scalar = " "
+            while position < scalars.count {
+                steps += 1
+                let scalar = scalars[position]
+                if scalar == "]" { return at(position + 1) != "]" }
+                if ReadOnlyStatement.bracketBreakers.contains(scalar) { return false }
+                if previous == "-", scalar == "-" { return false }
+                if previous == "/", scalar == "*" { return false }
+                previous = scalar
+                position += 1
+            }
+            return false
+        }
+
+        /// Mirrors SQLite's tokenizer for `@`/`:` parameters: a name of
+        /// identifier characters (any non-ASCII byte among them, `::` allowed
+        /// inside) followed directly by `(`.
+        mutating func opensSQLiteParameterSuffix(at start: Int) -> Bool {
+            if suffixAfterEmptyName == nil { computeParameterSuffixes() }
+            return suffixAfterEmptyName?[start + 1] ?? true
+        }
+
+        /// Fills the scan's outcome for every position in one pass from the
+        /// end, with no name characters read yet and with some. Scanning
+        /// forward from every `:` instead revisits the whole rest of a
+        /// `x::a::a…` cast chain once per colon.
+        mutating func computeParameterSuffixes() {
+            let count = scalars.count
+            var afterEmptyName = [Bool](repeating: false, count: count + 2)
+            var afterName = [Bool](repeating: false, count: count + 2)
+            var position = count - 1
+            while position >= 0 {
+                steps += 1
+                let scalar = scalars[position]
+                if !scalar.isASCII || isWordContinuation(scalar) {
+                    afterEmptyName[position] = afterName[position + 1]
+                    afterName[position] = afterName[position + 1]
+                } else if scalar == "(" {
+                    afterName[position] = true
+                } else if scalar == ":", at(position + 1) == ":" {
+                    afterEmptyName[position] = afterEmptyName[position + 2]
+                    afterName[position] = afterName[position + 2]
+                }
+                position -= 1
+            }
+            suffixAfterEmptyName = afterEmptyName
+        }
     }
 
     private static let bracketBreakers: Set<Unicode.Scalar> = ["'", "\"", "`", "[", "#", "$", "\\", ";"]
-
-    private static func bracketContentsCanQuoteOrComment(_ contents: [Unicode.Scalar]) -> Bool {
-        var previous: Unicode.Scalar = " "
-        for scalar in contents {
-            if bracketBreakers.contains(scalar) { return true }
-            let pair = String(String.UnicodeScalarView([previous, scalar]))
-            if pair == "--" || pair == "/*" { return true }
-            previous = scalar
-        }
-        return false
-    }
 
     private static func isASCIIDigit(_ scalar: Unicode.Scalar) -> Bool {
         scalar.value >= 0x30 && scalar.value <= 0x39
@@ -229,28 +307,6 @@ enum ReadOnlyStatement {
         default:
             return false
         }
-    }
-
-    /// Mirrors SQLite's tokenizer for `@`/`:` parameters: a name of
-    /// identifier characters (any non-ASCII byte among them, `::` allowed
-    /// inside) followed directly by `(`.
-    private static func opensSQLiteParameterSuffix(_ scalars: [Unicode.Scalar], at start: Int) -> Bool {
-        var index = start + 1
-        var nameLength = 0
-        while index < scalars.count {
-            let scalar = scalars[index]
-            if !scalar.isASCII || isWordCharacter(scalar) || scalar == "$" {
-                nameLength += 1
-                index += 1
-            } else if scalar == "(" {
-                return nameLength > 0
-            } else if scalar == ":", index + 1 < scalars.count, scalars[index + 1] == ":" {
-                index += 2
-            } else {
-                return false
-            }
-        }
-        return false
     }
 
     // MARK: - Mongo shell

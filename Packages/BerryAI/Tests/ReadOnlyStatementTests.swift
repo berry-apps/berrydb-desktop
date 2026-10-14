@@ -140,6 +140,24 @@ struct ReadOnlyStatementTests {
         #expect(Self.sql("SELECT @@VERSION", driver: .sqlserver))
     }
 
+    // MARK: Cost
+
+    /// Classification runs on the main actor before any query timeout, so its
+    /// work stays linear in the length of the text. A chain of casts used to
+    /// make every `:` rescan the rest of the chain.
+    @Test func longCastChainIsLexedInLinearSteps() {
+        let chain = "SELECT x" + String(repeating: "::a", count: 3_000) + " FROM t"
+        #expect(Self.sql(chain))
+        #expect(ReadOnlyStatement.sqlLexingSteps(chain) <= 5 * chain.unicodeScalars.count)
+    }
+
+    @Test func longOrdinarySelectIsLexedInLinearSteps() {
+        let columns = (1...3_000).map { "c\($0)" }.joined(separator: ", ")
+        let select = "SELECT \(columns) FROM t WHERE note = 'a [b] -- c'"
+        #expect(Self.sql(select))
+        #expect(ReadOnlyStatement.sqlLexingSteps(select) <= 5 * select.unicodeScalars.count)
+    }
+
     // MARK: Mongo shell
 
     @Test(arguments: [
