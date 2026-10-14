@@ -371,4 +371,61 @@ struct MySQLReadOnlyTests {
         #expect(try await readOnly("SELECT 1", on: opened).first?.first?.displayString == "1")
         #expect(ContinuousClock.now - started < .seconds(5))
     }
+
+    /// A cancel that lands between the preamble and the statement reaches a
+    /// connection with nothing running and ends nothing there (verified
+    /// against MySQL 8.4.11 and MariaDB 11.8.9). The statement must then
+    /// not run: it would hold the connection's turn until its own timeout,
+    /// and every read behind it would wait.
+    @Test func aCancelDuringThePreambleEndsTheReadBeforeItRuns() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+        let window = PreambleWindow()
+        await opened.readOnly.holdAfterReadOnlyPreamble { await window.hold() }
+
+        let read = Task { try await readOnly("SELECT SLEEP(10)", on: opened) }
+        await window.waitUntilHeld()
+        read.cancel()
+        _ = await read.result
+        // The cancel goes out on a connection of its own; a second is ample
+        // for it to reach the idle connection before the statement could.
+        try await Task.sleep(for: .seconds(1))
+        await window.release()
+
+        let started = ContinuousClock.now
+        #expect(try await readOnly("SELECT 1", on: opened).first?.first?.displayString == "1")
+        #expect(ContinuousClock.now - started < .seconds(5))
+    }
+}
+
+/// Holds a read-only statement between its preamble and the statement
+/// until the test lets it go on.
+private actor PreambleWindow {
+    private var held = false
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func hold() async {
+        held = true
+        guard !released else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        for waiter in waiters { waiter.resume() }
+        waiters.removeAll()
+    }
+
+    /// Polls with a 60-second deadline, so a statement that never reaches
+    /// the window fails the test instead of stalling it.
+    func waitUntilHeld() async {
+        let deadline = ContinuousClock.now + .seconds(60)
+        while !held {
+            guard ContinuousClock.now < deadline, (try? await Task.sleep(for: .milliseconds(1))) != nil else {
+                Issue.record("the statement did not reach the end of its preamble")
+                return
+            }
+        }
+    }
 }

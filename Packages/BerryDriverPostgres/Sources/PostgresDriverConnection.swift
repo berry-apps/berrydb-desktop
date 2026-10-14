@@ -35,6 +35,10 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
     /// while another scope's transaction is open would run inside it, and a
     /// scope opened inside another would be ended by its COMMIT.
     private let turn = ConnectionTurn()
+    /// Awaited between a read-only statement's preamble and the statement.
+    /// That window is a few round trips wide and nothing on the server can
+    /// hold it open, so this is how a test lands a cancel in it.
+    private var afterReadOnlyPreamble: (@Sendable () async -> Void)?
 
     static let batchSize = 500
     private static let logger: Logger = {
@@ -485,7 +489,8 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
     /// a DO block or a CALL, ends the call before the turn. BEGIN, the
     /// bounds, the statement and COMMIT run in one turn, so no other
     /// statement on this connection lands inside the transaction. A refused
-    /// BEGIN or SET LOCAL ends the call before the statement runs.
+    /// BEGIN or SET LOCAL, or a cancel during them, ends the call before the
+    /// statement runs.
     private func runReadOnly(
         _ sql: String, timeout: Duration, readOnlyTurn: ReadOnlyTurn,
         continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
@@ -521,6 +526,16 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
             }
             return
         }
+        await afterReadOnlyPreamble?()
+        // A cancel sent while the preamble ran can land between two of its
+        // commands, on a backend with nothing running, and is lost there;
+        // the statement then ran to its end (verified against PostgreSQL
+        // 16.15). The stream's cancellation is all that is left of it.
+        guard !Task.isCancelled else {
+            await finishTransaction(commit: false)
+            continuation.finish(throwing: DriverError.cancelled)
+            return
+        }
         do {
             try await streamRows(sql, into: continuation)
             await finishTransaction(commit: true)
@@ -530,6 +545,10 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
             await finishTransaction(commit: false)
             continuation.finish(throwing: Self.mapError(error))
         }
+    }
+
+    func holdAfterReadOnlyPreamble(_ hold: @escaping @Sendable () async -> Void) {
+        afterReadOnlyPreamble = hold
     }
 
     private func firstText(_ sql: String) async throws -> String? {

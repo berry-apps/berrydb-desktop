@@ -38,6 +38,10 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
     /// COMMIT of one would leave the other running in none. Only
     /// `prepareReadOnly()` and `executeReadOnly(_:timeout:)` take it.
     private let turn = ConnectionTurn()
+    /// Awaited between a read-only statement's preamble and the statement.
+    /// That window is a few round trips wide and nothing on the server can
+    /// hold it open, so this is how a test lands a cancel in it.
+    private var afterReadOnlyPreamble: (@Sendable () async -> Void)?
 
     static let batchSize = 500
     private static let logger: Logger = {
@@ -613,7 +617,8 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
 
     /// A text the allowlist refuses ends the call before the turn. The
     /// preamble, the statement and COMMIT run in one turn. A refused
-    /// preamble ends the call before the statement runs. The statement
+    /// preamble, or a cancel during it, ends the call before the statement
+    /// runs. The statement
     /// carries the server's own execution-time bound where the server has
     /// one (`statement(_:form:timeout:groupConcatMaxLength:)`).
     private func runReadOnly(
@@ -652,6 +657,17 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
             }
             return
         }
+        await afterReadOnlyPreamble?()
+        // A KILL QUERY sent while the preamble ran can land between two of
+        // its statements, on a connection with nothing running, and is lost
+        // there; the statement then ran to its end (verified against MySQL
+        // 8.4.11 and MariaDB 11.8.9). The stream's cancellation is all that
+        // is left of it.
+        guard !Task.isCancelled else {
+            _ = try? await connection.simpleQuery("ROLLBACK").get()
+            continuation.finish(throwing: DriverError.cancelled)
+            return
+        }
         do {
             let sql = Self.statement(statement, form: form, timeout: timeout, groupConcatMaxLength: nil)
             let stats = try await stream(sql, clock: clock, started: started, into: continuation)
@@ -662,5 +678,9 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
             _ = try? await connection.simpleQuery("ROLLBACK").get()
             continuation.finish(throwing: Self.mapError(error))
         }
+    }
+
+    func holdAfterReadOnlyPreamble(_ hold: @escaping @Sendable () async -> Void) {
+        afterReadOnlyPreamble = hold
     }
 }
