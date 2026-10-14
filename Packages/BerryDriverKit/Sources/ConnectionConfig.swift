@@ -104,6 +104,10 @@ public struct ConnectionConfig: Sendable {
     /// API keys. When set, this wins over `username`/`password` for the
     /// `Authorization` header; when `nil`, `username`/`password` are used.
     public let elasticsearchAPIKey: String?
+    /// The name the server lists the connection under, sent at connect where
+    /// the driver can (Postgres `application_name`); nil leaves the driver's
+    /// default. Other drivers ignore it.
+    public let applicationName: String?
 
     public init(
         driver: DriverID,
@@ -125,7 +129,8 @@ public struct ConnectionConfig: Sendable {
         awsRegion: String? = nil,
         additionalHosts: [String]? = nil,
         mongoReplicaSet: String? = nil,
-        elasticsearchAPIKey: String? = nil
+        elasticsearchAPIKey: String? = nil,
+        applicationName: String? = nil
     ) {
         self.driver = driver
         self.name = name
@@ -147,6 +152,22 @@ public struct ConnectionConfig: Sendable {
         self.additionalHosts = additionalHosts
         self.mongoReplicaSet = mongoReplicaSet
         self.elasticsearchAPIKey = elasticsearchAPIKey
+        self.applicationName = applicationName
+    }
+
+    /// Copy of this config whose connection the server lists under `name`.
+    public func withApplicationName(_ name: String) -> ConnectionConfig {
+        ConnectionConfig(
+            driver: driver, name: self.name, filePath: filePath,
+            host: host, port: port,
+            username: username, password: password, database: database,
+            tlsMode: tlsMode, caCertPath: caCertPath,
+            clientCertPath: clientCertPath, clientKeyPath: clientKeyPath, ssh: ssh,
+            awsAccessKeyID: awsAccessKeyID, awsSecretAccessKey: awsSecretAccessKey,
+            awsSessionToken: awsSessionToken, awsRegion: awsRegion,
+            additionalHosts: additionalHosts, mongoReplicaSet: mongoReplicaSet,
+            elasticsearchAPIKey: elasticsearchAPIKey, applicationName: name
+        )
     }
 
     public static func sqlite(path: String, name: String? = nil) -> ConnectionConfig {
@@ -166,7 +187,7 @@ public struct ConnectionConfig: Sendable {
             username: username, password: password, database: database,
             tlsMode: tlsMode, caCertPath: caCertPath,
             clientCertPath: clientCertPath, clientKeyPath: clientKeyPath, ssh: nil,
-            elasticsearchAPIKey: elasticsearchAPIKey
+            elasticsearchAPIKey: elasticsearchAPIKey, applicationName: applicationName
         )
     }
 }
