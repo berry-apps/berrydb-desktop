@@ -3,6 +3,7 @@ import BerryCore
 import BerryDriverKit
 import BerryDriverSQLite
 import BerryLicense
+import BerryStore
 import Foundation
 import Testing
 
@@ -63,24 +64,27 @@ struct AppleIntelligenceAccessTests {
 
     // MARK: - AIPanelController.appleIntelligenceGranted
 
-    private func makeController() -> AIPanelController {
+    private func makeController() throws -> AIPanelController {
         let client = LicenseClient(baseURL: URL(string: "https://example.invalid")!)
         let license = LicenseManager(client: client)
-        return AIPanelController(license: license, backendURL: URL(string: "https://example.invalid")!)
+        return AIPanelController(
+            license: license, backendURL: URL(string: "https://example.invalid")!,
+            store: try BerryStore(path: ":memory:")
+        )
     }
 
-    @Test func noAccessWithoutAGrantEvenWhenAppleIntelligenceIsAvailable() {
-        withCleanGrant {
-            let controller = makeController()
+    @Test func noAccessWithoutAGrantEvenWhenAppleIntelligenceIsAvailable() throws {
+        try withCleanGrant {
+            let controller = try makeController()
             // A fresh LicenseManager starts at `.none` (nothing persisted) —
             // exactly the "never activated" state this bypass exists for.
             #expect(controller.appleIntelligenceGranted == false)
         }
     }
 
-    @Test func accessOnceGrantedTracksLiveAppleIntelligenceAvailability() {
-        withCleanGrant {
-            let controller = makeController()
+    @Test func accessOnceGrantedTracksLiveAppleIntelligenceAvailability() throws {
+        try withCleanGrant {
+            let controller = try makeController()
             AppleIntelligenceAccess.grant(email: "dev@example.com")
             // This machine's real on-device availability, not a mock — the
             // same ground truth `AppleFoundationProvider.isAvailable()`
@@ -106,7 +110,10 @@ struct AppleIntelligenceAccessTests {
     private func makeBoundController() async throws -> AIPanelController {
         let client = LicenseClient(baseURL: URL(string: "https://example.invalid")!)
         let license = LicenseManager(client: client)
-        let controller = AIPanelController(license: license, backendURL: URL(string: "https://example.invalid")!)
+        let controller = AIPanelController(
+            license: license, backendURL: URL(string: "https://example.invalid")!,
+            store: try BerryStore(path: ":memory:")
+        )
         let session = try await makeSQLiteSession()
         controller.bind(session: session, catalog: nil, objects: [], profileID: nil)
         controller.giveConsentAndEnable()
