@@ -342,6 +342,11 @@
 "Run anyway" = "Vẫn chạy";
 "Run All Safe" = "Chạy tất cả (an toàn)";
 "Run this and every other read-only statement in this turn without asking again. Other statements still need your approval." = "Chạy câu này và mọi câu chỉ đọc khác trong lượt này mà không hỏi lại. Các câu khác vẫn cần bạn phê duyệt.";
+"Not run automatically: this session has a temporary table or an open transaction that a read-only connection can't see." = "Không tự chạy: phiên này có bảng tạm hoặc transaction đang mở mà kết nối chỉ đọc không thấy.";
+"Not run automatically: BerryDB couldn't open a read-only connection (%@)." = "Không tự chạy: BerryDB không mở được kết nối chỉ đọc (%@).";
+"no read-only connection is set up for this session" = "phiên này chưa có kết nối chỉ đọc";
+"the session is closed" = "phiên đã đóng";
+"cancelled" = "đã hủy";
 "Ask the assistant…" = "Hỏi trợ lý…";
 "File a bug report from this conversation." = "Gửi báo cáo lỗi từ cuộc trò chuyện này.";
 "Auto-run safe SELECTs" = "Tự chạy SELECT an toàn";

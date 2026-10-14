@@ -8,10 +8,18 @@ public enum ReadOnlyUnavailableReason: Sendable, Equatable {
     /// setting or an open transaction that the read-only connection would
     /// not see.
     case sessionState
-    /// The read-only connection could not be opened or set up. Carries the
-    /// bare words of the driver or the server, with no wrapper of their own,
-    /// for the card's sentence to put in context.
+    /// The read-only connection could not be opened or set up, or is not
+    /// there. Carries the bare words of the driver or the server, or one of
+    /// BerryDB's own details below, with no wrapper of their own, for the
+    /// card's sentence to put in context.
     case connectionFailed(String)
+
+    /// The details of `connectionFailed` that BerryDB gives itself rather
+    /// than a driver or a server, named so the card can say them in the
+    /// user's language.
+    public static let notSetUpDetail = "no read-only connection is set up for this session"
+    public static let sessionClosedDetail = "the session is closed"
+    public static let cancelledDetail = "cancelled"
 }
 
 /// Where a statement that runs without its own approval card goes.
@@ -32,7 +40,7 @@ public enum ReadOnlyRoute: Sendable {
     /// without a card.
     public static func withoutConnections(for session: Session) -> ReadOnlyRoute {
         ReadOnlyConnections.supports(session)
-            ? .unavailable(.connectionFailed("no read-only connection is set up for this session"))
+            ? .unavailable(.connectionFailed(ReadOnlyUnavailableReason.notSetUpDetail))
             : .notSupported
     }
 }
@@ -73,14 +81,14 @@ public struct ReadOnlyRouter {
             // open for good.
             guard !Task.isCancelled else {
                 await lease.finish(failed: false)
-                return .unavailable(.connectionFailed("cancelled"))
+                return .unavailable(.connectionFailed(ReadOnlyUnavailableReason.cancelledDetail))
             }
             return .readOnly(lease)
         } catch let unavailable as ReadOnlyConnectionUnavailable {
             return .unavailable(.connectionFailed(unavailable.reason))
         } catch {
             // Only a session that closed makes the pool throw anything else.
-            return .unavailable(.connectionFailed("the session is closed"))
+            return .unavailable(.connectionFailed(ReadOnlyUnavailableReason.sessionClosedDetail))
         }
     }
 }

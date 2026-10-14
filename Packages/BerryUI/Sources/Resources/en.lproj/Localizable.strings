@@ -342,6 +342,11 @@
 "Run anyway" = "Run anyway";
 "Run All Safe" = "Run All Safe";
 "Run this and every other read-only statement in this turn without asking again. Other statements still need your approval." = "Run this and every other read-only statement in this turn without asking again. Other statements still need your approval.";
+"Not run automatically: this session has a temporary table or an open transaction that a read-only connection can't see." = "Not run automatically: this session has a temporary table or an open transaction that a read-only connection can't see.";
+"Not run automatically: BerryDB couldn't open a read-only connection (%@)." = "Not run automatically: BerryDB couldn't open a read-only connection (%@).";
+"no read-only connection is set up for this session" = "no read-only connection is set up for this session";
+"the session is closed" = "the session is closed";
+"cancelled" = "cancelled";
 "Ask the assistant…" = "Ask the assistant…";
 "File a bug report from this conversation." = "File a bug report from this conversation.";
 "Auto-run safe SELECTs" = "Auto-run safe SELECTs";

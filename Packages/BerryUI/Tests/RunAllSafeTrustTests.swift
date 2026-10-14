@@ -7,17 +7,18 @@ import Testing
 
 @testable import BerryUI
 
-/// The panel's gate for a turn in which Run All Safe was already used: a
-/// statement the trust covers skips its card, every other card is recorded
-/// and denied.
+/// The panel's gate for a turn in which Run All Safe was already used: the
+/// trust covers what `RunAllSafeTrust` says, every card is recorded and
+/// denied.
 @MainActor
 private final class TrustedTurnGate: AIApprovalGate {
     private(set) var cards: [String] = []
 
+    func trustsWithoutCard(sql: String, danger: DangerLevel) -> Bool {
+        RunAllSafeTrust.skipsCard(danger: danger, readOnly: true, trustedThisTurn: true)
+    }
+
     func approve(sql: String, danger: DangerLevel, autoApprovable: Bool) async -> Bool {
-        if RunAllSafeTrust.skipsCard(danger: danger, readOnly: autoApprovable, trustedThisTurn: true) {
-            return true
-        }
         cards.append(sql)
         return false
     }
@@ -28,7 +29,9 @@ private final class TrustedTurnGate: AIApprovalGate {
 @MainActor
 @Suite("Run All Safe trust", .serialized)
 struct RunAllSafeTrustTests {
-    /// Auto-run is off so only the trust can let a statement through.
+    /// Auto-run is off so only the trust can let a statement through. A
+    /// statement it lets through runs automatically, so the executor routes
+    /// it to a read-only connection as the app does.
     private func makeExecutor(gate: TrustedTurnGate) async throws -> (QueryToolExecutor, Session) {
         DriverRegistry.register(SQLiteDriver.self)
         let path = NSTemporaryDirectory() + "berrydb-trust-\(UUID().uuidString).sqlite"
@@ -36,9 +39,13 @@ struct RunAllSafeTrustTests {
         let session = try await ConnectionManager().open(.sqlite(path: path))
         for try await _ in session.connection.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)") {}
         for try await _ in session.connection.execute("INSERT INTO t (id, name) VALUES (1, 'ann'), (2, 'bob')") {}
+        let router = ReadOnlyRouter(
+            connections: ReadOnlyConnections(), tracker: SessionStateTracker(), transactionIsActive: { false }
+        )
         let executor = QueryToolExecutor(
             session: session, catalog: SchemaCatalog(session: session), gate: gate,
-            options: .init(autoApproveSelects: false), onPropose: { _, _ in }
+            options: .init(autoApproveSelects: false), onPropose: { _, _ in },
+            readOnlyRoute: { await router.route(for: $0) }
         )
         return (executor, session)
     }

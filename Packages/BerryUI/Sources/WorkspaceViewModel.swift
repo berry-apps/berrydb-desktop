@@ -397,6 +397,9 @@ public final class WorkspaceViewModel {
     /// One catalog connection per open session, so a pass never waits behind
     /// the user's own statements on the session's connection.
     let metadataConnections = MetadataConnections()
+    /// One read-only connection per open session, for the statements the
+    /// assistant runs without a card; see `ReadOnlyConnections`.
+    let readOnlyConnections = ReadOnlyConnections()
     /// Shared with every window on the same store; see `sharedGraphWork`.
     let embeddingDrains: SchemaEmbeddingDrains
     /// Shared with every window on the same store; see `sharedGraphWork`.
@@ -456,7 +459,8 @@ public final class WorkspaceViewModel {
     }
 
     /// Every open workspace, so quitting can stop their passes and close their
-    /// catalog connections. Weak, so a closed window's workspace is released.
+    /// catalog and read-only connections. Weak, so a closed window's
+    /// workspace is released.
     private static let openWorkspaces = NSHashTable<WorkspaceViewModel>.weakObjects()
 
     public init() {
@@ -555,10 +559,12 @@ public final class WorkspaceViewModel {
 
     /// Stops this workspace's graph work for good, when its window closes:
     /// its passes, statistics refresh and embedding drains stop, its catalog
-    /// connections close, and the full graph it cached is dropped whatever
-    /// the graph views reported. The session itself is left as it is.
-    /// Nothing else stops them, because the view model is not released with
-    /// its window (see `WindowCloseObserver`).
+    /// and read-only connections close, and the full graph it cached is
+    /// dropped whatever the graph views reported. The session itself is left
+    /// open; what the tracker recorded of its connection is forgotten, since
+    /// the read-only connection, the one thing that reads it, never opens
+    /// for the session again. Nothing else stops them, because the view
+    /// model is not released with its window (see `WindowCloseObserver`).
     public func closeWorkspace() {
         guard !isClosed else { return }
         isClosed = true
@@ -572,12 +578,16 @@ public final class WorkspaceViewModel {
         Self.openWorkspaces.remove(self)
         let coordinator = harvestCoordinator
         let connections = metadataConnections
+        let readOnly = readOnlyConnections
+        let sessionID = session?.id
         let hold = beforeClosingConnections
         let id = workspaceID
         let teardown = Task.detached {
             await coordinator?.cancelAll()
             await hold?()
             await connections.closeAll()
+            await readOnly.closeAll()
+            if let sessionID { SessionStateTracker.shared.forget(sessionID: sessionID) }
             await Self.teardownFinished(id)
         }
         closingGraphWork = teardown
@@ -603,6 +613,25 @@ public final class WorkspaceViewModel {
             await workspace.harvestCoordinator?.cancelAll()
             await workspace.metadataConnections.closeAll()
         }
+    }
+
+    /// Closes every open workspace's read-only connections, for app
+    /// termination. A closed workspace closes its own in its teardown, which
+    /// `closeAllMetadataConnections()` waits for.
+    public static func closeAllReadOnlyConnections() async {
+        for workspace in openWorkspaces.allObjects {
+            await workspace.readOnlyConnections.closeAll()
+        }
+    }
+
+    /// Where a statement the assistant runs without a card goes for
+    /// `session`. The transaction controller is read on every call: it is
+    /// replaced on every connect and disconnect.
+    func readOnlyRoute(for session: Session) async -> ReadOnlyRoute {
+        let router = ReadOnlyRouter(connections: readOnlyConnections) { [weak self] in
+            self?.transaction.isActive ?? false
+        }
+        return await router.route(for: session)
     }
 
     /// Single wiring point for the core → store sinks. The DangerGuard
@@ -1230,6 +1259,9 @@ public final class WorkspaceViewModel {
             Task {
                 if tx.isActive { _ = await tx.rollback(session: old) }
                 await ConnectionManager.shared.close(old.id)
+                // The rollback runs through QueryService, which records the
+                // session again after `stopGraphWork` forgot it.
+                SessionStateTracker.shared.forget(sessionID: old.id)
             }
         }
         if let old = dataSourceSession {
@@ -1419,10 +1451,11 @@ public final class WorkspaceViewModel {
         await harvestGraphNow()
     }
 
-    /// Stops the graph work of a session that is closing: its passes, its
-    /// statistics refresh and embedding drain, and its metadata connection.
-    /// The rest runs detached because closing waits for a connection that may
-    /// still be opening, which must not hold the main actor.
+    /// Stops the work tied to a session that is closing: its graph passes,
+    /// statistics refresh and embedding drain, its metadata and read-only
+    /// connections, and what the tracker recorded of its own connection.
+    /// The closes run detached because closing waits for a connection that
+    /// may still be opening, which must not hold the main actor.
     private func stopGraphWork(sessionID: UUID, profileID: UUID?) {
         graphSession = nil
         if let profileID { leftGraphProfiles.insert(profileID) }
@@ -1431,11 +1464,18 @@ public final class WorkspaceViewModel {
         graphLoad = nil
         graphChangedAt = nil
         if let profileID { embeddingDrains.cancel(profileID: profileID, ownedBy: workspaceID) }
+        SessionStateTracker.shared.forget(sessionID: sessionID)
         let coordinator = harvestCoordinator
         let connections = metadataConnections
+        let readOnly = readOnlyConnections
         closingGraphWork = Task.detached {
+            // Started first and awaited last: an automatic run must stop
+            // getting the read-only connection now, not once the passes and
+            // the catalog connection have stopped.
+            async let readOnlyClosed: Void = readOnly.close(sessionID: sessionID)
             if let profileID { await coordinator?.cancel(profileID: profileID) }
             await connections.close(sessionID: sessionID)
+            await readOnlyClosed
         }
     }
 

@@ -37,6 +37,9 @@ public final class AIPanelController {
         public let timeoutSeconds: TimeInterval
         /// Rated safe and proven read-only throughout by the executor.
         public let readOnly: Bool
+        /// Set when the statement would have run without a card but the
+        /// read-only connection could not take it.
+        public let notAutoRunReason: ReadOnlyUnavailableReason?
         public var isDangerous: Bool { danger != .safe }
         public var offersRunAllSafe: Bool { RunAllSafeTrust.offersButton(danger: danger, readOnly: readOnly) }
         public var isExpired: Bool {
@@ -49,7 +52,8 @@ public final class AIPanelController {
             danger: DangerLevel,
             createdAt: Date = Date(),
             timeoutSeconds: TimeInterval = 110,
-            readOnly: Bool = false
+            readOnly: Bool = false,
+            notAutoRunReason: ReadOnlyUnavailableReason? = nil
         ) {
             self.id = id
             self.sql = sql
@@ -57,6 +61,44 @@ public final class AIPanelController {
             self.createdAt = createdAt
             self.timeoutSeconds = timeoutSeconds
             self.readOnly = readOnly
+            self.notAutoRunReason = notAutoRunReason
+        }
+
+        /// The line the card shows for `notAutoRunReason`.
+        public var notAutoRunMessage: String? { notAutoRunMessage(in: berryModuleBundle) }
+
+        /// The line in the localization `bundle` holds, so a test can read
+        /// the Vietnamese line in a process that runs in English.
+        func notAutoRunMessage(in bundle: Bundle) -> String? {
+            switch notAutoRunReason {
+            case nil:
+                return nil
+            case .sessionState:
+                return String(
+                    localized: "Not run automatically: this session has a temporary table or an open transaction that a read-only connection can't see.",
+                    bundle: bundle
+                )
+            case .connectionFailed(let detail):
+                let shown = Self.ownDetail(detail, in: bundle) ?? detail
+                return String(localized: "Not run automatically: BerryDB couldn't open a read-only connection (\(shown)).", bundle: bundle)
+            }
+        }
+
+        /// The reasons BerryDB gives itself, rather than a driver or a
+        /// server, in the card's language. A driver's or a server's words
+        /// are shown as they came, like every other database error the app
+        /// shows.
+        private static func ownDetail(_ detail: String, in bundle: Bundle) -> String? {
+            switch detail {
+            case ReadOnlyUnavailableReason.notSetUpDetail:
+                return String(localized: "no read-only connection is set up for this session", bundle: bundle)
+            case ReadOnlyUnavailableReason.sessionClosedDetail:
+                return String(localized: "the session is closed", bundle: bundle)
+            case ReadOnlyUnavailableReason.cancelledDetail:
+                return String(localized: "cancelled", bundle: bundle)
+            default:
+                return nil
+            }
         }
     }
 
@@ -190,6 +232,9 @@ public final class AIPanelController {
     /// All open panes, numbered, so the AI can disambiguate a split (get_open_tabs).
     public var readOpenTabs: (() -> OpenTabsSnapshot?)?
     public var activeTabStatements: ((String) -> [String])?
+    /// Where a statement the assistant runs without a card goes. Set by the
+    /// workspace, which owns the read-only connections.
+    public var readOnlyRoute: (@MainActor (Session) async -> ReadOnlyRoute)?
     /// Live tab/pane/action-log snapshot for `get_ui_state`/`query_ui_graph`
  /// unlike `readOpenTabs`, carries every tab in
     /// each pane, not just the active one.
@@ -877,6 +922,10 @@ public final class AIPanelController {
 
         if session != nil || dataSourceSession != nil {
             let gate = ApprovalGateAdapter(controller: self)
+            let routeAutomaticRuns: @MainActor (Session) async -> ReadOnlyRoute = { [weak self] session in
+                guard let self else { return ReadOnlyRoute.withoutConnections(for: session) }
+                return await self.automaticRunRoute(for: session)
+            }
             let executor = QueryToolExecutor(
                 session: isNoSQL ? nil : session,
                 catalog: isNoSQL ? nil : catalog,
@@ -966,7 +1015,8 @@ public final class AIPanelController {
                 store: store,
                 profileID: currentProfileID,
                 resolveArtifactID: { [weak self] tabID in self?.resolveArtifactID?(tabID) },
-                linkArtifact: { [weak self] tabID, artifactID in self?.linkArtifact?(tabID, artifactID) }
+                linkArtifact: { [weak self] tabID, artifactID in self?.linkArtifact?(tabID, artifactID) },
+                readOnlyRoute: routeAutomaticRuns
             )
             self.executor = executor
         } else {
@@ -1398,17 +1448,35 @@ public final class AIPanelController {
 
  // MARK: - Approval gate backing
 
+    /// Where `bind`'s executor sends a statement that runs without a card:
+    /// the workspace's routing, or, until the workspace supplied it, a card
+    /// for every engine that has a read-only connection.
+    func automaticRunRoute(for session: Session) async -> ReadOnlyRoute {
+        guard let readOnlyRoute else { return ReadOnlyRoute.withoutConnections(for: session) }
+        return await readOnlyRoute(session)
+    }
+
+    /// Whether Run All Safe, used on a card this turn, covers a statement
+    /// rated `danger` that the executor proved read-only.
+    func trustsSafeStatement(danger: DangerLevel) -> Bool {
+        RunAllSafeTrust.skipsCard(danger: danger, readOnly: true, trustedThisTurn: autoApproveSafeThisTurn)
+    }
+
+    /// A card for `sql`. Run All Safe is not applied here: the executor asks
+    /// `trustsSafeStatement` through the gate before it asks for a card, and
+    /// a statement it lets through runs on the read-only connection. A card
+    /// asked for with `notAutoRunReason` says why that connection could not
+    /// take a statement, and must show even under the trust.
     func requestApproval(
-        sql: String, danger: DangerLevel, readOnly: Bool = false, timeoutSeconds: TimeInterval = 110
+        sql: String, danger: DangerLevel, readOnly: Bool = false, timeoutSeconds: TimeInterval = 110,
+        notAutoRunReason: ReadOnlyUnavailableReason? = nil
     ) async -> Bool {
-        if RunAllSafeTrust.skipsCard(danger: danger, readOnly: readOnly, trustedThisTurn: autoApproveSafeThisTurn) {
-            return true
-        }
         approvalTimeoutTask?.cancel()
         return await withCheckedContinuation { continuation in
             approvalContinuation = continuation
             pendingApproval = PendingApproval(
-                sql: sql, danger: danger, timeoutSeconds: timeoutSeconds, readOnly: readOnly
+                sql: sql, danger: danger, timeoutSeconds: timeoutSeconds, readOnly: readOnly,
+                notAutoRunReason: notAutoRunReason
             )
             approvalTimeoutTask = Task { @MainActor [weak self] in
                 do {
@@ -1577,6 +1645,20 @@ final class ApprovalGateAdapter: AIApprovalGate {
     func approve(sql: String, danger: DangerLevel, autoApprovable: Bool, timeoutSeconds: TimeInterval) async -> Bool {
         await controller?.requestApproval(
             sql: sql, danger: danger, readOnly: autoApprovable, timeoutSeconds: timeoutSeconds
+        ) ?? false
+    }
+
+    func trustsWithoutCard(sql: String, danger: DangerLevel) -> Bool {
+        controller?.trustsSafeStatement(danger: danger) ?? false
+    }
+
+    /// No Run All Safe on this card (`readOnly: false`): the trust would only
+    /// bring the statement back to the same card.
+    func approveOnSessionConnection(
+        sql: String, danger: DangerLevel, reason: ReadOnlyUnavailableReason, timeoutSeconds: TimeInterval
+    ) async -> Bool {
+        await controller?.requestApproval(
+            sql: sql, danger: danger, readOnly: false, timeoutSeconds: timeoutSeconds, notAutoRunReason: reason
         ) ?? false
     }
 }

@@ -70,6 +70,15 @@ public final class SessionStateTracker: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Whether anything was recorded for the session since it was last
+    /// forgotten, so a test can tell a forgotten session from one recorded
+    /// again with nothing held.
+    func isTracking(sessionID: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return states[sessionID] != nil
+    }
+
     /// One pass over the text per statement it holds; a text without a
     /// semicolon is one statement and is not split.
     static func effects(of sql: String) -> [Effect] {
