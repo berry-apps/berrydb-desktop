@@ -169,8 +169,47 @@ public enum DangerGuard {
     /// Identifier/keyword tokens outside strings, comments, and dollar quotes.
     /// Quoted identifiers are kept as single tokens (with their quotes).
     static func topLevelTokens(_ sql: String) -> [String] {
+        scanTokens(sql).tokens
+    }
+
+    /// Scalars read while scanning `sql` for tokens. Every statement is
+    /// classified synchronously by its caller, often the main actor, before
+    /// any query timeout applies, so tests hold this linear in the length of
+    /// the text.
+    static func tokenScanReads(_ sql: String) -> Int {
+        scanTokens(sql).reads
+    }
+
+    /// The scanned text, readable only through subscripts that count every
+    /// scalar they return, so a rescan added anywhere in the scan shows up in
+    /// `tokenScanReads` instead of only in wall-clock time.
+    private struct CountedScalars {
+        private let storage: [Unicode.Scalar]
+        private(set) var reads = 0
+
+        init(_ text: String) { storage = Array(text.unicodeScalars) }
+
+        var count: Int { storage.count }
+
+        subscript(position: Int) -> Unicode.Scalar {
+            mutating get {
+                reads += 1
+                return storage[position]
+            }
+        }
+
+        subscript<R: RangeExpression>(bounds: R) -> ArraySlice<Unicode.Scalar> where R.Bound == Int {
+            mutating get {
+                let range = bounds.relative(to: storage)
+                reads += range.count
+                return storage[range]
+            }
+        }
+    }
+
+    private static func scanTokens(_ sql: String) -> (tokens: [String], reads: Int) {
         var tokens: [String] = []
-        let scalars = Array(sql.unicodeScalars)
+        var scalars = CountedScalars(sql)
         var i = 0
 
         func isWordScalar(_ s: Unicode.Scalar) -> Bool {
@@ -216,13 +255,25 @@ public enum DangerGuard {
                 if j < scalars.count, scalars[j] == "$" {
                     let tag = Array(scalars[i...j])
                     i = j + 1
+                    // The closing tag is compared in place. Only its first
+                    // and last scalars are `$`, so the scalars a failed
+                    // candidate matched after its opening `$` cannot start
+                    // the closing tag, and the search resumes at the scalar
+                    // that differed. Copying the candidate at every `$`
+                    // instead cost the tag's length per `$`, quadratic for a
+                    // long tag over a body full of `$`.
                     while i < scalars.count {
-                        if scalars[i] == "$", i + tag.count <= scalars.count,
-                           Array(scalars[i..<(i + tag.count)]) == tag {
-                            i += tag.count
-                            break
+                        guard scalars[i] == "$" else {
+                            i += 1
+                            continue
                         }
-                        i += 1
+                        var matched = 1
+                        while matched < tag.count, i + matched < scalars.count,
+                              scalars[i + matched] == tag[matched] {
+                            matched += 1
+                        }
+                        i += matched
+                        if matched == tag.count { break }
                     }
                 } else {
                     i += 1
@@ -240,6 +291,6 @@ public enum DangerGuard {
                 }
             }
         }
-        return tokens
+        return (tokens, scalars.reads)
     }
 }
