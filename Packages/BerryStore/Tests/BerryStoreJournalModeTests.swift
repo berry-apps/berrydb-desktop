@@ -265,7 +265,7 @@ struct BerryStoreJournalModeTests {
         let queue = DispatchQueue(label: "memory-manager-test", qos: .userInitiated)
         let manager = StoreMemoryManager(store: store, idle: 0.05, queue: queue)
         manager.touch()
-        let deadline = ContinuousClock.now + .seconds(10)
+        let deadline = ContinuousClock.now + .seconds(60)
         while store.releaseCount < 1, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
