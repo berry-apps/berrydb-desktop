@@ -408,6 +408,22 @@ struct ReadOnlyStatementTests {
         #expect(ReadOnlyStatement.sqlLexingSteps(select) <= 5 * select.unicodeScalars.count)
     }
 
+    /// Long text of the shape each lexer loop scans. Every read of the text
+    /// is counted where it happens, so a loop that rescans what it already
+    /// read raises the count however it is written.
+    @Test(arguments: [
+        "SELECT " + String(repeating: "@a::", count: 3_000) + "b FROM t",
+        "SELECT " + String(repeating: "[a]", count: 3_000) + " FROM t",
+        "SELECT 1 " + String(repeating: "/* c */ -- d\n", count: 1_000),
+        "SELECT " + String(repeating: "'a''b', ", count: 1_000) + "1",
+        "SELECT " + String(repeating: "f(", count: 1_000) + "1" + String(repeating: ")", count: 1_000),
+        "SELECT " + String(repeating: "1234567890 + ", count: 1_000) + "1",
+    ])
+    func everyLexerLoopRunsInLinearSteps(_ text: String) {
+        #expect(Self.sql(text))
+        #expect(ReadOnlyStatement.sqlLexingSteps(text) <= 5 * text.unicodeScalars.count)
+    }
+
     // MARK: Mongo shell
 
     @Test(arguments: [

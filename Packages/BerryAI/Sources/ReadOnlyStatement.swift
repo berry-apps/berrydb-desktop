@@ -397,7 +397,7 @@ enum ReadOnlyStatement {
         return lexer.tokens()
     }
 
-    /// Scalars visited while lexing `sql`. Classification runs on the main
+    /// Scalar reads made while lexing `sql`. Classification runs on the main
     /// actor before any query timeout applies, so tests hold this linear in
     /// the length of the text.
     static func sqlLexingSteps(_ sql: String) -> Int {
@@ -406,62 +406,76 @@ enum ReadOnlyStatement {
         return lexer.steps
     }
 
+    /// The text a lexer reads. Its scalars are reachable only through
+    /// `at(_:)`, which counts every read, so a loop that rescans the text is
+    /// counted however it is written and cannot slip past the linear bound
+    /// the tests hold. A counter each loop had to increment itself missed a
+    /// rescan that did not.
+    private struct CountedScalars {
+        private let storage: [Unicode.Scalar]
+        private(set) var reads = 0
+
+        init(_ sql: String) { storage = Array(sql.unicodeScalars) }
+
+        var count: Int { storage.count }
+
+        mutating func at(_ position: Int) -> Unicode.Scalar? {
+            reads += 1
+            return storage.indices.contains(position) ? storage[position] : nil
+        }
+    }
+
     private struct SQLLexer {
-        let scalars: [Unicode.Scalar]
+        var text: CountedScalars
         var index = 0
-        var steps = 0
         /// Whether SQLite's parameter scan reaches a `(` from each position
         /// with no name characters read yet; see `computeParameterSuffixes`.
         var suffixAfterEmptyName: [Bool]?
 
-        init(_ sql: String) { scalars = Array(sql.unicodeScalars) }
+        init(_ sql: String) { text = CountedScalars(sql) }
 
-        func at(_ position: Int) -> Unicode.Scalar? { position < scalars.count ? scalars[position] : nil }
+        var steps: Int { text.reads }
+
+        mutating func at(_ position: Int) -> Unicode.Scalar? { text.at(position) }
 
         mutating func tokens() -> [SQLToken]? {
-            for (position, scalar) in scalars.enumerated() {
-                steps += 1
+            var position = 0
+            while let scalar = at(position) {
+                position += 1
                 switch scalar.value {
                 case 0x09, 0x0A: continue
-                case 0x0D where at(position + 1) == "\n": continue
+                case 0x0D where at(position) == "\n": continue
                 case 0x00...0x1F, 0x7F, 0x85, 0x2028, 0x2029: return nil
                 default: continue
                 }
             }
 
             var tokens: [SQLToken] = []
-            while index < scalars.count {
-                steps += 1
-                let scalar = scalars[index]
+            while let scalar = at(index) {
                 switch scalar {
                 case " ", "\t", "\n", "\r":
                     index += 1
                 case "-" where at(index + 1) == "-":
                     // MySQL needs whitespace or a control character after `--`.
                     if let follower = at(index + 2), !" \t\n\r".unicodeScalars.contains(follower) { return nil }
-                    while index < scalars.count, scalars[index] != "\n" {
-                        steps += 1
-                        index += 1
-                    }
+                    while let commented = at(index), commented != "\n" { index += 1 }
                 case "/" where at(index + 1) == "*":
                     let marker = at(index + 2).map { String($0) } ?? ""
                     if marker == "!" { return nil }
                     if marker.lowercased() == "m", at(index + 3) == "!" { return nil }
                     index += 2
                     while true {
-                        steps += 1
-                        guard index + 1 < scalars.count else { return nil }
-                        if scalars[index] == "/", scalars[index + 1] == "*" { return nil }
-                        if scalars[index] == "*", scalars[index + 1] == "/" { break }
+                        guard let current = at(index), let following = at(index + 1) else { return nil }
+                        if current == "/", following == "*" { return nil }
+                        if current == "*", following == "/" { break }
                         index += 1
                     }
                     index += 2
                 case "'", "\"", "`":
                     index += 1
                     while true {
-                        steps += 1
-                        guard index < scalars.count, scalars[index] != "\\" else { return nil }
-                        if scalars[index] == scalar {
+                        guard let current = at(index), current != "\\" else { return nil }
+                        if current == scalar {
                             if at(index + 1) == scalar {
                                 index += 2
                                 continue
@@ -483,19 +497,16 @@ enum ReadOnlyStatement {
                 case "#", "$", "\\":
                     return nil
                 case "0"..."9":
-                    while index < scalars.count, ReadOnlyStatement.isASCIIDigit(scalars[index]) {
-                        steps += 1
-                        index += 1
-                    }
+                    while let digit = at(index), ReadOnlyStatement.isASCIIDigit(digit) { index += 1 }
                     tokens.append(.number)
                 default:
                     if ReadOnlyStatement.isWordCharacter(scalar), !ReadOnlyStatement.isASCIIDigit(scalar) {
-                        let start = index
-                        while index < scalars.count, isWordContinuation(scalars[index]) {
-                            steps += 1
+                        var word = String.UnicodeScalarView()
+                        while let character = at(index), isWordContinuation(character) {
+                            word.append(character)
                             index += 1
                         }
-                        tokens.append(.word(String(String.UnicodeScalarView(scalars[start..<index])).uppercased()))
+                        tokens.append(.word(String(word).uppercased()))
                     } else if scalar.isASCII {
                         tokens.append(.punctuation(scalar))
                         index += 1
@@ -516,9 +527,7 @@ enum ReadOnlyStatement {
         mutating func bracketIsUnambiguous(from open: Int) -> Bool {
             var position = open + 1
             var previous: Unicode.Scalar = " "
-            while position < scalars.count {
-                steps += 1
-                let scalar = scalars[position]
+            while let scalar = at(position) {
                 if scalar == "]" { return at(position + 1) != "]" }
                 if ReadOnlyStatement.bracketBreakers.contains(scalar) { return false }
                 if previous == "-", scalar == "-" { return false }
@@ -542,13 +551,11 @@ enum ReadOnlyStatement {
         /// forward from every `:` instead revisits the whole rest of a
         /// `x::a::a…` cast chain once per colon.
         mutating func computeParameterSuffixes() {
-            let count = scalars.count
+            let count = text.count
             var afterEmptyName = [Bool](repeating: false, count: count + 2)
             var afterName = [Bool](repeating: false, count: count + 2)
             var position = count - 1
-            while position >= 0 {
-                steps += 1
-                let scalar = scalars[position]
+            while position >= 0, let scalar = at(position) {
                 if !scalar.isASCII || isWordContinuation(scalar) {
                     afterEmptyName[position] = afterName[position + 1]
                     afterName[position] = afterName[position + 1]
