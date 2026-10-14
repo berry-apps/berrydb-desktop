@@ -6,7 +6,9 @@ import Testing
 
 /// The consent screen is the one place that tells a user what the assistant
 /// does with their database before AI is turned on, so its wording has to
-/// match the defaults the executor actually runs with.
+/// match the defaults the executor actually runs with. Main-actor isolated
+/// because the message is a static of a SwiftUI view.
+@MainActor
 @Suite("AI consent message")
 struct AIConsentMessageTests {
     /// The text for `key` in one localization of the BerryUI resource bundle,
