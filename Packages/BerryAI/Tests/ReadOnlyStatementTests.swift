@@ -226,6 +226,86 @@ struct ReadOnlyStatementTests {
         #expect(!Self.sql(text))
     }
 
+    /// Extension and engine functions that delete rows, change schema,
+    /// schedule work, call out of the database or reconfigure a cluster when
+    /// a plain SELECT calls them.
+    @Test(arguments: [
+        // TimescaleDB.
+        "SELECT drop_chunks('metrics', INTERVAL '3 months')",
+        "SELECT add_retention_policy('metrics', INTERVAL '90 days')",
+        "SELECT remove_compression_policy('metrics')",
+        "SELECT create_hypertable('metrics', 'time')",
+        "SELECT compress_chunk(c) FROM show_chunks('metrics') c",
+        "SELECT add_job('cleanup', '1 day')",
+        "SELECT alter_job(1000, scheduled => false)",
+        "SELECT delete_job(1000)",
+        // PostGIS.
+        "SELECT DropGeometryTable('public', 'parcels')",
+        "SELECT DropGeometryColumn('parcels', 'geom')",
+        "SELECT AddGeometryColumn('parcels', 'geom', 4326, 'POINT', 2)",
+        "SELECT UpdateGeometrySRID('parcels', 'geom', 3857)",
+        "SELECT Populate_Geometry_Columns()",
+        "SELECT topology.CreateTopology('roads', 4326)",
+        "SELECT topology.TopoGeo_AddPoint('roads', 'POINT(0 0)')",
+        "SELECT DropRasterConstraints('elevation', 'rast')",
+        // pg_cron.
+        "SELECT cron.schedule('nightly', '0 3 * * *', 'TRUNCATE logs')",
+        "SELECT cron.unschedule('nightly')",
+        // Amazon RDS and Aurora.
+        "SELECT aws_s3.table_import_from_s3('t', '', '(format csv)', aws_commons.create_s3_uri('b', 'k', 'us-east-1'))",
+        "SELECT * FROM aws_lambda.invoke(aws_commons.create_lambda_function_arn('f'), '{}'::json)",
+        // Citus and pg_partman.
+        "SELECT create_distributed_table('events', 'tenant_id')",
+        "SELECT citus_add_node('worker-1', 5432)",
+        "SELECT partman.run_maintenance()",
+        // HTTP from the server, and pg_surgery.
+        "SELECT * FROM http_post('https://example.invalid', 'x', 'text/plain')",
+        "SELECT net.http_get('https://example.invalid')",
+        "SELECT heap_force_kill('t'::regclass, tids) FROM damaged",
+        // MySQL replication administration and the locking service.
+        "SELECT group_replication_set_as_primary('00000000-0000-0000-0000-000000000000')",
+        "SELECT group_replication_switch_to_single_primary_mode()",
+        "SELECT asynchronous_connection_failover_add_source('ch', 'h', 3306, '', 50)",
+        "SELECT service_get_write_locks('ns', 'lock1', 10)",
+        "SELECT version_tokens_lock_exclusive('t', 10)",
+    ])
+    func extensionWriteOrAdministrationIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text))
+    }
+
+    /// Session state, waits and index maintenance that a read can reach.
+    @Test(arguments: [
+        "SELECT LAST_INSERT_ID(42)",
+        "SELECT @total := @total + amount FROM orders",
+        "SELECT MASTER_GTID_WAIT('0-1-100', 10)",
+        "SELECT pg_switch_xlog()",
+        "SELECT pg_xlog_replay_pause()",
+        "SELECT pg_xlog_replay_resume()",
+        "SELECT gin_clean_pending_list('docs_body_idx')",
+        "SELECT brin_summarize_new_values('events_ts_idx')",
+        "SELECT brin_summarize_range('events_ts_idx', 0)",
+        "SELECT brin_desummarize_range('events_ts_idx', 0)",
+    ])
+    func sessionStateOrIndexMaintenanceIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text))
+    }
+
+    /// Reads from the same extensions and engines keep running without a card.
+    @Test(arguments: [
+        "SELECT LAST_INSERT_ID()",
+        "SELECT time_bucket('1 day', ts), avg(v) FROM metrics GROUP BY 1",
+        "SELECT * FROM show_chunks('metrics')",
+        "SELECT hypertable_size('metrics')",
+        "SELECT ST_AsText(geom), ST_Area(geom) FROM parcels",
+        "SELECT Find_SRID('public', 'parcels', 'geom')",
+        "SELECT group_replication_get_write_concurrency()",
+        "SELECT make_interval(days => 10)",
+        "SELECT ADDDATE(created_at, 1), ADDTIME(t, '01:00') FROM orders",
+    ])
+    func extensionReadStaysReadOnly(_ text: String) {
+        #expect(Self.sql(text))
+    }
+
     /// Call forms that keep the function's name from reading as a plain word.
     @Test(arguments: [
         #"SELECT "nextval"('s')"#,
