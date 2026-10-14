@@ -491,6 +491,92 @@ struct QueryToolExecutorTests {
         #expect(rowCount == 2)
     }
 
+    // MARK: Auto-run is limited to statements that are read-only throughout
+
+    private func rowCount(in session: Session) async throws -> Int {
+        var count = 0
+        for try await event in session.connection.execute("SELECT id FROM t") {
+            if case let .rows(batch) = event { count += batch.count }
+        }
+        return count
+    }
+
+    /// The SQLite driver runs every statement in the text it is given, so a
+    /// write after a leading SELECT would run with the SELECT's auto-approval.
+    @Test func runSQLAsksBeforeAWriteThatFollowsASelect() async throws {
+        let session = try await makeSession()
+        let gate = ScriptedGate(false)
+        let executor = makeExecutor(session: session, gate: gate)
+
+        let outcome = await executor.execute(
+            AIToolCall(id: "c", name: "run_sql", args: ["sql": "SELECT id FROM t; DELETE FROM t"])
+        )
+
+        #expect(outcome.status == "denied")
+        #expect(gate.asked.count == 1)
+        #expect(gate.asked.first?.autoApprovable == false)
+        #expect(try await rowCount(in: session) == 2)
+    }
+
+    @Test func runSQLAsksBeforeADataModifyingCTE() async throws {
+        let session = try await makeSession()
+        let gate = ScriptedGate(false)
+        let executor = makeExecutor(session: session, gate: gate)
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "run_sql", args: [
+            "sql": "WITH d AS (DELETE FROM t WHERE id < 100 RETURNING *) SELECT count(*) FROM d",
+        ]))
+
+        #expect(outcome.status == "denied")
+        #expect(gate.asked.count == 1)
+        #expect(gate.asked.first?.autoApprovable == false)
+        // The card carries the delete warning, not a plain read.
+        #expect(gate.asked.first?.danger == .confirm(.deleteData))
+    }
+
+    @Test func runSQLAsksBeforeAMongoWriteWhoseArgumentsMentionARead() async {
+        let gate = ScriptedGate(false)
+        var executed: [String] = []
+        let executor = QueryToolExecutor(
+            gate: gate,
+            onPropose: { _, _ in },
+            executeStatement: { sql, _ in
+                executed.append(sql)
+                return .payload(["executed": true])
+            }
+        )
+
+        let outcome = await executor.execute(AIToolCall(
+            id: "c", name: "run_sql", args: ["sql": #"db.users.deleteMany({note: ".find("})"#]
+        ))
+
+        #expect(outcome.status == "denied")
+        #expect(gate.asked.count == 1)
+        #expect(executed.isEmpty)
+    }
+
+    /// Guard for the test above: a read whose filter mentions a write method
+    /// still runs without a card.
+    @Test func runSQLAutoRunsAMongoFindWhoseFilterMentionsAWrite() async {
+        let gate = ScriptedGate(false)
+        var executed: [String] = []
+        let executor = QueryToolExecutor(
+            gate: gate,
+            onPropose: { _, _ in },
+            executeStatement: { sql, _ in
+                executed.append(sql)
+                return .payload(["executed": true])
+            }
+        )
+        let sql = #"db.users.find({note: "deleteMany"})"#
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "run_sql", args: ["sql": sql]))
+
+        #expect(outcome.status == "ok")
+        #expect(gate.asked.isEmpty)
+        #expect(executed == [sql])
+    }
+
     /// Regression: a real database round-trip from run_sql must not be able
     /// to hang forever — PostgresNIO (and the other drivers) set no query
     /// timeout of their own, so a connection gone quietly dead mid-query
