@@ -5909,6 +5909,96 @@ private func makeSessionWithConfirmedReport(
     #expect(transport.receivedTools.map(\.name) == ["search_conversation"])
 }
 
+/// A session whose cloud turn failed offline, so a retry is queued for when
+/// connectivity returns. The transport answers normally from here on.
+@MainActor
+private func sessionWaitingForNetwork(_ transport: MockTransport) async throws -> AISession {
+    transport.responseError = URLError(.notConnectedToInternet)
+    let session = AISession(
+        transport: transport,
+        executor: LocalCapabilityHost(executor: CapabilityExecutor(toolSpecs: [])),
+        dialect: "postgres", schemaDigest: "d", store: makeStore()
+    )
+    await session.send("cloud question")
+    transport.responseError = nil
+    try #require(session.isWaitingForNetwork)
+    return session
+}
+
+/// Guard for the tests below: the retry itself still works for a
+/// conversation that stays on the cloud.
+@MainActor
+@Test func networkRetryResendsAPlainCloudTurn() async throws {
+    let transport = MockTransport(before: [], after: [])
+    let session = try await sessionWaitingForNetwork(transport)
+    let sent = transport.messageRequests.count
+
+    await session.retryAfterNetworkRestored()
+
+    #expect(transport.messageRequests.count == sent + 1)
+    #expect(transport.messageRequests.last?.text == "cloud question")
+}
+
+/// The retry sends the thread's messages as context. After an on-device
+/// turn those include on-device text, so the retry is dropped.
+@MainActor
+@Test func onDeviceSendDropsAQueuedNetworkRetry() async throws {
+    let transport = MockTransport(before: [], after: [])
+    let session = try await sessionWaitingForNetwork(transport)
+
+    await session.sendLocal("still offline", provider: SessionScriptedLocal(["Answered on the Mac."]))
+    let sent = transport.messageRequests.count
+    await session.retryAfterNetworkRestored()
+
+    #expect(transport.messageRequests.count == sent)
+    #expect(!session.isWaitingForNetwork)
+}
+
+/// A retry belongs to the thread it failed in; it must not land in a new
+/// one, or in an older one opened from history.
+@MainActor
+@Test func startingANewThreadDropsAQueuedNetworkRetry() async throws {
+    let transport = MockTransport(before: [], after: [])
+    let session = try await sessionWaitingForNetwork(transport)
+
+    session.startNewThread()
+    let sent = transport.messageRequests.count
+    await session.retryAfterNetworkRestored()
+
+    #expect(transport.messageRequests.count == sent)
+    #expect(!session.isWaitingForNetwork)
+}
+
+@MainActor
+@Test func loadingAThreadDropsAQueuedNetworkRetry() async throws {
+    let transport = MockTransport(before: [], after: [])
+    let session = try await sessionWaitingForNetwork(transport)
+
+    session.loadThread(id: UUID().uuidString, turns: [])
+    let sent = transport.messageRequests.count
+    await session.retryAfterNetworkRestored()
+
+    #expect(transport.messageRequests.count == sent)
+    #expect(!session.isWaitingForNetwork)
+}
+
+@MainActor
+@Test func networkRetryVetoedByTheHookIsDropped() async throws {
+    let transport = MockTransport(before: [], after: [])
+    let session = try await sessionWaitingForNetwork(transport)
+    session.allowsNetworkRetry = { false }
+
+    let sent = transport.messageRequests.count
+    await session.retryAfterNetworkRestored()
+    #expect(transport.messageRequests.count == sent)
+    #expect(!session.isWaitingForNetwork)
+
+    // Dropped, not postponed: allowing retries again later sends nothing.
+    session.allowsNetworkRetry = { true }
+    await session.retryAfterNetworkRestored()
+    #expect(transport.messageRequests.count == sent)
+}
+
 @MainActor
 @Test func describeTranslatesToolResultRejectedControlTokenExpiredOrUnknown() {
     // 1. When server returns {"code":"tool_result_rejected","reason":"control_token_unknown"}

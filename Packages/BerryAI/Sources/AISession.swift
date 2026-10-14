@@ -316,6 +316,11 @@ public final class AISession {
     /// notices and retypes it by hand.
     public private(set) var isWaitingForNetwork = false
     private var pendingNetworkRetryText: String?
+    /// Asked when connectivity returns, before the queued retry is sent. The
+    /// retry goes to BerryDB's AI service, which may no longer be where this
+    /// conversation's prompts go (the on-device model chosen meanwhile, AI
+    /// turned off, consent withdrawn); false drops it. Nil allows it.
+    public var allowsNetworkRetry: (() -> Bool)?
     // @ObservationIgnored: never read by a View, so it shouldn't be part of
     // @Observable's tracking in the first place — also required to make
     // nonisolated(unsafe) below actually take effect (the macro's tracked
@@ -704,11 +709,19 @@ public final class AISession {
     /// Fires once per reconnect, only if a turn is actually waiting — a
     /// `.satisfied` update with nothing pending (the common case: most path
     /// updates aren't a recovery from an outage) is a no-op.
-    private func retryAfterNetworkRestored() async {
+    func retryAfterNetworkRestored() async {
         guard let text = pendingNetworkRetryText, !isStreaming else { return }
+        dropNetworkRetry()
+        guard allowsNetworkRetry?() ?? true else { return }
+        await send(text)
+    }
+
+    /// The retry sends the thread's messages as context, so it is dropped as
+    /// soon as the conversation moves away from the turn that failed: an
+    /// on-device send, a new thread, or another thread opened.
+    private func dropNetworkRetry() {
         pendingNetworkRetryText = nil
         isWaitingForNetwork = false
-        await send(text)
     }
 
     /// Connectivity-loss errors specifically — as opposed to a server error,
@@ -2212,6 +2225,7 @@ public final class AISession {
     public func admitSendLocal(_ text: String, provider: any LocalCompletionProvider) -> SendLocalAdmission {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .ignored }
+        dropNetworkRetry()
         lastLocalProvider = provider
         guard activeInteraction == nil, pendingReportDraft == nil, !isStreaming else {
             queuedMessages.append(trimmed)
@@ -2346,6 +2360,7 @@ public final class AISession {
         capabilityErrorLocalizationKey = nil
         controlDeliveryErrorLocalizationKey = nil
         totalTokens = 0
+        dropNetworkRetry()
     }
 
     /// Drops the staged (pre-confirm) summary review. The consented copy on
@@ -2378,6 +2393,7 @@ public final class AISession {
         reportSubmissionState = .idle
         restorePendingInteraction(threadID: id)
         restorePendingReportDraft(threadID: id)
+        dropNetworkRetry()
     }
 
     /// The current thread id, if a conversation has started (for the panel to

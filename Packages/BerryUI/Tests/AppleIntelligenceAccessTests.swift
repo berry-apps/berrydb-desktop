@@ -293,6 +293,25 @@ struct AppleIntelligenceAccessTests {
         }
     }
 
+    /// A cloud turn that failed offline is retried when connectivity returns.
+    /// The panel lets that happen only while the route is still the backend.
+    @Test func networkRetryIsAllowedOnlyWhileTheRouteIsTheBackend() async throws {
+        try await withCleanGrant {
+            try await withOnDeviceToggle(true) {
+                let controller = try await makeBoundController()
+                controller.licenseStatus = { .trial(daysLeft: 5) }
+                let allowsRetry = try #require(controller.aiSession?.allowsNetworkRetry)
+                #expect(!allowsRetry(), "the on-device model is preferred")
+
+                UserDefaults.standard.set(false, forKey: "berry.ai.onDevice")
+                #expect(allowsRetry(), "a licensed cloud route")
+
+                controller.enabledForConnection = false
+                #expect(!allowsRetry(), "AI is off for the connection")
+            }
+        }
+    }
+
     // MARK: - The command palette's "Ask AI" passes the same gate as a send
 
     // A palette query that reaches the network waits on `example.invalid`

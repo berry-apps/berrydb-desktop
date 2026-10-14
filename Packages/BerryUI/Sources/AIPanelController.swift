@@ -1055,6 +1055,7 @@ public final class AIPanelController {
             aiSession?.loadThread(id: existingThreadID, turns: existingTranscript)
         }
         aiSession?.onTurnAdmitted = { [weak self] in self?.onTurnAdmitted?() }
+        aiSession?.allowsNetworkRetry = { [weak self] in self?.sendRoute == .backend }
 
  // Spawn enabled MCP servers in the background; their tools appear
         // on the next turn once tools/list returns.
