@@ -170,7 +170,7 @@ public actor ReadOnlyConnections {
             guard !closed.contains(session.id) else { throw CancellationError() }
             switch opened {
             case .failure(let error):
-                let reason = error.localizedDescription
+                let reason = Self.reason(of: error)
                 if current[session.id] == slotID {
                     current[session.id] = nil
                     slots[slotID] = nil
@@ -334,6 +334,16 @@ public actor ReadOnlyConnections {
     private func remember(closed sessionID: UUID) {
         closed.append(sessionID)
         if closed.count > Self.closedMemory { closed.removeFirst(closed.count - Self.closedMemory) }
+    }
+
+    /// The bare words of a failed open: `readOnlyUnavailable` already carries
+    /// the server's or the driver's reason, and its `localizedDescription`
+    /// would put its own prefix in front of it, which the card then wraps
+    /// again.
+    private static func reason(of error: any Error) -> String {
+        guard let driverError = error as? DriverError else { return error.localizedDescription }
+        if case .readOnlyUnavailable(let detail) = driverError { return detail }
+        return driverError.detail
     }
 
     /// Connects, then sets the connection up read-only; a connection that
