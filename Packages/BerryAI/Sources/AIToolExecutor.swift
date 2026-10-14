@@ -53,7 +53,9 @@ public struct AIToolSpec: Sendable, Equatable {
     /// True when running the tool sends its arguments or local data to
     /// BerryDB's AI service, e.g. to embed a search query. A turn of Apple's
     /// on-device model never offers such a tool, so that turn sends nothing
-    /// off the Mac. Local only; never advertised to the gateway.
+    /// to BerryDB's AI service. Its other tools may still reach the database
+    /// or an MCP server the user configured. Local only; never advertised to
+    /// the gateway.
     public let requiresBackend: Bool
 
     public init(

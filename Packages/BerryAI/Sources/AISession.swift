@@ -2325,9 +2325,9 @@ public final class AISession {
     }
 
     /// The tools an on-device turn may call: every tool except those that
-    /// send data to BerryDB's AI service, so that the turn sends nothing off
-    /// the Mac. `LocalCapabilityHost` refuses to run a tool left out of the
-    /// turn's snapshot even when the model names it.
+    /// send data to BerryDB's AI service, so that the turn sends nothing to
+    /// that service. `LocalCapabilityHost` refuses to run a tool left out of
+    /// the turn's snapshot even when the model names it.
     private func localTurnTools() -> [AIToolSpec] {
         executor.toolSpecs.filter { !$0.requiresBackend }
     }

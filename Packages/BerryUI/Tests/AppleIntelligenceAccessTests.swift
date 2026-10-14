@@ -146,7 +146,6 @@ struct AppleIntelligenceAccessTests {
 
     @Test func bypassGrantedRoutesToLocalNeverBackend() async throws {
         try await withCleanGrant {
-            guard AppleFoundationProvider.isAvailable() else { return } // needs a real on-device machine
             AppleIntelligenceAccess.grant(email: "dev@example.com")
             let controller = try await makeBoundController()
             #expect(controller.availability == .ready)
@@ -225,7 +224,6 @@ struct AppleIntelligenceAccessTests {
     /// above applies here too.
     @Test func editingAMessageIsBlockedButStillShowsTheBubble() async throws {
         try await withCleanGrant {
-            guard AppleFoundationProvider.isAvailable() else { return }
             AppleIntelligenceAccess.grant(email: "dev@example.com")
             let controller = try await makeBoundController()
             controller.draft = "edited text"

@@ -110,7 +110,7 @@ public final class QueryToolExecutor: AIToolExecutor {
     }
 
  /// Sample of a run_sql result returned to the backend.
-    private static let sampleLimit = 100
+    static let sampleLimit = 100
  /// Fixed cap for get_sample_rows.
     private static let sampleRowsLimit = 20
     /// Bounded list size for get_schema mode="overview" (Task 6.1/6.2): large

@@ -1,4 +1,6 @@
-import BerryAI
+@testable import BerryAI
+import BerryLicense
+import BerryStore
 import Foundation
 import Testing
 
@@ -22,15 +24,21 @@ struct AIConsentMessageTests {
         return value == missing ? nil : value
     }
 
-    @Test func saysReadOnlyQueriesRunWithoutAskingWhileThatIsTheDefault() {
+    @Test func saysReadOnlyQueriesRunWithoutAskingWhileThatIsTheDefault() throws {
         let message = AIPanelView.consentMessage
+        let controller = AIPanelController(
+            license: LicenseManager(client: LicenseClient(baseURL: URL(string: "https://example.invalid")!)),
+            backendURL: URL(string: "https://example.invalid")!,
+            store: try BerryStore(path: ":memory:")
+        )
+        #expect(controller.autoApproveSelects, "the default a connection without saved settings gets")
         #expect(QueryToolExecutor.Options().autoApproveSelects)
         #expect(message.contains("without asking"))
         #expect(message.contains("Auto-run safe SELECTs"), "names the switch that turns it off")
     }
 
     @Test func saysHowManyResultRowsTheAssistantSees() {
-        #expect(AIPanelView.consentMessage.contains("up to 100 rows"))
+        #expect(AIPanelView.consentMessage.contains("up to \(QueryToolExecutor.sampleLimit) rows"))
     }
 
     /// Whether a statement needs approval rests on a read-only check of its
