@@ -555,6 +555,20 @@ struct QueryToolExecutorTests {
         #expect(executed.isEmpty)
     }
 
+    /// With auto-run off, a proven read still reaches the gate marked as such,
+    /// so a trust the card holds (Run All Safe) can cover it; a write never is.
+    @Test func gateLearnsWhichStatementsAreReadOnlyWhenAutoRunIsOff() async throws {
+        let session = try await makeSession()
+        let gate = ScriptedGate(false)
+        let executor = makeExecutor(session: session, gate: gate, options: .init(autoApproveSelects: false))
+
+        _ = await executor.execute(AIToolCall(id: "a", name: "run_sql", args: ["sql": "SELECT id FROM t"]))
+        _ = await executor.execute(AIToolCall(id: "b", name: "run_sql", args: ["sql": "INSERT INTO t (id) VALUES (9)"]))
+        _ = await executor.execute(AIToolCall(id: "c", name: "run_sql", args: ["sql": "SELECT id FROM t; DELETE FROM t"]))
+
+        #expect(gate.asked.map(\.autoApprovable) == [true, false, false])
+    }
+
     /// Guard for the test above: a read whose filter mentions a write method
     /// still runs without a card.
     @Test func runSQLAutoRunsAMongoFindWhoseFilterMentionsAWrite() async {

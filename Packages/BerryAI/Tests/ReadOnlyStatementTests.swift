@@ -140,6 +140,136 @@ struct ReadOnlyStatementTests {
         #expect(Self.sql("SELECT @@VERSION", driver: .sqlserver))
     }
 
+    // MARK: Built-in functions with side effects
+
+    @Test(arguments: [
+        "SELECT * FROM dblink('host=x', 'SELECT 1') AS r(a int)",
+        "SELECT dblink_exec('host=x', 'DROP TABLE t')",
+        "SELECT dblink_send_query('c', 'DELETE FROM t')",
+        "SELECT * FROM OPENQUERY(remote, 'SELECT 1')",
+        "SELECT * FROM OPENROWSET('SQLNCLI', 'Server=x;', 'SELECT 1')",
+        "SELECT * FROM OPENDATASOURCE('SQLNCLI', 'Data Source=x').db.dbo.t",
+        "SELECT query_to_xml('SELECT 1', true, false, '')",
+    ])
+    func remoteOrPassThroughExecutionIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text))
+    }
+
+    @Test(arguments: [
+        "SELECT pg_terminate_backend(42)",
+        "SELECT pg_cancel_backend(42)",
+        "SELECT pg_reload_conf()",
+        "SELECT pg_rotate_logfile()",
+        "SELECT set_config('search_path', 'other', false)",
+        "SELECT pg_catalog.set_config('role', 'admin', false)",
+        "SELECT pg_notify('channel', 'payload')",
+        "SELECT pg_stat_reset()",
+        "SELECT pg_switch_wal()",
+        "SELECT pg_create_logical_replication_slot('s', 'pgoutput')",
+    ])
+    func processOrSessionControlIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text))
+    }
+
+    @Test(arguments: [
+        "SELECT nextval('orders_id_seq')",
+        "SELECT setval('orders_id_seq', 1)",
+        "SELECT NEXT VALUE FOR dbo.order_numbers",
+        "SELECT order_seq.nextval FROM dual",
+    ])
+    func sequenceAdvanceIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text))
+    }
+
+    @Test(arguments: [
+        "SELECT lo_import('/etc/hosts')",
+        "SELECT lo_export(16409, '/tmp/x')",
+        "SELECT lo_unlink(16409)",
+        "SELECT lo_create(0)",
+        "SELECT pg_read_file('postgresql.conf')",
+        "SELECT pg_read_binary_file('x')",
+        "SELECT pg_ls_dir('.')",
+        "SELECT pg_stat_file('x')",
+        "SELECT LOAD_FILE('/etc/hosts')",
+    ])
+    func largeObjectOrServerFileIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text))
+    }
+
+    @Test(arguments: [
+        "SELECT pg_advisory_lock(1)",
+        "SELECT pg_advisory_xact_lock_shared(1)",
+        "SELECT pg_try_advisory_lock(1)",
+        "SELECT pg_advisory_unlock_all()",
+        "SELECT GET_LOCK('x', 10)",
+        "SELECT RELEASE_LOCK('x')",
+        "SELECT RELEASE_ALL_LOCKS()",
+        "SELECT pg_sleep(10)",
+        "SELECT pg_sleep_for('5 minutes')",
+        "SELECT SLEEP(10)",
+        "SELECT BENCHMARK(1000000000, MD5('x'))",
+        "SELECT 1 WAITFOR DELAY '01:00:00'",
+    ])
+    func lockOrSleepIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text))
+    }
+
+    @Test(arguments: [
+        "SELECT load_extension('/tmp/x')",
+        "SELECT writefile('/tmp/x', 'y')",
+        "SELECT xp_cmdshell('dir')",
+        "SELECT master.dbo.xp_regread('x')",
+        "SELECT sp_executesql(N'DELETE FROM t')",
+        "SELECT sp_OACreate('x')",
+    ])
+    func extensionOrShellIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text))
+    }
+
+    /// Call forms that keep the function's name from reading as a plain word.
+    @Test(arguments: [
+        #"SELECT "nextval"('s')"#,
+        "SELECT `sleep`(10)",
+        "SELECT [xp_cmdshell]('dir')",
+        "SELECT pg_sleep/* pause */(10)",
+        "SELECT SLEEP (10)",
+    ])
+    func disguisedSideEffectCallIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text))
+    }
+
+    @Test(arguments: [
+        "SELECT count(*), sum(amount), avg(amount), max(id) FROM orders",
+        "SELECT coalesce(name, 'n/a'), lower(email), upper(code), length(note) FROM users",
+        "SELECT now(), current_date, date_trunc('day', created_at) FROM orders",
+        "SELECT json_extract(data, '$.a'), jsonb_build_object('id', id), json_agg(name) FROM events GROUP BY id",
+        "SELECT data->>'name', to_char(created_at, 'YYYY-MM') FROM events",
+        "SELECT currval('orders_id_seq')",
+        "SELECT pg_size_pretty(pg_total_relation_size('orders')), pg_backend_pid()",
+        "SELECT sleep_minutes, next_value, lower_bound FROM shifts",
+    ])
+    func ordinaryFunctionStaysReadOnly(_ text: String) {
+        #expect(Self.sql(text))
+    }
+
+    // MARK: Cost
+
+    /// Classification runs on the main actor before any query timeout, so its
+    /// work stays linear in the length of the text. A chain of casts used to
+    /// make every `:` rescan the rest of the chain.
+    @Test func longCastChainIsLexedInLinearSteps() {
+        let chain = "SELECT x" + String(repeating: "::a", count: 3_000) + " FROM t"
+        #expect(Self.sql(chain))
+        #expect(ReadOnlyStatement.sqlLexingSteps(chain) <= 5 * chain.unicodeScalars.count)
+    }
+
+    @Test func longOrdinarySelectIsLexedInLinearSteps() {
+        let columns = (1...3_000).map { "c\($0)" }.joined(separator: ", ")
+        let select = "SELECT \(columns) FROM t WHERE note = 'a [b] -- c'"
+        #expect(Self.sql(select))
+        #expect(ReadOnlyStatement.sqlLexingSteps(select) <= 5 * select.unicodeScalars.count)
+    }
+
     // MARK: Mongo shell
 
     @Test(arguments: [
@@ -167,6 +297,8 @@ struct ReadOnlyStatementTests {
         "db.users.find({}) /* .count( */",
         #"db.users.find({a: "\"; db.users.deleteMany({}); \""})"#,
         #"db.getSiblingDB("admin").users.find({})"#,
+        // The shell resolver has no `count`.
+        "db.users.count({active: true})",
     ])
     func unrecognizedMongoIsNotReadOnly(_ text: String) {
         #expect(!ReadOnlyStatement.isReadOnlyMongoShell(text))
@@ -177,7 +309,6 @@ struct ReadOnlyStatementTests {
         #"db.users.find({status: "A"}).sort({created: -1}).limit(5)"#,
         #"db.orders.aggregate([{$match: {status: "A"}}, {$group: {_id: "$cust", total: {$sum: "$amount"}}}])"#,
         #"db.users.distinct("city")"#,
-        "db.users.count({active: true})",
         "db.users.find({});",
     ])
     func mongoReadStaysReadOnly(_ text: String) {

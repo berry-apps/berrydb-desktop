@@ -10,6 +10,9 @@ extension String: @retroactive LocalizedError {
 /// User-facing approval for an AI-proposed statement.
 /// Rendered inline in the AI panel: the SQL is shown with [Deny]/[Run]. Writes
 /// and DDL ALWAYS prompt; a plain SELECT may auto-approve per setting.
+/// `autoApprovable` is true only for a statement rated safe and proven
+/// read-only throughout, the one kind a trust held by the gate itself, such
+/// as the card's Run All Safe, may let through without a card.
 @MainActor
 public protocol AIApprovalGate {
     func approve(sql: String, danger: DangerLevel, autoApprovable: Bool) async -> Bool
@@ -1199,8 +1202,8 @@ public final class QueryToolExecutor: AIToolExecutor {
         let isProduction = session?.isProduction ?? false
         let danger = DangerGuard.classify(sql, isProduction: isProduction)
         if case .typedConfirm = danger { return false }
-        let autoApprovable = options.autoApproveSelects && danger == .safe && isReadOnlyThroughout(sql)
-        if autoApprovable { return true }
+        let autoApprovable = danger == .safe && isReadOnlyThroughout(sql)
+        if autoApprovable, options.autoApproveSelects { return true }
         if let timeoutSeconds {
             return await gate.approve(sql: sql, danger: danger, autoApprovable: autoApprovable, timeoutSeconds: timeoutSeconds)
         } else if let deadline = executionDeadlineSeconds {

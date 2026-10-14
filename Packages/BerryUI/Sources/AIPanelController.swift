@@ -35,7 +35,10 @@ public final class AIPanelController {
         public let danger: DangerLevel
         public let createdAt: Date
         public let timeoutSeconds: TimeInterval
+        /// Rated safe and proven read-only throughout by the executor.
+        public let readOnly: Bool
         public var isDangerous: Bool { danger != .safe }
+        public var offersRunAllSafe: Bool { RunAllSafeTrust.offersButton(danger: danger, readOnly: readOnly) }
         public var isExpired: Bool {
             Date().timeIntervalSince(createdAt) >= timeoutSeconds
         }
@@ -45,13 +48,15 @@ public final class AIPanelController {
             sql: String,
             danger: DangerLevel,
             createdAt: Date = Date(),
-            timeoutSeconds: TimeInterval = 110
+            timeoutSeconds: TimeInterval = 110,
+            readOnly: Bool = false
         ) {
             self.id = id
             self.sql = sql
             self.danger = danger
             self.createdAt = createdAt
             self.timeoutSeconds = timeoutSeconds
+            self.readOnly = readOnly
         }
     }
 
@@ -380,8 +385,18 @@ public final class AIPanelController {
     public var autoApproveSelects = true {
         didSet {
             executor?.options.autoApproveSelects = autoApproveSelects
+            // Only the toggle sets this outside a restore, so it is a choice.
+            if !isRestoring {
+                ProductionAutoRun.recordChoice(
+                    isProduction: isProductionConnection, profileID: currentProfileID, defaults: .standard
+                )
+            }
             persistSettings()
         }
+    }
+
+    private var isProductionConnection: Bool {
+        session?.isProduction ?? dataSourceSession?.isProduction ?? false
     }
     private var consentGiven = false {
         didSet {
@@ -398,14 +413,13 @@ public final class AIPanelController {
     public private(set) var pendingApproval: PendingApproval?
     private var approvalContinuation: CheckedContinuation<Bool, Never>?
     private var approvalTimeoutTask: Task<Void, Never>?
- /// Set by an approval card's "Run All Safe" button — subsequent
-    /// safe statements this turn skip the prompt entirely instead of
-    /// re-asking one by one (e.g. running many SELECTs from a tab). Reset
-    /// at the start of every new user message so the trust never silently
-    /// carries into a later, unrelated request. Writes/DDL are never
-    /// covered by this — DangerGuard's "always ask" rule for those is
-    /// untouched; the button only ever appears on a statement that's
-    /// already classified safe.
+    /// Set by an approval card's "Run All Safe" button: later statements this
+    /// turn that are proven read-only skip the prompt instead of asking one
+    /// by one (e.g. running many SELECTs from a tab). Reset at the start of
+    /// every new user message so the trust never carries into a later,
+    /// unrelated request. Writes, DDL and multi-statement text still prompt;
+    /// `RunAllSafeTrust` decides what the trust covers and where the button
+    /// appears.
     private var autoApproveSafeThisTurn = false
 
  // MCP: servers the user has enabled/trusted this session (in-memory
@@ -804,7 +818,9 @@ public final class AIPanelController {
         let acceptedVersion = profileID.map { UserDefaults.standard.integer(forKey: Self.consentVersionKey($0)) } ?? 0
         consentGiven = (saved?.consentGiven ?? false) && acceptedVersion >= Self.consentVersion
         allowSampleRows = saved?.allowSampleRows ?? false
-        autoApproveSelects = saved?.autoApproveSelects ?? true
+        autoApproveSelects = ProductionAutoRun.restored(
+            stored: saved?.autoApproveSelects, isProduction: isProductionConnection, profileID: profileID, defaults: .standard
+        )
         enabledMCPServers = saved?.enabledMCPServers ?? []
         trustedMCPServers = saved?.trustedMCPServers ?? []
  // default OFF on production when there's no saved choice.
@@ -1368,12 +1384,18 @@ public final class AIPanelController {
 
  // MARK: - Approval gate backing
 
-    func requestApproval(sql: String, danger: DangerLevel, timeoutSeconds: TimeInterval = 110) async -> Bool {
-        if danger == .safe, autoApproveSafeThisTurn { return true }
+    func requestApproval(
+        sql: String, danger: DangerLevel, readOnly: Bool = false, timeoutSeconds: TimeInterval = 110
+    ) async -> Bool {
+        if RunAllSafeTrust.skipsCard(danger: danger, readOnly: readOnly, trustedThisTurn: autoApproveSafeThisTurn) {
+            return true
+        }
         approvalTimeoutTask?.cancel()
         return await withCheckedContinuation { continuation in
             approvalContinuation = continuation
-            pendingApproval = PendingApproval(sql: sql, danger: danger, timeoutSeconds: timeoutSeconds)
+            pendingApproval = PendingApproval(
+                sql: sql, danger: danger, timeoutSeconds: timeoutSeconds, readOnly: readOnly
+            )
             approvalTimeoutTask = Task { @MainActor [weak self] in
                 do {
                     try await Task.sleep(nanoseconds: UInt64(max(0, timeoutSeconds) * 1_000_000_000))
@@ -1388,13 +1410,16 @@ public final class AIPanelController {
     }
 
     /// `trustRemainingSafeThisTurn`: from the approval card's "Run All Safe"
-    /// button, only ever offered on a statement already classified safe —
-    /// this still approves that current statement too, not just future ones.
+    /// button, offered only on a statement proven read-only. It approves the
+    /// current statement too, not just future ones, and is ignored for a card
+    /// that never offered the button.
     public func resolveApproval(_ approved: Bool, trustRemainingSafeThisTurn: Bool = false) {
         approvalTimeoutTask?.cancel()
         approvalTimeoutTask = nil
         let isExpired = pendingApproval?.isExpired ?? false
-        if trustRemainingSafeThisTurn && !isExpired { autoApproveSafeThisTurn = true }
+        if trustRemainingSafeThisTurn, !isExpired, pendingApproval?.offersRunAllSafe == true {
+            autoApproveSafeThisTurn = true
+        }
         let effectiveApproved = isExpired ? false : approved
         pendingApproval = nil
         approvalContinuation?.resume(returning: effectiveApproved)
@@ -1530,11 +1555,13 @@ private final class ApprovalGateAdapter: AIApprovalGate {
     }
 
     func approve(sql: String, danger: DangerLevel, autoApprovable: Bool) async -> Bool {
-        await controller?.requestApproval(sql: sql, danger: danger) ?? false
+        await controller?.requestApproval(sql: sql, danger: danger, readOnly: autoApprovable) ?? false
     }
 
     func approve(sql: String, danger: DangerLevel, autoApprovable: Bool, timeoutSeconds: TimeInterval) async -> Bool {
-        await controller?.requestApproval(sql: sql, danger: danger, timeoutSeconds: timeoutSeconds) ?? false
+        await controller?.requestApproval(
+            sql: sql, danger: danger, readOnly: autoApprovable, timeoutSeconds: timeoutSeconds
+        ) ?? false
     }
 }
 

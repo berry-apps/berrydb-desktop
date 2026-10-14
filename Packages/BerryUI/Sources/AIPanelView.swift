@@ -549,10 +549,10 @@ struct AIPanelView: View {
                 Spacer()
                 Button(L("Deny")) { controller.resolveApproval(false) }
                     .keyboardShortcut(.cancelAction)
-                // Only offered on an already-safe statement (e.g. a batch of
-                // SELECTs prompting one by one) — writes/DDL never get this
-                // shortcut, matching DangerGuard's "always ask" rule for them.
-                if !approval.isDangerous {
+                // Offered only on a statement proven read-only (e.g. a batch
+                // of SELECTs prompting one by one); writes, DDL and
+                // multi-statement text never get this shortcut.
+                if approval.offersRunAllSafe {
                     Button(L("Run All Safe")) {
                         controller.resolveApproval(true, trustRemainingSafeThisTurn: true)
                     }
