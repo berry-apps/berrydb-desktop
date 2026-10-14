@@ -19,6 +19,15 @@ public struct SchemaGraph: Sendable {
 
     // MARK: - Building
 
+    /// Makes room for `nodes` nodes and `edges` edges, so a graph built from
+    /// rows whose number is known does not rehash its tables as it grows.
+    mutating func reserveCapacity(nodes: Int, edges: Int) {
+        self.nodes.reserveCapacity(nodes)
+        self.edges.reserveCapacity(edges)
+        outAdjacency.reserveCapacity(nodes)
+        inAdjacency.reserveCapacity(nodes)
+    }
+
     /// Adds or replaces a node (idempotent by id).
     public mutating func addNode(_ node: GraphNode) {
         nodes[node.id] = node

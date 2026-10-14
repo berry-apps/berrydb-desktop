@@ -12,9 +12,9 @@ public final class SimulateImpactToolExecutor: AIToolExecutor {
     /// entitlement, or nothing harvested yet) — an unrecognized table name
     /// still returns a (empty) report rather than nil, same contract as
     /// `WorkspaceViewModel.simulateImpact`.
-    private let simulateImpact: (String) -> ImpactSimulator.Report?
+    private let simulateImpact: (String) async -> ImpactSimulator.Report?
 
-    public init(simulateImpact: @escaping (String) -> ImpactSimulator.Report?) {
+    public init(simulateImpact: @escaping (String) async -> ImpactSimulator.Report?) {
         self.simulateImpact = simulateImpact
     }
 
@@ -27,18 +27,18 @@ public final class SimulateImpactToolExecutor: AIToolExecutor {
     }
 
     public func execute(_ call: AIToolCall) async -> ToolOutcome {
-        executeSimulate(call)
+        await executeSimulate(call)
     }
 
     public func execute(_ call: AIToolCall, lease: AIExecutionLease) async -> ToolOutcome {
         guard lease.isValid else { return .denied }
-        return executeSimulate(call)
+        return await executeSimulate(call)
     }
 
-    private func executeSimulate(_ call: AIToolCall) -> ToolOutcome {
+    private func executeSimulate(_ call: AIToolCall) async -> ToolOutcome {
         guard call.name == "simulate_impact" else { return .failed("Unknown tool '\(call.name)'") }
         guard let table = call.args["table"], !table.isEmpty else { return .failed("Missing 'table'") }
-        guard let report = simulateImpact(table) else {
+        guard let report = await simulateImpact(table) else {
             return .failed("Impact simulation isn't available right now (Intelligence entitlement or a harvested schema is required)")
         }
         let payload: [String: Any] = [

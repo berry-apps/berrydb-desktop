@@ -483,7 +483,12 @@ let package = Package(
             name: "BerryCoreTests",
             // BerryDriverSQLite: integration tests apply ChangeSets to a real
             // in-process database.
-            dependencies: ["BerryCore", "BerryDriverKit", "BerryDriverSQLite"],
+            // BerryDriverPostgres, BerryDriverMySQL, BerryDriverTestKit: tests read the statement bound of a
+            // metadata connection from a real server.
+            dependencies: [
+                "BerryCore", "BerryDriverKit", "BerryDriverSQLite",
+                "BerryDriverPostgres", "BerryDriverMySQL", "BerryDriverTestKit",
+            ],
             path: "Packages/BerryCore/Tests"
         ),
         .testTarget(
@@ -505,10 +510,12 @@ let package = Package(
             // real schema on the Docker matrix (skips when env is unset).
  // BerryDriverSQLite: the Query Analyzer plans EXPLAIN output
             // against an in-process SQLite database — deterministic, no Docker.
+            // GRDB: the reader tests record the statements the store runs.
             dependencies: [
                 "BerryGraph", "BerryDriverKit", "BerryStore", "BerryCore",
                 "BerryDriverPostgres", "BerryDriverMySQL", "BerryDriverSQLite",
                 "BerryDriverTestKit",
+                .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Packages/BerryGraph/Tests"
         ),
@@ -523,8 +530,10 @@ let package = Package(
             // BerryKeyValueKit/BerryDriverRedis: the Redis workspace wiring
  // has its own Docker/local-server-gated
             // conformance suite here too, same pattern as Mongo/Qdrant above.
+            // BerryLicense: the schema embedding consent rule takes a licence
+            // status.
             dependencies: [
-                "BerryUI", "BerryCore", "BerryCredentials", "BerryStore", "BerryGraph", "BerryAI",
+                "BerryUI", "BerryCore", "BerryCredentials", "BerryStore", "BerryGraph", "BerryAI", "BerryLicense",
                 "BerryDriverKit", "BerryDriverSQLite",
                 "BerryDataSourceKit", "BerryDriverMongo", "BerryDriverQdrant", "BerryDriverTestKit",
                 "BerryKeyValueKit", "BerryDriverRedis",
@@ -544,16 +553,20 @@ let package = Package(
         ),
         .testTarget(
             name: "BerryMCPServerTests",
+            // GRDB: a test breaks a store's tables to make every read fail.
             dependencies: [
                 "BerryMCPServer", "BerryMCP", "BerryStore", "BerryGraph",
                 .product(name: "MCP", package: "swift-sdk"),
+                .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Packages/BerryMCPServer/Tests"
         ),
         .testTarget(
             name: "BerryMCPTests",
+            // GRDB: a test breaks a store's tables to make every read fail.
             dependencies: [
                 "BerryMCP", "BerryCredentials", "BerryDriverKit", "BerryGraph", "BerryStore", "BerryDriverSQLite",
+                .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Packages/BerryMCP/Tests"
         ),
@@ -573,9 +586,13 @@ let package = Package(
         // via `make bench` (BERRYDB_BENCH=1 + Docker matrix); skipped otherwise.
         .testTarget(
             name: "BerryBenchmarks",
+            // GRDB: the schema graph scale suite writes a store in an earlier
+            // schema version and runs the store's migrator on it.
             dependencies: [
                 "BerryCore", "BerryDriverKit", "BerryDriverTestKit",
                 "BerryDriverPostgres", "BerryDriverMySQL",
+                "BerryStore", "BerryGraph", "BerryMCP",
+                .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Benchmarks"
         ),

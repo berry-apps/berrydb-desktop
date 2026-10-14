@@ -91,17 +91,18 @@ public enum BerryDBMCPComposition {
         }
     }
 
-    /// The server's dependencies over `store`. The integrity key is loaded
-    /// inside `verify`, which runs on every tool or resource request once
-    /// selection has chosen a project, including while that project is
-    /// disabled or after it was deleted, because the key is read before the
-    /// project row. A key rotated in the app therefore applies to the next
-    /// request, and a session whose selection chose no project never touches
-    /// the Keychain.
+    /// The server's dependencies over `store`, answering metadata from
+    /// `metadata` and reporting every request to `onRequest`. The integrity
+    /// key is loaded inside `verify`, which runs on every tool or resource
+    /// request once selection has chosen a project, including while that
+    /// project is disabled or after it was deleted, because the key is read
+    /// before the project row. A key rotated in the app therefore applies to
+    /// the next request, and a session whose selection chose no project never
+    /// touches the Keychain.
     static func dependencies(
-        store: BerryStore, explicitProject: MCPProjectReference?, workingDirectory: String
+        store: BerryStore, metadata: MCPMetadataService, explicitProject: MCPProjectReference?,
+        workingDirectory: String, onRequest: @escaping @Sendable () -> Void
     ) -> BerryMCPServerFactory.Dependencies {
-        let metadata = MCPMetadataService(store: store)
         let resolver = MCPProjectContextResolver(
             loadProjects: { try store.mcpProjects() },
             verify: { try store.verifiedMCPProject(id: $0, key: MCPAccessKeyStore.keychain.load()) }
@@ -111,7 +112,8 @@ public enum BerryDBMCPComposition {
             metadata: metadata,
             explicitProject: explicitProject,
             workingDirectory: workingDirectory,
-            version: serverVersion
+            version: serverVersion,
+            onRequest: onRequest
         )
     }
 

@@ -20,7 +20,25 @@ final class DynamoDBStubURLProtocol: URLProtocol, @unchecked Sendable {
         let onStop: @Sendable () -> Void
     }
 
+    /// Thrown by a handler to answer after `delay` instead of at once, without
+    /// blocking the shared protocol thread (see `Suspend`). `beforeAnswer` runs
+    /// right before the response is handed to the loading system, so a test can
+    /// count how many requests are in flight between the handler call and the
+    /// answer; it does not run when the request is stopped first. It runs
+    /// before rather than after: once the request has finished loading, its
+    /// caller may resume and start its next request while the answering
+    /// thread has not yet run the hook, and a count dropped there would
+    /// include both.
+    struct Delayed: Error {
+        let delay: TimeInterval
+        let response: HTTPURLResponse
+        let data: Data
+        let beforeAnswer: @Sendable () -> Void
+    }
+
     private var onStop: (@Sendable () -> Void)?
+    private var pendingDelivery: DispatchWorkItem?
+    private let deliveryLock = NSLock()
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var handlers: [String: Handler] = [:]
@@ -78,13 +96,31 @@ final class DynamoDBStubURLProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocolDidFinishLoading(self)
         } catch let suspend as Suspend {
             onStop = suspend.onStop
+        } catch let delayed as Delayed {
+            deliverLater(delayed)
         } catch {
             client?.urlProtocol(self, didFailWithError: error)
         }
     }
 
     override func stopLoading() {
+        deliveryLock.lock()
+        pendingDelivery?.cancel()
+        deliveryLock.unlock()
         onStop?()
+    }
+
+    private func deliverLater(_ delayed: Delayed) {
+        let delivery = DispatchWorkItem { [self] in
+            delayed.beforeAnswer()
+            client?.urlProtocol(self, didReceive: delayed.response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: delayed.data)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+        deliveryLock.lock()
+        pendingDelivery = delivery
+        deliveryLock.unlock()
+        DispatchQueue.global().asyncAfter(deadline: .now() + delayed.delay, execute: delivery)
     }
 
     private static func drain(_ stream: InputStream) -> Data {

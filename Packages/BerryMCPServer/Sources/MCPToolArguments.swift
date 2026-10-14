@@ -16,6 +16,9 @@ struct MCPToolArguments {
     static let searchLimitRange = 1 ... 200
     static let defaultSearchLimit = 50
     static let graphLimitRange = 1 ... 50
+    static let changesLimitRange = 1 ... 200
+    static let defaultChangesLimit = 50
+    static let maximumSinceLength = 64
 
     private let values: [String: Value]
 
@@ -32,10 +35,11 @@ struct MCPToolArguments {
     static func allowedKeys(for tool: MCPToolName) -> Set<String> {
         switch tool {
         case .status, .listConnections: return []
-        case .getSchema: return ["connection_id", "object_names", "detail"]
+        case .getSchema: return ["connection_id", "object_names", "detail", "offset"]
         case .searchSchema: return ["connection_id", "query", "limit"]
         case .graphQuery: return ["connection_id", "operation", "node", "from", "to", "limit"]
         case .getGraphStats: return ["connection_id", "object"]
+        case .getSchemaChanges: return ["connection_id", "since", "limit"]
         }
     }
 
@@ -86,6 +90,28 @@ struct MCPToolArguments {
 
     func searchLimit() throws -> Int {
         try integer("limit", in: Self.searchLimitRange) ?? Self.defaultSearchLimit
+    }
+
+    /// Where a listing page starts; 0 when absent.
+    func offset() throws -> Int {
+        guard let offset = try integer("offset") else { return 0 }
+        guard offset >= 0 else { throw MCPError.invalidParams("offset must be 0 or greater") }
+        return offset
+    }
+
+    /// The change feed position to continue from, as the service accepts it.
+    /// Only its length is checked here; text the service cannot read is a
+    /// tool error, since a cursor that went stale is not a malformed call.
+    func since() throws -> String? {
+        guard let since = try string("since") else { return nil }
+        guard since.count <= Self.maximumSinceLength else {
+            throw MCPError.invalidParams("since must be at most \(Self.maximumSinceLength) characters")
+        }
+        return since
+    }
+
+    func changesLimit() throws -> Int {
+        try integer("limit", in: Self.changesLimitRange) ?? Self.defaultChangesLimit
     }
 
     /// Every present key is type- and range-checked before the operation is
@@ -140,12 +166,18 @@ struct MCPToolArguments {
     }
 
     private func integer(_ key: String, in range: ClosedRange<Int>) throws -> Int? {
+        guard let number = try integer(key) else { return nil }
+        guard range.contains(number) else {
+            throw MCPError.invalidParams("\(key) must be between \(range.lowerBound) and \(range.upperBound)")
+        }
+        return number
+    }
+
+    /// A present, non-null integer argument, or nil when absent.
+    private func integer(_ key: String) throws -> Int? {
         guard let value = values[key], !value.isNull else { return nil }
         guard let number = value.intValue else {
             throw MCPError.invalidParams("\(key) must be an integer")
-        }
-        guard range.contains(number) else {
-            throw MCPError.invalidParams("\(key) must be between \(range.lowerBound) and \(range.upperBound)")
         }
         return number
     }

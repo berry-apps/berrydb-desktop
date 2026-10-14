@@ -44,12 +44,12 @@ struct TimeMachineTests {
         try await vm.refreshObjects()
         await vm.harvestGraphNow()
 
-        let snapshots = vm.timelineSnapshots()
-        // Digest-deduped, one per real structural change: connect's own
-        // implicit harvest (empty schema), CREATE TABLE, then ALTER TABLE.
-        #expect(snapshots.count == 3)
+        let marks = await vm.timelineSnapshots()
+        // One mark per pass that changed the schema: CREATE TABLE, then ALTER
+        // TABLE. The pass over the empty schema at connect changes nothing.
+        try #require(marks.count == 2)
 
-        let changes = vm.timelineChanges(from: snapshots[1].takenAt, to: snapshots[0].takenAt)
+        let changes = await vm.timelineChanges(from: marks[1].at, to: marks[0].at)
         #expect(changes.count == 1)
         let change = try #require(changes.first)
         #expect(change.isAdded == true)
@@ -60,9 +60,9 @@ struct TimeMachineTests {
         vm.disconnect()
     }
 
-    @Test func noSnapshotsWithoutHarvest() throws {
+    @Test func noSnapshotsWithoutHarvest() async throws {
         let vm = try WorkspaceViewModel(storePath: tempPath("store"))
-        #expect(vm.timelineSnapshots().isEmpty)
-        #expect(vm.timelineChanges(from: Date(), to: Date()).isEmpty)
+        #expect(await vm.timelineSnapshots().isEmpty)
+        #expect(await vm.timelineChanges(from: Date(), to: Date()).isEmpty)
     }
 }

@@ -178,7 +178,7 @@ struct BackupManagerView: View {
                 } else {
                     status = L("This backup doesn't match the current connection type.")
                 }
-                viewModel.refreshSchema()
+                viewModel.refreshSchema(harvestReason: .ownDDL)
             } catch {
                 status = error.localizedDescription
             }

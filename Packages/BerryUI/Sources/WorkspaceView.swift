@@ -26,6 +26,8 @@ public struct WorkspaceView: View {
     @State private var showImportSQLSheet = false
     @State private var showRestoreDumpSheet = false
     @State private var importSQLInitialURL: URL?
+    /// The open "Schemas to Index" sheet's model, nil while it is closed.
+    @State private var schemaScope: SchemaScopeModel?
     @State private var license: LicenseManager
     @State private var aiController: AIPanelController
     @State private var processBuffer = ResultBuffer()
@@ -181,6 +183,9 @@ public struct WorkspaceView: View {
         // NSWindow.title is the only source that UI reads. An empty title
         // here previously left native tabs blank.
         .navigationTitle(viewModel.connectionTitle)
+        // Each window owns its workspace; when the window closes, its schema
+        // passes, drains and catalog connections stop with it.
+        .background(WindowCloseObserver { viewModel.closeWorkspace() })
         .toolbar { toolbarContent }
         .focusedSceneValue(\.workspaceMenu, menuActions)
         // History / Saved Queries / New Table / Import / Processes / Insights /
@@ -236,7 +241,7 @@ public struct WorkspaceView: View {
                         importSQLInitialURL = nil
                     },
                     onSuccess: {
-                        viewModel.refreshSchema()
+                        viewModel.refreshSchema(harvestReason: .ownDDL)
                     }
                 )
             }
@@ -247,8 +252,15 @@ public struct WorkspaceView: View {
                 dataSourceSession: viewModel.dataSourceSession,
                 onDismiss: { showRestoreDumpSheet = false },
                 onSuccess: {
-                    viewModel.refreshSchema()
+                    viewModel.refreshSchema(harvestReason: .ownDDL)
                 }
+            )
+        }
+        .sheet(item: $schemaScope) { model in
+            SchemaScopeView(
+                model: model,
+                connectionName: viewModel.profiles.first { $0.id == model.id }?.name ?? "",
+                onClose: { schemaScope = nil }
             )
         }
         .sheet(item: $connectionSheetTarget) { target in
@@ -444,7 +456,7 @@ public struct WorkspaceView: View {
                 case nil: viewModel.newEditorTab(text: sql, title: title)
                 }
             }
-            aiController.onRefreshSchema = { viewModel.refreshSchema() }
+            aiController.onRefreshSchema = { viewModel.refreshSchema(harvestReason: .ownDDL) }
             aiController.readActiveTab = { viewModel.activeTabSnapshot() }
             aiController.readOpenTabs = { viewModel.openTabsSnapshot() }
             aiController.activeTabStatements = { which in viewModel.activeEditorStatements(for: which) }
@@ -467,7 +479,10 @@ public struct WorkspaceView: View {
             aiController.previewNewColumn = { table, column in
                 await viewModel.previewNewColumn(table: table, column: column)
             }
-            aiController.simulateImpact = { viewModel.simulateImpact($0) }
+            aiController.simulateImpact = { await viewModel.simulateImpact($0) }
+            viewModel.schemaEmbeddingAllowed = { aiController.allowsSchemaEmbedding(profileID: $0) }
+            viewModel.makeSchemaEmbeddingTransport = { aiController.makeSchemaEmbeddingTransport() }
+            aiController.onSchemaEmbeddingConsentChange = { viewModel.schemaEmbeddingConsentChanged(profileID: $0) }
             aiController.maybeGenerateDailyReview = { await viewModel.maybeGenerateDailyReview() }
             aiController.latestDailyReview = { viewModel.latestDailyReview() }
             aiController.slowestQueries = { viewModel.slowestQueries(limit: $0) }
@@ -1591,6 +1606,18 @@ public struct WorkspaceView: View {
                 .font(BerryTheme.Typeface.sidebarRow)
                 .fontWeight(isSelected ? .semibold : .regular)
             Spacer()
+            if viewModel.profilesNeedingSchemaScope.contains(profile.id) {
+                Button {
+                    schemaScope = viewModel.schemaScopeModel(profileID: profile.id)
+                } label: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                .buttonStyle(.plain)
+                .help(L("More than 20,000 tables — pick the schemas to index"))
+                .accessibilityLabel(L("More than 20,000 tables — pick the schemas to index"))
+            }
             if profile.envColor == "production" {
                 ProductionBadge()
             }
@@ -1630,6 +1657,11 @@ public struct WorkspaceView: View {
             }
             Button(L("Duplicate")) {
                 viewModel.duplicate(profile: profile)
+            }
+            if viewModel.intelligenceEntitled, Self.harvestsSchema(profile) {
+                Button(L("Schemas to Index…")) {
+                    schemaScope = viewModel.schemaScopeModel(profileID: profile.id)
+                }
             }
             Divider()
             if index > 0 {
@@ -1999,6 +2031,15 @@ public struct WorkspaceView: View {
             """
         }
         viewModel.newEditorTab(text: sql, title: "new_trigger.sql")
+    }
+
+    /// Whether connecting the profile opens a SQL session, the only kind whose
+    /// schema is harvested.
+    private static func harvestsSchema(_ profile: ConnectionProfile) -> Bool {
+        switch profile.driver {
+        case .mongodb, .qdrant, .elasticsearch, .redis: false
+        default: true
+        }
     }
 
     /// Routes a saved-profile connect to the SQL or NoSQL/vector path by
@@ -2457,7 +2498,7 @@ public struct WorkspaceView: View {
                 transaction: viewModel.transaction,
                 onFocus: { viewModel.focusedGroupID = groupID },
                 onPersist: { viewModel.persistEditor(document) },
-                onRefreshSchema: { viewModel.refreshSchema() },
+                onRefreshSchema: { viewModel.refreshSchema(harvestReason: .ownDDL) },
                 availableProfiles: viewModel.profiles,
                 onAttachProfile: { profile in Task { await viewModel.connect(profile: profile) } },
                 onSaveQueryReplay: { sql, durationMS in await viewModel.saveQueryReplay(sql: sql, durationMS: durationMS) }
@@ -2482,7 +2523,7 @@ public struct WorkspaceView: View {
                     viewModel.alterWarnings(original: original, edited: edited)
                 },
                 migrationPreview: { edited in
-                    viewModel.migrationPreview(editing: edited)
+                    await viewModel.migrationPreview(editing: edited)
                 },
                 tableNames: viewModel.relationalTableNames,
                 columnsProvider: { await viewModel.columns(ofTableNamed: $0) },
@@ -2640,18 +2681,24 @@ public struct WorkspaceView: View {
                 onDismissInsight: { viewModel.recordInsightDismissed($0) },
                 onClose: close
             )
+            .onAppear { viewModel.openGraphView() }
+            .onDisappear { viewModel.closeGraphView() }
         case .graphExplorer:
             GraphExplorerView(
-                tables: { viewModel.harvestedTableNames() },
-                overview: { viewModel.graphOverview($0) },
-                simulateImpact: { viewModel.simulateImpact($0) },
+                graphChangedAt: viewModel.graphChangedAt,
+                tables: { await viewModel.harvestedTableNames() },
+                overview: { await viewModel.graphOverview($0) },
+                simulateImpact: { await viewModel.simulateImpact($0) },
                 onReveal: { viewModel.revealObject(named: $0) },
                 onClose: close
             )
+            .onAppear { viewModel.openGraphView() }
+            .onDisappear { viewModel.closeGraphView() }
         case .timeline:
             TimeMachineView(
-                snapshots: { viewModel.timelineSnapshots() },
-                changes: { viewModel.timelineChanges(from: $0, to: $1) },
+                graphChangedAt: viewModel.graphChangedAt,
+                marks: { await viewModel.timelineSnapshots() },
+                changes: { await viewModel.timelineChanges(from: $0, to: $1) },
                 onReveal: { viewModel.revealObject(named: $0) },
                 onClose: close
             )

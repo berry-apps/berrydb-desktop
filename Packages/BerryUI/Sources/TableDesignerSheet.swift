@@ -19,7 +19,7 @@ struct TableDesignerSheet: View {
     /// Unsupported-edit warnings from the alteration diff (ALTER mode).
     let alterWarnings: (TableDesign) -> [String]
  /// AI Schema Review findings for the edit-in-progress (ALTER mode).
-    let migrationPreview: (TableDesign) -> [Insight]
+    let migrationPreview: (TableDesign) async -> [Insight]
  /// Existing table names for FK "referenced table" suggestions.
     let tableNames: [String]
     /// Columns of a referenced table, for FK "referenced column" suggestions.
@@ -46,7 +46,7 @@ struct TableDesignerSheet: View {
         onClose: @escaping () -> Void,
         editingExisting: TableDesign? = nil,
         alterWarnings: @escaping (TableDesign) -> [String] = { _ in [] },
-        migrationPreview: @escaping (TableDesign) -> [Insight] = { _ in [] },
+        migrationPreview: @escaping (TableDesign) async -> [Insight] = { _ in [] },
         tableNames: [String] = [],
         columnsProvider: @escaping (String) async -> [String] = { _ in [] },
         driver: DriverID = .sqlite,
@@ -103,7 +103,9 @@ struct TableDesignerSheet: View {
  // not a style choice.
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard !Task.isCancelled else { return }
-            previewInsights = migrationPreview(current)
+            let insights = await migrationPreview(current)
+            guard !Task.isCancelled else { return }
+            previewInsights = insights
         }
     }
 

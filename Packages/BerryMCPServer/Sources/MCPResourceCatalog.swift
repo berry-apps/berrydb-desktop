@@ -51,9 +51,10 @@ public enum MCPResourceCatalog {
         let connections = try mapping { try metadata.listConnections(in: project) }
         guard let connection = connections.first(where: { $0.id == id }) else { throw unknownResource() }
         let stats = try mapping { try metadata.graphStats(in: project, connectionID: id, object: nil) }
-        guard case let .summary(summary) = stats else { throw unknownResource() }
+        guard case let .summary(summary) = stats.value else { throw unknownResource() }
         let payload = GraphPayload(
-            harvestedAt: connection.graphHarvestedAt, tables: summary.tables, unusedIndexes: summary.unusedIndexes
+            harvestedAt: connection.graphHarvestedAt, checkedAt: stats.checkedAt, stale: stats.stale,
+            tables: summary.tables, unusedIndexes: summary.unusedIndexes
         )
         return [try content(payload, uri: uri)]
     }
@@ -70,8 +71,27 @@ public enum MCPResourceCatalog {
 
     private struct GraphPayload: Encodable {
         let harvestedAt: Date?
+        let checkedAt: Date?
+        let stale: Bool
         let tables: [BerryGraphQueryService.NodeStatistics]
         let unusedIndexes: [String]
+
+        private enum CodingKeys: String, CodingKey {
+            case harvestedAt, checkedAt, stale, tables, unusedIndexes
+        }
+
+        /// `checkedAt` is written as null when nil, as in every tool's
+        /// answer; `harvestedAt` is left out then, as `berrydb_get_schema`
+        /// leaves it, and the resource is listed only for a connection that
+        /// has one.
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encodeIfPresent(harvestedAt, forKey: .harvestedAt)
+            try container.encode(checkedAt, forKey: .checkedAt)
+            try container.encode(stale, forKey: .stale)
+            try container.encode(tables, forKey: .tables)
+            try container.encode(unusedIndexes, forKey: .unusedIndexes)
+        }
     }
 
     private static func graphURI(_ id: UUID) -> String {

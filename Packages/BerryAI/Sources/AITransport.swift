@@ -446,6 +446,14 @@ public struct AIClient: AITransport {
         self.capabilityCompatibility = capabilityCompatibility
     }
 
+    /// Ends the client's URL session once its requests have finished
+    /// (https://developer.apple.com/documentation/foundation/urlsession/finishtasksandinvalidate()).
+    /// The client must send nothing afterwards: a session refuses new tasks
+    /// once invalidated.
+    public func invalidateSession() {
+        session.finishTasksAndInvalidate()
+    }
+
     private func request(_ path: String, method: String = "POST") -> URLRequest {
         // `appendingPathComponent` percent-escapes `?`/`&` instead of treating
         // them as a query string (it's for path segments, not URI references),

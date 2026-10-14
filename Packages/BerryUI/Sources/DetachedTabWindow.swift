@@ -79,7 +79,7 @@ public struct DetachedTabWindow: View {
                     viewModel.alterWarnings(original: original, edited: edited)
                 },
                 migrationPreview: { edited in
-                    viewModel.migrationPreview(editing: edited)
+                    await viewModel.migrationPreview(editing: edited)
                 },
                 driver: viewModel.session?.config.driver ?? .sqlite
             )

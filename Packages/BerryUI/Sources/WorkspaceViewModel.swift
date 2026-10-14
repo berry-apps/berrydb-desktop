@@ -191,10 +191,8 @@ public struct TableGraphOverview: Sendable, Equatable {
 
 /// One existence change between two Digital-Twin snapshots (Time Machine
 /// Timeline) — a table/column/index that appeared or
-/// disappeared. Existence-only: `graph_node`'s attrs are upserted in place
-/// with no history, and the snapshot digest itself only covers node/edge
-/// existence, so an attribute-only change (e.g. a column's type) never even
-/// creates a new snapshot to diff against — not tracked here, not a UI gap.
+/// disappeared. Existence-only: a column's attribute-only change (e.g. its
+/// type) is not tracked here.
 public struct TimelineChange: Identifiable, Sendable, Equatable {
     public let id: String
     public let isAdded: Bool
@@ -388,13 +386,81 @@ public final class WorkspaceViewModel {
     private var editorCounter = 0
     private var mermaidDiagramCounter = 0
 
-    private var store: BerryStore?
+    private(set) var store: BerryStore?
     private var snapshotSink: (any SchemaSnapshotSink)?
 
- /// Digital-Twin graph store, backed by the same store.sqlite.
-    private var graphStore: GraphStore? { store.map(GraphStore.init(store:)) }
+    // MARK: Schema graph
+
+    /// Runs the schema harvest passes of this workspace's connections, off the
+    /// main actor. Nil when the store did not open.
+    @ObservationIgnored private var harvestCoordinator: HarvestCoordinator?
+    /// One catalog connection per open session, so a pass never waits behind
+    /// the user's own statements on the session's connection.
+    let metadataConnections = MetadataConnections()
+    /// Shared with every window on the same store; see `sharedGraphWork`.
+    let embeddingDrains: SchemaEmbeddingDrains
+    /// Shared with every window on the same store; see `sharedGraphWork`.
+    let passGate: HarvestPassGate
+    /// Identifies this workspace's drains among those of every window on the
+    /// same store.
+    let workspaceID = UUID()
+    /// Set once the workspace's window closed; its graph work never starts
+    /// again.
+    @ObservationIgnored private(set) var isClosed = false
+    /// Gives memory back when the system reports pressure: the store's page
+    /// and statement caches, which GRDB releases on its own only on iOS
+    /// (https://github.com/groue/GRDB.swift/blob/v7.11.1/README.md#memory-management), and
+    /// the full graph a graph view keeps, hundreds of megabytes for a large
+    /// schema. The next read loads the graph again.
+    @ObservationIgnored private(set) var storeMemory: StoreMemoryManager?
+    /// Whether a profile allows its table names to leave the machine now.
+    /// Without it nothing is embedded.
+    @ObservationIgnored public var schemaEmbeddingAllowed: ((UUID) -> Bool)?
+    /// Builds the transport one drain sends a profile's names with; the drain
+    /// releases it when it ends.
+    @ObservationIgnored public var makeSchemaEmbeddingTransport: (() -> SchemaEmbeddingTransport)?
+    /// When the active profile's stored schema last changed. Views that show
+    /// the graph reload when it moves.
+    public private(set) var graphChangedAt: Date?
+    @ObservationIgnored private var graphLoad: GraphLoad?
+    /// Open views that show the full graph. The graph is cached only while
+    /// one is open, so a large schema's graph is not held for the session.
+    @ObservationIgnored private var graphViewers = 0
+    /// Full-graph loads started, so a test can tell a cached graph from a
+    /// reloaded one.
+    @ObservationIgnored private(set) var graphLoads = 0
+    @ObservationIgnored private(set) var statisticsRefresh: Task<Void, Never>?
+    /// Saved profiles whose last pass found more tables than a whole-catalog
+    /// pass handles well, as far as this workspace has seen; the sidebar marks
+    /// them so the user can narrow their scope.
+    public private(set) var profilesNeedingSchemaScope: Set<UUID> = []
+    /// The open SQL session whose graph work is live. Cleared as soon as that
+    /// work stops, before its metadata connection closes, so a pass still
+    /// asking for an introspector can no longer resolve the closing session.
+    @ObservationIgnored private var graphSession: Session?
+    /// Profiles whose graph work stopped with their session and which have
+    /// not been opened again.
+    @ObservationIgnored private var leftGraphProfiles: Set<UUID> = []
+    /// The last session close's teardown of graph work, kept so it can be
+    /// awaited.
+    @ObservationIgnored private(set) var closingGraphWork: Task<Void, Never>?
+    /// Runs in `closeWorkspace()`'s teardown before the catalog connections
+    /// close, so a test can hold the teardown open.
+    @ObservationIgnored var beforeClosingConnections: (@Sendable () async -> Void)?
+
+    private struct GraphLoad {
+        let profileID: UUID
+        /// The stored schema's revision the graph was read at.
+        let revision: Int
+        let task: Task<SchemaGraph?, Never>
+    }
+
+    /// Every open workspace, so quitting can stop their passes and close their
+    /// catalog connections. Weak, so a closed window's workspace is released.
+    private static let openWorkspaces = NSHashTable<WorkspaceViewModel>.weakObjects()
 
     public init() {
+        (embeddingDrains, passGate) = Self.sharedGraphWork(forStorePath: try? BerryStore.defaultStoreURL().path)
         do {
             store = try BerryStore.open()
             profiles = try store?.allProfiles() ?? []
@@ -404,13 +470,139 @@ public final class WorkspaceViewModel {
             storeError = error.localizedDescription
         }
         wireSinks()
+        wireHarvest()
     }
 
     /// Test-only initializer with an injected store path.
     public init(storePath: String) throws {
+        (embeddingDrains, passGate) = Self.sharedGraphWork(forStorePath: storePath)
         store = try BerryStore(path: storePath)
         profiles = try store?.allProfiles() ?? []
         wireSinks()
+        wireHarvest()
+    }
+
+    private static var sharedDrains: [String: SchemaEmbeddingDrains] = [:]
+    private static var sharedPassGates: [String: HarvestPassGate] = [:]
+
+    /// The drains and the pass gate of every workspace on the store at
+    /// `path`. Each window has its own workspace, coordinator and catalog
+    /// connections, but a profile open in two windows is harvested by one
+    /// pass at a time and drained once, and the app as a whole runs no more
+    /// passes at once than one coordinator would. An in-memory store, or one
+    /// whose path is unknown, is a store of its own and shares nothing.
+    private static func sharedGraphWork(forStorePath path: String?) -> (SchemaEmbeddingDrains, HarvestPassGate) {
+        guard let path, path != ":memory:", !path.isEmpty else { return (SchemaEmbeddingDrains(), HarvestPassGate()) }
+        let drains = sharedDrains[path] ?? SchemaEmbeddingDrains()
+        let gate = sharedPassGates[path] ?? HarvestPassGate()
+        sharedDrains[path] = drains
+        sharedPassGates[path] = gate
+        return (drains, gate)
+    }
+
+    /// The coordinator's passes read the catalog through the metadata
+    /// connection of the profile's open session. A profile without one fails
+    /// the pass as a connection failure: nothing here connects in the
+    /// background.
+    private func wireHarvest() {
+        Self.openWorkspaces.add(self)
+        guard let store else { return }
+        // The pressure source calls back on a utility queue.
+        storeMemory = StoreMemoryManager(store: store, onPressure: { [weak self] in
+            Task { @MainActor in self?.graphLoad = nil }
+        })
+        let connections = metadataConnections
+        let introspector: HarvestCoordinator.IntrospectorProvider = { [weak self] profileID in
+            let session = try await MainActor.run { () throws -> Session in
+                guard let self else { throw CancellationError() }
+                return try self.harvestSession(for: profileID)
+            }
+            // A pass cancelled while it waited, because its session is
+            // closing, must not open a connection for that session.
+            try Task.checkCancellation()
+            return try await connections.connection(for: session).introspector
+        }
+        // The connection a failed pass read through may be dead; the next
+        // pass connects again. Only the profile's current session is touched:
+        // a session closed since then took its connection with it.
+        let dropConnection: @Sendable (UUID) async -> Void = { [weak self] profileID in
+            let sessionID = await MainActor.run { () -> UUID? in
+                guard let session = self?.graphSession, session.profileID == profileID else { return nil }
+                return session.id
+            }
+            if let sessionID { await connections.discard(sessionID: sessionID) }
+        }
+        harvestCoordinator = HarvestCoordinator(
+            store: store, introspector: introspector, dropConnection: dropConnection, passGate: passGate
+        )
+    }
+
+    /// A pass was requested for a profile with no open session; the
+    /// coordinator records it as a connection failure.
+    struct NoOpenSession: Error {}
+
+    /// The session a pass for `profileID` reads the catalog through. A pass
+    /// for a profile this workspace has left was cancelled with its session,
+    /// even when the cancel has not reached the coordinator yet, so it throws
+    /// `CancellationError` rather than counting as a connection failure that
+    /// starts a backoff.
+    func harvestSession(for profileID: UUID) throws -> Session {
+        if isClosed { throw CancellationError() }
+        if let graphSession, graphSession.profileID == profileID { return graphSession }
+        if leftGraphProfiles.contains(profileID) { throw CancellationError() }
+        throw NoOpenSession()
+    }
+
+    /// Stops this workspace's graph work for good, when its window closes:
+    /// its passes, statistics refresh and embedding drains stop, its catalog
+    /// connections close, and the full graph it cached is dropped whatever
+    /// the graph views reported. The session itself is left as it is.
+    /// Nothing else stops them, because the view model is not released with
+    /// its window (see `WindowCloseObserver`).
+    public func closeWorkspace() {
+        guard !isClosed else { return }
+        isClosed = true
+        graphSession = nil
+        statisticsRefresh?.cancel()
+        statisticsRefresh = nil
+        graphLoad = nil
+        graphViewers = 0
+        embeddingDrains.cancelAll(ownedBy: workspaceID)
+        storeMemory?.stop()
+        Self.openWorkspaces.remove(self)
+        let coordinator = harvestCoordinator
+        let connections = metadataConnections
+        let hold = beforeClosingConnections
+        let id = workspaceID
+        let teardown = Task.detached {
+            await coordinator?.cancelAll()
+            await hold?()
+            await connections.closeAll()
+            await Self.teardownFinished(id)
+        }
+        closingGraphWork = teardown
+        Self.closingWorkspaces[id] = teardown
+    }
+
+    /// The teardowns of closed workspaces still closing their catalog
+    /// connections. A closed workspace leaves `openWorkspaces`, and closing
+    /// the last window terminates the app, so the quit path awaits these too.
+    private static var closingWorkspaces: [UUID: Task<Void, Never>] = [:]
+
+    private static func teardownFinished(_ id: UUID) {
+        closingWorkspaces[id] = nil
+    }
+
+    /// Stops every open workspace's harvest passes and embedding drains and
+    /// closes their catalog connections, for app termination.
+    public static func closeAllMetadataConnections() async {
+        for teardown in Array(closingWorkspaces.values) { await teardown.value }
+        for workspace in openWorkspaces.allObjects {
+            workspace.statisticsRefresh?.cancel()
+            workspace.embeddingDrains.cancelAll()
+            await workspace.harvestCoordinator?.cancelAll()
+            await workspace.metadataConnections.closeAll()
+        }
     }
 
     /// Single wiring point for the core → store sinks. The DangerGuard
@@ -715,10 +907,13 @@ public final class WorkspaceViewModel {
 
  /// Manually re-read the live schema — clears the per-session cache
     /// so newly created objects show up without reconnecting.
-    public func refreshSchema() {
+    /// `harvestReason` is `.ownDDL` after a statement of this workspace
+    /// changed the schema, which ranks the graph refresh just below one the
+    /// user asked for.
+    public func refreshSchema(harvestReason: HarvestReason = .userAction) {
         Task {
             await catalog?.invalidate()
-            try? await refreshObjects()
+            try? await refreshObjects(harvestReason: harvestReason)
             try? await refreshCollections()
         }
     }
@@ -849,6 +1044,7 @@ public final class WorkspaceViewModel {
         defer { isConnecting = false }
         do {
             if let old = session {
+                stopGraphWork(sessionID: old.id, profileID: activeProfileID)
                 await ConnectionManager.shared.close(old.id)
             }
             // One active connection per workspace, SQL XOR NoSQL XOR key-value
@@ -869,6 +1065,8 @@ public final class WorkspaceViewModel {
                 recordHistory: recordHistory
             )
             session = newSession
+            graphSession = newSession
+            if let profileID { leftGraphProfiles.remove(profileID) }
             activeProfileID = profileID
             catalog = SchemaCatalog(session: newSession, snapshotSink: snapshotSink)
             transaction = TransactionController()
@@ -1025,6 +1223,7 @@ public final class WorkspaceViewModel {
 
     public func disconnect() {
         if let old = session {
+            stopGraphWork(sessionID: old.id, profileID: activeProfileID)
             // Best-effort rollback of any open manual transaction before the
  // socket closes — an abandoned BEGIN must not leak.
             let tx = transaction
@@ -1072,29 +1271,172 @@ public final class WorkspaceViewModel {
         selectedCollectionID = nil
     }
 
-    public func refreshObjects() async throws {
+    /// Re-reads the object list, then refreshes the stored schema graph off
+    /// the UI path. `harvestReason` says who is waiting for the graph: a
+    /// refresh requested from the UI, or one after a statement of this
+    /// workspace changed the schema.
+    public func refreshObjects(harvestReason: HarvestReason = .userAction) async throws {
         guard let catalog else { return }
         objects = try await catalog.objects(forceRefresh: true)
- // Seed/refresh the Digital Twin off the UI path — metadata only
- // (Q6), deduped by digest, off on production. Never blocks or
-        // fails the refresh.
-        Task { await harvestGraphNow() }
+        // Never blocks or fails the refresh.
+        Task { await harvestGraphNow(reason: harvestReason) }
  // Daily Review digest — same off-UI-path pattern; only does
         // real work when due, so this is a cheap no-op most of the time.
         Task { await maybeGenerateDailyReview() }
     }
 
-    /// Harvests the DSG for the active saved profile and records a Digital-Twin
- /// snapshot. Metadata only (Q6); silently a
- /// no-op on a production profile or a profileless quick-open.
-    /// Best-effort — a harvest error never surfaces to the session.
-    public func harvestGraphNow() async {
- guard intelligenceEntitled else { return } // Q15 tier gate
-        guard let session, let catalog, let profileID = activeProfileID, let graphStore else { return }
-        _ = try? await SchemaHarvester.harvest(
-            session: session, catalog: catalog, into: graphStore,
-            profileID: profileID, now: Date()
+    /// Brings the active saved profile's stored schema up to date through the
+    /// harvest coordinator, which reads the catalog off the main actor on the
+    /// session's metadata connection. Metadata only. A no-op without the
+    /// Intelligence entitlement, on a production profile or a profileless
+    /// quick-open, and a failed pass never surfaces to the session.
+    ///
+    /// A pass that changed the schema publishes `graphChangedAt`. One that
+    /// completed starts an embedding drain for any queued names, since a drain
+    /// cut short by a closed connection or by quitting resumes only here, and,
+    /// after a user action, a statistics refresh.
+    public func harvestGraphNow(reason: HarvestReason = .userAction) async {
+        guard intelligenceEntitled, !isClosed, let session, !session.isProduction, let profileID = activeProfileID,
+              let harvestCoordinator else { return }
+        let outcome = await harvestCoordinator.request(reason, for: profileID)
+        // The session or the window may have closed while the pass ran; its
+        // work stopped then.
+        guard !isClosed, self.session?.id == session.id else { return }
+        switch outcome {
+        case .updated, .unchanged:
+            if case .updated = outcome {
+                await publishGraphChange(profileID: profileID)
+            } else if let state = await storedGraphState(profileID: profileID) {
+                // A pass over an unchanged catalog writes no change time, but a
+                // scope saved meanwhile can have moved the hint.
+                noteSchemaScopeHint(state, profileID: profileID)
+            }
+            guard self.session?.id == session.id else { return }
+            drainSchemaEmbeddings(profileID: profileID)
+            if reason == .userAction { refreshStatistics(session: session, profileID: profileID) }
+        case .partial, .failed, .backingOff:
+            // Rows such a pass wrote moved the stored schema's revision, which
+            // the kept graph is keyed on.
+            break
+        }
+    }
+
+    /// Reads the profile's change time and hint off the main actor and
+    /// publishes them, dropping a graph cached under the previous change time.
+    private func publishGraphChange(profileID: UUID) async {
+        let state = await storedGraphState(profileID: profileID)
+        guard activeProfileID == profileID else { return }
+        graphLoad = nil
+        graphChangedAt = state?.changedAt
+        if let state { noteSchemaScopeHint(state, profileID: profileID) }
+    }
+
+    private func storedGraphState(profileID: UUID) async -> GraphReader.State? {
+        guard let store else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            try? GraphReader(store: store).state(profileID: profileID)
+        }.value
+    }
+
+    private func noteSchemaScopeHint(_ state: GraphReader.State, profileID: UUID) {
+        if state.hint == "selectSchemas" {
+            profilesNeedingSchemaScope.insert(profileID)
+        } else {
+            profilesNeedingSchemaScope.remove(profileID)
+        }
+    }
+
+    /// Consent is asked again before every batch, so a connection whose AI is
+    /// switched off, or which moves to the on-device model, stops sending
+    /// names at the next batch even if nothing cancels the drain. The
+    /// transport is built once per drain.
+    private func drainSchemaEmbeddings(profileID: UUID) {
+        guard let store else { return }
+        embeddingDrains.start(
+            profileID: profileID, owner: workspaceID,
+            allowed: { [weak self] in self?.schemaEmbeddingAllowed?(profileID) ?? false },
+            indexer: { [weak self] in
+                guard let made = self?.makeSchemaEmbeddingTransport?() else { return nil }
+                return DrainIndexer(SchemaEmbeddingIndexer(store: store, transport: made.transport), release: made.release)
+            }
         )
+    }
+
+    /// Something that decides whether the profile's names may be embedded
+    /// changed. The drain in progress stops at once, whichever window started
+    /// it, and when the names may now be embedded a new one starts: a search
+    /// embeds only a bounded number of names as it runs, so names queued
+    /// while embedding was not allowed would otherwise wait for the next
+    /// completed pass.
+    public func schemaEmbeddingConsentChanged(profileID: UUID) {
+        embeddingDrains.cancel(profileID: profileID)
+        guard intelligenceEntitled, !isClosed, schemaEmbeddingAllowed?(profileID) == true else { return }
+        drainSchemaEmbeddings(profileID: profileID)
+    }
+
+    /// Statistics take a coordinator slot at the lowest priority but one and
+    /// read through the metadata connection. The task is cancelled when the
+    /// session closes, which is the only way to stop a refresh.
+    private func refreshStatistics(session: Session, profileID: UUID) {
+        guard statisticsRefresh == nil, let store, let harvestCoordinator else { return }
+        let connections = metadataConnections
+        statisticsRefresh = Task { [weak self] in
+            let selected = try? GraphReader(store: store).state(profileID: profileID).selectedSchemas
+            let scope = selected.flatMap { $0 }.map(SchemaScope.schemas) ?? .allUserSchemas
+            var replaced = false
+            // Cancelled with its session: asking for the connection now would
+            // reopen one for a session that is closing.
+            if !Task.isCancelled, let connection = try? await connections.connection(for: session) {
+                replaced = await harvestCoordinator.requestStatistics(
+                    for: profileID, connection: connection, driver: session.config.driver, scope: scope
+                )
+            }
+            guard !Task.isCancelled else { return }
+            self?.statisticsRefresh = nil
+            // The full graph carries the statistics, so one cached before new
+            // numbers were written is stale.
+            if replaced { self?.graphLoad = nil }
+        }
+    }
+
+    /// The schema scope sheet's model for a saved profile, or nil without a
+    /// store. Saving stops the profile's passes first; for the active profile
+    /// it then publishes the new change time and runs a pass over the new
+    /// scope, while another profile picks the scope up when it next connects.
+    func schemaScopeModel(profileID: UUID) -> SchemaScopeModel? {
+        guard let store else { return nil }
+        let coordinator = harvestCoordinator
+        return SchemaScopeModel(
+            profileID: profileID, store: store,
+            stopPasses: { await coordinator?.cancel(profileID: profileID) },
+            didSave: { [weak self] in await self?.schemaScopeSaved(profileID: profileID) }
+        )
+    }
+
+    private func schemaScopeSaved(profileID: UUID) async {
+        guard activeProfileID == profileID else { return }
+        await publishGraphChange(profileID: profileID)
+        await harvestGraphNow()
+    }
+
+    /// Stops the graph work of a session that is closing: its passes, its
+    /// statistics refresh and embedding drain, and its metadata connection.
+    /// The rest runs detached because closing waits for a connection that may
+    /// still be opening, which must not hold the main actor.
+    private func stopGraphWork(sessionID: UUID, profileID: UUID?) {
+        graphSession = nil
+        if let profileID { leftGraphProfiles.insert(profileID) }
+        statisticsRefresh?.cancel()
+        statisticsRefresh = nil
+        graphLoad = nil
+        graphChangedAt = nil
+        if let profileID { embeddingDrains.cancel(profileID: profileID, ownedBy: workspaceID) }
+        let coordinator = harvestCoordinator
+        let connections = metadataConnections
+        closingGraphWork = Task.detached {
+            if let profileID { await coordinator?.cancel(profileID: profileID) }
+            await connections.close(sessionID: sessionID)
+        }
     }
 
  /// Generates and persists a Daily Review digest if due
@@ -1120,10 +1462,11 @@ public final class WorkspaceViewModel {
         return DailyReviewBuilder.decode(record.summaryJSON)
     }
 
- /// Local `graph_query` executor for the AI panel,
-    /// or nil when no DSG can be persisted (quick-open / no store).
+    /// The `graph_query` and `get_stats` executor for the AI panel, or nil
+    /// without a store. It reads the stored schema through `GraphReader`, the
+    /// store the harvest writes and the workspace's graph views read too.
     public func graphExecutor(profileID: UUID) -> (any AIToolExecutor)? {
-        graphStore.map { GraphToolExecutor(store: $0, profileID: profileID) }
+        store.map { GraphToolExecutor(reader: GraphReader(store: $0), profileID: profileID) }
     }
 
  /// Runs the analyzers for the active profile.
@@ -1136,13 +1479,24 @@ public final class WorkspaceViewModel {
     ///     only, no user data — Q6).
  /// Insights the user has dismissed are filtered out. Empty when
     /// nothing is harvested and no workload exists.
+    ///
+    /// The graphs are loaded and analysed in detached tasks, so the main actor
+    /// only receives the insights.
     public func analyzeInsights() async -> [Insight] {
         guard intelligenceEntitled, let session else { return [] } // Q15 tier gate
         var result: [Insight] = []
-        if let profileID = activeProfileID, let graphStore,
-           let graph = try? graphStore.loadGraph(profileID: profileID), graph.nodeCount > 0 {
-            result += InsightEngine.analyze(graph, dialect: session.config.driver)
-            result += ConventionMemory.namingMismatches(graph, history: recentHistoricalGraphs())
+        if let profileID = activeProfileID, let store, let graph = await latestGraph() {
+            let dialect = session.config.driver
+            result += await Task.detached(priority: .userInitiated) {
+                let reader = GraphReader(store: store)
+                let marks = ((try? reader.changeMarks(profileID: profileID)) ?? []).dropFirst().prefix(Self.conventionHistoryLimit)
+                let history = Self.conventionHeld(
+                    at: marks.map(\.at), load: { try? reader.fullGraph(profileID: profileID, asOf: $0) },
+                    judge: ConventionMemory.hasIndexNamingConvention
+                )
+                return InsightEngine.analyze(graph, dialect: dialect)
+                    + ConventionMemory.namingMismatches(graph, historyHeldConvention: history)
+            }.value
         }
         let workload = (try? store?.history(profileID: activeProfileID))?
             .filter { $0.status == "success" }.map(\.sql) ?? []
@@ -1180,20 +1534,30 @@ public final class WorkspaceViewModel {
         select(object)
     }
 
-    /// Harvested table names for the active profile, for the Graph Explorer picker.
-    public func harvestedTableNames() -> [String] {
-        guard let graph = latestGraph() else { return [] }
-        return graph.nodes.values.filter { $0.kind == .table }.map(\.name).sorted()
+    /// Harvested table names for the active profile, for the Graph Explorer
+    /// picker, collected off the main actor.
+    public func harvestedTableNames() async -> [String] {
+        guard let graph = await latestGraph() else { return [] }
+        return await Task.detached(priority: .userInitiated) {
+            graph.nodes.values.filter { $0.kind == .table }.map(\.name).sorted()
+        }.value
     }
 
  /// Dependency overview for one table over the DSG
  /// what it depends on (FK/derive out), what depends on it
     /// directly, and its full blast radius (transitive reverse reachability).
     /// Names, not node ids. Empty when nothing is harvested / table unknown.
-    public func graphOverview(_ table: String) -> TableGraphOverview {
-        guard let graph = latestGraph(),
-              let node = graph.nodes.values.first(where: { $0.kind == .table && $0.name == table })
-        else { return TableGraphOverview(table: table, dependsOn: [], dependents: [], blastRadius: []) }
+    /// Computed off the main actor.
+    public func graphOverview(_ table: String) async -> TableGraphOverview {
+        let empty = TableGraphOverview(table: table, dependsOn: [], dependents: [], blastRadius: [])
+        guard let graph = await latestGraph() else { return empty }
+        return await Task.detached(priority: .userInitiated) {
+            Self.overview(of: table, in: graph) ?? empty
+        }.value
+    }
+
+    nonisolated private static func overview(of table: String, in graph: SchemaGraph) -> TableGraphOverview? {
+        guard let node = graph.nodes.values.first(where: { $0.kind == .table && $0.name == table }) else { return nil }
         let kinds: Set<EdgeKind> = [.references, .derivesFrom]
         func names(_ ids: [String]) -> [String] { ids.compactMap { graph.nodes[$0]?.name }.sorted() }
         return TableGraphOverview(
@@ -1211,13 +1575,16 @@ public final class WorkspaceViewModel {
     /// evidence. `nil` only when the feature itself is unavailable (no
     /// entitlement, nothing harvested yet) — an unmatched table name or no
     /// matching queries still returns a real, simply-empty `Report`
-    /// (`ImpactSimulator.simulate`'s own fallback, Q15 tier gate).
-    public func simulateImpact(_ table: String) -> ImpactSimulator.Report? {
-        guard intelligenceEntitled, let graph = latestGraph() else { return nil }
-        let nodeID = graph.nodes.values.first { $0.kind == .table && $0.name == table }?.id ?? ""
+    /// (`ImpactSimulator.simulate`'s own fallback). Without the Intelligence
+    /// entitlement it is nil. The simulation runs off the main actor.
+    public func simulateImpact(_ table: String) async -> ImpactSimulator.Report? {
+        guard intelligenceEntitled, let graph = await latestGraph() else { return nil }
         let workload = (try? store?.history(profileID: activeProfileID))?
             .filter { $0.status == "success" }.map(\.sql) ?? []
-        return ImpactSimulator.simulate(changing: nodeID, in: graph, workload: workload)
+        return await Task.detached(priority: .userInitiated) {
+            let nodeID = graph.nodes.values.first { $0.kind == .table && $0.name == table }?.id ?? ""
+            return ImpactSimulator.simulate(changing: nodeID, in: graph, workload: workload)
+        }.value
     }
 
     /// Saves the just-completed run of `sql` as a Query Replay snapshot
@@ -1272,60 +1639,103 @@ public final class WorkspaceViewModel {
         return PlanNode.jsonString(of: plan)
     }
 
-    private func latestGraph() -> SchemaGraph? {
-        guard let profileID = activeProfileID, let graphStore,
-              let graph = try? graphStore.loadGraph(profileID: profileID), graph.nodeCount > 0
-        else { return nil }
-        return graph
-    }
-
-    /// Bounded window of PRIOR snapshots (not including the current one) for
- /// convention-consistency checks ("Database
-    /// Memory") — capped so a long-lived, frequently-changed profile doesn't
-    /// make every insight refresh reload dozens of full historical graphs.
-    /// `graphSnapshots` is already newest-first, so `dropFirst()` skips the
-    /// current snapshot `latestGraph()` already represents.
-    private static let conventionHistoryLimit = 5
-
-    private func recentHistoricalGraphs() -> [SchemaGraph] {
-        guard let profileID = activeProfileID, let graphStore,
-              let snapshots = try? graphStore.snapshots(profileID: profileID), snapshots.count > 1
-        else { return [] }
-        return snapshots.dropFirst().prefix(Self.conventionHistoryLimit).compactMap {
-            try? graphStore.loadGraph(profileID: profileID, asOf: $0.takenAt)
+    /// The active profile's current graph, or nil when nothing is harvested.
+    /// It is read off the main actor, and while a graph view is open it is
+    /// kept while the stored schema's revision stays where it was read, so
+    /// the view's reads share one load. The revision moves with every
+    /// committed write to the stored schema, including one from a pass that
+    /// failed afterwards or from another window, which leave the change time
+    /// as it was. A load already running at the same revision is joined.
+    private func latestGraph() async -> SchemaGraph? {
+        guard let profileID = activeProfileID, let store else { return nil }
+        let revision = await storedGraphState(profileID: profileID)?.revision ?? 0
+        guard activeProfileID == profileID else { return nil }
+        let load: Task<SchemaGraph?, Never>
+        if let graphLoad, graphLoad.profileID == profileID, graphLoad.revision == revision {
+            load = graphLoad.task
+        } else {
+            graphLoads += 1
+            load = Task.detached(priority: .userInitiated) {
+                try? GraphReader(store: store).fullGraph(profileID: profileID, asOf: nil)
+            }
+            if graphViewers > 0 { graphLoad = GraphLoad(profileID: profileID, revision: revision, task: load) }
         }
+        guard let graph = await load.value else {
+            // A failed read is not kept, so the next call tries again.
+            if graphLoad?.task == load { graphLoad = nil }
+            return nil
+        }
+        return graph.nodeCount > 0 ? graph : nil
     }
 
- /// Digital-Twin snapshot history for the Time Machine Timeline
- /// newest first — already digest-deduped at write time
-    /// (`BerryStore.saveGraph`), so every entry represents a real structural
-    /// change, not refresh noise.
-    public func timelineSnapshots() -> [GraphSnapshotRecord] {
-        guard let profileID = activeProfileID, let graphStore else { return [] }
-        return (try? graphStore.snapshots(profileID: profileID)) ?? []
+    /// Called by a view that shows the full graph when it appears.
+    public func openGraphView() {
+        graphViewers += 1
     }
 
-    /// Tables/columns/indexes that appeared or disappeared between two
-    /// snapshots, sorted by owning table then name.
-    public func timelineChanges(from earlier: Date, to later: Date) -> [TimelineChange] {
-        guard let profileID = activeProfileID, let graphStore,
-              let earlierGraph = try? graphStore.loadGraph(profileID: profileID, asOf: earlier),
-              let laterGraph = try? graphStore.loadGraph(profileID: profileID, asOf: later)
-        else { return [] }
+    /// Called by a view that shows the full graph when it disappears; the
+    /// cached graph is dropped once no such view is open.
+    public func closeGraphView() {
+        graphViewers = max(0, graphViewers - 1)
+        if graphViewers == 0 { graphLoad = nil }
+    }
+
+    /// How many earlier graphs the convention-consistency check ("Database
+    /// Memory") compares against: the graphs at the newest marks before the
+    /// current one, which is the newest mark. Each is a full graph, so a
+    /// long-lived, frequently changed profile must not make every insight
+    /// refresh load many of them.
+    nonisolated private static let conventionHistoryLimit = 2
+
+    /// Whether each of the graphs at `marks` held the index-naming
+    /// convention, judged one graph at a time: each is released before the
+    /// next one loads, so with the current graph the analysis never holds
+    /// more than two full graphs. A full graph of 20,000 tables takes
+    /// hundreds of megabytes.
+    nonisolated static func conventionHeld<Graph>(
+        at marks: [Date], load: (Date) -> Graph?, judge: (Graph) -> Bool
+    ) -> [Bool] {
+        marks.compactMap { load($0).map(judge) }
+    }
+
+    /// The Time Machine's marks: the passes that changed the stored schema,
+    /// newest first, each with what it added, changed and removed.
+    public func timelineSnapshots() async -> [SchemaChangeRecord] {
+        guard let profileID = activeProfileID, let store else { return [] }
+        return await Task.detached(priority: .userInitiated) {
+            (try? GraphReader(store: store).changeMarks(profileID: profileID)) ?? []
+        }.value
+    }
+
+    /// Tables/columns/indexes that appeared or disappeared between the graphs
+    /// at two instants, sorted by owning table then name. Both graphs are
+    /// loaded and compared off the main actor.
+    public func timelineChanges(from earlier: Date, to later: Date) async -> [TimelineChange] {
+        guard let profileID = activeProfileID, let store else { return [] }
+        return await Task.detached(priority: .userInitiated) {
+            let reader = GraphReader(store: store)
+            guard let earlierGraph = try? reader.fullGraph(profileID: profileID, asOf: earlier),
+                  let laterGraph = try? reader.fullGraph(profileID: profileID, asOf: later)
+            else { return [] }
+            return Self.changes(from: earlierGraph, to: laterGraph)
+        }.value
+    }
+
+    nonisolated private static func changes(from earlierGraph: SchemaGraph, to laterGraph: SchemaGraph) -> [TimelineChange] {
         let diff = earlierGraph.diff(to: laterGraph)
         var changes: [TimelineChange] = []
         for id in diff.addedNodes {
             guard let node = laterGraph.nodes[id] else { continue }
             changes.append(TimelineChange(
                 id: id, isAdded: true, kind: node.kind, name: node.name,
-                tableName: node.kind == .table ? nil : Self.owningTable(of: id, in: laterGraph)
+                tableName: node.kind == .table ? nil : owningTable(of: id, in: laterGraph)
             ))
         }
         for id in diff.removedNodes {
             guard let node = earlierGraph.nodes[id] else { continue }
             changes.append(TimelineChange(
                 id: id, isAdded: false, kind: node.kind, name: node.name,
-                tableName: node.kind == .table ? nil : Self.owningTable(of: id, in: earlierGraph)
+                tableName: node.kind == .table ? nil : owningTable(of: id, in: earlierGraph)
             ))
         }
         return changes.sorted {
@@ -1333,7 +1743,7 @@ public final class WorkspaceViewModel {
         }
     }
 
-    private static func owningTable(of nodeID: String, in graph: SchemaGraph) -> String? {
+    nonisolated private static func owningTable(of nodeID: String, in graph: SchemaGraph) -> String? {
         graph.neighbors(of: nodeID, direction: .incoming, kinds: [.hasColumn, .hasIndex])
             .first.flatMap { graph.nodes[$0]?.name }
     }
@@ -1383,9 +1793,12 @@ public final class WorkspaceViewModel {
     /// hypothetical graph with `edited`'s columns/indexes/foreign keys, before
     /// any DDL runs. Empty when nothing is harvested yet — nothing to compare
     /// the edit against.
-    public func migrationPreview(editing edited: TableDesign) -> [Insight] {
-        guard intelligenceEntitled, let session, let graph = latestGraph() else { return [] } // Q15 tier gate
-        return MigrationPreviewAnalyzer.preview(current: graph, editing: edited, dialect: session.config.driver)
+    public func migrationPreview(editing edited: TableDesign) async -> [Insight] {
+        guard intelligenceEntitled, let session, let graph = await latestGraph() else { return [] }
+        let dialect = session.config.driver
+        return await Task.detached(priority: .userInitiated) {
+            MigrationPreviewAnalyzer.preview(current: graph, editing: edited, dialect: dialect)
+        }.value
     }
 
     /// AI Schema Review for a proposed NEW column on an existing table
@@ -1403,7 +1816,7 @@ public final class WorkspaceViewModel {
         else { return nil }
         guard var design = await tableDesign(of: SchemaObject(kind: .table, name: table)) else { return nil }
         design.columns.append(column)
-        return migrationPreview(editing: design)
+        return await migrationPreview(editing: design)
     }
 
     /// Apply the diff and refresh the schema; returns an error message or nil.
@@ -1413,7 +1826,7 @@ public final class WorkspaceViewModel {
             try await TableAlteration(
                 original: original, edited: edited, driver: session.config.driver
             ).apply(on: session)
-            refreshSchema()
+            refreshSchema(harvestReason: .ownDDL)
             return nil
         } catch {
             return error.localizedDescription
@@ -1655,7 +2068,7 @@ public final class WorkspaceViewModel {
         guard let session else { return L("No connection") }
         do {
             try await design.apply(on: session)
-            try await refreshObjects()
+            try await refreshObjects(harvestReason: .ownDDL)
             return nil
         } catch {
             return error.localizedDescription
@@ -2802,6 +3215,7 @@ public final class WorkspaceViewModel {
         defer { isConnecting = false }
 
         if let old = session {
+            stopGraphWork(sessionID: old.id, profileID: activeProfileID)
             await ConnectionManager.shared.close(old.id)
         }
         if let old = dataSourceSession {
@@ -2905,6 +3319,7 @@ public final class WorkspaceViewModel {
         defer { isConnecting = false }
 
         if let old = session {
+            stopGraphWork(sessionID: old.id, profileID: activeProfileID)
             await ConnectionManager.shared.close(old.id)
         }
         if let old = dataSourceSession {
@@ -3260,7 +3675,7 @@ public final class WorkspaceViewModel {
             if let error = await DestructiveStatementRunner.run(statements, on: session) {
                 quickActionError = error
             }
-            refreshSchema()
+            refreshSchema(harvestReason: .ownDDL)
             onCompleted?()
         }
     }

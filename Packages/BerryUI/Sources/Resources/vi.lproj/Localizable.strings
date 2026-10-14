@@ -436,12 +436,20 @@
 "total calls" = "tổng lượt gọi";
 "No recent queries in history touch this table." = "Không có query gần đây nào trong lịch sử chạm tới bảng này.";
 
+/* Schema scope sheet */
+"Schemas to Index…" = "Schema cần lập chỉ mục…";
+"Schemas to Index" = "Schema cần lập chỉ mục";
+"All schemas" = "Tất cả schema";
+"This connection has no schemas to choose from." = "Kết nối này không có schema nào để chọn.";
+"Nothing is indexed for this connection yet. Every schema is indexed when it connects." = "Kết nối này chưa được lập chỉ mục. Mọi schema sẽ được lập chỉ mục khi kết nối.";
+"More than 20,000 tables — pick the schemas to index" = "Hơn 20.000 bảng — hãy chọn các schema cần lập chỉ mục";
+
 /* Time Machine Timeline */
 "Time Machine" = "Time Machine";
 "Schema change history" = "Lịch sử thay đổi schema";
 "Not enough history yet" = "Chưa đủ lịch sử";
 "Time Machine needs at least two recorded schema snapshots — keep refreshing the schema as it evolves." = "Time Machine cần ít nhất 2 snapshot schema đã ghi lại — tiếp tục refresh schema khi nó thay đổi.";
-"nodes" = "nút";
+"%lld added · %lld changed · %lld removed" = "%lld thêm · %lld thay đổi · %lld xóa";
 "First recorded snapshot" = "Snapshot đầu tiên được ghi lại";
 "Nothing earlier to compare against." = "Không có gì trước đó để so sánh.";
 "Select a snapshot" = "Chọn một snapshot";

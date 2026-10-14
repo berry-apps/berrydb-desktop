@@ -3,19 +3,36 @@ import SwiftUI
 
 /// Graph Explorer: pick a harvested table
 /// and see what it depends on, what depends on it, and its full blast radius.
-/// Reads the DSG through the viewModel — presentation only.
+/// Reads the DSG through the viewModel — presentation only. What it shows is
+/// loaded in tasks into state, never computed in `body`: every read walks the
+/// whole graph, and `body` runs on the main actor on every redraw.
 struct GraphExplorerView: View {
-    let tables: () -> [String]
-    let overview: (String) -> TableGraphOverview
+    /// When the stored schema last changed; a new value reloads the view.
+    let graphChangedAt: Date?
+    let tables: () async -> [String]
+    let overview: (String) async -> TableGraphOverview
  /// Quantified impact against real recent workload
  /// — nil only when the feature itself is unavailable, not for "no
     /// matches" (see `WorkspaceViewModel.simulateImpact`).
-    let simulateImpact: (String) -> ImpactSimulator.Report?
+    let simulateImpact: (String) async -> ImpactSimulator.Report?
     let onReveal: (String) -> Void
     let onClose: () -> Void
 
+    private struct Detail {
+        let table: String
+        let overview: TableGraphOverview
+        let impact: ImpactSimulator.Report?
+    }
+
+    private struct DetailKey: Equatable {
+        let table: String?
+        let changedAt: Date?
+    }
+
     @State private var allTables: [String] = []
+    @State private var tablesLoaded = false
     @State private var selected: String?
+    @State private var detailShown: Detail?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -26,7 +43,10 @@ struct GraphExplorerView: View {
             }
             .padding()
             Divider()
-            if allTables.isEmpty {
+            if !tablesLoaded {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if allTables.isEmpty {
                 ContentUnavailableView(
                     L("No graph yet"),
                     systemImage: "point.3.connected.trianglepath.dotted",
@@ -41,7 +61,22 @@ struct GraphExplorerView: View {
                 }
             }
         }
-        .onAppear { allTables = tables() }
+        .task(id: graphChangedAt) {
+            let loaded = await tables()
+            guard !Task.isCancelled else { return }
+            allTables = loaded
+            tablesLoaded = true
+        }
+        .task(id: DetailKey(table: selected, changedAt: graphChangedAt)) {
+            guard let selected else {
+                detailShown = nil
+                return
+            }
+            let dependencies = await overview(selected)
+            let impact = await simulateImpact(selected)
+            guard !Task.isCancelled else { return }
+            detailShown = Detail(table: selected, overview: dependencies, impact: impact)
+        }
     }
 
     private var tablePicker: some View {
@@ -52,8 +87,8 @@ struct GraphExplorerView: View {
     }
 
     @ViewBuilder private var detail: some View {
-        if let selected {
-            let o = overview(selected)
+        if let selected, let shown = detailShown, shown.table == selected {
+            let o = shown.overview
             ScrollView {
                 VStack(alignment: .leading, spacing: BerryTheme.Space.lg) {
                     Text(selected).font(.title3.weight(.semibold))
@@ -63,11 +98,14 @@ struct GraphExplorerView: View {
                           empty: L("No table references this one."))
                     group(L("Blast radius"), systemImage: "burst", o.blastRadius,
                           empty: L("Changing it affects nothing downstream."))
-                    impactGroup(selected)
+                    impactGroup(shown.impact)
                 }
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+        } else if selected != nil {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ContentUnavailableView(
                 L("Select a table"),
@@ -108,9 +146,8 @@ struct GraphExplorerView: View {
  /// — complements the pure-topology "Blast radius" group above with
     /// which of the recent history's queries actually touch this table (or
     /// anything in its blast radius), ranked by how often they ran.
-    private func impactGroup(_ table: String) -> some View {
-        let report = simulateImpact(table)
-        return VStack(alignment: .leading, spacing: BerryTheme.Space.sm) {
+    private func impactGroup(_ report: ImpactSimulator.Report?) -> some View {
+        VStack(alignment: .leading, spacing: BerryTheme.Space.sm) {
             Label(L("Quantified impact (recent workload)"), systemImage: "chart.bar.xaxis")
                 .font(.subheadline.weight(.semibold))
             if let report, !report.affectedQueries.isEmpty {

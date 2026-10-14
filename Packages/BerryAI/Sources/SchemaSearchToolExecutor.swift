@@ -21,6 +21,16 @@ public final class SchemaSearchToolExecutor: AIToolExecutor {
     /// they were last embedded (BerryStore never cleans those up on its own).
     private let candidateNames: () -> [String]
 
+    /// The most names one search embeds for itself, four requests at a time,
+    /// the concurrency of the background drain. A connection the drain has
+    /// not reached, because it has never been harvested or its names may not
+    /// leave the machine in the background, gets its names embedded by the
+    /// searches that list them; the bound keeps one search to 25 rounds of
+    /// requests however many tables lack a vector, and the next search embeds
+    /// the next ones.
+    public static let backfillLimit = 100
+    static let backfillConcurrency = 4
+
     public init(
         store: BerryStore, transport: AITransport,
         profileID: @escaping () -> UUID?,
@@ -28,7 +38,7 @@ public final class SchemaSearchToolExecutor: AIToolExecutor {
     ) {
         self.store = store
         self.transport = transport
-        self.indexer = SchemaEmbeddingIndexer(store: store, transport: transport)
+        self.indexer = SchemaEmbeddingIndexer(store: store, transport: transport, maxConcurrentRequests: Self.backfillConcurrency)
         self.profileID = profileID
         self.candidateNames = candidateNames
     }
@@ -57,13 +67,13 @@ public final class SchemaSearchToolExecutor: AIToolExecutor {
         let names = candidateNames()
         guard !names.isEmpty else { return .ok(#"{"matches":[]}"#) }
 
-        await indexer.backfill(profileID: profileID, candidateNames: names)
-        if let lease, !lease.isValid { return .denied }
-
+        // The query first: when it cannot be embedded nothing can match, and a
+        // provider that is down is not then asked once per name.
         let vector = await transport.embed(text: query)
         if let lease, !lease.isValid { return .denied }
-        guard vector.count == BerryStore.schemaObjectEmbeddingDimension,
-              let nearest = try? store.nearestSchemaObjects(profileID: profileID, to: vector, limit: 8) else {
+        guard vector.count == BerryStore.schemaObjectEmbeddingDimension else { return .ok(#"{"matches":[]}"#) }
+        guard await backfill(profileID: profileID, names: names, lease: lease) else { return .denied }
+        guard let nearest = try? store.nearestSchemaObjects(profileID: profileID, to: vector, limit: 8) else {
             return .ok(#"{"matches":[]}"#)
         }
         let live = Set(names)
@@ -73,5 +83,21 @@ public final class SchemaSearchToolExecutor: AIToolExecutor {
         let json = (try? JSONSerialization.data(withJSONObject: ["matches": matches]))
             .flatMap { String(data: $0, encoding: .utf8) } ?? #"{"matches":[]}"#
         return .ok(json)
+    }
+
+    /// Embeds up to `backfillLimit` of `names` that have no vector yet, one
+    /// round of requests at a time, and stops once the store refuses a
+    /// vector. Returns false once the lease has ended, checked after every
+    /// round, so a turn that ends stops sending names.
+    private func backfill(profileID: UUID, names: [String], lease: AIExecutionLease?) async -> Bool {
+        let missing = await indexer.namesWithoutVector(profileID: profileID, among: names, limit: Self.backfillLimit)
+        for start in stride(from: 0, to: missing.count, by: Self.backfillConcurrency) {
+            guard !Task.isCancelled else { break }
+            let round = Array(missing[start..<min(start + Self.backfillConcurrency, missing.count)])
+            let stored = await indexer.embed(profileID: profileID, names: round)
+            if let lease, !lease.isValid { return false }
+            guard stored else { break }
+        }
+        return true
     }
 }

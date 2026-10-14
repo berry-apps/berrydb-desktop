@@ -1,3 +1,4 @@
+import BerryMCP
 import BerryMCPServer
 import BerryStore
 import Foundation
@@ -33,11 +34,19 @@ do {
     exit(1)
 }
 
+// A host keeps the helper running for its whole session, mostly idle. The
+// store's caches are released once requests stop for a few seconds, and on
+// memory pressure the cached table graphs go with them.
+let metadata = MCPMetadataService(store: store)
+let memory = StoreMemoryManager(store: store, onPressure: { [metadata] in metadata.dropCachedGraphs() })
+
 let (server, start) = await BerryMCPServerFactory.makeServer(
     BerryDBMCPComposition.dependencies(
         store: store,
+        metadata: metadata,
         explicitProject: arguments.project,
-        workingDirectory: FileManager.default.currentDirectoryPath
+        workingDirectory: FileManager.default.currentDirectoryPath,
+        onRequest: { [memory] in memory.touch() }
     )
 )
 
