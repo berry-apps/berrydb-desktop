@@ -98,7 +98,7 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
             tlsMode = .require(try NIOSSLContext(configuration: tls))
         }
 
-        let pgConfig = PostgresConnection.Configuration(
+        var pgConfig = PostgresConnection.Configuration(
             host: host,
             port: config.port ?? 5432,
             username: config.username ?? "postgres",
@@ -106,6 +106,7 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
             database: config.database,
             tls: tlsMode
         )
+        pgConfig.options.additionalStartupParameters = Self.startupParameters(for: config)
         do {
             return try await PostgresConnection.connect(
                 configuration: pgConfig,
@@ -155,32 +156,7 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
         let clock = ContinuousClock()
         let started = clock.now
         do {
-            try await inTurn {
-                let rows = try await connection.query(
-                    PostgresQuery(unsafeSQL: sql),
-                    logger: Self.logger
-                )
-                var sentColumns = false
-                var batch: [[BerryValue]] = []
-                batch.reserveCapacity(Self.batchSize)
-
-                for try await row in rows {
-                    let cells = Array(row)
-                    if !sentColumns {
-                        sentColumns = true
-                        continuation.yield(.columns(cells.map {
-                            ColumnMeta(name: $0.columnName, declaredType: String(describing: $0.dataType))
-                        }))
-                    }
-                    batch.append(cells.map(Self.berryValue(from:)))
-                    if batch.count >= Self.batchSize {
-                        continuation.yield(.rows(batch))
-                        batch.removeAll(keepingCapacity: true)
-                        await Task.yield()
-                    }
-                }
-                if !batch.isEmpty { continuation.yield(.rows(batch)) }
-            }
+            try await inTurn { try await streamRows(sql, into: continuation) }
             continuation.yield(.complete(QueryStats(
  rowsAffected: nil, // PostgresNIO does not expose the command tag yet — note
                 duration: clock.now - started
@@ -189,6 +165,32 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
         } catch {
             continuation.finish(throwing: Self.mapError(error))
         }
+    }
+
+    /// Streams the rows of `sql` into `continuation` in batches, leaving the
+    /// stream open for the caller to complete.
+    private func streamRows(_ sql: String, into continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation) async throws {
+        let rows = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger)
+        var sentColumns = false
+        var batch: [[BerryValue]] = []
+        batch.reserveCapacity(Self.batchSize)
+
+        for try await row in rows {
+            let cells = Array(row)
+            if !sentColumns {
+                sentColumns = true
+                continuation.yield(.columns(cells.map {
+                    ColumnMeta(name: $0.columnName, declaredType: String(describing: $0.dataType))
+                }))
+            }
+            batch.append(cells.map(Self.berryValue(from:)))
+            if batch.count >= Self.batchSize {
+                continuation.yield(.rows(batch))
+                batch.removeAll(keepingCapacity: true)
+                await Task.yield()
+            }
+        }
+        if !batch.isEmpty { continuation.yield(.rows(batch)) }
     }
 
  // MARK: - Value mapping (no information loss)
@@ -429,5 +431,168 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
         } else {
             turnWaiters.removeFirst().resume()
         }
+    }
+}
+
+// MARK: - Read-only statements
+
+extension PostgresDriverConnection: ReadOnlyExecuting {
+    /// Opens one read-only transaction and reads the mode back, so a proxy
+    /// that accepts BEGIN READ ONLY without honouring it fails here instead
+    /// of on a write. PgBouncer in statement pooling mode refuses the BEGIN
+    /// (https://www.pgbouncer.org/features.html).
+    public func prepareReadOnly() async throws {
+        guard !isClosed else { throw DriverError.notConnected }
+        await takeTurn()
+        defer { giveTurn() }
+        let mode: String?
+        do {
+            try await command("BEGIN READ ONLY")
+            mode = try await firstText("SHOW transaction_read_only")
+        } catch {
+            await finishTransaction(commit: false)
+            throw DriverError.readOnlyUnavailable(Self.detail(error))
+        }
+        await finishTransaction(commit: false)
+        guard mode == "on" else {
+            throw DriverError.readOnlyUnavailable("transaction_read_only reads \(mode ?? "nothing") inside BEGIN READ ONLY")
+        }
+    }
+
+    public nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let turn = ReadOnlyTurn()
+            let task = Task {
+                await self.runReadOnly(sql, timeout: timeout, turn: turn, continuation: continuation)
+            }
+            continuation.onTermination = { termination in
+                guard case .cancelled = termination else { return }
+                task.cancel()
+                if turn.cancel() { self.cancelCurrentQuery() }
+            }
+        }
+    }
+
+    /// What runs before each read-only statement. SET LOCAL ends with the
+    /// transaction, so nothing stays on a server session a pooler hands on
+    /// (https://www.postgresql.org/docs/current/sql-set.html).
+    /// `statement_timeout` bounds the statement on the server as well as on
+    /// the client, and a value of 0 would turn the bound off
+    /// (https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-STATEMENT-TIMEOUT),
+    /// so it never drops below 1 ms. `lock_timeout` keeps a read from
+    /// queueing behind the user's uncommitted DDL, and other sessions behind
+    /// the read (https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-LOCK-TIMEOUT).
+    static func readOnlyPreamble(timeout: Duration) -> [String] {
+        let milliseconds = max(1, timeout.components.seconds * 1_000 + timeout.components.attoseconds / 1_000_000_000_000_000)
+        return [
+            "BEGIN READ ONLY",
+            "SET LOCAL statement_timeout = '\(milliseconds)ms'",
+            "SET LOCAL lock_timeout = '5s'",
+        ]
+    }
+
+    /// `application_name` lists the connection in `pg_stat_activity`;
+    /// PgBouncer tracks it for each client itself
+    /// (https://www.pgbouncer.org/config.html#track_extra_parameters), so a
+    /// pooler neither refuses nor drops it.
+    static func startupParameters(for config: ConnectionConfig) -> [(String, String)] {
+        guard let name = config.applicationName else { return [] }
+        return [("application_name", name)]
+    }
+
+    /// The server's own message, without the driver's wrapper text.
+    static func detail(_ error: Error) -> String {
+        let mapped = mapError(error)
+        if case .queryFailed(let message, _) = mapped { return message }
+        return mapped.localizedDescription
+    }
+
+    /// BEGIN, the bounds, the statement and COMMIT run in one turn, so no
+    /// other statement on this connection lands inside the transaction. A
+    /// refused BEGIN or SET LOCAL ends the call before the statement runs.
+    private func runReadOnly(
+        _ sql: String, timeout: Duration, turn: ReadOnlyTurn,
+        continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
+    ) async {
+        guard !isClosed else {
+            continuation.finish(throwing: DriverError.notConnected)
+            return
+        }
+        let clock = ContinuousClock()
+        let started = clock.now
+        await takeTurn()
+        defer { giveTurn() }
+        guard turn.begin() else {
+            continuation.finish(throwing: DriverError.cancelled)
+            return
+        }
+        defer { turn.end() }
+        do {
+            for statement in Self.readOnlyPreamble(timeout: timeout) {
+                try await command(statement)
+            }
+        } catch {
+            await finishTransaction(commit: false)
+            let mapped = Self.mapError(error)
+            if case .cancelled = mapped {
+                continuation.finish(throwing: mapped)
+            } else {
+                continuation.finish(throwing: DriverError.readOnlyUnavailable(Self.detail(error)))
+            }
+            return
+        }
+        do {
+            try await streamRows(sql, into: continuation)
+            await finishTransaction(commit: true)
+            continuation.yield(.complete(QueryStats(rowsAffected: nil, duration: clock.now - started)))
+            continuation.finish()
+        } catch {
+            await finishTransaction(commit: false)
+            continuation.finish(throwing: Self.mapError(error))
+        }
+    }
+
+    private func firstText(_ sql: String) async throws -> String? {
+        var first: String?
+        for try await row in try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger) {
+            if first == nil, case .text(let text)? = Array(row).first.map(Self.berryValue(from:)) {
+                first = text
+            }
+        }
+        return first
+    }
+}
+
+/// Whether a read-only statement holds its connection's turn, shared with
+/// its stream's termination handler, which runs outside the actor. The
+/// server cancels by backend, whatever statement runs there
+/// (https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-SIGNAL),
+/// so a statement whose stream is cancelled while it waits for the turn
+/// sends no cancel, which would end the statement ahead of it, and passes
+/// the turn on without running once the turn reaches it.
+final class ReadOnlyTurn: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var held = false
+
+    /// Marks the statement as running once it has the turn; false when its
+    /// stream was cancelled while it waited, and it must not run.
+    func begin() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        held = !cancelled
+        return held
+    }
+
+    func end() {
+        lock.lock(); defer { lock.unlock() }
+        held = false
+    }
+
+    /// Marks the stream cancelled; true when the statement holds the turn,
+    /// so a cancel sent to the backend reaches it.
+    func cancel() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        cancelled = true
+        return held
     }
 }
