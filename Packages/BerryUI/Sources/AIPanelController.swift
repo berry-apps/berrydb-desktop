@@ -75,7 +75,7 @@ public final class AIPanelController {
                 return nil
             case .sessionState:
                 return String(
-                    localized: "Not run automatically: this session has a temporary table or an open transaction that a read-only connection can't see.",
+                    localized: "Not run automatically: this session has state a read-only connection can't see, such as a temporary table, a USE or search_path change, or an open transaction.",
                     bundle: bundle
                 )
             case .connectionFailed(let detail):

@@ -18,9 +18,11 @@ import Testing
 struct ReadOnlyApprovalCardTests {
     private typealias Card = AIPanelController.PendingApproval
     private static let sessionStateKey =
-        "Not run automatically: this session has a temporary table or an open transaction that a read-only connection can't see."
+        "Not run automatically: this session has state a read-only connection can't see, such as a temporary table, a USE or search_path change, or an open transaction."
     private static let connectionKey = "Not run automatically: BerryDB couldn't open a read-only connection (%@)."
     private static let vietnameseConnectionPrefix = "Không tự chạy: BerryDB không mở được kết nối chỉ đọc ("
+    private static let vietnameseSessionState =
+        "Không tự chạy: phiên này có trạng thái mà kết nối chỉ đọc không thấy, như bảng tạm, lệnh USE hay search_path, hoặc transaction đang mở."
 
     /// One localization of the BerryUI resource bundle, so a test can read
     /// the Vietnamese text in a process that runs in English.
@@ -67,7 +69,7 @@ struct ReadOnlyApprovalCardTests {
         let state = Card(sql: "SELECT 1", danger: .safe, notAutoRunReason: .sessionState)
         let failed = Card(sql: "SELECT 1", danger: .safe, notAutoRunReason: .connectionFailed("too many clients already"))
 
-        #expect(state.notAutoRunMessage == L("Not run automatically: this session has a temporary table or an open transaction that a read-only connection can't see."))
+        #expect(state.notAutoRunMessage == L("Not run automatically: this session has state a read-only connection can't see, such as a temporary table, a USE or search_path change, or an open transaction."))
         #expect(failed.notAutoRunMessage == L("Not run automatically: BerryDB couldn't open a read-only connection (\("too many clients already"))."))
         #expect(!state.offersRunAllSafe)
     }
@@ -79,6 +81,7 @@ struct ReadOnlyApprovalCardTests {
             #expect(vietnamese != key)
         }
         #expect(localized(Self.connectionKey, in: "vi")?.contains("%@") == true)
+        #expect(localized(Self.sessionStateKey, in: "vi") == Self.vietnameseSessionState)
     }
 
     /// A server's words go into the line as they came, like every other
