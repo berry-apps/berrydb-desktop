@@ -455,7 +455,9 @@ struct WorkspaceGraphTests {
         try #require(vm.storeMemory).handleMemoryPressure()
 
         #expect(store.releaseCount > releases)
-        let deadline = ContinuousClock.now + .seconds(10)
+        // A minute, not ten seconds: a parallel run on a three-core CI runner
+        // left awaiting tests unscheduled for up to 18 seconds.
+        let deadline = ContinuousClock.now + .seconds(60)
         while vm.graphLoads == loaded, ContinuousClock.now < deadline {
             _ = await vm.harvestedTableNames()
             try await Task.sleep(for: .milliseconds(5))

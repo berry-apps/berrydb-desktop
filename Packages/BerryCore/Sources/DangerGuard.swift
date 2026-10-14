@@ -54,15 +54,21 @@ public enum DangerGuard {
     ]
 
     public static func classify(_ sql: String, isProduction: Bool) -> DangerLevel {
-        let tokens = topLevelTokens(sql)
-        guard let first = tokens.first?.uppercased() else { return .safe }
-        let upper = tokens.map { $0.uppercased() }
+        let statementTokens = topLevelTokens(sql)
+        guard let leading = statementTokens.first?.uppercased() else { return .safe }
 
         // Transaction control is always safe.
-        if ["BEGIN", "COMMIT", "ROLLBACK", "START", "SAVEPOINT", "RELEASE"].contains(first) {
+        if ["BEGIN", "COMMIT", "ROLLBACK", "START", "SAVEPOINT", "RELEASE"].contains(leading) {
             return .safe
         }
 
+        // A WITH clause or EXPLAIN ANALYZE carries out the write it wraps, so
+        // that write decides, from its own keyword on. A WHERE after it that
+        // belongs to an outer SELECT turns a no-WHERE warning into the
+        // targeted-write one, which still asks.
+        let tokens = Array(statementTokens[(embeddedWriteIndex(in: statementTokens) ?? 0)...])
+        let first = tokens[0].uppercased()
+        let upper = tokens.map { $0.uppercased() }
         let hasWhere = upper.contains("WHERE")
 
         if isProduction {
@@ -100,6 +106,50 @@ public enum DangerGuard {
             return .safe
         }
     }
+
+    /// What a WITH clause may wrap or lead into that changes data
+    /// (https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING).
+    private static let dataModifyingKeywords: Set<String> = ["INSERT", "UPDATE", "DELETE", "MERGE"]
+
+    /// Keywords that begin the statement an EXPLAIN describes.
+    private static let explainTargets: Set<String> = writeKeywords.union([
+        "SELECT", "WITH", "VALUES", "TABLE", "EXECUTE", "DECLARE",
+    ])
+
+    /// Index of the write that a leading WITH clause, or an EXPLAIN that runs
+    /// its statement, carries out; nil when the leading keyword decides.
+    /// EXPLAIN without ANALYZE only plans the statement
+    /// (https://www.postgresql.org/docs/current/sql-explain.html,
+    /// https://dev.mysql.com/doc/refman/8.4/en/explain.html#explain-analyze).
+    private static func embeddedWriteIndex(in tokens: [String]) -> Int? {
+        let upper = tokens.map { $0.uppercased() }
+        switch upper.first {
+        case "WITH":
+            return firstDataModifyingIndex(in: upper, from: 1)
+        case "EXPLAIN":
+            guard let target = upper.indices.dropFirst().first(where: { explainTargets.contains(upper[$0]) }),
+                  upper[1..<target].contains(where: { analyzeSpellings.contains($0) })
+            else { return nil }
+            if upper[target] == "WITH" { return firstDataModifyingIndex(in: upper, from: target + 1) }
+            return writeKeywords.contains(upper[target]) ? target : nil
+        default:
+            return nil
+        }
+    }
+
+    /// `FOR UPDATE` and `FOR NO KEY UPDATE` lock the rows a read returns;
+    /// they change no data.
+    private static func firstDataModifyingIndex(in upper: [String], from start: Int) -> Int? {
+        guard start < upper.count else { return nil }
+        for index in start..<upper.count where dataModifyingKeywords.contains(upper[index]) {
+            let locksRows = upper[index] == "UPDATE" && lockingUpdatePrefixes.contains(upper[index - 1])
+            if !locksRows { return index }
+        }
+        return nil
+    }
+
+    private static let lockingUpdatePrefixes: Set<String> = ["FOR", "KEY"]
+    private static let analyzeSpellings: Set<String> = ["ANALYZE", "ANALYSE"]
 
     /// Object name for typed confirmation: the last identifier of the
     /// statement head, unqualified ("schema"."name" → name), original casing.

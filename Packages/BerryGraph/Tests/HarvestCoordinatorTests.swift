@@ -157,10 +157,13 @@ actor Gate {
     }
 }
 
-/// Polls `condition` until it holds. Gives up after ten seconds, so a broken
-/// coordinator fails the test instead of hanging it.
+/// Polls `condition` until it holds. Gives up after a minute, so a broken
+/// coordinator fails the test instead of hanging it. The suite runs every
+/// test in parallel, and on a three-core CI runner tests that only await other
+/// tasks took up to 18 seconds, so a ten-second limit failed coordinators that
+/// were correct.
 func waitUntil(_ condition: () async -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(10)
+    let deadline = ContinuousClock.now + .seconds(60)
     while !(await condition()) {
         guard ContinuousClock.now < deadline else {
             Issue.record("the awaited condition never held")

@@ -1175,7 +1175,8 @@ public final class QueryToolExecutor: AIToolExecutor {
     // MARK: - Safety chain (shared by run_sql and run_tab_statements)
 
     /// DangerGuard classification + approval for one statement. Writes/DDL always
- /// prompt; a plain safe SELECT may auto-approve.
+    /// prompt; only a statement `ReadOnlyStatement` proves read-only throughout
+    /// may auto-approve.
     ///
  /// `.typedConfirm` (DROP/TRUNCATE on production) is denied
     /// outright rather than routed through the chat's approval card: that
@@ -1198,7 +1199,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         let isProduction = session?.isProduction ?? false
         let danger = DangerGuard.classify(sql, isProduction: isProduction)
         if case .typedConfirm = danger { return false }
-        let autoApprovable = Self.isReadOnly(sql) && danger == .safe && options.autoApproveSelects
+        let autoApprovable = options.autoApproveSelects && danger == .safe && isReadOnlyThroughout(sql)
         if autoApprovable { return true }
         if let timeoutSeconds {
             return await gate.approve(sql: sql, danger: danger, autoApprovable: autoApprovable, timeoutSeconds: timeoutSeconds)
@@ -1314,12 +1315,12 @@ public final class QueryToolExecutor: AIToolExecutor {
 
     // MARK: - Helpers
 
-    private static func isReadOnly(_ sql: String) -> Bool {
-        let head = sql.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return head.hasPrefix("select") || head.hasPrefix("with")
-            || head.hasPrefix("explain") || head.hasPrefix("show")
-            || head.contains(".find(") || head.contains(".aggregate(")
-            || head.contains(".count(") || head.contains(".distinct(")
+    /// Without a SQL session, statements go to the document, vector or search
+    /// store through `executeStatement`, where only a Mongo shell read can be
+    /// proven read-only.
+    private func isReadOnlyThroughout(_ sql: String) -> Bool {
+        guard let session else { return ReadOnlyStatement.isReadOnlyMongoShell(sql) }
+        return ReadOnlyStatement.isReadOnlySQL(sql, driver: session.config.driver)
     }
 
     private static func jsonValue(_ value: BerryValue) -> Any {
