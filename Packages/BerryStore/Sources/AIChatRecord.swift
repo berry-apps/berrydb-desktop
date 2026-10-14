@@ -70,6 +70,14 @@ public struct AIMessageRecord: Codable, Sendable, Equatable, FetchableRecord, Pe
 
     public static let databaseTableName = "ai_message"
 
+    /// `toolCalls` value of a message written by a turn of Apple's on-device
+    /// model. Such a turn sends nothing to BerryDB's AI service, so its
+    /// messages are never embedded there, neither right after the turn nor by
+    /// a later backfill, and semantic conversation search cannot match them.
+    /// They stay ordinary conversation otherwise: shown in history, editable,
+    /// and part of the context of a later cloud turn in the same thread.
+    public static let onDeviceMarker = "local:on-device"
+
     public init(
         id: UUID = UUID(), threadID: UUID, seq: Int, role: String, content: String,
         toolCalls: String? = nil, toolCallID: String? = nil, createdAt: Date, artifactsJSON: String? = nil,

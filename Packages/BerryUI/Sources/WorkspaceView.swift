@@ -215,7 +215,8 @@ public struct WorkspaceView: View {
             CommandPaletteView(
                 entries: CommandPaletteEntries.build(from: menuActions),
                 onCancel: { showCommandPalette = false },
-                onAskAI: { query in await aiController.routeCommandPaletteQuery(query) }
+                onAskAI: { query in await aiController.routeCommandPaletteQuery(query) },
+                onOpenAIPanel: { showAIPanel = true }
             )
         }
         .sheet(item: $ddlObject) { object in

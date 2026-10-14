@@ -27,7 +27,8 @@ public final class SearchConversationToolExecutor: AIToolExecutor {
         [AIToolSpec(
             name: "search_conversation",
             description: "Semantically search EARLIER parts of this conversation that are no longer in the recent context (they were summarized). Use it when the user refers to a detail from earlier that you can't see. Returns the most relevant past messages.",
-            parametersJSON: #"{"type":"object","properties":{"query":{"type":"string","description":"What to look for in the earlier conversation."}},"required":["query"]}"#
+            parametersJSON: #"{"type":"object","properties":{"query":{"type":"string","description":"What to look for in the earlier conversation."}},"required":["query"]}"#,
+            requiresBackend: true
         )]
     }
 

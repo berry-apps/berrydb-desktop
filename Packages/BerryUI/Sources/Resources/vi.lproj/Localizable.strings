@@ -279,6 +279,9 @@
 "Sign in required" = "Cần đăng nhập";
 "Could not reach the license server" = "Không kết nối được máy chủ license";
 "This device has already used its free trial with a different account. Sign in with that account, or use a license key." = "Máy này đã dùng thử miễn phí với một tài khoản khác. Hãy đăng nhập bằng tài khoản đó, hoặc dùng license key.";
+"If a license exists for this email, we've sent its key there. Check your inbox and spam folder." = "Nếu email này có license, chúng tôi đã gửi key tới đó. Hãy kiểm tra hộp thư đến và thư mục spam.";
+"We can't email license keys right now. Contact support at info@berryhub.app." = "Hiện chưa thể gửi license key qua email. Hãy liên hệ hỗ trợ tại info@berryhub.app.";
+"Too many attempts. Try again later." = "Bạn đã thử quá nhiều lần. Hãy thử lại sau.";
 "This license could not be read — it may be corrupted. Try activating again with your key or restoring by email." = "Không đọc được license này — có thể đã bị hỏng. Hãy thử kích hoạt lại bằng key hoặc khôi phục qua email.";
 "This license was signed with a key this app doesn't recognize — it may have been issued for a different environment. Try activating again, or contact support if this keeps happening." = "License này được ký bằng khóa mà app không nhận ra — có thể đã được cấp cho môi trường khác. Hãy thử kích hoạt lại, hoặc liên hệ hỗ trợ nếu vẫn còn lỗi.";
 
@@ -326,7 +329,7 @@
 "Turn AI on…" = "Bật AI…";
 "Turn AI off for this connection" = "Tắt AI cho kết nối này";
 "Before you start" = "Trước khi bắt đầu";
-"The assistant sends your schema (table and column names), the database type, and your questions to BerryDB's AI service. Row data is never sent unless you turn on sample rows. Any SQL the assistant proposes runs only after you approve it." = "Trợ lý gửi schema (tên bảng và cột), loại cơ sở dữ liệu và câu hỏi của bạn tới dịch vụ AI của BerryDB. Dữ liệu dòng không bao giờ được gửi trừ khi bạn bật gửi dòng mẫu. Mọi câu SQL trợ lý đề xuất chỉ chạy sau khi bạn phê duyệt.";
+"The assistant sends your schema (table and column names), the database type, and your questions to BerryDB's AI service. By default it may run read-only queries without asking, and it sees up to 100 rows of each query it runs. To approve every query first, turn off “Auto-run safe SELECTs” in AI settings. Statements it can't tell are read-only need your approval. Sample rows are sent only if you turn them on." = "Trợ lý gửi schema (tên bảng và cột), loại cơ sở dữ liệu và câu hỏi của bạn tới dịch vụ AI của BerryDB. Theo mặc định, trợ lý có thể tự chạy truy vấn chỉ đọc mà không hỏi, và thấy tối đa 100 dòng kết quả của mỗi truy vấn nó chạy. Để tự duyệt mọi truy vấn trước, hãy tắt “Tự chạy SELECT an toàn” trong Cài đặt AI. Các câu lệnh mà trợ lý không xác định được là chỉ đọc cần bạn phê duyệt. Dòng mẫu chỉ được gửi khi bạn bật.";
 "This is a production connection — review every statement carefully." = "Đây là kết nối production — hãy xem kỹ từng câu lệnh.";
 "I understand — enable AI" = "Tôi đã hiểu — bật AI";
 "Ask about your schema, or ask the assistant to write a query." = "Hỏi về schema, hoặc nhờ trợ lý viết truy vấn.";
@@ -732,7 +735,9 @@
 
 /* follow-up: prepareSend() found nowhere to route a turn (Apple-Intelligence-only access with on-device off, and no real license to fall back to) */
 "Editing needs cloud AI — on-device doesn't support it yet. Add a trial, license, or credit in License settings to edit this message." = "Sửa tin nhắn cần AI đám mây — on-device chưa hỗ trợ. Vào phần License để thêm bản dùng thử, license hoặc nạp tiền, rồi sửa lại tin nhắn này.";
+"Editing uses cloud AI. Turn off the on-device model in AI settings to edit this message." = "Sửa tin nhắn dùng AI đám mây. Hãy tắt mô hình on-device trong Cài đặt AI để sửa tin nhắn này.";
 "On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on above, or add a trial, license, or credit in License settings to use cloud AI instead." = "AI on-device đang tắt, và bạn chưa có bản dùng thử hay license cho AI đám mây. Bật lại on-device ở trên, hoặc vào phần License để thêm bản dùng thử, license hoặc nạp tiền.";
+"On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on in AI settings, or add a trial, license, or credit in License settings." = "AI on-device đang tắt, và bạn chưa có bản dùng thử hay license cho AI đám mây. Bật lại on-device trong Cài đặt AI, hoặc vào phần License để thêm bản dùng thử, license hoặc nạp tiền.";
 "Use Free On-Device Instead" = "Dùng On-Device miễn phí thay thế";
 "This Mac supports Apple Intelligence — skip the trial and run AI on-device for free." = "Máy này hỗ trợ Apple Intelligence — bỏ qua bản dùng thử, chạy AI on-device miễn phí.";
 

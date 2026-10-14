@@ -1,10 +1,12 @@
 import Foundation
 
-/// a Mac with Apple Intelligence available can use on-device AI
+/// A Mac with Apple Intelligence available can use on-device AI
 /// without a paid trial/license — it costs BerryDB nothing to serve. Purely
 /// local: no network call, no server-issued trial consumed. The email is
 /// captured only as the same commitment step the real trial flow asks for;
-/// it never leaves this machine.
+/// it never leaves this machine. Nothing reads it to start a trial: a trial
+/// starts only from the License sheet's trial button, with the email typed
+/// there.
 ///
 /// A UI-facing flag, not an entitlement — see
 /// `AIPanelController.appleIntelligenceGranted` for the actual gate.

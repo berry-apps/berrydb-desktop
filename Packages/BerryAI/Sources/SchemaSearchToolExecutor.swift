@@ -47,7 +47,8 @@ public final class SchemaSearchToolExecutor: AIToolExecutor {
         [AIToolSpec(
             name: "search_schema",
             description: "Semantically search this connection's tables/collections by meaning rather than literal name, e.g. \"payment\" can surface `invoice`/`billing`. Use when the user describes what data they want conceptually instead of naming an exact object.",
-            parametersJSON: #"{"type":"object","properties":{"query":{"type":"string","description":"What kind of data to look for, in plain language."}},"required":["query"]}"#
+            parametersJSON: #"{"type":"object","properties":{"query":{"type":"string","description":"What kind of data to look for, in plain language."}},"required":["query"]}"#,
+            requiresBackend: true
         )]
     }
 

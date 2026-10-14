@@ -53,6 +53,52 @@ struct SearchConversationToolExecutorTests {
         return chained
     }
 
+    /// Every search embeds its query on BerryDB's AI service, so the tool
+    /// must say so to be kept out of on-device turns.
+    @MainActor
+    @Test func declaresThatItNeedsTheBackend() {
+        let executor = SearchConversationToolExecutor(store: makeStore(), transport: StubTransport(), currentThreadID: { nil })
+        #expect(!executor.toolSpecs.isEmpty)
+        #expect(executor.toolSpecs.allSatisfy { $0.requiresBackend })
+    }
+
+    /// Messages from on-device turns lack vectors, which makes them look
+    /// like a backlog to the backfill a cloud turn's search runs. Embedding
+    /// them then would send that text off the Mac after all.
+    @MainActor
+    @Test func backfillNeverEmbedsMessagesFromOnDeviceTurns() async {
+        let store = makeStore()
+        let threadID = UUID()
+        try! store.saveAIThread(AIThreadRecord(
+            id: threadID, dialect: "postgres", createdAt: Date(), updatedAt: Date()
+        ))
+        appendAndActivate(store, threadID: threadID, (0..<12).map { seq in
+            let onDevice = seq < 2
+            return AIMessageRecord(
+                threadID: threadID, seq: seq,
+                role: seq.isMultiple(of: 2) ? "user" : "assistant",
+                content: onDevice ? "on-device \(seq)" : "cloud \(seq)",
+                toolCalls: onDevice ? AIMessageRecord.onDeviceMarker : nil,
+                createdAt: Date()
+            )
+        })
+        let transport = StubTransport()
+        transport.embedReply = Array(repeating: 0.1, count: BerryStore.aiMessageEmbeddingDimension)
+        let executor = SearchConversationToolExecutor(
+            store: store, transport: transport,
+            currentThreadID: { threadID.uuidString }
+        )
+
+        _ = await executor.execute(AIToolCall(
+            id: "c1", name: "search_conversation", args: ["query": "anything"]
+        ))
+
+        #expect(transport.embedInputs().filter { $0.hasPrefix("on-device") }.isEmpty)
+        // The rest of the older messages are still backfilled.
+        #expect(transport.embedInputs().contains("cloud 2"))
+        #expect(transport.embedInputs().contains("cloud 3"))
+    }
+
     @MainActor
     @Test func returnsEmptyMatchesWhenNoThreadIsActive() async {
         let executor = SearchConversationToolExecutor(store: makeStore(), transport: StubTransport(), currentThreadID: { nil })

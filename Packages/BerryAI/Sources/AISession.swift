@@ -316,6 +316,11 @@ public final class AISession {
     /// notices and retypes it by hand.
     public private(set) var isWaitingForNetwork = false
     private var pendingNetworkRetryText: String?
+    /// Asked when connectivity returns, before the queued retry is sent. The
+    /// retry goes to BerryDB's AI service, which may no longer be where this
+    /// conversation's prompts go (the on-device model chosen meanwhile, AI
+    /// turned off, consent withdrawn); false drops it. Nil allows it.
+    public var allowsNetworkRetry: (() -> Bool)?
     // @ObservationIgnored: never read by a View, so it shouldn't be part of
     // @Observable's tracking in the first place — also required to make
     // nonisolated(unsafe) below actually take effect (the macro's tracked
@@ -476,15 +481,6 @@ public final class AISession {
     /// origin/token and resolution status in one value prevents mismatched
     /// ad-hoc pending fields and makes retry behavior atomic.
     private var activeInteraction: ActiveInteraction?
-
-    /// Whether `admitSend` would run a message immediately (true) or queue
-    /// it (false) — the same condition its own guards check, exposed so a
- /// caller can decide whether a precondition (starting a real
-    /// trial before running the turn) is safe to attempt without leaving a
-    /// queued message orphaned if that precondition then fails.
-    public var canRunImmediately: Bool {
-        activeInteraction == nil && pendingReportDraft == nil && !isStreaming
-    }
 
     public var pendingReport: PendingReport? {
         guard case let .report(report) = activeInteraction?.payload else {
@@ -713,11 +709,19 @@ public final class AISession {
     /// Fires once per reconnect, only if a turn is actually waiting — a
     /// `.satisfied` update with nothing pending (the common case: most path
     /// updates aren't a recovery from an outage) is a no-op.
-    private func retryAfterNetworkRestored() async {
+    func retryAfterNetworkRestored() async {
         guard let text = pendingNetworkRetryText, !isStreaming else { return }
+        dropNetworkRetry()
+        guard allowsNetworkRetry?() ?? true else { return }
+        await send(text)
+    }
+
+    /// The retry sends the thread's messages as context, so it is dropped as
+    /// soon as the conversation moves away from the turn that failed: an
+    /// on-device send, a new thread, or another thread opened.
+    private func dropNetworkRetry() {
         pendingNetworkRetryText = nil
         isWaitingForNetwork = false
-        await send(text)
     }
 
     /// Connectivity-loss errors specifically — as opposed to a server error,
@@ -801,20 +805,6 @@ public final class AISession {
         guard !trimmed.isEmpty else { return }
         transcript.append(AITurn(role: .user, text: trimmed))
         transcript.append(AITurn(role: .assistant, text: reason))
-    }
-
-    /// Fails a turn `admitSend` already began (assistant bubble already on
-    /// the transcript, `isStreaming` already true) before any network call
- /// happened — for a precondition that turned out not to hold
-    /// an auto-trial-start attempt that failed before `runTurn` ever ran).
-    /// `assistantTurnID` guards against a stale call landing on a
-    /// different turn that has since taken the same index.
-    public func failActiveTurn(assistantIndex: Int, assistantTurnID: UUID, reason: String) {
-        isStreaming = false
-        defer { drainQueuedMessageIfReady() }
-        guard transcript.indices.contains(assistantIndex),
-              transcript[assistantIndex].id == assistantTurnID else { return }
-        transcript[assistantIndex].text = reason
     }
 
     /// Runs the async continuation for an admission already decided by
@@ -2235,6 +2225,7 @@ public final class AISession {
     public func admitSendLocal(_ text: String, provider: any LocalCompletionProvider) -> SendLocalAdmission {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .ignored }
+        dropNetworkRetry()
         lastLocalProvider = provider
         guard activeInteraction == nil, pendingReportDraft == nil, !isStreaming else {
             queuedMessages.append(trimmed)
@@ -2275,7 +2266,7 @@ public final class AISession {
             drainQueuedMessageIfReady()
         }
 
-        let tools = executor.toolSpecs
+        let tools = localTurnTools()
         let capabilityHost = executor as? LocalCapabilityHost
         do {
             let thread = try await ensureThread()
@@ -2298,15 +2289,16 @@ public final class AISession {
                 if answer.isEmpty, transcript[assistant].text.isEmpty {
                     lastError = "The on-device model didn't return an answer."
                 }
+                // Not handed to the embedding indexer: it would send both
+                // messages to BerryDB's AI service. The marker also keeps a
+                // later backfill from embedding them.
                 let persisted = await persistTurn(
                     threadID: thread, userText: trimmed,
-                    assistantText: transcript[assistant].text
+                    assistantText: transcript[assistant].text,
+                    userMetadata: AIMessageRecord.onDeviceMarker,
+                    assistantMetadata: AIMessageRecord.onDeviceMarker
                 )
                 applyPersistedMessageIDs(persisted, assistant: assistant)
-                if !persisted.isEmpty {
-                    let indexer = embeddingIndexer
-                    Task { await indexer.index(persisted) }
-                }
             case let .clarification(clarification):
                 let pending = try prepareLocalInteraction(
                     clarification, threadID: thread, provider: provider
@@ -2317,6 +2309,7 @@ public final class AISession {
                 let persisted = await persistTurn(
                     threadID: thread, userText: trimmed,
                     assistantText: clarification.question,
+                    userMetadata: AIMessageRecord.onDeviceMarker,
                     assistantMetadata: "local:interaction"
                 )
                 applyPersistedMessageIDs(persisted, assistant: assistant)
@@ -2329,6 +2322,14 @@ public final class AISession {
                 transcript.removeLast(transcript.count - transcriptCount)
             }
         }
+    }
+
+    /// The tools an on-device turn may call: every tool except those that
+    /// send data to BerryDB's AI service, so that the turn sends nothing to
+    /// that service. `LocalCapabilityHost` refuses to run a tool left out of
+    /// the turn's snapshot even when the model names it.
+    private func localTurnTools() -> [AIToolSpec] {
+        executor.toolSpecs.filter { !$0.requiresBackend }
     }
 
     private func localPromptTranscript() -> String {
@@ -2359,6 +2360,7 @@ public final class AISession {
         capabilityErrorLocalizationKey = nil
         controlDeliveryErrorLocalizationKey = nil
         totalTokens = 0
+        dropNetworkRetry()
     }
 
     /// Drops the staged (pre-confirm) summary review. The consented copy on
@@ -2391,6 +2393,7 @@ public final class AISession {
         reportSubmissionState = .idle
         restorePendingInteraction(threadID: id)
         restorePendingReportDraft(threadID: id)
+        dropNetworkRetry()
     }
 
     /// The current thread id, if a conversation has started (for the panel to
@@ -3268,7 +3271,7 @@ public final class AISession {
             runningTool = nil
         }
 
-        let tools = executor.toolSpecs
+        let tools = localTurnTools()
         let capabilityHost = executor as? LocalCapabilityHost
         do {
             try capabilityHost?.beginLocalTurn(with: tools)

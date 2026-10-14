@@ -18,7 +18,7 @@ import Observation
 @Observable
 public final class AIPanelController {
     /// Why the chat is or isn't usable right now — drives the panel's gate.
-    public enum Availability: Equatable {
+    public enum Availability: Equatable, Sendable {
         case noConnection
         case unlicensed
  /// switched off for this connection (default on production).
@@ -486,6 +486,7 @@ public final class AIPanelController {
     /// opens, migrates or writes the store of whoever runs it.
     init(license: LicenseManager, backendURL: URL, store: BerryStore) {
         self.license = license
+        self.licenseStatus = { license.status }
         self.backendURL = backendURL
         self.store = store
         // Nothing else purges `ai_pending_interaction` rows past their
@@ -675,7 +676,7 @@ public final class AIPanelController {
     public func allowsSchemaEmbedding(profileID: UUID) -> Bool {
         Self.allowsSchemaEmbedding(
             profileID: profileID, currentProfileID: currentProfileID, availability: availability,
-            license: license.status, onDevice: UserDefaults.standard.bool(forKey: "berry.ai.onDevice")
+            license: licenseStatus(), onDevice: UserDefaults.standard.bool(forKey: "berry.ai.onDevice")
         )
     }
 
@@ -722,7 +723,7 @@ public final class AIPanelController {
     /// ever activated at all) blocks the panel.
     public var availability: Availability {
         guard session != nil || dataSourceSession != nil else { return .noConnection }
-        if case .none = license.status, !appleIntelligenceGranted { return .unlicensed }
+        if case .none = licenseStatus(), !appleIntelligenceGranted { return .unlicensed }
         guard enabledForConnection else { return .disabledForConnection }
         guard consentGiven else { return .needsConsent }
         return .ready
@@ -737,9 +738,21 @@ public final class AIPanelController {
     /// inside the panel this property gates, so coupling them would lock a
     /// user out with no way back to the toggle once it's off.
     public var appleIntelligenceGranted: Bool {
-        guard case .none = license.status else { return false }
-        return AppleIntelligenceAccess.isGranted && AppleFoundationProvider.isAvailable()
+        guard case .none = licenseStatus() else { return false }
+        return AppleIntelligenceAccess.isGranted && onDeviceModelAvailable()
     }
+
+    /// The installed license's status. Replaceable so tests can take the
+    /// licensed routes: a real license needs a signed license file and a
+    /// Keychain token, neither of which a test may write.
+    var licenseStatus: () -> LicenseStatus
+
+    /// Whether Apple's on-device model can run on this Mac, and the model a
+    /// local turn runs on. Replaceable so tests can exercise the on-device
+    /// routes on machines without Apple Intelligence, which include the CI
+    /// runners.
+    var onDeviceModelAvailable: () -> Bool = { AppleFoundationProvider.isAvailable() }
+    var makeOnDeviceProvider: () -> any LocalCompletionProvider = { AppleFoundationProvider() }
 
     // MARK: - Bind to the active session
 
@@ -788,7 +801,8 @@ public final class AIPanelController {
         // Restore saved settings without persisting them back.
         isRestoring = true
         let saved = profileID.flatMap { loadSettings?($0) }
-        consentGiven = saved?.consentGiven ?? false
+        let acceptedVersion = profileID.map { UserDefaults.standard.integer(forKey: Self.consentVersionKey($0)) } ?? 0
+        consentGiven = (saved?.consentGiven ?? false) && acceptedVersion >= Self.consentVersion
         allowSampleRows = saved?.allowSampleRows ?? false
         autoApproveSelects = saved?.autoApproveSelects ?? true
         enabledMCPServers = saved?.enabledMCPServers ?? []
@@ -1042,6 +1056,7 @@ public final class AIPanelController {
             aiSession?.loadThread(id: existingThreadID, turns: existingTranscript)
         }
         aiSession?.onTurnAdmitted = { [weak self] in self?.onTurnAdmitted?() }
+        aiSession?.allowsNetworkRetry = { [weak self] in self?.sendRoute == .backend }
 
  // Spawn enabled MCP servers in the background; their tools appear
         // on the next turn once tools/list returns.
@@ -1070,11 +1085,27 @@ public final class AIPanelController {
     /// Runs as its own `AISession`/thread rather than the panel's main one,
     /// so it costs the same as one ordinary chat turn (per the doc) without
     /// splicing routing exchanges into the user's actual conversation
-    /// history. Returns whether a UI action actually fired (so the palette
-    /// can dismiss deterministically without parsing the model's reply) and
+    /// history. Reports whether a UI action actually fired, so the palette
+    /// can dismiss deterministically without parsing the model's reply, and
     /// the model's final text for display otherwise.
-    public func routeCommandPaletteQuery(_ text: String) async -> (performed: Bool, reply: String?) {
-        guard LicenseManager.apiToken() != nil else { return (false, nil) }
+    ///
+    /// The query passes the same gate as a message sent from the panel,
+    /// `sendRoute`: a license or Apple Intelligence access, AI on for this
+    /// connection, its consent given, and the on-device model when it is
+    /// preferred. Holding an API token is no gate, since
+    /// `LicenseManager.apiToken()` falls back to a development token.
+    public func routeCommandPaletteQuery(_ text: String) async -> CommandPaletteOutcome {
+        let route = sendRoute
+        switch route {
+        case let .closed(reason):
+            return .gateClosed(reason)
+        case .noCloudAccess:
+            return .reply(L(
+                "On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on in AI settings, or add a trial, license, or credit in License settings."
+            ))
+        case .onDevice, .backend:
+            break
+        }
         let entryExecutor = PerformUIActionToolExecutor(currentEntries: { [weak self] in
             self?.uiActionEntries?() ?? []
         })
@@ -1114,9 +1145,28 @@ public final class AIPanelController {
             transport: transport, executor: router,
             dialect: dialect, schemaDigest: "command-palette", store: store
         )
-        await routingSession.send(text)
-        let reply = routingSession.transcript.last(where: { $0.role == .assistant })?.text
-        return (entryExecutor.didPerform, reply)
+        if route == .onDevice {
+            await routingSession.sendLocal(text, provider: makeOnDeviceProvider())
+        } else {
+            await routingSession.send(text)
+        }
+        if entryExecutor.didPerform { return .performed }
+        return .reply(routingSession.transcript.last(where: { $0.role == .assistant })?.text)
+    }
+
+    /// What became of a command palette query. Sendable because the palette
+    /// awaits it through a nonisolated closure, which Swift 6.1 rejects for a
+    /// non-Sendable result.
+    public enum CommandPaletteOutcome: Equatable, Sendable {
+        /// A UI action ran; the palette closes.
+        case performed
+        /// The model answered without acting, or the query could not be
+        /// sent; the palette shows the text, or a fallback when nil.
+        case reply(String?)
+        /// The AI gate is closed for the reason given. Nothing was sent; the
+        /// AI panel opens, since it is where that reason is explained and
+        /// resolved.
+        case gateClosed(Availability)
     }
 
  /// Enable/disable an allowlisted MCP server and reconnect so its tools
@@ -1136,8 +1186,23 @@ public final class AIPanelController {
 
  /// Accept the metadata policy and turn AI on for this connection.
     public func giveConsentAndEnable() {
+        if let currentProfileID {
+            UserDefaults.standard.set(Self.consentVersion, forKey: Self.consentVersionKey(currentProfileID))
+        }
         enabledForConnection = true
         consentGiven = true
+    }
+
+    /// Version of the consent screen's text, raised when the text changes in
+    /// a way a user who already accepted must see. An acceptance stored with
+    /// an older version, or with none, counts as not given, so the screen
+    /// shows again for that connection.
+    static let consentVersion = 1
+
+    /// The accepted version is kept in user defaults per connection profile,
+    /// beside the acceptance in the store, so the store needs no migration.
+    static func consentVersionKey(_ profileID: UUID) -> String {
+        "berry.ai.consentVersion.\(profileID.uuidString)"
     }
 
     /// Persists the current settings for the active profile (no-op while
@@ -1154,6 +1219,41 @@ public final class AIPanelController {
         ))
     }
 
+    /// Where a prompt typed into the panel or the command palette may go.
+    enum SendRoute: Equatable {
+        /// The panel's gate is closed for this reason; nothing may be sent.
+        case closed(Availability)
+        /// Apple's on-device model; nothing is sent to BerryDB's AI service.
+        case onDevice
+        /// BerryDB's AI service.
+        case backend
+        /// Apple Intelligence access without a license or trial, and the
+        /// on-device model turned off: there is nowhere to send it.
+        case noCloudAccess
+    }
+
+    /// An expired trial or plan still goes to the backend, whose refusal
+    /// carries the top-up prompt the panel shows. A preferred on-device model
+    /// wins over any license, as the toggle says.
+    nonisolated static func sendRoute(
+        availability: Availability, license: LicenseStatus, onDevicePreferred: Bool
+    ) -> SendRoute {
+        guard availability == .ready else { return .closed(availability) }
+        if onDevicePreferred { return .onDevice }
+        if case .none = license { return .noCloudAccess }
+        return .backend
+    }
+
+    /// The route for a prompt sent now. The on-device toggle is read here and
+    /// not in `availability`, since gating the panel on it would also hide
+    /// the settings menu that holds the toggle.
+    var sendRoute: SendRoute {
+        Self.sendRoute(
+            availability: availability, license: licenseStatus(),
+            onDevicePreferred: UserDefaults.standard.bool(forKey: "berry.ai.onDevice") && onDeviceModelAvailable()
+        )
+    }
+
     /// What `prepareSend` decided, for `send(_:)` below to carry out.
     public enum PreparedSend {
         case local(AISession.SendLocalAdmission)
@@ -1163,14 +1263,6 @@ public final class AIPanelController {
         /// this just lets callers still reach their post-send logic (e.g.
         /// scrolling to the new bubble) the same as any other case.
         case handled
-        /// Apple-Intelligence-only access (no real license), but this
-        /// device has an email captured via the grant — try a real trial
-        /// for it before giving up. Balance is shared per email across
-        /// devices (not per device), so an email that already topped up
-        /// elsewhere picks its balance back up automatically the moment
-        /// its own fresh trial-token quota runs out — no account-linking
-        /// needed, the backend already does this.
-        case backendAfterTrial(AISession.SendAdmission, email: String)
     }
 
     /// Synchronous half of send(): validates, clears `draft`, and admits the
@@ -1187,7 +1279,9 @@ public final class AIPanelController {
     /// skip this (`sendLocal` was a single `async func`), so it alone kept
     /// lagging behind Send whenever the MainActor was busy.
     public func prepareSend() -> PreparedSend? {
-        guard availability == .ready, let aiSession else { return nil }
+        let route = sendRoute
+        if case .closed = route { return nil }
+        guard let aiSession else { return nil }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
         draft = ""
@@ -1198,7 +1292,7 @@ public final class AIPanelController {
         // A device with no real license/trial must never reach the metered
         // backend through any branch below — editing included.
         let hasRealLicense: Bool = {
-            if case .none = license.status { return false }
+            if case .none = licenseStatus() { return false }
             return true
         }()
  // Editing a past message always goes through the backend
@@ -1212,34 +1306,36 @@ public final class AIPanelController {
                 ))
                 return .handled
             }
+            // With the on-device model preferred, the edited turn would go to
+            // BerryDB's AI service with the thread's on-device messages as
+            // context, while the toggle still reads on-device.
+            guard route == .backend else {
+                aiSession.admitBlocked(text, reason: L(
+                    "Editing uses cloud AI. Turn off the on-device model in AI settings to edit this message."
+                ))
+                return .handled
+            }
             guard let admission = aiSession.prepareEdit(messageID: messageID, newText: text) else { return nil }
             return .backend(admission)
         }
- // On-device: checked here, at the point of sending, not in
-        // `availability` — that's what keeps the toggle from also gating
-        // whether the panel itself is reachable.
-        if UserDefaults.standard.bool(forKey: "berry.ai.onDevice"), AppleFoundationProvider.isAvailable() {
-            return .local(aiSession.admitSendLocal(text, provider: AppleFoundationProvider()))
-        }
-        guard hasRealLicense else {
- // no real license, but this device already has an email
-            // (captured when Apple Intelligence access was granted) — try
-            // a real trial for it before giving up, instead of just
-            // telling the user to go do it themselves. Requires
-            // `canRunImmediately` (checked and consumed on this same
-            // synchronous call stack, so it can't go stale before
-            // `admitSend` runs) — a message that would otherwise queue
-            // must not get entangled with an auto-trial attempt that might
-            // then fail, which would leave it orphaned.
-            if let email = AppleIntelligenceAccess.grantedEmail, aiSession.canRunImmediately {
-                return .backendAfterTrial(aiSession.admitSend(text), email: email)
-            }
+        switch route {
+        case .onDevice:
+            return .local(aiSession.admitSendLocal(text, provider: makeOnDeviceProvider()))
+        case .noCloudAccess:
+            // No trial is started here. The email given for Apple
+            // Intelligence access is promised to stay on this Mac, and a
+            // trial would post it to the license server from a send that
+            // never mentioned one. A trial starts only from the License
+            // sheet's trial button.
             aiSession.admitBlocked(text, reason: L(
                 "On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on above, or add a trial, license, or credit in License settings to use cloud AI instead."
             ))
             return .handled
+        case .backend:
+            return .backend(aiSession.admitSend(text))
+        case .closed:
+            return nil
         }
-        return .backend(aiSession.admitSend(text))
     }
 
     public func send(_ prepared: PreparedSend) async {
@@ -1251,27 +1347,6 @@ public final class AIPanelController {
             await runOnBackendAndRefresh(admission)
         case .handled:
             break
-        case let .backendAfterTrial(admission, email):
-            await license.startTrial(email: email)
-            if case .none = license.status {
-                // Trial start failed (network, or the server rejected it) —
-                // the assistant bubble already exists from admitSend's
-                // beginTurn; fail it in place with an explanation rather
-                // than leaving a permanent spinner or attempting the
-                // backend call anyway with no valid token. Reuse the same
-                // code→message mapping LicenseView uses (e.g. this device
- // already used its trial under a different email)
-                // instead of a generic message that would bury the actual,
-                // actionable reason.
-                if case let .run(_, assistantIndex, assistantTurnID) = admission {
-                    let reason = license.lastError.map(licenseErrorMessage) ?? L(
-                        "Couldn't start a trial for cloud AI — check your connection, or add a trial, license, or credit in License settings."
-                    )
-                    aiSession.failActiveTurn(assistantIndex: assistantIndex, assistantTurnID: assistantTurnID, reason: reason)
-                }
-            } else {
-                await runOnBackendAndRefresh(admission)
-            }
         }
     }
 
