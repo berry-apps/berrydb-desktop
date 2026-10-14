@@ -7,21 +7,52 @@ extension String: @retroactive LocalizedError {
     public var errorDescription: String? { self }
 }
 
+/// How the safety chain let a statement through, which decides the
+/// connection it runs on.
+public enum AIApprovalDecision: Sendable, Equatable {
+    /// Without a card of its own, because it is rated safe and proven
+    /// read-only throughout and either the auto-run setting is on or the
+    /// gate trusts it (Run All Safe). Runs on the read-only connection where
+    /// the engine has one.
+    case autoRun
+    /// The user approved its card. Runs on the session's own connection.
+    case approved
+    case denied
+}
+
 /// User-facing approval for an AI-proposed statement.
 /// Rendered inline in the AI panel: the SQL is shown with [Deny]/[Run]. Writes
 /// and DDL ALWAYS prompt; a plain SELECT may auto-approve per setting.
 /// `autoApprovable` is true only for a statement rated safe and proven
-/// read-only throughout, the one kind a trust held by the gate itself, such
-/// as the card's Run All Safe, may let through without a card.
+/// read-only throughout, the one kind whose card may offer Run All Safe.
 @MainActor
 public protocol AIApprovalGate {
     func approve(sql: String, danger: DangerLevel, autoApprovable: Bool) async -> Bool
     func approve(sql: String, danger: DangerLevel, autoApprovable: Bool, timeoutSeconds: TimeInterval) async -> Bool
+    /// Whether a trust the gate holds, such as Run All Safe for the rest of
+    /// a turn, lets a statement through without a card. Asked only for a
+    /// statement rated safe and proven read-only throughout; one it lets
+    /// through is an automatic run.
+    func trustsWithoutCard(sql: String, danger: DangerLevel) -> Bool
+    /// The card for a statement that would have run without one but cannot
+    /// run on the read-only connection, saying why. No trust skips it: once
+    /// approved, the statement runs on the session's own connection.
+    func approveOnSessionConnection(
+        sql: String, danger: DangerLevel, reason: ReadOnlyUnavailableReason, timeoutSeconds: TimeInterval
+    ) async -> Bool
 }
 
 public extension AIApprovalGate {
     func approve(sql: String, danger: DangerLevel, autoApprovable: Bool, timeoutSeconds: TimeInterval) async -> Bool {
         await approve(sql: sql, danger: danger, autoApprovable: autoApprovable)
+    }
+
+    func trustsWithoutCard(sql: String, danger: DangerLevel) -> Bool { false }
+
+    func approveOnSessionConnection(
+        sql: String, danger: DangerLevel, reason: ReadOnlyUnavailableReason, timeoutSeconds: TimeInterval
+    ) async -> Bool {
+        await approve(sql: sql, danger: danger, autoApprovable: false, timeoutSeconds: timeoutSeconds)
     }
 }
 
@@ -151,6 +182,10 @@ public final class QueryToolExecutor: AIToolExecutor {
     /// it after approval and immediately before each irreversible operation.
     private let executeStatement: (@MainActor (String, AIExecutionLease) async -> AIDirectStatementResult)?
     private let listCollections: (() -> [String])?
+    /// Where a statement that runs without its own card goes. Nil leaves an
+    /// engine with a read-only connection asking for a card instead, so no
+    /// automatic run reaches the session's own connection there.
+    private let readOnlyRoute: (@MainActor (Session) async -> ReadOnlyRoute)?
     public var options: Options
 
  /// local artifact persistence — nil `store`/
@@ -224,6 +259,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         profileID: UUID? = nil,
         resolveArtifactID: @escaping (String) -> UUID? = { _ in nil },
         linkArtifact: @escaping (String, UUID) -> Void = { _, _ in },
+        readOnlyRoute: (@MainActor (Session) async -> ReadOnlyRoute)? = nil,
         /// Test-only override for `aiQueryTimeoutSeconds`'s default — a real
         /// 90s wait isn't practical in a test.
         queryTimeoutSeconds: TimeInterval = 90,
@@ -245,6 +281,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         self.linkArtifact = linkArtifact
         self.executeStatement = executeStatement
         self.listCollections = listCollections
+        self.readOnlyRoute = readOnlyRoute
         self.aiQueryTimeoutSeconds = queryTimeoutSeconds
         self.executionDeadlineSeconds = executionDeadlineSeconds
     }
@@ -547,7 +584,8 @@ public final class QueryToolExecutor: AIToolExecutor {
             return .failed("Execution stopped: tool deadline (\(durationLabel)) exceeded")
         }
         let remainingForApproval = maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
-        guard await approve(sql, timeoutSeconds: remainingForApproval) else { return .denied }
+        let decision = await approve(sql, timeoutSeconds: remainingForApproval)
+        guard decision != .denied else { return .denied }
         guard lease.isValid else { return .denied }
 
         let remainingForQuery = maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
@@ -556,7 +594,9 @@ public final class QueryToolExecutor: AIToolExecutor {
         }
 
         do {
-            var payload = try await drainSample(sql, lease: lease, timeoutOverrideSeconds: remainingForQuery)
+            guard var payload = try await run(sql, decision: decision, lease: lease, startTime: startTime) else {
+                return .denied
+            }
             recordRunSQLArtifact(sql: sql, into: &payload)
             return .ok(Self.json(payload))
         }
@@ -588,7 +628,22 @@ public final class QueryToolExecutor: AIToolExecutor {
             from: tableRef, whereClause: nil, orderBy: nil, limit: Self.sampleRowsLimit
         )
         guard lease.isValid else { return .denied }
-        do { return .ok(Self.json(try await drainSample(sql, lease: lease, timeoutOverrideSeconds: executionDeadlineSeconds))) }
+        // Built here from a quoted table name and a LIMIT, so no model text
+        // reaches it: it runs without a card, on the read-only connection
+        // when it can and otherwise on the session's own connection.
+        do {
+            if case .readOnly(let readOnly) = await route(for: session) {
+                do {
+                    return .ok(Self.json(try await drainReadOnly(
+                        sql, on: readOnly, lease: lease, timeoutOverrideSeconds: executionDeadlineSeconds
+                    )))
+                } catch DriverError.readOnlyUnavailable {
+                    // The read-only mode did not start, so the statement did
+                    // not run; it runs on the session's own connection below.
+                }
+            }
+            return .ok(Self.json(try await drainSample(sql, lease: lease, timeoutOverrideSeconds: executionDeadlineSeconds)))
+        }
         catch is CancellationError { return .denied }
         catch {
             guard lease.isValid else { return .denied }
@@ -657,7 +712,8 @@ public final class QueryToolExecutor: AIToolExecutor {
                 break
             }
             let remainingForApproval = maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
-            guard await approve(sql, timeoutSeconds: remainingForApproval) else { stoppedEarly = true; break }
+            let decision = await approve(sql, timeoutSeconds: remainingForApproval)
+            guard decision != .denied else { stoppedEarly = true; break }
             if let maxDuration, Date().timeIntervalSince(startTime) >= maxDuration {
                 stoppedEarly = true
                 results.append(["sql": sql, "error": "Execution stopped: tool deadline (\(durationLabel)) exceeded"])
@@ -673,7 +729,10 @@ public final class QueryToolExecutor: AIToolExecutor {
             }
 
             do {
-                var payload = try await drainSample(sql, lease: lease, timeoutOverrideSeconds: remainingForQuery)
+                guard var payload = try await run(sql, decision: decision, lease: lease, startTime: startTime) else {
+                    stoppedEarly = true
+                    break
+                }
                 payload["sql"] = sql
                 results.append(payload)
             } catch is CancellationError {
@@ -1198,18 +1257,106 @@ public final class QueryToolExecutor: AIToolExecutor {
     /// back that this statement needs to be run manually, which is also the
  /// correct outcome for: typing the object name to confirm a
     /// destructive production DDL is deliberately a manual-only action.
-    private func approve(_ sql: String, timeoutSeconds: TimeInterval? = nil) async -> Bool {
+    private func approve(_ sql: String, timeoutSeconds: TimeInterval? = nil) async -> AIApprovalDecision {
         let isProduction = session?.isProduction ?? false
         let danger = DangerGuard.classify(sql, isProduction: isProduction)
-        if case .typedConfirm = danger { return false }
+        if case .typedConfirm = danger { return .denied }
         let autoApprovable = danger == .safe && isReadOnlyThroughout(sql)
-        if autoApprovable, options.autoApproveSelects { return true }
+        if autoApprovable, options.autoApproveSelects || gate.trustsWithoutCard(sql: sql, danger: danger) {
+            return .autoRun
+        }
+        let approved: Bool
         if let timeoutSeconds {
-            return await gate.approve(sql: sql, danger: danger, autoApprovable: autoApprovable, timeoutSeconds: timeoutSeconds)
+            approved = await gate.approve(sql: sql, danger: danger, autoApprovable: autoApprovable, timeoutSeconds: timeoutSeconds)
         } else if let deadline = executionDeadlineSeconds {
-            return await gate.approve(sql: sql, danger: danger, autoApprovable: autoApprovable, timeoutSeconds: deadline)
+            approved = await gate.approve(sql: sql, danger: danger, autoApprovable: autoApprovable, timeoutSeconds: deadline)
         } else {
-            return await gate.approve(sql: sql, danger: danger, autoApprovable: autoApprovable)
+            approved = await gate.approve(sql: sql, danger: danger, autoApprovable: autoApprovable)
+        }
+        return approved ? .approved : .denied
+    }
+
+    /// Runs a statement the safety chain let through. A card-approved one
+    /// runs on the session's own connection. An automatic run goes to the
+    /// read-only connection; on an engine that has one but cannot use it
+    /// now, the statement waits for a card saying why and runs on the
+    /// session's own connection only once approved, so no automatic run
+    /// reaches that connection. A write the read-only connection refused is
+    /// the tool's error and is never run again elsewhere. Returns nil when
+    /// that card is denied.
+    private func run(
+        _ sql: String, decision: AIApprovalDecision, lease: AIExecutionLease, startTime: Date
+    ) async throws -> [String: Any]? {
+        let maxDuration = executionDeadlineSeconds
+        func remaining() -> TimeInterval? {
+            maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
+        }
+        guard decision == .autoRun, let session else {
+            return try await drainSample(sql, lease: lease, timeoutOverrideSeconds: remaining())
+        }
+        let reason: ReadOnlyUnavailableReason
+        switch await route(for: session) {
+        case .notSupported:
+            return try await drainSample(sql, lease: lease, timeoutOverrideSeconds: remaining())
+        case .readOnly(let readOnly):
+            do {
+                return try await drainReadOnly(sql, on: readOnly, lease: lease, timeoutOverrideSeconds: remaining())
+            } catch DriverError.readOnlyUnavailable(let detail) {
+                reason = .connectionFailed(detail)
+            }
+        case .unavailable(let unavailable):
+            reason = unavailable
+        }
+        // A turn stopped while its connection opened is answered as
+        // unavailable too; it gets no card, which would wait for a turn that
+        // is over.
+        guard lease.isValid, !Task.isCancelled else { throw CancellationError() }
+        let danger = DangerGuard.classify(sql, isProduction: session.isProduction)
+        guard await gate.approveOnSessionConnection(
+            sql: sql, danger: danger, reason: reason, timeoutSeconds: remaining() ?? 110
+        ) else { return nil }
+        guard lease.isValid else { throw CancellationError() }
+        if let left = remaining(), left <= 0 { throw DeadlineExceeded(seconds: maxDuration ?? 110) }
+        return try await drainSample(sql, lease: lease, timeoutOverrideSeconds: remaining())
+    }
+
+    private func route(for session: Session) async -> ReadOnlyRoute {
+        guard let readOnlyRoute else { return ReadOnlyRoute.withoutConnections(for: session) }
+        return await readOnlyRoute(session)
+    }
+
+    /// Drains `sql` on the read-only connection and hands the connection
+    /// back however the drain ends, a lease that arrived after the turn was
+    /// cancelled included. It goes back when the drain gives up, not when
+    /// the statement ends, because a statement that timed out can stay stuck
+    /// on its socket; and on a task of its own, because after a failure the
+    /// pool first checks that the connection still answers, which can take
+    /// seconds the tool call does not wait for.
+    private func drainReadOnly(
+        _ sql: String, on readOnly: ReadOnlyLease, lease: AIExecutionLease, timeoutOverrideSeconds: TimeInterval?
+    ) async throws -> [String: Any] {
+        do {
+            let payload = try await drainSample(sql, lease: lease, timeoutOverrideSeconds: timeoutOverrideSeconds, readOnly: readOnly)
+            Task { await readOnly.finish(failed: false) }
+            return payload
+        } catch {
+            let cancelled: Bool
+            if error is CancellationError {
+                cancelled = true
+            } else if case DriverError.cancelled? = error as? DriverError {
+                cancelled = true
+            } else {
+                cancelled = false
+            }
+            Task { await readOnly.finish(failed: !cancelled) }
+            throw error
+        }
+    }
+
+    private struct DeadlineExceeded: LocalizedError {
+        let seconds: TimeInterval
+        var errorDescription: String? {
+            "Execution stopped: tool deadline (\(seconds > 0 ? Int(seconds) : 110)s) exceeded"
         }
     }
 
@@ -1237,7 +1384,8 @@ public final class QueryToolExecutor: AIToolExecutor {
     private func drainSample(
         _ sql: String,
         lease: AIExecutionLease,
-        timeoutOverrideSeconds: TimeInterval? = nil
+        timeoutOverrideSeconds: TimeInterval? = nil,
+        readOnly: ReadOnlyLease? = nil
     ) async throws -> [String: Any] {
         guard lease.isValid else { throw CancellationError() }
         let effectiveTimeout: TimeInterval
@@ -1267,7 +1415,9 @@ public final class QueryToolExecutor: AIToolExecutor {
                 }
                 return ResultBox(["error": "Direct query execution unavailable for this connection"])
             }
-            let result = try await self.runDatabaseQuery(sql, session: session, lease: lease)
+            let result = try await self.runDatabaseQuery(
+                sql, session: session, lease: lease, readOnly: readOnly, timeoutSeconds: effectiveTimeout
+            )
             return ResultBox(result)
         }
         return box.payload
@@ -1286,12 +1436,21 @@ public final class QueryToolExecutor: AIToolExecutor {
     /// soft-delete reasons ("production rules
     /// never downgrade").
     @MainActor
-    private func runDatabaseQuery(_ sql: String, session: Session, lease: AIExecutionLease) async throws -> [String: Any] {
+    private func runDatabaseQuery(
+        _ sql: String, session: Session, lease: AIExecutionLease, readOnly: ReadOnlyLease?, timeoutSeconds: TimeInterval
+    ) async throws -> [String: Any] {
         var columns: [String] = []
         var rows: [[Any]] = []
         var truncated = false
         var rowsAffected: Int64?
-        for try await event in QueryService.execute(sql, on: session, dangerPreconfirmed: true) {
+        // The server bounds the statement as well where it can, so one this
+        // race gives up on stops on the server too.
+        var runner: QueryService.StatementRunner?
+        if let connection = readOnly?.connection {
+            let bound = Duration.seconds(timeoutSeconds)
+            runner = { connection.executeReadOnly($0, timeout: bound) }
+        }
+        for try await event in QueryService.execute(sql, on: session, dangerPreconfirmed: true, via: runner) {
             try Task.checkCancellation()
             guard lease.isValid else { throw CancellationError() }
             switch event {

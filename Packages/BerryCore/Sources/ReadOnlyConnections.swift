@@ -217,6 +217,12 @@ public actor ReadOnlyConnections {
     /// How many leases wait for a connection to open or to answer its
     /// check, so a test can tell that one is waiting.
     private(set) var leasesWaiting = 0
+    /// Leases handed out and not finished, on every connection the pool
+    /// holds, so a test can tell that each caller gave its lease back: one
+    /// that never does keeps its connection open for good.
+    var unfinishedLeases: Int {
+        slots.values.reduce(0) { $0 + $1.holders.count }
+    }
 
     private func startOpening(_ session: Session) -> UUID {
         let driverType = driverType

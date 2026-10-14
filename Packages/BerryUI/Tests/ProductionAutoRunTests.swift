@@ -45,9 +45,16 @@ struct ProductionAutoRunTests {
         let session = try await ConnectionManager().open(.sqlite(path: path), isProduction: true)
         for try await _ in session.connection.execute("CREATE TABLE t (id INTEGER)") {}
         let gate = RecordingGate()
+        // The app's routing, so the card can come only from auto-run being
+        // off: without a route, an engine with a read-only connection gets a
+        // card for every automatic run, and the test could not fail.
+        let router = ReadOnlyRouter(
+            connections: ReadOnlyConnections(), tracker: SessionStateTracker(), transactionIsActive: { false }
+        )
         let executor = QueryToolExecutor(
             session: session, catalog: SchemaCatalog(session: session), gate: gate,
-            options: .init(autoApproveSelects: autoRun), onPropose: { _, _ in }
+            options: .init(autoApproveSelects: autoRun), onPropose: { _, _ in },
+            readOnlyRoute: { await router.route(for: $0) }
         )
 
         _ = await executor.execute(AIToolCall(id: "c", name: "run_sql", args: ["sql": "SELECT id FROM t"]))

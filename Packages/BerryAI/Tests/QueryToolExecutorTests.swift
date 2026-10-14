@@ -79,6 +79,15 @@ struct QueryToolExecutorTests {
         return object
     }
 
+    /// The app's routing for these temp-file SQLite sessions: a second
+    /// connection to the same file, which refuses writes.
+    private func sqliteReadOnlyRoute() -> @MainActor (Session) async -> ReadOnlyRoute {
+        let router = ReadOnlyRouter(
+            connections: ReadOnlyConnections(), tracker: SessionStateTracker(), transactionIsActive: { false }
+        )
+        return { await router.route(for: $0) }
+    }
+
     private func makeExecutor(
         session: Session,
         gate: ScriptedGate,
@@ -92,6 +101,7 @@ struct QueryToolExecutorTests {
             gate: gate,
             options: options,
             onPropose: onPropose,
+            readOnlyRoute: sqliteReadOnlyRoute(),
             queryTimeoutSeconds: queryTimeoutSeconds
         )
     }
@@ -796,7 +806,8 @@ struct QueryToolExecutorTests {
         let executor = QueryToolExecutor(
             session: session, catalog: SchemaCatalog(session: session), gate: gate,
             onPropose: { _, _ in },
-            activeTabStatements: { _ in ["SELECT id FROM t ORDER BY id", "DELETE FROM t"] }
+            activeTabStatements: { _ in ["SELECT id FROM t ORDER BY id", "DELETE FROM t"] },
+            readOnlyRoute: sqliteReadOnlyRoute()
         )
 
         let outcome = await executor.execute(AIToolCall(id: "c", name: "run_tab_statements", args: ["which": "all"]))
@@ -1447,7 +1458,8 @@ struct QueryToolExecutorTests {
             },
             store: store, profileID: profileID,
             resolveArtifactID: { tabID in tabID == host.tabID ? host.artifactID : nil },
-            linkArtifact: { tabID, artifactID in if tabID == host.tabID { host.artifactID = artifactID } }
+            linkArtifact: { tabID, artifactID in if tabID == host.tabID { host.artifactID = artifactID } },
+            readOnlyRoute: sqliteReadOnlyRoute()
         )
     }
 
