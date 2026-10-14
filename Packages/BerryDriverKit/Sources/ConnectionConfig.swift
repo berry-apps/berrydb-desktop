@@ -105,8 +105,10 @@ public struct ConnectionConfig: Sendable {
     /// `Authorization` header; when `nil`, `username`/`password` are used.
     public let elasticsearchAPIKey: String?
     /// The name the server lists the connection under, sent at connect where
-    /// the driver can (Postgres `application_name`); nil leaves the driver's
-    /// default. Other drivers ignore it.
+    /// the driver can: Postgres takes it as the `application_name` startup
+    /// parameter and shows it in `pg_stat_activity`
+    /// (https://www.postgresql.org/docs/current/runtime-config-logging.html#GUC-APPLICATION-NAME).
+    /// Nil leaves the driver's default. Other drivers ignore it.
     public let applicationName: String?
 
     public init(

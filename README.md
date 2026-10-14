@@ -76,7 +76,7 @@ Connect to SQL, NoSQL, Key-Value, and Vector databases all in a unified native w
 - **Query Explanation & Tuning**: `EXPLAIN` analysis, bottleneck detection, and index recommendations.
 - **Chat with Your Database**: Ask questions about your schema, tables, and relationships directly inside the integrated AI panel.
 - **Where the AI runs**: In cloud mode (free trial, then a paid plan), your questions, the database type, your schema (table and column names), and the results of queries the assistant runs (up to 100 rows each) are sent to BerryDB's AI service; table sample rows are shared only if you turn that on. On macOS 26 with Apple Intelligence you can switch to Apple's on-device model for free; its turns send nothing to BerryDB's service, so the assistant's search of earlier conversation does not cover them. If you switch back to cloud mode in the same conversation, the earlier messages go with your next question as context.
-- **What runs without asking**: Read-only queries the assistant writes run automatically unless you turn off *Auto-run safe SELECTs*; anything that changes data needs your approval. AI is off by default on connections marked as production.
+- **What runs without asking**: Read-only queries the assistant writes run automatically unless you turn off *Auto-run safe SELECTs*; anything that changes data needs your approval. On PostgreSQL, MySQL/MariaDB, and SQLite, a query that runs without asking goes through a separate read-only connection, so the database itself refuses a write; on SQL Server and DynamoDB, BerryDB's own read-only check is the only one. When the read-only connection can't take a query, the approval card shows why. AI is off by default on connections marked as production.
 
 ### 🔌 Schema for Coding Agents (MCP)
 - **Local MCP helper**: Claude Code, Codex, and Antigravity can start `berrydb-mcp`, a helper inside BerryDB.app, to read the schema BerryDB has cached for the connections you choose: tables, columns, keys, indexes, relationships, and the schema graph.
@@ -188,7 +188,7 @@ make run
 - Type SQL queries with keyword completion, then press **⌘Return** to execute.
 - Open the **AI Assistant** panel (or press **⌘J**):
   - Type a natural language prompt, e.g. *"Show top 10 customers by revenue this month"* or *"Find slow queries and suggest index optimization"*.
-  - The assistant writes proposed SQL into the active editor tab. Before running a statement itself, it asks you to **Run** or **Deny**; read-only queries run automatically unless you turn off *Auto-run safe SELECTs*.
+  - The assistant writes proposed SQL into the active editor tab. Before running a statement itself, it asks you to **Run** or **Deny**; read-only queries run automatically unless you turn off *Auto-run safe SELECTs*. On PostgreSQL, MySQL/MariaDB, and SQLite they run on a separate read-only connection; when that isn't possible, for example inside an open transaction, the card asks you instead and says why.
 
 ### 4. Editing Data Directly in the Grid
 - Double-click a cell in the data grid to edit it inline (the result needs a primary key).

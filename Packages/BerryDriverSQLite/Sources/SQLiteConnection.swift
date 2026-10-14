@@ -259,9 +259,10 @@ extension SQLiteConnection: ReadOnlyExecuting {
             return
         }
         let db = handle.db
-        // Set again before every statement: `PRAGMA query_only = OFF` is
-        // itself allowed while the mode is on, so the previous statement may
-        // have turned it off.
+        // Set again before every statement: compiling `PRAGMA query_only =
+        // OFF` turns the mode off without running it, and the check for a
+        // second statement in the previous text compiles that text (see
+        // `hasStatement(after:in:)`).
         guard sqlite3_exec(db, "PRAGMA query_only = ON", nil, nil, nil) == SQLITE_OK else {
             continuation.finish(throwing: DriverError.readOnlyUnavailable(String(cString: sqlite3_errmsg(db))))
             return
@@ -299,10 +300,14 @@ extension SQLiteConnection: ReadOnlyExecuting {
 
     /// Whether `tail`, the text after the first statement, holds another
     /// statement. `sqlite3_prepare_v2` compiles only the first statement and
-    /// points past it (https://www.sqlite.org/c3ref/prepare.html); compiling
-    /// never runs anything. Whitespace and comments compile to no statement,
-    /// and text that does not compile counts as a statement, so it is refused
-    /// rather than skipped.
+    /// points past it (https://www.sqlite.org/c3ref/prepare.html).
+    /// Compiling is not free of effects: compiling a flag pragma such as
+    /// `PRAGMA query_only = OFF` sets the flag on the connection then and
+    /// there (verified against the system libsqlite3 3.51.0), so this check
+    /// can turn the read-only mode off, which is why `runReadOnly` sets it
+    /// again before every statement. Whitespace and comments compile to no
+    /// statement, and text that does not compile counts as a statement, so
+    /// it is refused rather than skipped.
     static func hasStatement(after tail: UnsafePointer<CChar>?, in db: OpaquePointer) -> Bool {
         var cursor = tail
         while let current = cursor, current.pointee != 0 {
