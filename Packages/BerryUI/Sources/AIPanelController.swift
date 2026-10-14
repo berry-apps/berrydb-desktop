@@ -1546,8 +1546,10 @@ public final class AIPanelController {
 
 /// Bridges the executor's approval requests to the panel controller without a
 /// retain cycle (executor → gate → controller is weak; controller owns both).
+/// Internal so tests can put an executor in front of a controller the way
+/// `bind` does, without a license token or a network session.
 @MainActor
-private final class ApprovalGateAdapter: AIApprovalGate {
+final class ApprovalGateAdapter: AIApprovalGate {
     weak var controller: AIPanelController?
 
     init(controller: AIPanelController) {
