@@ -379,6 +379,29 @@ struct QueryToolExecutorReadOnlyRoutingTests {
         #expect(await main.onSessionPath == ["UPDATE t SET id = 2 WHERE id = 1"])
     }
 
+    /// A document store has no read-only connection; its boundary learns
+    /// which statements ran without a card, so it can refuse one that
+    /// resolves to a write.
+    @Test func theDocumentStoreLearnsWhichStatementsRanWithoutACard() async {
+        let gate = RoutingGate(approves: true)
+        var calls: [(sql: String, autoRun: Bool)] = []
+        let executor = QueryToolExecutor(
+            gate: gate,
+            onPropose: { _, _ in },
+            executeStatement: { sql, _, autoRun in
+                calls.append((sql, autoRun))
+                return .payload(["executed": true])
+            }
+        )
+
+        _ = await runSQL(executor, "db.users.find({})")
+        _ = await runSQL(executor, "db.users.deleteMany({})")
+
+        #expect(calls.map(\.sql) == ["db.users.find({})", "db.users.deleteMany({})"])
+        #expect(calls.map(\.autoRun) == [true, false])
+        #expect(gate.cards == ["db.users.deleteMany({})"])
+    }
+
     /// Each statement hands the connection back once, so its idle countdown
     /// starts; a refused write counts as a failure, which makes the pool
     /// check that the connection still answers.

@@ -891,7 +891,7 @@ public final class AIPanelController {
                 activeTabStatements: { [weak self] which in self?.activeTabStatements?(which) ?? [] },
                 createDebugTab: { [weak self] sql, title in self?.createDebugTab?(sql, title) },
                 openMermaidTab: { [weak self] diagram, title in self?.openMermaidTab?(diagram, title) },
-                executeStatement: { [weak self] sql, lease in
+                executeStatement: { [weak self] sql, lease, autoRun in
                     guard lease.isValid else { return .denied }
                     guard let dataSourceSession = self?.dataSourceSession else {
                         return .payload(["error": "Direct query execution unavailable for this connection"])
@@ -925,6 +925,9 @@ public final class AIPanelController {
                                 return .payload(["error": "No statement found in script"])
                             }
                             let action = try MongoShellResolver.resolve(first)
+                            if let refusal = AutoRunWriteGuard.refusal(for: action, autoRun: autoRun) {
+                                return .payload(["error": refusal])
+                            }
                             switch action {
                             case .query(let query):
                                 guard lease.isValid else { return .denied }

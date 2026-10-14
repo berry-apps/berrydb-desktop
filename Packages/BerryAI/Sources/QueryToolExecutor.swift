@@ -180,7 +180,10 @@ public final class QueryToolExecutor: AIToolExecutor {
     /// UI-owned NoSQL boundary. The lease is intentionally passed through
     /// instead of checked only here: connection/query/write code must validate
     /// it after approval and immediately before each irreversible operation.
-    private let executeStatement: (@MainActor (String, AIExecutionLease) async -> AIDirectStatementResult)?
+    /// The flag is true for a statement that runs without its own card, which
+    /// the boundary refuses if it resolves to a write: document stores have
+    /// no read-only connection to enforce that for it.
+    private let executeStatement: (@MainActor (String, AIExecutionLease, Bool) async -> AIDirectStatementResult)?
     private let listCollections: (() -> [String])?
     /// Where a statement that runs without its own card goes. Nil leaves an
     /// engine with a read-only connection asking for a card instead, so no
@@ -253,7 +256,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         activeTabStatements: @escaping (String) -> [String] = { _ in [] },
         createDebugTab: @escaping (String, String?) -> Void = { _, _ in },
         openMermaidTab: @escaping (String, String?) -> Void = { _, _ in },
-        executeStatement: (@MainActor (String, AIExecutionLease) async -> AIDirectStatementResult)? = nil,
+        executeStatement: (@MainActor (String, AIExecutionLease, Bool) async -> AIDirectStatementResult)? = nil,
         listCollections: (() -> [String])? = nil,
         store: BerryStore? = nil,
         profileID: UUID? = nil,
@@ -1292,7 +1295,9 @@ public final class QueryToolExecutor: AIToolExecutor {
             maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
         }
         guard decision == .autoRun, let session else {
-            return try await drainSample(sql, lease: lease, timeoutOverrideSeconds: remaining())
+            return try await drainSample(
+                sql, lease: lease, timeoutOverrideSeconds: remaining(), autoRun: decision == .autoRun
+            )
         }
         let reason: ReadOnlyUnavailableReason
         switch await route(for: session) {
@@ -1385,7 +1390,8 @@ public final class QueryToolExecutor: AIToolExecutor {
         _ sql: String,
         lease: AIExecutionLease,
         timeoutOverrideSeconds: TimeInterval? = nil,
-        readOnly: ReadOnlyLease? = nil
+        readOnly: ReadOnlyLease? = nil,
+        autoRun: Bool = false
     ) async throws -> [String: Any] {
         guard lease.isValid else { throw CancellationError() }
         let effectiveTimeout: TimeInterval
@@ -1405,7 +1411,7 @@ public final class QueryToolExecutor: AIToolExecutor {
             guard let session = self.session else {
                 if let executeStatement = self.executeStatement {
                     guard lease.isValid else { throw CancellationError() }
-                    switch await executeStatement(sql, lease) {
+                    switch await executeStatement(sql, lease, autoRun) {
                     case .payload(let payload):
                         guard lease.isValid else { throw CancellationError() }
                         return ResultBox(payload)
