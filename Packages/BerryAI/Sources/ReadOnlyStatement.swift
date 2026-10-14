@@ -405,8 +405,8 @@ enum ReadOnlyStatement {
     // MARK: - Mongo shell
 
     /// Methods the shell resolver turns into a query, never a write.
-    private static let mongoReadMethods: Set<String> = [
-        "find", "findOne", "aggregate", "count", "countDocuments", "estimatedDocumentCount", "distinct",
+    static let mongoReadMethods: Set<String> = [
+        "find", "findOne", "aggregate", "countDocuments", "estimatedDocumentCount", "distinct",
     ]
     /// Cursor modifiers the resolver accepts after `find`.
     private static let mongoCursorMethods: Set<String> = ["sort", "limit"]

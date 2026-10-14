@@ -297,6 +297,8 @@ struct ReadOnlyStatementTests {
         "db.users.find({}) /* .count( */",
         #"db.users.find({a: "\"; db.users.deleteMany({}); \""})"#,
         #"db.getSiblingDB("admin").users.find({})"#,
+        // The shell resolver has no `count`.
+        "db.users.count({active: true})",
     ])
     func unrecognizedMongoIsNotReadOnly(_ text: String) {
         #expect(!ReadOnlyStatement.isReadOnlyMongoShell(text))
@@ -307,7 +309,6 @@ struct ReadOnlyStatementTests {
         #"db.users.find({status: "A"}).sort({created: -1}).limit(5)"#,
         #"db.orders.aggregate([{$match: {status: "A"}}, {$group: {_id: "$cust", total: {$sum: "$amount"}}}])"#,
         #"db.users.distinct("city")"#,
-        "db.users.count({active: true})",
         "db.users.find({});",
     ])
     func mongoReadStaysReadOnly(_ text: String) {
