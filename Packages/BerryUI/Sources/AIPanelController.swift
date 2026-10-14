@@ -385,8 +385,18 @@ public final class AIPanelController {
     public var autoApproveSelects = true {
         didSet {
             executor?.options.autoApproveSelects = autoApproveSelects
+            // Only the toggle sets this outside a restore, so it is a choice.
+            if !isRestoring {
+                ProductionAutoRun.recordChoice(
+                    isProduction: isProductionConnection, profileID: currentProfileID, defaults: .standard
+                )
+            }
             persistSettings()
         }
+    }
+
+    private var isProductionConnection: Bool {
+        session?.isProduction ?? dataSourceSession?.isProduction ?? false
     }
     private var consentGiven = false {
         didSet {
@@ -794,7 +804,9 @@ public final class AIPanelController {
         let saved = profileID.flatMap { loadSettings?($0) }
         consentGiven = saved?.consentGiven ?? false
         allowSampleRows = saved?.allowSampleRows ?? false
-        autoApproveSelects = saved?.autoApproveSelects ?? true
+        autoApproveSelects = ProductionAutoRun.restored(
+            stored: saved?.autoApproveSelects, isProduction: isProductionConnection, profileID: profileID, defaults: .standard
+        )
         enabledMCPServers = saved?.enabledMCPServers ?? []
         trustedMCPServers = saved?.trustedMCPServers ?? []
  // default OFF on production when there's no saved choice.
