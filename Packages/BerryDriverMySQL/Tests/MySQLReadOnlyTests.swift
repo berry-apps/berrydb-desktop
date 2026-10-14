@@ -5,22 +5,9 @@ import Testing
 
 @testable import BerryDriverMySQL
 
-@Suite("MySQL read-only statements")
-struct MySQLReadOnlyStatementTests {
-    /// A schema change commits the open transaction before it runs, so the
-    /// read-only transaction alone does not stop it; the session's default
-    /// mode, set again before every statement, does.
-    @Test func eachStatementRunsInAReadOnlyTransactionOfAReadOnlySession() {
-        #expect(MySQLDriverConnection.readOnlyPreamble == [
-            "SET SESSION TRANSACTION READ ONLY",
-            "START TRANSACTION READ ONLY",
-        ])
-    }
-}
-
 /// Runs against a real server from `BERRYDB_TEST_MYSQL`, MySQL or MariaDB;
 /// skipped when the variable is unset. Each test makes its own table and
-/// function, named after a fresh UUID, and drops them.
+/// routines, named after a fresh UUID, and drops them.
 @Suite("MySQL read-only connection", .serialized, .enabled(if: TestServer.mysql != nil))
 struct MySQLReadOnlyTests {
     private struct Opened {
@@ -30,6 +17,10 @@ struct MySQLReadOnlyTests {
     }
 
     private func config() -> ConnectionConfig {
+        Self.config()
+    }
+
+    private static func config() -> ConnectionConfig {
         let server = TestServer.mysql!
         return ConnectionConfig(
             driver: .mysql, name: "read-only", host: server.host, port: server.port,
@@ -55,6 +46,8 @@ struct MySQLReadOnlyTests {
 
     private func close(_ opened: Opened) async {
         _ = try? await drain(opened.main.execute("DROP FUNCTION IF EXISTS \(opened.table)_writer"))
+        _ = try? await drain(opened.main.execute("DROP FUNCTION IF EXISTS \(opened.table)_flip"))
+        _ = try? await drain(opened.main.execute("DROP PROCEDURE IF EXISTS \(opened.table)_proc"))
         _ = try? await drain(opened.main.execute("DROP TABLE IF EXISTS \(opened.table), \(opened.table)_made"))
         await opened.main.close()
         await opened.readOnly.close()
@@ -101,6 +94,15 @@ struct MySQLReadOnlyTests {
         return message.contains("1792") || message.contains("READ ONLY transaction")
     }
 
+    /// Refused before the server saw the text, by `ReadOnlyAllowlist`.
+    private func isRefusedBeforeTheServer(_ error: DriverError?) -> Bool {
+        refusal(error)?.hasPrefix("The read-only connection ") == true
+    }
+
+    private func isMariaDB(_ opened: Opened) async throws -> Bool {
+        try await drain(opened.main.execute("SELECT VERSION()")).first?.first?.displayString?.contains("MariaDB") == true
+    }
+
     @Test func prepareSetsTheLockWaitAndTheConnectionReads() async throws {
         let opened = try await open()
         defer { Task { await close(opened) } }
@@ -111,66 +113,84 @@ struct MySQLReadOnlyTests {
         #expect(try await readOnly("SELECT count(*) FROM \(opened.table)", on: opened).first?.first?.displayString == "0")
     }
 
-    /// The must-fail list: a plain write and a function that writes; the
-    /// server refuses each with error 1792.
+    /// The must-fail list for statements that start like a read: a function
+    /// that writes and, on MySQL, a DELETE behind WITH, which MariaDB 11.8
+    /// does not parse. The server refuses each with error 1792.
     @Test func writesFailOnTheServerHoweverTheyAreSpelled() async throws {
         let opened = try await open()
         defer { Task { await close(opened) } }
         let table = opened.table
+        try await drain(opened.main.execute("INSERT INTO \(table) VALUES (1)"))
+        var statements = ["SELECT \(table)_writer()"]
+        if try await !isMariaDB(opened) {
+            statements.append("WITH gone AS (SELECT 1 AS id) DELETE FROM \(table) WHERE id IN (SELECT id FROM gone)")
+        }
 
-        for statement in [
-            "INSERT INTO \(table) VALUES (1)",
-            "SELECT \(table)_writer()",
-        ] {
+        for statement in statements {
             let error = await #expect(throws: DriverError.self, "\(statement)") { try await readOnly(statement, on: opened) }
             #expect(isReadOnlyRefusal(error), "\(statement): \(String(describing: error))")
         }
 
-        #expect(try await rowCount(opened) == "0")
+        #expect(try await rowCount(opened) == "1")
     }
 
-    /// A schema change commits the read-only transaction before it runs
-    /// (https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html) and
-    /// then runs under the session's default mode, which is read-only too.
-    /// Verified against MySQL 8.4.11 and MariaDB 11.8.9: in a read-write
-    /// session DROP TABLE runs from inside START TRANSACTION READ ONLY.
-    @Test func schemaChangesFailOnTheServer() async throws {
+    /// Statements that change the access mode or end the read-only
+    /// transaction before they write, each verified to write from inside
+    /// START TRANSACTION READ ONLY on MariaDB 11.8.9, and the CALL also on
+    /// MySQL 8.4.11, plus writes and schema changes that do not start like a
+    /// read. None reaches the server.
+    @Test func statementsThatDoNotStartLikeAReadAreRefusedBeforeTheServer() async throws {
         let opened = try await open()
         defer { Task { await close(opened) } }
         let table = opened.table
+        try await drain(opened.main.execute(
+            "CREATE PROCEDURE \(table)_proc() BEGIN COMMIT; SET SESSION TRANSACTION READ WRITE; "
+                + "INSERT INTO \(table) VALUES (4); END"
+        ))
 
         for statement in [
+            "SET STATEMENT transaction_read_only=0 FOR DROP TABLE \(table)",
+            "SET STATEMENT tx_read_only=0 FOR DROP TABLE \(table)",
+            "BEGIN NOT ATOMIC SET SESSION TRANSACTION READ WRITE; DROP TABLE \(table); END",
+            "BEGIN NOT ATOMIC COMMIT; SET SESSION TRANSACTION READ WRITE; INSERT INTO \(table) VALUES (1); END",
+            "CALL \(table)_proc()",
+            "SELECT 1 /*!, (SELECT \(table)_writer()) */",
+            "INSERT INTO \(table) VALUES (2)",
             "CREATE TABLE \(table)_made (id INT)",
             "DROP TABLE \(table)",
             "TRUNCATE TABLE \(table)",
+            "SET SESSION TRANSACTION READ WRITE",
         ] {
             let error = await #expect(throws: DriverError.self, "\(statement)") { try await readOnly(statement, on: opened) }
-            #expect(isReadOnlyRefusal(error), "\(statement): \(String(describing: error))")
+            #expect(isRefusedBeforeTheServer(error), "\(statement): \(String(describing: error))")
         }
 
-        #expect(try await tableExists(table, opened))
+        #expect(try await rowCount(opened) == "0")
         #expect(try await tableExists("\(table)_made", opened) == false)
     }
 
-    /// SET SESSION TRANSACTION READ WRITE is allowed inside a transaction and
-    /// changes the session's default; the next statement still starts its
-    /// own read-only transaction in a read-only session. SET TRANSACTION
-    /// without SESSION is refused inside a transaction with error 1568.
-    @Test func switchingTheModeBackDoesNotReachTheNextStatement() async throws {
+    /// A stored function may set the session's default access mode back to
+    /// READ WRITE, and a SELECT may call it; verified against MySQL 8.4.11
+    /// and MariaDB 11.8.9. The next statement sets the default again, so a
+    /// statement that commits the transaction before it runs still runs
+    /// read-only.
+    @Test func aFunctionThatSwitchesTheSessionBackDoesNotReachTheNextStatement() async throws {
         let opened = try await open()
         defer { Task { await close(opened) } }
+        let table = opened.table
+        try await drain(opened.main.execute(
+            "CREATE FUNCTION \(table)_flip() RETURNS INT DETERMINISTIC "
+                + "BEGIN SET @@SESSION.transaction_read_only = 0; RETURN 1; END"
+        ))
 
-        try await readOnly("SET SESSION TRANSACTION READ WRITE", on: opened)
-        let switched = await #expect(throws: DriverError.self) { try await readOnly("SET TRANSACTION READ WRITE", on: opened) }
-        let insert = await #expect(throws: DriverError.self) { try await readOnly("INSERT INTO \(opened.table) VALUES (2)", on: opened) }
-        try await readOnly("SET SESSION TRANSACTION READ WRITE", on: opened)
-        let create = await #expect(throws: DriverError.self) { try await readOnly("CREATE TABLE \(opened.table)_made (id INT)", on: opened) }
+        let flipped = try await readOnly("SELECT \(table)_flip()", on: opened)
+        let mode = try await readOnly("SELECT @@SESSION.transaction_read_only", on: opened)
+        let error = await #expect(throws: DriverError.self) { try await readOnly("SELECT \(table)_writer()", on: opened) }
 
-        #expect(refusal(switched)?.contains("while a transaction is in progress") == true, "\(String(describing: switched))")
-        #expect(isReadOnlyRefusal(insert), "\(String(describing: insert))")
-        #expect(isReadOnlyRefusal(create), "\(String(describing: create))")
+        #expect(flipped.first?.first?.displayString == "1")
+        #expect(mode.first?.first?.displayString == "1")
+        #expect(isReadOnlyRefusal(error), "\(String(describing: error))")
         #expect(try await rowCount(opened) == "0")
-        #expect(try await tableExists("\(opened.table)_made", opened) == false)
     }
 
     /// MySQLNIO 1.9.1 leaves CLIENT_MULTI_STATEMENTS out of the capabilities
@@ -215,17 +235,17 @@ struct MySQLReadOnlyTests {
 
     /// Writes sent at once all fail, in whatever order their control
     /// statements reach the server. Whether two statements shared a
-    /// transaction does not show here: the session's read-only default also
-    /// refuses an INSERT that another statement's COMMIT left outside its
-    /// transaction. `aStatementSentWhileAnotherRunsStartsAfterItsCommit`
-    /// checks the order itself.
+    /// transaction does not show here: the function's INSERT fails in a
+    /// read-only session too.
+    /// `aStatementSentWhileAnotherRunsStartsAfterItsCommit` checks the order
+    /// itself.
     @Test func concurrentWritesAllFail() async throws {
         let opened = try await open()
         defer { Task { await close(opened) } }
 
         await withTaskGroup(of: Void.self) { group in
             for index in 0..<20 {
-                let sql = index.isMultiple(of: 2) ? "SELECT SLEEP(0.05)" : "INSERT INTO \(opened.table) VALUES (\(index))"
+                let sql = index.isMultiple(of: 2) ? "SELECT SLEEP(0.05)" : "SELECT \(opened.table)_writer()"
                 group.addTask { _ = try? await readOnly(sql, on: opened) }
             }
         }
@@ -233,39 +253,57 @@ struct MySQLReadOnlyTests {
         #expect(try await rowCount(opened) == "0")
     }
 
+    /// MySQL keeps the last statements of each thread in
+    /// `events_statements_history`, on by default
+    /// (https://dev.mysql.com/doc/refman/8.4/en/performance-schema-events-statements-history-table.html);
+    /// MariaDB 11.8.9 starts with the performance schema off
+    /// (https://mariadb.com/kb/en/performance-schema-overview/).
+    private static func keepsStatementHistory() async -> Bool {
+        guard TestServer.mysql != nil, let connection = try? await MySQLDriverConnection(config: config()) else { return false }
+        let rows = try? await connection.queryAll(
+            "SELECT ENABLED FROM performance_schema.setup_consumers WHERE NAME = 'events_statements_history'"
+        )
+        await connection.close()
+        return rows?.first?.first?.displayString == "YES"
+    }
+
     /// A statement sent while another runs starts after the other's COMMIT,
-    /// read from the server's general query log
-    /// (https://dev.mysql.com/doc/refman/8.4/en/query-log.html). MySQLNIO
+    /// read from the read-only connection's own statement history. MySQLNIO
     /// sends one command at a time, in the order they were asked for, so
     /// without the turn the second statement's first command would run
     /// before the first statement's COMMIT, its START TRANSACTION would end
     /// the first statement's transaction, and that COMMIT would end its own.
-    /// The log is switched on for the test alone and set back after.
-    @Test func aStatementSentWhileAnotherRunsStartsAfterItsCommit() async throws {
+    /// The history holds 10 statements per thread by default
+    /// (`performance_schema_events_statements_history_size`, verified against
+    /// MySQL 8.4.11), enough for the end of the first statement and all of
+    /// the second.
+    @Test(.enabled("needs the performance schema's statement history") { await keepsStatementHistory() })
+    func aStatementSentWhileAnotherRunsStartsAfterItsCommit() async throws {
         let opened = try await open()
         defer { Task { await close(opened) } }
         let connectionID = try #require(try await readOnly("SELECT CONNECTION_ID()", on: opened).first?.first?.displayString)
-        let settings = try await drain(opened.main.execute("SELECT @@GLOBAL.general_log, @@GLOBAL.log_output, NOW(6)"))
-        let (logging, output, since) = try #require(settings.first.map { ($0[0].displayString, $0[1].displayString, $0[2].displayString) })
-        try await drain(opened.main.execute("SET GLOBAL log_output = 'TABLE'"))
-        try await drain(opened.main.execute("SET GLOBAL general_log = 1"))
 
         let running = Task { try await readOnly("SELECT SLEEP(0.5), 7", on: opened) }
-        try? await Task.sleep(for: .milliseconds(200))
-        let sent = try? await readOnly("SELECT 8", on: opened)
-        let ran = try? await running.value
+        try await Task.sleep(for: .milliseconds(200))
+        let sent = try await readOnly("SELECT 8", on: opened)
+        let ran = try await running.value
+        let history = try await drain(opened.main.execute(
+            "SELECT h.EVENT_NAME, h.SQL_TEXT FROM performance_schema.events_statements_history h "
+                + "JOIN performance_schema.threads t ON t.THREAD_ID = h.THREAD_ID "
+                + "WHERE t.PROCESSLIST_ID = \(connectionID) ORDER BY h.EVENT_ID"
+        ))
+        // A statement run with the prepared-statement protocol is logged as
+        // Prepare, Execute and Close stmt with no text; the control
+        // statements, sent as text, carry theirs.
+        let order = history.compactMap { row in
+            row.first?.displayString == "statement/com/Execute" ? "EXECUTE" : row.last?.displayString
+        }
+        let reads = order.indices.filter { order[$0] == "EXECUTE" }
+        let lastTwo = reads.count >= 2 ? Array(order[reads[reads.count - 2]...]) : order
 
-        try await drain(opened.main.execute("SET GLOBAL general_log = \(logging ?? "0")"))
-        try await drain(opened.main.execute("SET GLOBAL log_output = '\(output ?? "FILE")'"))
-        let log = try await drain(opened.main.execute(
-            "SELECT CAST(argument AS CHAR) FROM mysql.general_log WHERE thread_id = \(connectionID)"
-                + " AND command_type IN ('Query', 'Execute') AND event_time >= '\(since ?? "")'"
-        )).compactMap { $0.first?.displayString }
-        let commands = Array(log.drop { !$0.contains("SLEEP(0.5)") }.prefix(3))
-
-        #expect(ran?.first?.map(\.displayString) == ["0", "7"])
-        #expect(sent?.first?.first?.displayString == "8")
-        #expect(commands.count == 3 && commands[1] == "COMMIT" && commands[2] == MySQLDriverConnection.readOnlyPreamble[0], "\(log)")
+        #expect(ran.first?.map(\.displayString) == ["0", "7"])
+        #expect(sent.first?.first?.displayString == "8")
+        #expect(lastTwo == ["EXECUTE", "COMMIT"] + MySQLDriverConnection.readOnlyPreamble + ["EXECUTE", "COMMIT"], "\(order)")
     }
 
     /// Stop in the editor sends KILL QUERY for the session's own connection

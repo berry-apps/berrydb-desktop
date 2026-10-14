@@ -1,7 +1,9 @@
 import Foundation
 
-/// A connection's turn, taken by one statement or transaction at a time in
-/// the order they asked. A connection carries one conversation with the
+/// A connection's turn, taken by one statement or transaction at a time.
+/// Waiters get it first in, first out; two callers that ask at nearly the
+/// same moment may join the queue in either order, because `take()` runs off
+/// the caller's actor. A connection carries one conversation with the
 /// server, so a statement sent while another statement's transaction is open
 /// runs inside that transaction, and that transaction's COMMIT ends both.
 public final class ConnectionTurn: @unchecked Sendable {

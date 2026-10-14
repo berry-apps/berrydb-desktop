@@ -68,6 +68,7 @@ struct PostgresReadOnlyLiveTests {
     }
 
     private func close(_ opened: Opened) async {
+        _ = try? await drain(opened.main.execute("DROP PROCEDURE IF EXISTS \(opened.table)_proc()"))
         _ = try? await drain(opened.main.execute("DROP FUNCTION IF EXISTS \(opened.table)_writer()"))
         _ = try? await drain(opened.main.execute("DROP SEQUENCE IF EXISTS \(opened.table)_seq"))
         _ = try? await drain(opened.main.execute("DROP TABLE IF EXISTS \(opened.table)"))
@@ -109,8 +110,9 @@ struct PostgresReadOnlyLiveTests {
         #expect(try await readOnly("SELECT count(*) FROM \(opened.table)", on: opened) == [[.int(0)]])
     }
 
-    /// The must-fail list: a plain write, a sequence, a function that
-    /// writes, and switching the mode off inside the statement that writes.
+    /// The must-fail list for statements that start like a read: a write in
+    /// a WITH, a sequence, a function that writes, and switching the mode
+    /// off inside the statement that writes.
     /// A write fails with SQLSTATE 25006, "cannot execute … in a read-only
     /// transaction". In the SELECT that calls set_config before the writing
     /// function, the switch fails first, with SQLSTATE 25001, because the
@@ -123,7 +125,7 @@ struct PostgresReadOnlyLiveTests {
         let readOnlyWrite = "in a read-only transaction"
 
         for (statement, refused) in [
-            ("INSERT INTO \(table) VALUES (1)", readOnlyWrite),
+            ("WITH made AS (INSERT INTO \(table) VALUES (1) RETURNING id) SELECT id FROM made", readOnlyWrite),
             ("SELECT nextval('\(table)_seq')", readOnlyWrite),
             ("SELECT \(table)_writer()", readOnlyWrite),
             (
@@ -143,21 +145,49 @@ struct PostgresReadOnlyLiveTests {
         #expect(try await drain(opened.main.execute("SELECT nextval('\(table)_seq')")) == [[.int(1)]])
     }
 
-    /// `SET TRANSACTION READ WRITE` alone can succeed: neither BEGIN READ
-    /// ONLY nor SET LOCAL takes a snapshot, and the access mode may change
-    /// until one is taken. What matters is that the next statement starts
-    /// read-only again.
+    /// A SELECT may change the session's default access mode with
+    /// set_config; the next statement still begins read-only.
     @Test func switchingTheModeBackDoesNotReachTheNextStatement() async throws {
         let opened = try await open()
         defer { Task { await close(opened) } }
 
-        let flip = try? await readOnly("SET TRANSACTION READ WRITE", on: opened)
-        _ = try? await readOnly("SET default_transaction_read_only = off", on: opened)
-        let error = await #expect(throws: DriverError.self) { try await readOnly("INSERT INTO \(opened.table) VALUES (2)", on: opened) }
+        let flipped = try await readOnly("SELECT set_config('default_transaction_read_only', 'off', false)", on: opened)
+        let error = await #expect(throws: DriverError.self) {
+            try await readOnly("WITH made AS (INSERT INTO \(opened.table) VALUES (2) RETURNING id) SELECT id FROM made", on: opened)
+        }
 
+        #expect(flipped == [[.text("off")]])
         #expect(refusal(error)?.contains("in a read-only transaction") == true, "\(String(describing: error))")
         #expect(try await rowCount(opened) == [[.int(0)]])
-        print("SET TRANSACTION READ WRITE on the read-only path: \(flip == nil ? "failed" : "succeeded")")
+    }
+
+    /// `DO` and `CALL` run procedural code, which can try to change the
+    /// access mode or end the transaction before it writes. PostgreSQL
+    /// 16.15 refuses both from inside BEGIN READ ONLY (a snapshot is
+    /// already taken, and a COMMIT inside the explicit transaction is an
+    /// invalid transaction termination), so the refusal before the server
+    /// keeps the engines alike rather than closing a hole there.
+    @Test func statementsThatDoNotStartLikeAReadAreRefusedBeforeTheServer() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+        let table = opened.table
+        try await drain(opened.main.execute(
+            "CREATE PROCEDURE \(table)_proc() LANGUAGE plpgsql AS $$ BEGIN COMMIT; SET TRANSACTION READ WRITE; "
+                + "INSERT INTO \(table) VALUES (4); END $$"
+        ))
+
+        for statement in [
+            "DO $$ BEGIN SET TRANSACTION READ WRITE; INSERT INTO \(table) VALUES (3); END $$",
+            "CALL \(table)_proc()",
+            "INSERT INTO \(table) VALUES (1)",
+            "SET TRANSACTION READ WRITE",
+            "/* /* */ SELECT 1 */ DO $$ BEGIN INSERT INTO \(table) VALUES (5); END $$",
+        ] {
+            let error = await #expect(throws: DriverError.self, "\(statement)") { try await readOnly(statement, on: opened) }
+            #expect(refusal(error)?.hasPrefix("The read-only connection ") == true, "\(statement): \(String(describing: error))")
+        }
+
+        #expect(try await rowCount(opened) == [[.int(0)]])
     }
 
     /// PostgresNIO sends each statement with the extended query protocol,
@@ -235,7 +265,9 @@ struct PostgresReadOnlyLiveTests {
 
         await withTaskGroup(of: Void.self) { group in
             for index in 0..<20 {
-                let sql = index.isMultiple(of: 2) ? "SELECT pg_sleep(0.05)" : "INSERT INTO \(opened.table) VALUES (\(index))"
+                let sql = index.isMultiple(of: 2)
+                    ? "SELECT pg_sleep(0.05)"
+                    : "WITH made AS (INSERT INTO \(opened.table) VALUES (\(index)) RETURNING id) SELECT id FROM made"
                 group.addTask { _ = try? await readOnly(sql, on: opened) }
             }
         }
@@ -254,7 +286,7 @@ struct PostgresReadOnlyLiveTests {
         let running = Task { try await readOnly("SELECT 7 FROM pg_sleep(0.5)", on: opened) }
         try await Task.sleep(for: .milliseconds(200))
         let error = await #expect(throws: DriverError.self) {
-            try await readOnly("INSERT INTO \(opened.table) VALUES (5)", on: opened)
+            try await readOnly("WITH made AS (INSERT INTO \(opened.table) VALUES (5) RETURNING id) SELECT id FROM made", on: opened)
         }
 
         #expect(refusal(error)?.contains("in a read-only transaction") == true, "\(String(describing: error))")

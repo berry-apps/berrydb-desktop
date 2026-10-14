@@ -60,7 +60,9 @@ public protocol ReadOnlyExecuting: DriverConnection {
     /// Runs exactly one statement under the read-only mode, bounded by
     /// `timeout` where the server can bound a statement. Finishes with
     /// `DriverError.readOnlyUnavailable`, without running the statement, when
-    /// the mode cannot be established. There is deliberately no fallback to
+    /// the mode cannot be established, and with the `ReadOnlyAllowlist`
+    /// refusal, before the server sees it, when the text does not start like
+    /// a read. There is deliberately no fallback to
     /// an unscoped run, unlike `CatalogReadScoping.beginCatalogReads`: these
     /// statements come from outside the app and are safe only because the
     /// server refuses their writes.

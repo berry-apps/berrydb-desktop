@@ -246,7 +246,14 @@ extension SQLiteConnection: ReadOnlyExecuting {
         }
     }
 
+    /// A text the allowlist refuses (`ReadOnlyAllowlist.sqlite`) never
+    /// reaches the database: `PRAGMA query_only = OFF` would turn the mode
+    /// off, and ATTACH runs while the mode is on.
     private func runReadOnly(sql: String, continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation) async {
+        if let refusal = ReadOnlyAllowlist.sqlite.refusal(of: sql) {
+            continuation.finish(throwing: refusal)
+            return
+        }
         guard !isClosed else {
             continuation.finish(throwing: DriverError.notConnected)
             return

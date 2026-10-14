@@ -481,13 +481,19 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
         return [("application_name", name)]
     }
 
-    /// BEGIN, the bounds, the statement and COMMIT run in one turn, so no
-    /// other statement on this connection lands inside the transaction. A
-    /// refused BEGIN or SET LOCAL ends the call before the statement runs.
+    /// A text the allowlist refuses (`ReadOnlyAllowlist.postgres`), such as
+    /// a DO block or a CALL, ends the call before the turn. BEGIN, the
+    /// bounds, the statement and COMMIT run in one turn, so no other
+    /// statement on this connection lands inside the transaction. A refused
+    /// BEGIN or SET LOCAL ends the call before the statement runs.
     private func runReadOnly(
         _ sql: String, timeout: Duration, readOnlyTurn: ReadOnlyTurn,
         continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
     ) async {
+        if let refusal = ReadOnlyAllowlist.postgres.refusal(of: sql) {
+            continuation.finish(throwing: refusal)
+            return
+        }
         guard !isClosed else {
             continuation.finish(throwing: DriverError.notConnected)
             return

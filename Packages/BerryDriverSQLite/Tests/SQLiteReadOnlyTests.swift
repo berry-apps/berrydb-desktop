@@ -50,7 +50,7 @@ struct SQLiteReadOnlyTests {
 
     @Test func prepareTurnsQueryOnlyOnAndReadsItBack() async throws {
         try await withOpened { _, readOnly in
-            let mode = try await drain(readOnly.executeReadOnly("PRAGMA query_only", timeout: .seconds(5)))
+            let mode = try await drain(readOnly.executeReadOnly("SELECT query_only FROM pragma_query_only()", timeout: .seconds(5)))
 
             #expect(mode == [[.int(1)]])
         }
@@ -64,10 +64,12 @@ struct SQLiteReadOnlyTests {
         }
     }
 
+    /// A WITH may lead an INSERT (https://www.sqlite.org/lang_with.html), so
+    /// this write starts like a read and reaches the database.
     @Test func aWriteIsRefusedByTheDatabase() async throws {
         try await withOpened { main, readOnly in
             let error = await #expect(throws: DriverError.self) {
-                try await drain(readOnly.executeReadOnly("INSERT INTO t (id) VALUES (2)", timeout: .seconds(5)))
+                try await drain(readOnly.executeReadOnly(Self.write(2), timeout: .seconds(5)))
             }
 
             guard case let .queryFailed(_, code)? = error else {
@@ -80,17 +82,48 @@ struct SQLiteReadOnlyTests {
         }
     }
 
-    /// `PRAGMA query_only = OFF` is itself allowed while the mode is on
-    /// (https://www.sqlite.org/pragma.html#pragma_query_only), so a statement
-    /// can turn the mode off; the next statement must still run read-only.
-    @Test func turningTheModeOffDoesNotCarryToTheNextStatement() async throws {
+    private static func write(_ id: Int) -> String {
+        "WITH new(id) AS (SELECT \(id)) INSERT INTO t (id) SELECT id FROM new"
+    }
+
+    /// A statement that does not start like a read never reaches the
+    /// database, `PRAGMA query_only = OFF` included.
+    @Test func aStatementThatDoesNotStartLikeAReadIsRefusedBeforeItRuns() async throws {
         try await withOpened { main, readOnly in
-            _ = try? await drain(readOnly.executeReadOnly("PRAGMA query_only = OFF", timeout: .seconds(5)))
-            await #expect(throws: DriverError.self) {
-                try await drain(readOnly.executeReadOnly("INSERT INTO t (id) VALUES (3)", timeout: .seconds(5)))
+            for sql in ["INSERT INTO t (id) VALUES (2)", "PRAGMA query_only = OFF", "ATTACH ':memory:' AS other"] {
+                let error = await #expect(throws: DriverError.self, "\(sql)") {
+                    try await drain(readOnly.executeReadOnly(sql, timeout: .seconds(5)))
+                }
+                guard case let .queryFailed(message, code)? = error else {
+                    Issue.record("\(sql): expected queryFailed, got \(String(describing: error))")
+                    continue
+                }
+                #expect(code == nil && message.hasPrefix("The read-only connection "), "\(sql): \(message)")
             }
 
+            let mode = try await drain(readOnly.executeReadOnly("SELECT query_only FROM pragma_query_only()", timeout: .seconds(5)))
             let remaining = try await count(on: main)
+            #expect(mode == [[.int(1)]])
+            #expect(remaining == [[.int(1)]])
+        }
+    }
+
+    /// Compiling `PRAGMA query_only = OFF` turns the mode off, and the check
+    /// for a second statement compiles it before refusing the text; the next
+    /// statement must still run read-only.
+    @Test func turningTheModeOffDoesNotCarryToTheNextStatement() async throws {
+        try await withOpened { main, readOnly in
+            _ = try? await drain(readOnly.executeReadOnly("SELECT 1; PRAGMA query_only = OFF", timeout: .seconds(5)))
+            let error = await #expect(throws: DriverError.self) {
+                try await drain(readOnly.executeReadOnly(Self.write(3), timeout: .seconds(5)))
+            }
+
+            guard case let .queryFailed(_, code)? = error else {
+                Issue.record("expected queryFailed, got \(String(describing: error))")
+                return
+            }
+            let remaining = try await count(on: main)
+            #expect(code == SQLITE_READONLY)
             #expect(remaining == [[.int(1)]])
         }
     }

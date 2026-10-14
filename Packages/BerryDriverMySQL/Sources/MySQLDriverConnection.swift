@@ -520,6 +520,22 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
 /// statement, which sets the default again and starts its own read-only
 /// transaction.
 ///
+/// Some statements leave the read-only transaction before they write, so a
+/// text runs only when it starts like a read (`ReadOnlyAllowlist.mysql`) and
+/// holds no executable comment. Verified against MariaDB 11.8.9, each from
+/// inside START TRANSACTION READ ONLY in a read-only session:
+/// `SET STATEMENT transaction_read_only=0 FOR DROP TABLE t` drops the table
+/// (https://mariadb.com/kb/en/set-statement/), and a compound statement
+/// (https://mariadb.com/kb/en/begin-end/) such as `BEGIN NOT ATOMIC COMMIT;
+/// SET SESSION TRANSACTION READ WRITE; INSERT …; END` writes; on MySQL 8.4.11
+/// and MariaDB a CALL of a procedure that does the same writes too.
+///
+/// `SELECT … INTO OUTFILE` writes a file on the server from inside a
+/// read-only transaction
+/// (https://dev.mysql.com/doc/refman/8.4/en/select-into.html). The approval
+/// classifier sends any statement with INTO to the card; what stops the file
+/// is a database account without the FILE privilege.
+///
 /// `execute(_:)`, `ping()`, `queryAll(_:)` and the introspector do not take
 /// the connection's turn, so a connection prepared with `prepareReadOnly()`
 /// runs its statements through `executeReadOnly(_:timeout:)` only: a
@@ -537,10 +553,12 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
     /// (https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html) and
     /// then runs under the session's default access mode, so the session is
     /// made read-only again before every statement, in case the statement
-    /// before it switched it back. Verified against MySQL 8.4.11 and MariaDB
-    /// 11.8.9: in a read-write session DROP TABLE runs from inside START
-    /// TRANSACTION READ ONLY, and in a read-only session it fails with error
-    /// 1792.
+    /// before it switched it back; a stored function a SELECT calls can.
+    /// Verified against MySQL 8.4.11 and MariaDB 11.8.9: in a read-write
+    /// session DROP TABLE runs from inside START TRANSACTION READ ONLY, and
+    /// in a read-only session it fails with error 1792. The allowlist keeps
+    /// such statements off this connection; the session's mode is the second
+    /// line.
     static let readOnlyPreamble = [
         "SET SESSION TRANSACTION READ ONLY",
         "START TRANSACTION READ ONLY",
@@ -593,7 +611,8 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
         }
     }
 
-    /// The preamble, the statement and COMMIT run in one turn. A refused
+    /// A text the allowlist refuses ends the call before the turn. The
+    /// preamble, the statement and COMMIT run in one turn. A refused
     /// preamble ends the call before the statement runs. The statement
     /// carries the server's own execution-time bound where the server has
     /// one (`statement(_:form:timeout:groupConcatMaxLength:)`).
@@ -601,6 +620,10 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
         _ statement: String, timeout: Duration, readOnlyTurn: ReadOnlyTurn,
         continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
     ) async {
+        if let refusal = ReadOnlyAllowlist.mysql.refusal(of: statement) {
+            continuation.finish(throwing: refusal)
+            return
+        }
         guard !isClosed else {
             continuation.finish(throwing: DriverError.notConnected)
             return
