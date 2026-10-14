@@ -67,3 +67,13 @@ extension DriverError: LocalizedError {
         }
     }
 }
+
+extension DriverError {
+    /// The server's or the driver's own words, without the localized wrapper
+    /// `errorDescription` adds, for an error that carries another error's
+    /// reason, such as `readOnlyUnavailable`.
+    public var detail: String {
+        if case .queryFailed(let message, _) = self { return message }
+        return localizedDescription
+    }
+}
