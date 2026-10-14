@@ -45,7 +45,8 @@ enum ReadOnlyStatement {
     /// holds the shared connection like the sleep functions below. Not listed:
     /// keywords that only shape a read (`DECLARE`, `FETCH`, `OPEN`, `CLOSE`),
     /// because `OFFSET ... FETCH` paging and `open` and `close` price columns
-    /// are common in reads that should keep running.
+    /// are common in reads that should keep running. SQL Server reserves
+    /// them, and `transactSQLStatementKeywords` covers them there.
     private static let disqualifyingKeywords: Set<String> = [
         // Writes, DDL and privileges.
         "INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "REPLACE", "CREATE", "ALTER", "DROP",
@@ -283,6 +284,40 @@ enum ReadOnlyStatement {
 
     private static let sharedLockWords: Set<String> = ["SHARE", "KEY"]
 
+    /// SQL Server statements that can follow a read in the same batch with
+    /// no separator and that `disqualifyingKeywords` does not already
+    /// cover: control of flow, which can hold the shared connection in a
+    /// loop, cursors and keys, which stay open on it, messages, and `ADD
+    /// SENSITIVITY CLASSIFICATION`, which writes metadata. All are reserved
+    /// (https://learn.microsoft.com/en-us/sql/t-sql/language-elements/reserved-keywords-transact-sql),
+    /// so outside a bracketed or quoted name none of them names a column.
+    /// Not listed: `ELSE` and `END`, which also close a `CASE` expression
+    /// and start nothing without an `IF` or a `BEGIN` before them, and
+    /// `BREAK` and `CONTINUE`, which occur only inside a `WHILE`.
+    private static let transactSQLStatementKeywords: Set<String> = [
+        "IF", "WHILE", "GOTO", "RETURN", "PRINT", "RAISERROR", "DECLARE", "OPEN", "CLOSE", "FETCH",
+        "READTEXT", "ADD",
+    ]
+
+    /// True when a SQL Server batch goes on past its read into another
+    /// statement. Words between `[` and `]` are a name there, never a
+    /// keyword, and `FETCH` after `ROW` or `ROWS` is a read's paging clause.
+    private static func startsAnotherTransactSQLStatement(_ tokens: [SQLToken]) -> Bool {
+        var insideBrackets = false
+        for (index, token) in tokens.enumerated() {
+            guard case .word(let word) = token else {
+                if token == .punctuation("[") { insideBrackets = true }
+                if token == .punctuation("]") { insideBrackets = false }
+                continue
+            }
+            guard !insideBrackets, transactSQLStatementKeywords.contains(word) else { continue }
+            let previous = index > 0 ? tokens[index - 1] : nil
+            if word == "FETCH", previous == .word("ROWS") || previous == .word("ROW") { continue }
+            return true
+        }
+        return false
+    }
+
     static func isReadOnlySQL(_ sql: String, driver: DriverID?) -> Bool {
         guard let tokens = sqlTokens(sql), case .word(let lead)? = tokens.first,
               readLeads(for: driver).contains(lead)
@@ -290,6 +325,7 @@ enum ReadOnlyStatement {
         if let separator = tokens.firstIndex(of: .punctuation(";")), separator != tokens.count - 1 {
             return false
         }
+        if driver == .sqlserver, startsAnotherTransactSQLStatement(tokens) { return false }
         for (index, token) in tokens.enumerated() {
             let next = index + 1 < tokens.count ? tokens[index + 1] : nil
             if token == .punctuation("("), callsSideEffectFunction(tokens, open: index) { return false }

@@ -140,6 +140,41 @@ struct ReadOnlyStatementTests {
         #expect(Self.sql("SELECT @@VERSION", driver: .sqlserver))
     }
 
+    /// SQL Server runs a batch whose statements need no separator, so a read
+    /// can be followed by any statement at all.
+    @Test(arguments: [
+        "SELECT 1 WHILE 1 = 1 SELECT 2",
+        "SELECT 1 IF 1 = 1 SELECT 2",
+        "SELECT 1 ADD SENSITIVITY CLASSIFICATION TO dbo.t.c WITH (LABEL = 'x')",
+        "SELECT 1 DECLARE c CURSOR GLOBAL FOR SELECT id FROM t",
+        "SELECT 1 OPEN SYMMETRIC KEY k DECRYPTION BY PASSWORD = 'p'",
+        "SELECT 1 CLOSE c",
+        "SELECT 1 FETCH NEXT FROM c",
+        "SELECT 1 PRINT 'x'",
+        "SELECT 1 RAISERROR('x', 16, 1)",
+        "SELECT 1 GOTO done",
+        "SELECT 1 RETURN",
+        "SELECT 1 READTEXT t.c @ptr 0 10",
+    ])
+    func sqlServerStatementAfterAReadIsNotReadOnly(_ text: String) {
+        #expect(!Self.sql(text, driver: .sqlserver))
+    }
+
+    /// Paging, bracketed names that are reserved words, and expressions that
+    /// share a keyword with a statement keep running on SQL Server; other
+    /// engines read `open` and `close` as plain column names.
+    @Test func sqlServerReadsThatShareAStatementKeywordStayReadOnly() {
+        #expect(Self.sql("SELECT id FROM t ORDER BY id OFFSET 10 ROWS FETCH NEXT 10 ROWS ONLY", driver: .sqlserver))
+        #expect(Self.sql(
+            "SELECT * FROM (SELECT id FROM t ORDER BY id OFFSET 0 ROWS FETCH FIRST 1 ROW ONLY) AS s", driver: .sqlserver
+        ))
+        #expect(Self.sql("SELECT [open], [close], [add], [print] FROM prices", driver: .sqlserver))
+        #expect(Self.sql("SELECT IIF(a > 0, 'p', 'n'), DATEADD(day, 1, d) FROM t", driver: .sqlserver))
+        #expect(Self.sql("SELECT CASE WHEN a > 0 THEN 1 ELSE 0 END FROM t", driver: .sqlserver))
+        #expect(Self.sql("SELECT open, close FROM prices", driver: .postgres))
+        #expect(Self.sql("SELECT open, close FROM prices", driver: .mysql))
+    }
+
     // MARK: Built-in functions with side effects
 
     @Test(arguments: [
