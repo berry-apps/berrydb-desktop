@@ -106,6 +106,95 @@ struct DangerGuardTests {
         }
     }
 
+    // MARK: Dollar quotes
+
+    // Classification depends on nothing but these tokens. The expected
+    // tokens are what the scan produced while it still copied the candidate
+    // closing tag at every `$`, so the in-place search keeps every boundary.
+
+    @Test func nestedDollarQuotesCloseOnlyOnTheirOwnTag() {
+        let cases: [(sql: String, tokens: [String])] = [
+            ("UPDATE t SET body = $fn$ WHERE $fn$", ["UPDATE", "t", "SET", "body"]),
+            ("UPDATE t SET body = $outer$ $inner$ WHERE $inner$ $outer$ WHERE id = 1",
+             ["UPDATE", "t", "SET", "body", "WHERE", "id", "1"]),
+            ("UPDATE t SET body = $a$ $ab$ WHERE $a$", ["UPDATE", "t", "SET", "body"]),
+            ("UPDATE t SET body = $ab$ $a$ WHERE $ab$", ["UPDATE", "t", "SET", "body"]),
+            ("UPDATE t SET body = $$ WHERE $$", ["UPDATE", "t", "SET", "body"]),
+            ("UPDATE t SET body = $ñ$ WHERE $ñ$ WHERE id = 1", ["UPDATE", "t", "SET", "body", "WHERE", "id", "1"]),
+            ("UPDATE t SET body = $f$ ' -- /* $f$ WHERE id = 1", ["UPDATE", "t", "SET", "body", "WHERE", "id", "1"]),
+            ("UPDATE t SET x = 1 -- $a$\nWHERE id = 1", ["UPDATE", "t", "SET", "x", "1", "WHERE", "id", "1"]),
+        ]
+        for (sql, tokens) in cases {
+            #expect(DangerGuard.topLevelTokens(sql) == tokens, "\(sql)")
+        }
+    }
+
+    /// A closing tag can start on the very `$` where a near miss of it
+    /// stopped matching, or right after a stray `$`.
+    @Test func closingTagIsFoundRightAfterANearMiss() {
+        let cases: [(sql: String, tokens: [String])] = [
+            ("UPDATE t SET body = $abc$ $ab$abc$ WHERE id = 1", ["UPDATE", "t", "SET", "body", "WHERE", "id", "1"]),
+            ("UPDATE t SET body = $abc$ $abc $abc$ WHERE id = 1", ["UPDATE", "t", "SET", "body", "WHERE", "id", "1"]),
+            ("UPDATE t SET body = $a$ $$a$ WHERE $a$ WHERE id = 1", ["UPDATE", "t", "SET", "body", "WHERE"]),
+            ("UPDATE t SET body = $a$x$a$WHERE id = 1", ["UPDATE", "t", "SET", "body", "WHERE", "id", "1"]),
+            ("SELECT $a$$a$ WHERE", ["SELECT", "WHERE"]),
+        ]
+        for (sql, tokens) in cases {
+            #expect(DangerGuard.topLevelTokens(sql) == tokens, "\(sql)")
+        }
+    }
+
+    @Test func dollarSignsOutsideAQuoteKeepTheirTokens() {
+        let cases: [(sql: String, tokens: [String])] = [
+            ("UPDATE t SET a = $1 WHERE id = $2", ["UPDATE", "t", "SET", "a", "1", "WHERE", "id", "2"]),
+            ("DELETE FROM t WHERE id = $1", ["DELETE", "FROM", "t", "WHERE", "id", "1"]),
+            ("UPDATE t SET a = $1$ WHERE id = 1 $1$", ["UPDATE", "t", "SET", "a"]),
+            ("UPDATE a$b SET c = 1 WHERE id = 1", ["UPDATE", "a", "b", "SET", "c", "1", "WHERE", "id", "1"]),
+            ("UPDATE a$b$c SET d = 1 WHERE id = 1", ["UPDATE", "a"]),
+            ("SELECT $", ["SELECT"]),
+            ("SELECT $a", ["SELECT", "a"]),
+            ("DROP TABLE $x$ ignored $x$ \"Số Liệu\"", ["DROP", "TABLE", "\"Số Liệu\""]),
+        ]
+        for (sql, tokens) in cases {
+            #expect(DangerGuard.topLevelTokens(sql) == tokens, "\(sql)")
+        }
+    }
+
+    /// An unterminated dollar quote runs to the end of the text, so a WHERE
+    /// after it never counts.
+    @Test func unterminatedDollarQuoteHidesTheRestOfTheText() {
+        let cases: [(sql: String, tokens: [String])] = [
+            ("UPDATE t SET body = $q$ WHERE id = 1", ["UPDATE", "t", "SET", "body"]),
+            ("UPDATE t SET body = $abc$ WHERE $ab", ["UPDATE", "t", "SET", "body"]),
+            ("UPDATE t SET body = $abc$ WHERE $abc", ["UPDATE", "t", "SET", "body"]),
+        ]
+        for (sql, tokens) in cases {
+            #expect(DangerGuard.topLevelTokens(sql) == tokens, "\(sql)")
+        }
+        #expect(DangerGuard.classify("UPDATE t SET body = $q$ WHERE id = 1", isProduction: false)
+            == .confirm(.updateWithoutWhere))
+    }
+
+    // MARK: Cost
+
+    /// Every statement is classified synchronously by its caller, often the
+    /// main actor, before any query timeout, so the scan's reads stay linear
+    /// in the length of the text. Copying the candidate closing tag at every
+    /// `$` of a dollar-quoted body made this text quadratic: 2.0 s at 480k
+    /// scalars in a release build.
+    @Test func dollarQuoteFullOfDollarSignsIsScannedInLinearReads() {
+        let sql = "SELECT $" + String(repeating: "a", count: 1_000) + "$" + String(repeating: "$", count: 2_000)
+        #expect(DangerGuard.classify(sql, isProduction: false) == .safe)
+        #expect(DangerGuard.tokenScanReads(sql) <= 5 * sql.unicodeScalars.count)
+    }
+
+    @Test func longOrdinaryStatementIsScannedInLinearReads() {
+        let assignments = (1...3_000).map { "c\($0) = $\($0)" }.joined(separator: ", ")
+        let sql = "UPDATE t SET \(assignments) WHERE note = 'a -- b' AND \"Mixed\" = $fn$ x $fn$ /* c */"
+        #expect(DangerGuard.classify(sql, isProduction: false) == .safe)
+        #expect(DangerGuard.tokenScanReads(sql) <= 5 * sql.unicodeScalars.count)
+    }
+
     // MARK: Gate integration — denied statement must never reach the driver
 
     private struct DenyAll: DangerConfirmer {
