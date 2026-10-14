@@ -240,6 +240,59 @@ struct AppleIntelligenceAccessTests {
         }
     }
 
+    /// With a license and the on-device model preferred, an edit would re-run
+    /// the conversation on BerryDB's AI service, its on-device messages
+    /// included, although the toggle still reads on-device. It is blocked
+    /// with a message instead, like an edit without a license.
+    @Test func editingWhileOnDeviceIsPreferredSendsNothing() async throws {
+        try await withCleanGrant {
+            try await withOnDeviceToggle(true) {
+                let controller = try await makeBoundController()
+                controller.licenseStatus = { .trial(daysLeft: 5) }
+                controller.makeOnDeviceProvider = { ScriptedOnDeviceModel(reply: "Two tables.") }
+                #expect(controller.availability == .ready)
+                controller.draft = "what tables?"
+                let first = try #require(controller.prepareSend())
+                await controller.send(first)
+                let messageID = try #require(controller.transcript.first?.messageID)
+
+                controller.editingMessageID = messageID
+                controller.draft = "what views?"
+                let edit = try #require(controller.prepareSend(), "must not silently discard the edit")
+                guard case .handled = edit else {
+                    Issue.record("expected .handled (shown, sent nowhere), got \(edit)")
+                    return
+                }
+                #expect(!controller.isStreaming)
+                #expect(controller.transcript.last?.text == L("Editing uses cloud AI. Turn off the on-device model in AI settings to edit this message."))
+            }
+        }
+    }
+
+    /// Guard for the test above: with the on-device model turned off, a
+    /// licensed user's edit still goes to the backend.
+    @Test func editingWithALicenseOnTheCloudRouteGoesToTheBackend() async throws {
+        try await withCleanGrant {
+            try await withOnDeviceToggle(true) {
+                let controller = try await makeBoundController()
+                controller.licenseStatus = { .trial(daysLeft: 5) }
+                controller.makeOnDeviceProvider = { ScriptedOnDeviceModel(reply: "Two tables.") }
+                controller.draft = "what tables?"
+                await controller.send(try #require(controller.prepareSend()))
+                let messageID = try #require(controller.transcript.first?.messageID)
+
+                UserDefaults.standard.set(false, forKey: "berry.ai.onDevice")
+                controller.editingMessageID = messageID
+                controller.draft = "what views?"
+                let edit = try #require(controller.prepareSend())
+                guard case .backend = edit else {
+                    Issue.record("expected .backend, got \(edit)")
+                    return
+                }
+            }
+        }
+    }
+
     // MARK: - The command palette's "Ask AI" passes the same gate as a send
 
     // A palette query that reaches the network waits on `example.invalid`

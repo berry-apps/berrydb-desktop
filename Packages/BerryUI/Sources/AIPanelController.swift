@@ -486,6 +486,7 @@ public final class AIPanelController {
     /// opens, migrates or writes the store of whoever runs it.
     init(license: LicenseManager, backendURL: URL, store: BerryStore) {
         self.license = license
+        self.licenseStatus = { license.status }
         self.backendURL = backendURL
         self.store = store
         // Nothing else purges `ai_pending_interaction` rows past their
@@ -675,7 +676,7 @@ public final class AIPanelController {
     public func allowsSchemaEmbedding(profileID: UUID) -> Bool {
         Self.allowsSchemaEmbedding(
             profileID: profileID, currentProfileID: currentProfileID, availability: availability,
-            license: license.status, onDevice: UserDefaults.standard.bool(forKey: "berry.ai.onDevice")
+            license: licenseStatus(), onDevice: UserDefaults.standard.bool(forKey: "berry.ai.onDevice")
         )
     }
 
@@ -722,7 +723,7 @@ public final class AIPanelController {
     /// ever activated at all) blocks the panel.
     public var availability: Availability {
         guard session != nil || dataSourceSession != nil else { return .noConnection }
-        if case .none = license.status, !appleIntelligenceGranted { return .unlicensed }
+        if case .none = licenseStatus(), !appleIntelligenceGranted { return .unlicensed }
         guard enabledForConnection else { return .disabledForConnection }
         guard consentGiven else { return .needsConsent }
         return .ready
@@ -737,9 +738,14 @@ public final class AIPanelController {
     /// inside the panel this property gates, so coupling them would lock a
     /// user out with no way back to the toggle once it's off.
     public var appleIntelligenceGranted: Bool {
-        guard case .none = license.status else { return false }
+        guard case .none = licenseStatus() else { return false }
         return AppleIntelligenceAccess.isGranted && onDeviceModelAvailable()
     }
+
+    /// The installed license's status. Replaceable so tests can take the
+    /// licensed routes: a real license needs a signed license file and a
+    /// Keychain token, neither of which a test may write.
+    var licenseStatus: () -> LicenseStatus
 
     /// Whether Apple's on-device model can run on this Mac, and the model a
     /// local turn runs on. Replaceable so tests can exercise the on-device
@@ -1226,7 +1232,7 @@ public final class AIPanelController {
     /// the settings menu that holds the toggle.
     var sendRoute: SendRoute {
         Self.sendRoute(
-            availability: availability, license: license.status,
+            availability: availability, license: licenseStatus(),
             onDevicePreferred: UserDefaults.standard.bool(forKey: "berry.ai.onDevice") && onDeviceModelAvailable()
         )
     }
@@ -1269,7 +1275,7 @@ public final class AIPanelController {
         // A device with no real license/trial must never reach the metered
         // backend through any branch below — editing included.
         let hasRealLicense: Bool = {
-            if case .none = license.status { return false }
+            if case .none = licenseStatus() { return false }
             return true
         }()
  // Editing a past message always goes through the backend
@@ -1280,6 +1286,15 @@ public final class AIPanelController {
             guard hasRealLicense else {
                 aiSession.admitBlocked(text, reason: L(
                     "Editing needs cloud AI — on-device doesn't support it yet. Add a trial, license, or credit in License settings to edit this message."
+                ))
+                return .handled
+            }
+            // With the on-device model preferred, the edited turn would go to
+            // BerryDB's AI service with the thread's on-device messages as
+            // context, while the toggle still reads on-device.
+            guard route == .backend else {
+                aiSession.admitBlocked(text, reason: L(
+                    "Editing uses cloud AI. Turn off the on-device model in AI settings to edit this message."
                 ))
                 return .handled
             }
