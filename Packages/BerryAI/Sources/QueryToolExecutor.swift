@@ -1307,6 +1307,11 @@ public final class QueryToolExecutor: AIToolExecutor {
         }
         let reason: ReadOnlyUnavailableReason
         switch try await route(for: session, within: remaining(), deadline: maxDuration ?? 110) {
+        case .notSupported where ReadOnlyConnections.supports(session):
+            // Wrong wiring, since the engine has a read-only connection;
+            // only an engine without one runs such a statement on the
+            // session's own connection without a card.
+            reason = .connectionFailed(ReadOnlyUnavailableReason.notSetUpDetail)
         case .notSupported:
             return try await drainSample(sql, lease: lease, timeoutOverrideSeconds: remaining())
         case .readOnly(let readOnly):
@@ -1322,6 +1327,9 @@ public final class QueryToolExecutor: AIToolExecutor {
         // unavailable too; it gets no card, which would wait for a turn that
         // is over.
         guard lease.isValid, !Task.isCancelled else { throw CancellationError() }
+        // With nothing left of the deadline the card would expire as it
+        // showed, and the model would read a denial nobody made.
+        if let left = remaining(), left <= 0 { throw DeadlineExceeded(seconds: maxDuration ?? 110) }
         let danger = DangerGuard.classify(sql, isProduction: session.isProduction)
         guard await gate.approveOnSessionConnection(
             sql: sql, danger: danger, reason: reason, timeoutSeconds: remaining() ?? 110

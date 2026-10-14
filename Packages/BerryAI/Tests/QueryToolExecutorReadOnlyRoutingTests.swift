@@ -290,6 +290,46 @@ struct QueryToolExecutorReadOnlyRoutingTests {
         #expect(await withoutRouting.onSessionPath == ["SELECT id FROM t LIMIT 1000"])
     }
 
+    /// A route that says an engine with the contract has no read-only
+    /// connection is wired wrong; the statement still gets the card rather
+    /// than running on the session's own connection without one.
+    @Test func aRouteThatDeniesTheContractOfAnEngineThatHasItStillGetsACard() async {
+        let main = RecordingConnection()
+        let gate = RoutingGate(approves: false)
+
+        let outcome = await runSQL(executor(session(main: main), gate: gate, routing: Routing(.notSupported)), "SELECT id FROM t")
+
+        #expect(outcome.status == "denied")
+        #expect(gate.reasons == [.connectionFailed(ReadOnlyUnavailableReason.notSetUpDetail)])
+        #expect(await main.onSessionPath.isEmpty)
+    }
+
+    /// The route answered once the tool's deadline had passed. A card then
+    /// would expire as it showed, and the model would read a denial nobody
+    /// made; the call reports the deadline instead.
+    @Test func noCardIsShownOnceTheDeadlineHasPassed() async {
+        let main = RecordingConnection()
+        let gate = RoutingGate(approves: true)
+        let executor = QueryToolExecutor(
+            session: session(main: main), gate: gate,
+            onPropose: { _, _ in },
+            readOnlyRoute: { _ in
+                // Holds the main actor past the deadline, so the route
+                // answers before the deadline's own timer can run.
+                usleep(300_000)
+                return .unavailable(.sessionState)
+            },
+            executionDeadlineSeconds: 0.1
+        )
+
+        let outcome = await runSQL(executor, "SELECT id FROM t")
+
+        #expect(outcome.status == "error")
+        #expect(outcome.resultJSON?.contains("tool deadline") == true, "\(String(describing: outcome.resultJSON))")
+        #expect(gate.cards.isEmpty)
+        #expect(await main.onSessionPath.isEmpty)
+    }
+
     @Test func withoutRoutingAnEngineWithTheContractGetsACard() async {
         let main = RecordingConnection()
         let gate = RoutingGate(approves: false)
