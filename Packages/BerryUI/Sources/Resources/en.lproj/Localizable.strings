@@ -279,6 +279,9 @@
 "Sign in required" = "Sign in required";
 "Could not reach the license server" = "Could not reach the license server";
 "This device has already used its free trial with a different account. Sign in with that account, or use a license key." = "This device has already used its free trial with a different account. Sign in with that account, or use a license key.";
+"If a license exists for this email, we've sent its key there. Check your inbox and spam folder." = "If a license exists for this email, we've sent its key there. Check your inbox and spam folder.";
+"We can't email license keys right now. Contact support at info@berryhub.app." = "We can't email license keys right now. Contact support at info@berryhub.app.";
+"Too many attempts. Try again later." = "Too many attempts. Try again later.";
 "This license could not be read — it may be corrupted. Try activating again with your key or restoring by email." = "This license could not be read — it may be corrupted. Try activating again with your key or restoring by email.";
 "This license was signed with a key this app doesn't recognize — it may have been issued for a different environment. Try activating again, or contact support if this keeps happening." = "This license was signed with a key this app doesn't recognize — it may have been issued for a different environment. Try activating again, or contact support if this keeps happening.";
 

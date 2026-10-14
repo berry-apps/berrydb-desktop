@@ -279,6 +279,9 @@
 "Sign in required" = "Cần đăng nhập";
 "Could not reach the license server" = "Không kết nối được máy chủ license";
 "This device has already used its free trial with a different account. Sign in with that account, or use a license key." = "Máy này đã dùng thử miễn phí với một tài khoản khác. Hãy đăng nhập bằng tài khoản đó, hoặc dùng license key.";
+"If a license exists for this email, we've sent its key there. Check your inbox and spam folder." = "Nếu email này có license, chúng tôi đã gửi key tới đó. Hãy kiểm tra hộp thư đến và thư mục spam.";
+"We can't email license keys right now. Contact support at info@berryhub.app." = "Hiện chưa thể gửi license key qua email. Hãy liên hệ hỗ trợ tại info@berryhub.app.";
+"Too many attempts. Try again later." = "Bạn đã thử quá nhiều lần. Hãy thử lại sau.";
 "This license could not be read — it may be corrupted. Try activating again with your key or restoring by email." = "Không đọc được license này — có thể đã bị hỏng. Hãy thử kích hoạt lại bằng key hoặc khôi phục qua email.";
 "This license was signed with a key this app doesn't recognize — it may have been issued for a different environment. Try activating again, or contact support if this keeps happening." = "License này được ký bằng khóa mà app không nhận ra — có thể đã được cấp cho môi trường khác. Hãy thử kích hoạt lại, hoặc liên hệ hỗ trợ nếu vẫn còn lỗi.";
 

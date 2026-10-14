@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import BerryUI
@@ -10,8 +11,43 @@ import Testing
 /// readable message.
 @Suite("licenseErrorMessage")
 struct LicenseSupportTests {
-    @Test func mapsKeySentToAReadableInstruction() {
-        #expect(licenseErrorMessage("key_sent").localizedCaseInsensitiveContains("purchase email"))
+    /// The text for `key` in one localization of the BerryUI resource bundle,
+    /// or nil when that localization has no entry for it.
+    private func localized(_ key: String, in language: String) -> String? {
+        guard let path = berryModuleBundle.path(forResource: language, ofType: "lproj"),
+              let bundle = Bundle(path: path)
+        else { return nil }
+        let missing = "\u{0}missing"
+        let value = bundle.localizedString(forKey: key, value: missing, table: nil)
+        return value == missing ? nil : value
+    }
+
+    /// Restoring by email answers `key_sent` whatever the address, so that
+    /// nobody can learn from it whether an email bought a license, and the
+    /// mail can still fail to go out. The message must claim neither.
+    private static let keySent = "If a license exists for this email, we've sent its key there. Check your inbox and spam folder."
+    /// The server cannot send mail at all.
+    private static let restoreUnavailable = "We can't email license keys right now. Contact support at info@berryhub.app."
+    private static let rateLimited = "Too many attempts. Try again later."
+
+    @Test func keySentClaimsNeitherALicenseNorADelivery() {
+        #expect(licenseErrorMessage("key_sent") == L(String.LocalizationValue(Self.keySent)))
+    }
+
+    @Test func restoreUnavailableSaysMailCannotBeSentAndWhoToContact() {
+        #expect(licenseErrorMessage("restore_unavailable") == L(String.LocalizationValue(Self.restoreUnavailable)))
+    }
+
+    @Test func rateLimitedSaysToTryAgainLater() {
+        #expect(licenseErrorMessage("rate_limited") == L(String.LocalizationValue(Self.rateLimited)))
+    }
+
+    @Test func restoreMessagesAreTranslatedForEveryShippedLanguage() throws {
+        for key in [Self.keySent, Self.restoreUnavailable, Self.rateLimited] {
+            #expect(localized(key, in: "en") == key)
+            let vietnamese = try #require(localized(key, in: "vi"), "vi.lproj has no entry for \(key)")
+            #expect(vietnamese != key)
+        }
     }
 
     @Test func mapsNoSubscriptionToAReadableMessage() {

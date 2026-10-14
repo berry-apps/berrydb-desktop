@@ -113,8 +113,16 @@ func licenseErrorMessage(_ code: String) -> String {
         String(localized: "This license is already active on the maximum number of devices", bundle: berryModuleBundle)
     case "expired": String(localized: "This license has expired", bundle: berryModuleBundle)
     case "plan_required": String(localized: "Sign in required", bundle: berryModuleBundle)
+    // `POST /v1/licenses/by-email` answers `key_sent` for every address when
+    // the license server can send mail, so the reply never tells whether an
+    // email bought a license, and the mail can still fail to go out. The
+    // text claims neither a license nor a delivery.
     case "key_sent":
-        String(localized: "We sent your license key to your purchase email — check your inbox and enter it above to activate.", bundle: berryModuleBundle)
+        String(localized: "If a license exists for this email, we've sent its key there. Check your inbox and spam folder.", bundle: berryModuleBundle)
+    case "restore_unavailable":
+        String(localized: "We can't email license keys right now. Contact support at info@berryhub.app.", bundle: berryModuleBundle)
+    case "rate_limited":
+        String(localized: "Too many attempts. Try again later.", bundle: berryModuleBundle)
     case "no_subscription":
         String(localized: "No subscription was found for that email or device yet.", bundle: berryModuleBundle)
     case "trial_already_used":
