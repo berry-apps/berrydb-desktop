@@ -801,7 +801,8 @@ public final class AIPanelController {
         // Restore saved settings without persisting them back.
         isRestoring = true
         let saved = profileID.flatMap { loadSettings?($0) }
-        consentGiven = saved?.consentGiven ?? false
+        let acceptedVersion = profileID.map { UserDefaults.standard.integer(forKey: Self.consentVersionKey($0)) } ?? 0
+        consentGiven = (saved?.consentGiven ?? false) && acceptedVersion >= Self.consentVersion
         allowSampleRows = saved?.allowSampleRows ?? false
         autoApproveSelects = saved?.autoApproveSelects ?? true
         enabledMCPServers = saved?.enabledMCPServers ?? []
@@ -1185,8 +1186,23 @@ public final class AIPanelController {
 
  /// Accept the metadata policy and turn AI on for this connection.
     public func giveConsentAndEnable() {
+        if let currentProfileID {
+            UserDefaults.standard.set(Self.consentVersion, forKey: Self.consentVersionKey(currentProfileID))
+        }
         enabledForConnection = true
         consentGiven = true
+    }
+
+    /// Version of the consent screen's text, raised when the text changes in
+    /// a way a user who already accepted must see. An acceptance stored with
+    /// an older version, or with none, counts as not given, so the screen
+    /// shows again for that connection.
+    static let consentVersion = 1
+
+    /// The accepted version is kept in user defaults per connection profile,
+    /// beside the acceptance in the store, so the store needs no migration.
+    static func consentVersionKey(_ profileID: UUID) -> String {
+        "berry.ai.consentVersion.\(profileID.uuidString)"
     }
 
     /// Persists the current settings for the active profile (no-op while
