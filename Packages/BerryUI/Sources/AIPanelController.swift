@@ -387,6 +387,7 @@ public final class AIPanelController {
             executor?.options.autoApproveSelects = autoApproveSelects
             // Only the toggle sets this outside a restore, so it is a choice.
             if !isRestoring {
+                storedAutoApproveSelects = autoApproveSelects
                 ProductionAutoRun.recordChoice(
                     isProduction: isProductionConnection, profileID: currentProfileID, defaults: .standard
                 )
@@ -394,6 +395,12 @@ public final class AIPanelController {
             persistSettings()
         }
     }
+
+    /// The auto-run value saved with this connection's settings, which only
+    /// the toggle changes. On production `autoApproveSelects` can be off by
+    /// default rather than by choice; saving that with another setting would
+    /// keep auto-run off after the production label is removed.
+    private var storedAutoApproveSelects = true
 
     private var isProductionConnection: Bool {
         session?.isProduction ?? dataSourceSession?.isProduction ?? false
@@ -818,6 +825,8 @@ public final class AIPanelController {
         let acceptedVersion = profileID.map { UserDefaults.standard.integer(forKey: Self.consentVersionKey($0)) } ?? 0
         consentGiven = (saved?.consentGiven ?? false) && acceptedVersion >= Self.consentVersion
         allowSampleRows = saved?.allowSampleRows ?? false
+        // The store's own default for a connection with nothing saved yet.
+        storedAutoApproveSelects = saved?.autoApproveSelects ?? true
         autoApproveSelects = ProductionAutoRun.restored(
             stored: saved?.autoApproveSelects, isProduction: isProductionConnection, profileID: profileID, defaults: .standard
         )
@@ -1228,7 +1237,7 @@ public final class AIPanelController {
         saveSettings?(profileID, AIConnectionSettings(
             enabled: enabledForConnection,
             allowSampleRows: allowSampleRows,
-            autoApproveSelects: autoApproveSelects,
+            autoApproveSelects: storedAutoApproveSelects,
             consentGiven: consentGiven,
             enabledMCPServers: enabledMCPServers,
             trustedMCPServers: trustedMCPServers

@@ -50,10 +50,13 @@ struct AIPanelControllerProductionTests {
     }
 
     /// Runs `body` with a fresh profile id and removes the auto-run choice
-    /// it may record from the defaults afterwards.
+    /// and consent version it may record from the defaults afterwards.
     private func withProfile(_ body: (UUID) async throws -> Void) async rethrows {
         let profileID = UUID()
-        defer { UserDefaults.standard.removeObject(forKey: ProductionAutoRun.choiceKey(profileID)) }
+        defer {
+            UserDefaults.standard.removeObject(forKey: ProductionAutoRun.choiceKey(profileID))
+            UserDefaults.standard.removeObject(forKey: AIPanelController.consentVersionKey(profileID))
+        }
         try await body(profileID)
     }
 
@@ -92,6 +95,61 @@ struct AIPanelControllerProductionTests {
             controller.bind(session: try await makeSQLiteSession(isProduction: false), catalog: nil, objects: [], profileID: profileID)
 
             #expect(controller.autoApproveSelects == stored)
+        }
+    }
+
+    // MARK: Saving
+
+    /// Auto-run off on production is a default, not a choice. Saving another
+    /// setting must not store it, or auto-run would stay off once the
+    /// production label is removed.
+    @Test func anotherSettingSavedOnProductionKeepsTheStoredAutoRun() async throws {
+        try await withProfile { profileID in
+            let saves = SavedSettings()
+            let controller = try makeController(saved: Self.enabledWithAutoRun, saves: saves)
+            controller.bind(session: try await makeSQLiteSession(isProduction: true), catalog: nil, objects: [], profileID: profileID)
+            #expect(!controller.autoApproveSelects)
+
+            controller.allowSampleRows = true
+
+            #expect(saves.value?.allowSampleRows == true)
+            #expect(saves.value?.autoApproveSelects == true)
+        }
+    }
+
+    /// The same holds for a production connection with nothing stored yet,
+    /// whose first save is the consent.
+    @Test func consentOnANewProductionConnectionStoresNoAutoRunChoice() async throws {
+        try await withProfile { profileID in
+            let saves = SavedSettings()
+            let controller = try makeController(saved: nil, saves: saves)
+            controller.bind(session: try await makeSQLiteSession(isProduction: true), catalog: nil, objects: [], profileID: profileID)
+
+            controller.giveConsentAndEnable()
+
+            #expect(saves.value?.consentGiven == true)
+            #expect(saves.value?.autoApproveSelects == true)
+            #expect(!controller.autoApproveSelects)
+        }
+    }
+
+    /// Guard: what the toggle is set to is stored, and later saves of other
+    /// settings keep it.
+    @Test(arguments: [true, false])
+    func theToggleStoresItsValue(_ isProduction: Bool) async throws {
+        try await withProfile { profileID in
+            let saves = SavedSettings()
+            let controller = try makeController(saved: Self.enabledWithAutoRun, saves: saves)
+            controller.bind(
+                session: try await makeSQLiteSession(isProduction: isProduction), catalog: nil, objects: [], profileID: profileID
+            )
+
+            controller.autoApproveSelects = true
+            #expect(saves.value?.autoApproveSelects == true)
+            controller.autoApproveSelects = false
+            #expect(saves.value?.autoApproveSelects == false)
+            controller.allowSampleRows = true
+            #expect(saves.value?.autoApproveSelects == false)
         }
     }
 }
