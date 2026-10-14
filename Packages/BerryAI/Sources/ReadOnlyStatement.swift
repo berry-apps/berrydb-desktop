@@ -595,14 +595,15 @@ enum ReadOnlyStatement {
         "find", "findOne", "aggregate", "countDocuments", "estimatedDocumentCount", "distinct",
     ]
     /// Cursor modifiers the resolver accepts after `find`.
-    private static let mongoCursorMethods: Set<String> = ["sort", "limit"]
+    static let mongoCursorMethods: Set<String> = ["sort", "limit"]
     /// Pipeline stages that write their output to a collection
     /// (https://www.mongodb.com/docs/manual/reference/operator/aggregation/out/,
     /// https://www.mongodb.com/docs/manual/reference/operator/aggregation/merge/).
     private static let mongoWritingStages: Set<String> = ["$out", "$merge"]
 
-    /// True for one `db.<collection>.<read method>(...)` call, optionally
-    /// followed by cursor modifiers, that names no writing pipeline stage.
+    /// True for one `db.<collection>.<read method>(...)` call, with cursor
+    /// modifiers only after `find` as the resolver allows, that names no
+    /// writing pipeline stage.
     /// The method actually called decides, not a substring anywhere in the
     /// text. Elasticsearch and Qdrant scripts arrive on the same path and
     /// never match, so they always need approval.
@@ -615,6 +616,7 @@ enum ReadOnlyStatement {
               let close = mongoClosingIndex(tokens, open: 5)
         else { return false }
         var index = close + 1
+        if index < tokens.count, method != "find" { return false }
         while index < tokens.count {
             guard tokens[index] == .punctuation("."), index + 2 < tokens.count,
                   case .word(let modifier) = tokens[index + 1], mongoCursorMethods.contains(modifier),

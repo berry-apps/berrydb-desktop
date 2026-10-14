@@ -32,4 +32,38 @@ struct MongoReadMethodAgreementTests {
             }
         }
     }
+
+    /// A call for each cursor modifier the classifier accepts.
+    private static let modifierSamples: [String: String] = [
+        "sort": ".sort({a: 1})",
+        "limit": ".limit(1)",
+    ]
+
+    private static func resolvesToAQuery(_ text: String) throws -> Bool {
+        let statement = try #require(try MongoShellParser.parse(text).first)
+        guard case .success(.query) = Result(catching: { try MongoShellResolver.resolve(statement) }) else {
+            return false
+        }
+        return true
+    }
+
+    /// Every read method with every cursor modifier chained on gets the same
+    /// verdict from the classifier as from the resolver, which takes
+    /// modifiers only after `find`.
+    @Test func everyModifierChainAgreesWithTheResolver() throws {
+        for method in ReadOnlyStatement.mongoReadMethods.sorted() {
+            guard let base = Self.samples[method] else { continue }
+            for modifier in ReadOnlyStatement.mongoCursorMethods.sorted() {
+                guard let call = Self.modifierSamples[modifier] else {
+                    Issue.record("no sample call for .\(modifier)")
+                    continue
+                }
+                let chain = base + call
+                #expect(ReadOnlyStatement.isReadOnlyMongoShell(chain) == (try Self.resolvesToAQuery(chain)), "\(chain)")
+            }
+        }
+        let findChain = "db.c.find({}).sort({a: 1}).limit(1)"
+        #expect(ReadOnlyStatement.isReadOnlyMongoShell(findChain))
+        #expect(try Self.resolvesToAQuery(findChain))
+    }
 }
