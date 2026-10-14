@@ -82,9 +82,13 @@ public struct ReadOnlyAllowlist: Sendable {
     }
 
     /// The first word of `bytes` in upper case, or nil when the text holds
-    /// none or starts with something else. A word is a run of ASCII letters,
-    /// digits, `_`, `$` and non-ASCII bytes, so a word that only begins like
-    /// a lead (`SELECTX`, `SELECTé`) is another word.
+    /// none, starts with something else, or its first word holds a non-ASCII
+    /// byte. A word is a run of ASCII letters, digits, `_`, `$` and non-ASCII
+    /// bytes, so a word that only begins like a lead (`SELECTX`, `SELECTé`)
+    /// is another word. Only ASCII letters are folded: Unicode case mapping
+    /// reads `ſelect` (long s) or `wıth` (dotless i) as a lead, and decoding
+    /// drops a leading byte-order mark, so the word compared would not be the
+    /// bytes the server reads.
     private func firstWord(of bytes: [UInt8]) -> String? {
         var index = 0
         while index < bytes.count {
@@ -100,8 +104,12 @@ public struct ReadOnlyAllowlist: Sendable {
             }
         }
         let word = bytes[index...].prefix(while: Self.isWordByte)
-        guard !word.isEmpty, let text = String(bytes: word, encoding: .utf8) else { return nil }
-        return text.uppercased()
+        guard !word.isEmpty, word.allSatisfy({ $0 < 0x80 }) else { return nil }
+        return String(decoding: word.map(Self.asciiUppercased), as: UTF8.self)
+    }
+
+    private static func asciiUppercased(_ byte: UInt8) -> UInt8 {
+        (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(byte) ? byte - 0x20 : byte
     }
 
     private func isLineComment(_ bytes: [UInt8], at index: Int) -> Bool {

@@ -39,11 +39,19 @@ struct ReadOnlyAllowlistTests {
         }
     }
 
-    /// A word that only begins like a lead is another word.
+    /// A word that only begins like a lead is another word. So is one that
+    /// becomes a lead only through Unicode case mapping (long s, dotless i)
+    /// or once a leading byte-order mark is dropped: the first word the
+    /// check sees has to be the first word the server runs.
     @Test func aLeadIsAWholeWord() {
-        for sql in ["SELECTX 1", "SELECT_1", "SELECT$1", "SELECT1", "WITHIN", "SHOWS", "SELECTé 1", "\u{A0}SELECT 1"] {
+        for sql in [
+            "SELECTX 1", "SELECT_1", "SELECT$1", "SELECT1", "WITHIN", "SHOWS", "SELECTé 1", "\u{A0}SELECT 1",
+            "\u{17F}elect 1", "w\u{131}th x AS (SELECT 1) SELECT 1", "expla\u{131}n SELECT 1", "value\u{17F} (1)",
+            "de\u{17F}c t", "\u{FEFF}SELECT 1",
+        ] {
             #expect(!runs(sql, on: .mysql), "\(sql)")
             #expect(!runs(sql, on: .postgres), "\(sql)")
+            #expect(!runs(sql, on: .sqlite), "\(sql)")
         }
     }
 
