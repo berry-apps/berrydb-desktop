@@ -52,9 +52,11 @@ private final class GraphSource: @unchecked Sendable {
 struct TableGraphCacheTests {
     let start = Date(timeIntervalSince1970: 1_000)
 
-    /// Polls `condition` until it holds, for at most ten seconds.
+    /// Polls `condition` until it holds, for at most a minute: on a loaded
+    /// three-core CI runner a parallel test run can leave a timer unserved
+    /// for well over ten seconds.
     private func waitUntil(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(10)
+        let deadline = ContinuousClock.now + .seconds(60)
         while !condition() {
             guard ContinuousClock.now < deadline else {
                 Issue.record("the awaited condition never held")
