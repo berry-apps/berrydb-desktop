@@ -1077,11 +1077,27 @@ public final class AIPanelController {
     /// Runs as its own `AISession`/thread rather than the panel's main one,
     /// so it costs the same as one ordinary chat turn (per the doc) without
     /// splicing routing exchanges into the user's actual conversation
-    /// history. Returns whether a UI action actually fired (so the palette
-    /// can dismiss deterministically without parsing the model's reply) and
+    /// history. Reports whether a UI action actually fired, so the palette
+    /// can dismiss deterministically without parsing the model's reply, and
     /// the model's final text for display otherwise.
-    public func routeCommandPaletteQuery(_ text: String) async -> (performed: Bool, reply: String?) {
-        guard LicenseManager.apiToken() != nil else { return (false, nil) }
+    ///
+    /// The query passes the same gate as a message sent from the panel,
+    /// `sendRoute`: a license or Apple Intelligence access, AI on for this
+    /// connection, its consent given, and the on-device model when it is
+    /// preferred. Holding an API token is no gate, since
+    /// `LicenseManager.apiToken()` falls back to a development token.
+    public func routeCommandPaletteQuery(_ text: String) async -> CommandPaletteOutcome {
+        let route = sendRoute
+        switch route {
+        case let .closed(reason):
+            return .gateClosed(reason)
+        case .noCloudAccess:
+            return .reply(L(
+                "On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on in AI settings, or add a trial, license, or credit in License settings."
+            ))
+        case .onDevice, .backend:
+            break
+        }
         let entryExecutor = PerformUIActionToolExecutor(currentEntries: { [weak self] in
             self?.uiActionEntries?() ?? []
         })
@@ -1121,9 +1137,26 @@ public final class AIPanelController {
             transport: transport, executor: router,
             dialect: dialect, schemaDigest: "command-palette", store: store
         )
-        await routingSession.send(text)
-        let reply = routingSession.transcript.last(where: { $0.role == .assistant })?.text
-        return (entryExecutor.didPerform, reply)
+        if route == .onDevice {
+            await routingSession.sendLocal(text, provider: makeOnDeviceProvider())
+        } else {
+            await routingSession.send(text)
+        }
+        if entryExecutor.didPerform { return .performed }
+        return .reply(routingSession.transcript.last(where: { $0.role == .assistant })?.text)
+    }
+
+    /// What became of a command palette query.
+    public enum CommandPaletteOutcome: Equatable {
+        /// A UI action ran; the palette closes.
+        case performed
+        /// The model answered without acting, or the query could not be
+        /// sent; the palette shows the text, or a fallback when nil.
+        case reply(String?)
+        /// The AI gate is closed for the reason given. Nothing was sent; the
+        /// AI panel opens, since it is where that reason is explained and
+        /// resolved.
+        case gateClosed(Availability)
     }
 
  /// Enable/disable an allowlisted MCP server and reconnect so its tools

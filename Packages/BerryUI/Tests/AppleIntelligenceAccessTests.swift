@@ -239,4 +239,69 @@ struct AppleIntelligenceAccessTests {
             #expect(controller.transcript.first?.text == "edited text")
         }
     }
+
+    // MARK: - The command palette's "Ask AI" passes the same gate as a send
+
+    // A palette query that reaches the network waits on `example.invalid`
+    // until the system gives up, so the time limit turns a query that should
+    // never have been sent into a failure instead of a stalled run.
+
+    private struct ScriptedOnDeviceModel: LocalCompletionProvider {
+        let reply: String
+        static func isAvailable() -> Bool { true }
+        func complete(prompt: String) async throws -> String { reply }
+    }
+
+    @Test(.timeLimit(.minutes(1))) func paletteWithNoConnectionOpensThePanelInsteadOfSending() async throws {
+        let controller = try makeController()
+        #expect(await controller.routeCommandPaletteQuery("show slow queries") == .gateClosed(.noConnection))
+    }
+
+    @Test(.timeLimit(.minutes(1))) func paletteWithoutLicenseOrAccessOpensThePanel() async throws {
+        try await withCleanGrant {
+            let controller = try await makeBoundController()
+            #expect(await controller.routeCommandPaletteQuery("show slow queries") == .gateClosed(.unlicensed))
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1))) func paletteAsksForConsentLikeThePanel() async throws {
+        try await withCleanGrant {
+            AppleIntelligenceAccess.grant(email: "dev@example.com")
+            let controller = try await makeBoundController(consent: false)
+            #expect(await controller.routeCommandPaletteQuery("show slow queries") == .gateClosed(.needsConsent))
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1))) func paletteRespectsAIBeingOffForTheConnection() async throws {
+        try await withCleanGrant {
+            AppleIntelligenceAccess.grant(email: "dev@example.com")
+            let controller = try await makeBoundController()
+            controller.enabledForConnection = false
+            #expect(await controller.routeCommandPaletteQuery("show slow queries") == .gateClosed(.disabledForConnection))
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1))) func paletteUsesTheOnDeviceModelWhenItIsPreferred() async throws {
+        try await withCleanGrant {
+            AppleIntelligenceAccess.grant(email: "dev@example.com")
+            try await withOnDeviceToggle(true) {
+                let controller = try await makeBoundController()
+                controller.makeOnDeviceProvider = { ScriptedOnDeviceModel(reply: "Nothing to open for that.") }
+                #expect(await controller.routeCommandPaletteQuery("show slow queries") == .reply("Nothing to open for that."))
+            }
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1))) func paletteWithOnDeviceOffAndNoLicenseSendsNothing() async throws {
+        try await withCleanGrant {
+            AppleIntelligenceAccess.grant(email: "dev@example.com")
+            try await withOnDeviceToggle(false) {
+                let license = makeLicense()
+                let controller = try await makeBoundController(license: license)
+                let outcome = await controller.routeCommandPaletteQuery("show slow queries")
+                #expect(outcome == .reply(L("On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on in AI settings, or add a trial, license, or credit in License settings.")))
+                #expect(license.lastError == nil, "no trial request may have been attempted")
+            }
+        }
+    }
 }

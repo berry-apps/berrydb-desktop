@@ -733,6 +733,7 @@
 /* follow-up: prepareSend() found nowhere to route a turn (Apple-Intelligence-only access with on-device off, and no real license to fall back to) */
 "Editing needs cloud AI — on-device doesn't support it yet. Add a trial, license, or credit in License settings to edit this message." = "Editing needs cloud AI — on-device doesn't support it yet. Add a trial, license, or credit in License settings to edit this message.";
 "On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on above, or add a trial, license, or credit in License settings to use cloud AI instead." = "On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on above, or add a trial, license, or credit in License settings to use cloud AI instead.";
+"On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on in AI settings, or add a trial, license, or credit in License settings." = "On-device AI is off, and there's no trial or license for cloud AI. Turn on-device back on in AI settings, or add a trial, license, or credit in License settings.";
 "Use Free On-Device Instead" = "Use Free On-Device Instead";
 "This Mac supports Apple Intelligence — skip the trial and run AI on-device for free." = "This Mac supports Apple Intelligence — skip the trial and run AI on-device for free.";
 

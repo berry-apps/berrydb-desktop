@@ -10,7 +10,10 @@ struct CommandPaletteView: View {
  /// NL routing fallback for when no local keyword matches
     /// `AIPanelController.routeCommandPaletteQuery`. `performed` lets this
     /// view dismiss deterministically instead of parsing `reply`'s text.
-    let onAskAI: (String) async -> (performed: Bool, reply: String?)
+    let onAskAI: (String) async -> AIPanelController.CommandPaletteOutcome
+    /// Shows the AI panel, which explains why the AI gate is closed and
+    /// offers the way to open it.
+    let onOpenAIPanel: () -> Void
 
     @State private var query = ""
     @State private var selectedID: String?
@@ -123,12 +126,16 @@ struct CommandPaletteView: View {
         aiMessage = nil
         let text = query
         Task {
-            let result = await onAskAI(text)
+            let outcome = await onAskAI(text)
             isAsking = false
-            if result.performed {
+            switch outcome {
+            case .performed:
                 onCancel()
-            } else {
-                aiMessage = result.reply ?? L("Couldn't find a matching action.")
+            case .gateClosed:
+                onCancel()
+                onOpenAIPanel()
+            case .reply(let reply):
+                aiMessage = reply ?? L("Couldn't find a matching action.")
             }
         }
     }
