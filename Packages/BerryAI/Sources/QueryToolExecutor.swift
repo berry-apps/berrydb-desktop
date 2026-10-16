@@ -245,6 +245,10 @@ public final class QueryToolExecutor: AIToolExecutor {
 
     private let executionDeadlineSeconds: TimeInterval?
 
+    /// The clock every tool deadline is measured against. Injected so a test
+    /// can move time past a deadline without waiting for it.
+    private let now: @Sendable () -> Date
+
     public init(
         session: Session? = nil,
         catalog: SchemaCatalog? = nil,
@@ -266,7 +270,8 @@ public final class QueryToolExecutor: AIToolExecutor {
         /// Test-only override for `aiQueryTimeoutSeconds`'s default — a real
         /// 90s wait isn't practical in a test.
         queryTimeoutSeconds: TimeInterval = 90,
-        executionDeadlineSeconds: TimeInterval? = 110
+        executionDeadlineSeconds: TimeInterval? = 110,
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.session = session
         self.catalog = catalog
@@ -287,6 +292,7 @@ public final class QueryToolExecutor: AIToolExecutor {
         self.readOnlyRoute = readOnlyRoute
         self.aiQueryTimeoutSeconds = queryTimeoutSeconds
         self.executionDeadlineSeconds = executionDeadlineSeconds
+        self.now = now
     }
 
  /// The tools this executor advertises to the gateway.
@@ -580,18 +586,18 @@ public final class QueryToolExecutor: AIToolExecutor {
         guard let sql, !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .failed("run_sql requires 'sql'")
         }
-        let startTime = Date()
+        let startTime = now()
         let maxDuration = executionDeadlineSeconds
         let durationLabel = (maxDuration ?? 110) > 0 ? "\(Int(maxDuration ?? 110))s" : "110s"
-        if let maxDuration, Date().timeIntervalSince(startTime) >= maxDuration {
+        if let maxDuration, now().timeIntervalSince(startTime) >= maxDuration {
             return .failed("Execution stopped: tool deadline (\(durationLabel)) exceeded")
         }
-        let remainingForApproval = maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
+        let remainingForApproval = maxDuration.map { max(0, $0 - now().timeIntervalSince(startTime)) }
         let decision = await approve(sql, timeoutSeconds: remainingForApproval)
         guard decision != .denied else { return .denied }
         guard lease.isValid else { return .denied }
 
-        let remainingForQuery = maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
+        let remainingForQuery = maxDuration.map { max(0, $0 - now().timeIntervalSince(startTime)) }
         if let remaining = remainingForQuery, remaining <= 0 {
             return .failed("Execution stopped: tool deadline (\(durationLabel)) exceeded")
         }
@@ -634,10 +640,10 @@ public final class QueryToolExecutor: AIToolExecutor {
         // Built here from a quoted table name and a LIMIT, so no model text
         // reaches it: it runs without a card, on the read-only connection
         // when it can and otherwise on the session's own connection.
-        let startTime = Date()
+        let startTime = now()
         let maxDuration = executionDeadlineSeconds
         func remaining() -> TimeInterval? {
-            maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
+            maxDuration.map { max(0, $0 - now().timeIntervalSince(startTime)) }
         }
         do {
             let route = try await route(for: session, within: maxDuration, deadline: maxDuration ?? 110)
@@ -711,26 +717,26 @@ public final class QueryToolExecutor: AIToolExecutor {
         }
         var results: [[String: Any]] = []
         var stoppedEarly = false
-        let startTime = Date()
+        let startTime = now()
         let maxDuration = executionDeadlineSeconds
         let durationLabel = (maxDuration ?? 110) > 0 ? "\(Int(maxDuration ?? 110))s" : "110s"
         for sql in statements {
-            if let maxDuration, Date().timeIntervalSince(startTime) >= maxDuration {
+            if let maxDuration, now().timeIntervalSince(startTime) >= maxDuration {
                 stoppedEarly = true
                 results.append(["sql": sql, "error": "Execution stopped: tool deadline (\(durationLabel)) exceeded"])
                 break
             }
-            let remainingForApproval = maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
+            let remainingForApproval = maxDuration.map { max(0, $0 - now().timeIntervalSince(startTime)) }
             let decision = await approve(sql, timeoutSeconds: remainingForApproval)
             guard decision != .denied else { stoppedEarly = true; break }
-            if let maxDuration, Date().timeIntervalSince(startTime) >= maxDuration {
+            if let maxDuration, now().timeIntervalSince(startTime) >= maxDuration {
                 stoppedEarly = true
                 results.append(["sql": sql, "error": "Execution stopped: tool deadline (\(durationLabel)) exceeded"])
                 break
             }
             guard lease.isValid else { return .denied }
 
-            let remainingForQuery = maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
+            let remainingForQuery = maxDuration.map { max(0, $0 - now().timeIntervalSince(startTime)) }
             if let remaining = remainingForQuery, remaining <= 0 {
                 stoppedEarly = true
                 results.append(["sql": sql, "error": "Execution stopped: tool deadline (\(durationLabel)) exceeded"])
@@ -774,18 +780,18 @@ public final class QueryToolExecutor: AIToolExecutor {
         // would surface a second, invisible, blocking NSAlert instead.
         if case .typedConfirm = danger { return .denied }
 
-        let startTime = Date()
+        let startTime = now()
         let maxDuration = executionDeadlineSeconds
         let durationLabel = (maxDuration ?? 110) > 0 ? "\(Int(maxDuration ?? 110))s" : "110s"
-        if let maxDuration, Date().timeIntervalSince(startTime) >= maxDuration {
+        if let maxDuration, now().timeIntervalSince(startTime) >= maxDuration {
             return .failed("Execution stopped: tool deadline (\(durationLabel)) exceeded")
         }
 
-        let remainingForApproval = maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
+        let remainingForApproval = maxDuration.map { max(0, $0 - now().timeIntervalSince(startTime)) }
         guard await gate.approve(sql: sql, danger: danger, autoApprovable: false, timeoutSeconds: remainingForApproval ?? 110) else { return .denied }
         guard lease.isValid else { return .denied }
 
-        let remainingForQuery = maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
+        let remainingForQuery = maxDuration.map { max(0, $0 - now().timeIntervalSince(startTime)) }
         if let remaining = remainingForQuery, remaining <= 0 {
             return .failed("Execution stopped: tool deadline (\(durationLabel)) exceeded")
         }
@@ -1298,7 +1304,7 @@ public final class QueryToolExecutor: AIToolExecutor {
     ) async throws -> [String: Any]? {
         let maxDuration = executionDeadlineSeconds
         func remaining() -> TimeInterval? {
-            maxDuration.map { max(0, $0 - Date().timeIntervalSince(startTime)) }
+            maxDuration.map { max(0, $0 - now().timeIntervalSince(startTime)) }
         }
         guard decision == .autoRun, let session else {
             return try await drainSample(
