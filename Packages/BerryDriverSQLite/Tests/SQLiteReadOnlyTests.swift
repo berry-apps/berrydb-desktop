@@ -159,4 +159,25 @@ struct SQLiteReadOnlyTests {
             #expect(blockComment == [[.int(1)]])
         }
     }
+
+    @Test func parametersBindInOrder() async throws {
+        try await withOpened { _, readOnly in
+            let rows = try await drain(readOnly.executeReadOnly(
+                "SELECT ?, ?, ?, ?, ? IS NULL", parameters: [.int(9_000_000_000), .double(2.5), .bool(true), .text("x"), .null],
+                timeout: .seconds(5)
+            ))
+            #expect(rows == [[.int(9_000_000_000), .double(2.5), .int(1), .text("x"), .int(1)]])
+        }
+    }
+
+    @Test func aParameterCountMismatchFails() async throws {
+        try await withOpened { _, readOnly in
+            await #expect(throws: DriverError.self) {
+                try await drain(readOnly.executeReadOnly("SELECT ?, ?", parameters: [.int(1)], timeout: .seconds(5)))
+            }
+            await #expect(throws: DriverError.self) {
+                try await drain(readOnly.executeReadOnly("SELECT ?", parameters: [.int(1), .int(2)], timeout: .seconds(5)))
+            }
+        }
+    }
 }

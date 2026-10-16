@@ -233,9 +233,17 @@ extension SQLiteConnection: ReadOnlyExecuting {
     /// SQLite has no per-statement time limit; `timeout` is left to the
     /// caller, whose cancel interrupts this connection's own handle.
     public nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error> {
+        executeReadOnly(sql, parameters: [], timeout: timeout)
+    }
+
+    public nonisolated func executeReadOnly(
+        _ sql: String,
+        parameters: [SQLParameter],
+        timeout: Duration
+    ) -> AsyncThrowingStream<ResultEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                await self.runReadOnly(sql: sql, continuation: continuation)
+                await self.runReadOnly(sql: sql, parameters: parameters, continuation: continuation)
             }
             continuation.onTermination = { termination in
                 if case .cancelled = termination {
@@ -249,7 +257,7 @@ extension SQLiteConnection: ReadOnlyExecuting {
     /// A text the allowlist refuses (`ReadOnlyAllowlist.sqlite`) never
     /// reaches the database: `PRAGMA query_only = OFF` would turn the mode
     /// off, and ATTACH runs while the mode is on.
-    private func runReadOnly(sql: String, continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation) async {
+    private func runReadOnly(sql: String, parameters: [SQLParameter], continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation) async {
         if let refusal = ReadOnlyAllowlist.sqlite.refusal(of: sql) {
             continuation.finish(throwing: refusal)
             return
@@ -293,6 +301,30 @@ extension SQLiteConnection: ReadOnlyExecuting {
             continuation.yield(.complete(QueryStats(rowsAffected: nil, duration: clock.now - started)))
             continuation.finish()
             return
+        }
+        // An unbound placeholder reads as NULL (https://www.sqlite.org/c3ref/bind_blob.html),
+        // so a count that does not match is refused instead of run.
+        guard Int(sqlite3_bind_parameter_count(stmt)) == parameters.count else {
+            continuation.finish(throwing: DriverError.queryFailed(
+                message: "The statement has \(sqlite3_bind_parameter_count(stmt)) placeholders and \(parameters.count) parameters were given.",
+                code: nil
+            ))
+            return
+        }
+        for (offset, parameter) in parameters.enumerated() {
+            let index = Int32(offset + 1)
+            // SQLite has no boolean type (https://www.sqlite.org/datatype3.html#boolean_datatype), hence 0/1.
+            let rc: Int32 = switch parameter {
+            case .null: sqlite3_bind_null(stmt, index)
+            case .bool(let value): sqlite3_bind_int64(stmt, index, value ? 1 : 0)
+            case .int(let value): sqlite3_bind_int64(stmt, index, value)
+            case .double(let value): sqlite3_bind_double(stmt, index, value)
+            case .text(let value): sqlite3_bind_text(stmt, index, value, -1, SQLITE_TRANSIENT)
+            }
+            guard rc == SQLITE_OK else {
+                continuation.finish(throwing: currentError(db))
+                return
+            }
         }
         guard await step(stmt, db: db, clock: clock, started: started, continuation: continuation) else { return }
         continuation.finish()
