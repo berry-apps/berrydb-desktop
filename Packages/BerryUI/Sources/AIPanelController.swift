@@ -755,7 +755,7 @@ public final class AIPanelController {
     public func makeSchemaEmbeddingTransport() -> SchemaEmbeddingTransport {
         let client = AIClient(
             baseURL: backendURL,
-            token: { LicenseManager.apiToken() ?? "dev-token" },
+            token: { [apiToken] in apiToken() ?? "dev-token" },
             reauthenticate: { [license] in await license.syncFromBackend() }
         )
         return SchemaEmbeddingTransport(transport: client, release: { client.invalidateSession() })
@@ -815,6 +815,17 @@ public final class AIPanelController {
     /// licensed routes: a real license needs a signed license file and a
     /// Keychain token, neither of which a test may write.
     var licenseStatus: () -> LicenseStatus
+
+    /// The AI service's bearer token, read again for every request so a token
+    /// replaced after a re-sync is picked up. Replaceable so a test never
+    /// reads the login Keychain, where `LicenseManager.apiToken()` looks.
+    var apiToken: @Sendable () -> String? = { LicenseManager.apiToken() }
+
+    /// Fetches the AI balance the panel's footer shows. Replaceable so a test
+    /// that binds the panel sends no request to the AI service.
+    var fetchBalance: @Sendable (_ token: String, _ backendURL: URL) async -> Balance? = { token, backendURL in
+        await Balance.fetch(token: token, backendURL: backendURL)
+    }
 
     /// Whether Apple's on-device model can run on this Mac, and the model a
     /// local turn runs on. Replaceable so tests can exercise the on-device
@@ -885,7 +896,7 @@ public final class AIPanelController {
         enabledForConnection = saved?.enabled ?? (hasConnection && !isProduction)
         isRestoring = false
 
-        guard session != nil || dataSourceSession != nil, LicenseManager.apiToken() != nil else {
+        guard session != nil || dataSourceSession != nil, apiToken() != nil else {
             aiSession = nil
             executor = nil
             return
@@ -1058,7 +1069,7 @@ public final class AIPanelController {
         // still perfectly valid.
         let transport = AIClient(
             baseURL: backendURL,
-            token: { LicenseManager.apiToken() ?? "dev-token" },
+            token: { [apiToken] in apiToken() ?? "dev-token" },
             reauthenticate: { [license] in await license.syncFromBackend() },
  // AI Database Coach — a global preference,
             // not per-connection (how the user likes things explained
@@ -1212,7 +1223,7 @@ public final class AIPanelController {
         let router = ToolRouter(routes: routes)
         let transport = AIClient(
             baseURL: backendURL,
-            token: { LicenseManager.apiToken() ?? "dev-token" },
+            token: { [apiToken] in apiToken() ?? "dev-token" },
             reauthenticate: { [license] in await license.syncFromBackend() }
         )
         let dialect: String
@@ -1547,8 +1558,8 @@ public final class AIPanelController {
            Date().timeIntervalSince(lastQuotaRefreshAttempt) < Self.quotaRefreshInterval {
             return
         }
-        guard let token = LicenseManager.apiToken() else { return }
-        guard let fetched = await Balance.fetch(token: token, backendURL: backendURL) else { return }
+        guard let token = apiToken() else { return }
+        guard let fetched = await fetchBalance(token, backendURL) else { return }
         balance = fetched
         lastQuotaRefreshAttempt = Date()
     }

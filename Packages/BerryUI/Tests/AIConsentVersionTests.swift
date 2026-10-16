@@ -40,6 +40,7 @@ struct AIConsentVersionTests {
             store: try BerryStore(path: ":memory:")
         )
         controller.licenseStatus = { .trial(daysLeft: 5) }
+        controller.useOfflineAccount()
         controller.loadSettings = { _ in saved }
         controller.saveSettings = { _, settings in saves.value = settings }
         controller.bind(session: try await makeSQLiteSession(), catalog: nil, objects: [], profileID: profileID)

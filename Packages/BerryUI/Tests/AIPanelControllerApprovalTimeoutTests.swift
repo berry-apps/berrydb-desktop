@@ -13,10 +13,12 @@ struct AIPanelControllerApprovalTimeoutTests {
     private func makeController() throws -> AIPanelController {
         let client = LicenseClient(baseURL: URL(string: "https://example.invalid")!)
         let license = LicenseManager(client: client)
-        return AIPanelController(
+        let controller = AIPanelController(
             license: license, backendURL: URL(string: "https://example.invalid")!,
             store: try BerryStore(path: ":memory:")
         )
+        controller.useOfflineAccount()
+        return controller
     }
 
     @Test func unattendedApprovalTimesOutAndClearsPendingApproval() async throws {
