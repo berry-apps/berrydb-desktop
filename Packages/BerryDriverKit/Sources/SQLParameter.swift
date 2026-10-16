@@ -26,7 +26,10 @@ import Foundation
 ///   placeholder is refused, because SQLite numbers it by where it first
 ///   appears, and so is a `?NNN` numbering that skips a number, which
 ///   leaves a parameter bound to nothing
-///   (https://www.sqlite.org/c3ref/bind_blob.html).
+///   (https://www.sqlite.org/c3ref/bind_blob.html). A bare `?` among `?NNN`
+///   placeholders is refused too: like a skipped number it has no name
+///   (https://www.sqlite.org/c3ref/bind_parameter_name.html), so the two
+///   cannot be told apart.
 public enum SQLParameter: Sendable, Hashable {
     case null
     case bool(Bool)
