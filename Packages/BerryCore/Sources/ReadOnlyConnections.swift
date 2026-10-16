@@ -578,6 +578,12 @@ actor PooledReadOnlyConnection: ReadOnlyExecuting {
     }
 
     nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error> {
+        executeReadOnly(sql, parameters: [], timeout: timeout)
+    }
+
+    nonisolated func executeReadOnly(
+        _ sql: String, parameters: [SQLParameter], timeout: Duration
+    ) -> AsyncThrowingStream<ResultEvent, Error> {
         let base = base
         let statements = statements
         return AsyncThrowingStream { continuation in
@@ -588,7 +594,7 @@ actor PooledReadOnlyConnection: ReadOnlyExecuting {
             }
             let forward = Task {
                 do {
-                    for try await event in base.executeReadOnly(sql, timeout: timeout) {
+                    for try await event in base.executeReadOnly(sql, parameters: parameters, timeout: timeout) {
                         continuation.yield(event)
                     }
                     // A cancelled consumer ends the driver's stream without

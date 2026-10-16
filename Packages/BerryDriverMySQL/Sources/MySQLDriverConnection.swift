@@ -36,7 +36,8 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
     /// Held by a read-only statement from its first control statement to its
     /// COMMIT, so two read-only statements never share one transaction: the
     /// COMMIT of one would leave the other running in none. Only
-    /// `prepareReadOnly()` and `executeReadOnly(_:timeout:)` take it.
+    /// `prepareReadOnly()` and `executeReadOnly(_:parameters:timeout:)`, which
+    /// `executeReadOnly(_:timeout:)` calls, take it.
     private let turn = ConnectionTurn()
     /// Awaited between a read-only statement's preamble and the statement.
     /// That window is a few round trips wide and nothing on the server can
@@ -546,9 +547,10 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
 ///
 /// `execute(_:)`, `ping()`, `queryAll(_:)` and the introspector do not take
 /// the connection's turn, so a connection prepared with `prepareReadOnly()`
-/// runs its statements through `executeReadOnly(_:timeout:)` only: a
-/// statement sent another way while a read-only transaction is open runs
-/// inside it, and its own COMMIT would end that transaction.
+/// runs its statements through `executeReadOnly(_:timeout:)` or
+/// `executeReadOnly(_:parameters:timeout:)` only: a statement sent another
+/// way while a read-only transaction is open runs inside it, and its own
+/// COMMIT would end that transaction.
 extension MySQLDriverConnection: ReadOnlyExecuting {
     /// Seconds a statement waits for a metadata lock, such as one held by an
     /// uncommitted ALTER of the user's, before it fails

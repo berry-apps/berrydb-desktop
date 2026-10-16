@@ -461,6 +461,23 @@ struct ReadOnlyConnectionsTests {
         }
     }
 
+    /// Parameters go through a lease to the pool's connection unchanged;
+    /// without them the statement runs with none.
+    @Test func aLeasedConnectionPassesParametersOn() async throws {
+        let script = ROScript()
+        let session = await Self.session(script: script)
+        try await Self.withPool { pool in
+            let lease = try await pool.lease(for: session)
+
+            for try await _ in lease.connection.executeReadOnly("SELECT ?, ?", parameters: [.int(7), .text("x")], timeout: .seconds(5)) {}
+            for try await _ in lease.connection.executeReadOnly("SELECT 2", timeout: .seconds(5)) {}
+
+            #expect(await script.readOnlyStatements == ["SELECT ?, ?", "SELECT 2"])
+            #expect(await script.readOnlyParameters == [[.int(7), .text("x")], []])
+            await lease.finish(failed: false)
+        }
+    }
+
     /// Session IDs are never reused, so the pool remembers only the last 64
     /// closed ones.
     @Test func theLastSixtyFourClosedSessionsAreRemembered() async throws {
@@ -764,6 +781,7 @@ actor ROScript {
     private(set) var statementCancels = 0
     private(set) var configs: [ConnectionConfig] = []
     private(set) var readOnlyStatements: [String] = []
+    private(set) var readOnlyParameters: [[SQLParameter]] = []
     private(set) var plainStatements: [String] = []
 
     init(
@@ -794,7 +812,11 @@ actor ROScript {
         if let prepareFailure { throw DriverError.readOnlyUnavailable(prepareFailure) }
     }
 
-    func ranReadOnly(_ sql: String) { readOnlyStatements.append(sql) }
+    func ranReadOnly(_ sql: String, parameters: [SQLParameter]) {
+        readOnlyStatements.append(sql)
+        readOnlyParameters.append(parameters)
+    }
+
     func ranPlain(_ sql: String) { plainStatements.append(sql) }
     func statementCancelled() { statementCancels += 1 }
     func pinged() { pings += 1 }
@@ -848,13 +870,19 @@ actor ROScriptedConnection: ReadOnlyExecuting {
         }
     }
 
+    nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error> {
+        executeReadOnly(sql, parameters: [], timeout: timeout)
+    }
+
     /// Holds at the script's statement gate when it has one, and records a
     /// cancel the way a driver's cancel path would see it.
-    nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error> {
+    nonisolated func executeReadOnly(
+        _ sql: String, parameters: [SQLParameter], timeout: Duration
+    ) -> AsyncThrowingStream<ResultEvent, Error> {
         let script = script
         return AsyncThrowingStream { continuation in
             let task = Task {
-                await script.ranReadOnly(sql)
+                await script.ranReadOnly(sql, parameters: parameters)
                 if let gate = script.statementGate { await gate.pass() }
                 continuation.yield(.complete(QueryStats(rowsAffected: nil, duration: .zero)))
                 continuation.finish()

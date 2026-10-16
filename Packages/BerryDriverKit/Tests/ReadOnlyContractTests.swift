@@ -69,8 +69,8 @@ struct ReadOnlyContractTests {
     }
 }
 
-/// A connection with only the unparameterized read-only call, as
-/// `PooledReadOnlyConnection` and the test doubles are.
+/// A connection with only the unparameterized read-only call, as several
+/// test doubles are.
 private actor UnparameterizedConnection: ReadOnlyExecuting {
     nonisolated let id = UUID()
     private(set) var ran: [String] = []

@@ -70,7 +70,9 @@ public protocol ReadOnlyExecuting: DriverConnection {
 
     /// Runs exactly one statement as `executeReadOnly(_:timeout:)` does, with
     /// `parameters` bound to its placeholders in order. A count that does
-    /// not match the placeholders fails the statement.
+    /// not match the placeholders fails the statement, and so does a
+    /// placeholder the driver cannot bind by position; `SQLParameter` says
+    /// which placeholders each driver reads and how it sends a value.
     nonisolated func executeReadOnly(
         _ sql: String, parameters: [SQLParameter], timeout: Duration
     ) -> AsyncThrowingStream<ResultEvent, Error>
@@ -80,7 +82,9 @@ extension ReadOnlyExecuting {
     /// For a connection that has no bind path of its own: without
     /// parameters it runs the statement as `executeReadOnly(_:timeout:)`
     /// does; with any, it refuses rather than run the text with its
-    /// placeholders unbound.
+    /// placeholders unbound. A conformer whose `executeReadOnly(_:timeout:)`
+    /// forwards to this method must implement this method itself, or the
+    /// two call each other until the stack runs out.
     public nonisolated func executeReadOnly(
         _ sql: String, parameters: [SQLParameter], timeout: Duration
     ) -> AsyncThrowingStream<ResultEvent, Error> {
