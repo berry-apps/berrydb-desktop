@@ -298,13 +298,24 @@ struct MySQLReadOnlyTests {
         #expect(rows.first?.map(\.displayString) == ["?", "7"])
     }
 
-    /// A read-only connection whose session adds `mode` to its SQL mode
-    /// before `prepareReadOnly()` reads it.
-    private func readOnlyConnection(addingMode mode: String) async throws -> MySQLDriverConnection {
+    /// A read-only connection whose session runs `setup` before
+    /// `prepareReadOnly()` reads its settings.
+    private func readOnlyConnection(after setup: String) async throws -> MySQLDriverConnection {
         let connection = try await MySQLDriverConnection(config: config())
-        try await drain(connection.execute("SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',\(mode)')"))
+        try await drain(connection.execute(setup))
         try await connection.prepareReadOnly()
         return connection
+    }
+
+    private func readOnlyConnection(addingMode mode: String) async throws -> MySQLDriverConnection {
+        try await readOnlyConnection(after: "SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',\(mode)')")
+    }
+
+    private static func isMariaDBServer() async -> Bool {
+        guard TestServer.mysql != nil, let connection = try? await MySQLDriverConnection(config: config()) else { return false }
+        let rows = try? await connection.queryAll("SELECT VERSION()")
+        await connection.close()
+        return rows?.first?.first?.displayString?.contains("MariaDB") == true
     }
 
     private func refusal(of sql: String, _ parameters: [SQLParameter], on connection: MySQLDriverConnection) async -> String? {
@@ -384,6 +395,79 @@ struct MySQLReadOnlyTests {
         ))
 
         #expect(rows.first?.map(\.displayString) == [#"a\"#, "7"])
+    }
+
+    /// The server ends the text at a NUL after `;`: unrefused, this ran as
+    /// `SELECT ?;` with two parameters and returned 65544 (verified against
+    /// MySQL 8.4.11 and MariaDB 11.8.9).
+    @Test func aTextWithANulIsRefused() async throws {
+        let connection = try await readOnlyConnection(after: "DO 0")
+        defer { Task { await connection.close() } }
+
+        let refused = await refusal(of: "SELECT ?;\u{0}?", [.int(1), .int(2)], on: connection)
+        let withoutTheNul = try await drain(connection.executeReadOnly("SELECT ?;", parameters: [.int(1)], timeout: .seconds(30)))
+
+        #expect(refused == "Parameters are not bound in a text that holds a NUL character; write the values into the statement instead.")
+        #expect(withoutTheNul.first?.map(\.displayString) == ["1"])
+    }
+
+    /// MariaDB's MSSQL mode quotes an identifier with `[…]`: unrefused, this
+    /// returned 65544 (verified against MariaDB 11.8.9).
+    @Test(.enabled("MSSQL is a MariaDB SQL mode; MySQL 8.4.11 refuses it") { await isMariaDBServer() })
+    func underMSSQLModeParametersAreRefused() async throws {
+        let connection = try await readOnlyConnection(after: "SET SESSION sql_mode = 'MSSQL'")
+        defer { Task { await connection.close() } }
+
+        let refused = await refusal(of: "SELECT ? AS p, 1 AS [a?]", [.int(1), .int(2)], on: connection)
+        let withoutParameters = try await drain(connection.executeReadOnly("SELECT 1 AS [a?]", timeout: .seconds(30)))
+
+        #expect(refused == "Parameters are not bound under the session's MSSQL SQL mode; write the values into the statement instead.")
+        #expect(withoutParameters.first?.map(\.displayString) == ["1"])
+    }
+
+    /// MariaDB's ORACLE mode adds placeholders this count does not see,
+    /// such as `:1`. No statement was found that it then accepts with a
+    /// mismatch, since one with more placeholders than parameters fails at
+    /// the server (verified against MariaDB 11.8.9), but parameters are
+    /// refused there rather than relying on that.
+    @Test(.enabled("ORACLE is a MariaDB SQL mode; MySQL 8.4.11 refuses it") { await isMariaDBServer() })
+    func underOracleModeParametersAreRefused() async throws {
+        let connection = try await readOnlyConnection(after: "SET SESSION sql_mode = 'ORACLE'")
+        defer { Task { await connection.close() } }
+
+        let refused = await refusal(of: "SELECT ? AS a FROM DUAL", [.int(1)], on: connection)
+        let withoutParameters = try await drain(connection.executeReadOnly("SELECT 1 AS a FROM DUAL", timeout: .seconds(30)))
+
+        #expect(refused == "Parameters are not bound under the session's ORACLE SQL mode; write the values into the statement instead.")
+        #expect(withoutParameters.first?.map(\.displayString) == ["1"])
+    }
+
+    /// In gbk and big5 the last of the UTF-8 bytes of U+4E2D and the
+    /// backslash after them read as one character, so the quote after the
+    /// backslash ends the string: unrefused, this returned 65544 (verified
+    /// against MySQL 8.4.11 and MariaDB 11.8.9).
+    @Test func withAMultiByteClientCharacterSetParametersAreRefused() async throws {
+        for characterSet in ["gbk", "big5"] {
+            let connection = try await readOnlyConnection(after: "SET SESSION character_set_client = '\(characterSet)'")
+            let refused = await refusal(of: #"SELECT ? AS p, '中\' AS x, '?' AS y"#, [.int(1), .int(2)], on: connection)
+            let withoutParameters = try await drain(connection.executeReadOnly("SELECT 1 AS x", timeout: .seconds(30)))
+            await connection.close()
+
+            #expect(
+                refused == "Parameters are not bound with the session's \(characterSet) client character set; "
+                    + "write the values into the statement instead."
+            )
+            #expect(withoutParameters.first?.map(\.displayString) == ["1"], "\(characterSet)")
+        }
+    }
+
+    @Test func withASingleByteClientCharacterSetParametersBind() async throws {
+        let connection = try await readOnlyConnection(after: "SET SESSION character_set_client = 'latin1'")
+        defer { Task { await connection.close() } }
+
+        let rows = try await drain(connection.executeReadOnly("SELECT ? AS p, 'x' AS q", parameters: [.int(1)], timeout: .seconds(30)))
+
+        #expect(rows.first?.map(\.displayString) == ["1", "x"])
     }
 
     @Test func aBoolBinds() async throws {

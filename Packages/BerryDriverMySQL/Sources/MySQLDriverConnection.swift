@@ -33,10 +33,10 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
     private var perStatementForm: PerStatementForm?
     /// Set by `boundEachStatement(by:)`.
     private var statementTimeout: Duration?
-    /// How the read-only path counts placeholders, from the session's SQL
-    /// mode as `prepareReadOnly()` read it. A connection never prepared
-    /// counts as the server's default mode reads.
-    private var placeholderQuoting = MySQLPlaceholders.Quoting.serverDefault
+    /// What the read-only path's placeholder count knows of the session, as
+    /// `prepareReadOnly()` read it. A connection never prepared counts as
+    /// the server's default session reads.
+    private var placeholderSession = MySQLPlaceholders.Session.serverDefault
     /// Held by a read-only statement from its first control statement to its
     /// COMMIT, so two read-only statements never share one transaction: the
     /// COMMIT of one would leave the other running in none. Only
@@ -588,14 +588,15 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
     /// holds the session's default
     /// (https://dev.mysql.com/doc/refman/8.4/en/set-transaction.html).
     ///
-    /// The session's SQL mode is read with the lock wait, for the
-    /// placeholder count (`MySQLPlaceholders.Quoting`), and holds for every
-    /// statement after it: the connection then runs only statements that
-    /// start like a read, a SELECT cannot assign a system variable, and a
-    /// stored function's `SET SESSION sql_mode` is gone once it returns
-    /// (verified against MySQL 8.4.11 and MariaDB 11.8.9). A SET_VAR hint
-    /// does not change how its own statement is read (verified against
-    /// MySQL 8.4.11), and MariaDB reads the hint as a comment.
+    /// The session's SQL mode and client character set are read with the
+    /// lock wait, for the placeholder count (`MySQLPlaceholders.Session`),
+    /// and hold for every statement after it: the connection then runs only
+    /// statements that start like a read, a SELECT cannot assign a system
+    /// variable, and a stored function's `SET SESSION sql_mode` or
+    /// `SET character_set_client` is gone once it returns (verified against
+    /// MySQL 8.4.11 and MariaDB 11.8.9). A SET_VAR hint does not change how
+    /// its own statement is read (verified against MySQL 8.4.11), and
+    /// MariaDB reads the hint as a comment.
     public func prepareReadOnly() async throws {
         guard !isClosed else { throw DriverError.notConnected }
         await turn.take()
@@ -603,7 +604,9 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
         let settings: [[BerryValue]]
         do {
             _ = try await textQuery("SET SESSION lock_wait_timeout = \(Self.readOnlyLockWaitSeconds)")
-            settings = try await textQuery("SELECT @@SESSION.lock_wait_timeout, @@SESSION.sql_mode")
+            settings = try await textQuery(
+                "SELECT @@SESSION.lock_wait_timeout, @@SESSION.sql_mode, @@SESSION.character_set_client"
+            )
             for control in Self.readOnlyPreamble {
                 _ = try await textQuery(control)
             }
@@ -612,17 +615,32 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
             _ = try? await textQuery("ROLLBACK")
             throw DriverError.readOnlyUnavailable(Self.mapError(error).detail)
         }
-        guard let row = settings.first, row.count == 2,
-              row[0].displayString == String(Self.readOnlyLockWaitSeconds) else {
-            throw DriverError.readOnlyUnavailable("lock_wait_timeout did not read back as \(Self.readOnlyLockWaitSeconds)")
-        }
-        switch row[1] {
-        case .text(let sqlMode): placeholderQuoting = MySQLPlaceholders.Quoting(sqlMode: sqlMode)
-        case .bytes(let sqlMode): placeholderQuoting = MySQLPlaceholders.Quoting(sqlMode: String(decoding: sqlMode, as: UTF8.self))
-        default: throw DriverError.readOnlyUnavailable("sql_mode could not be read")
-        }
+        placeholderSession = try Self.readOnlySession(from: settings)
         if (try? await textQuery("DO 1; DO 1")) != nil {
             throw DriverError.readOnlyUnavailable("the server ran two statements sent as one")
+        }
+    }
+
+    /// The session `prepareReadOnly()` reads back, from its one row of the
+    /// lock wait, the SQL mode and the client character set.
+    static func readOnlySession(from settings: [[BerryValue]]) throws -> MySQLPlaceholders.Session {
+        guard settings.count == 1, let row = settings.first, row.count == 3 else {
+            throw DriverError.readOnlyUnavailable("the session settings did not read back as one row of three values")
+        }
+        guard row[0].displayString == String(Self.readOnlyLockWaitSeconds) else {
+            throw DriverError.readOnlyUnavailable("lock_wait_timeout did not read back as \(Self.readOnlyLockWaitSeconds)")
+        }
+        guard let sqlMode = text(of: row[1]), let characterSet = text(of: row[2]) else {
+            throw DriverError.readOnlyUnavailable("sql_mode and character_set_client did not read back as text")
+        }
+        return MySQLPlaceholders.Session(sqlMode: sqlMode, characterSetClient: characterSet)
+    }
+
+    private static func text(of value: BerryValue) -> String? {
+        switch value {
+        case .text(let text): text
+        case .bytes(let bytes): String(decoding: bytes, as: UTF8.self)
+        default: nil
         }
     }
 
@@ -664,17 +682,12 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
         }
         // Without parameters the server refuses a placeholder that has
         // nothing bound (verified against MySQL 8.4.11 and MariaDB 11.8.9),
-        // so only a statement with parameters is counted, and a text that
-        // `MySQLPlaceholders` miscounts, as on a connection whose SQL mode
-        // was never read, still runs without them.
-        if !parameters.isEmpty {
-            let placeholders = MySQLPlaceholders.count(in: statement, quoting: placeholderQuoting)
-            guard placeholders == parameters.count else {
-                continuation.finish(throwing: DriverError.placeholderCountMismatch(
-                    placeholders: placeholders, parameters: parameters.count
-                ))
-                return
-            }
+        // so only a statement with parameters is counted or refused, and a
+        // text that `MySQLPlaceholders` cannot count still runs without them.
+        if !parameters.isEmpty,
+           let refusal = MySQLPlaceholders.refusal(of: statement, parameters: parameters.count, in: placeholderSession) {
+            continuation.finish(throwing: refusal)
+            return
         }
         guard !isClosed else {
             continuation.finish(throwing: DriverError.notConnected)

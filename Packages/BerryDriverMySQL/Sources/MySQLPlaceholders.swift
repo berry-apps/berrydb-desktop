@@ -1,3 +1,5 @@
+import BerryDriverKit
+
 /// Counts the `?` placeholders of a statement the way MySQL and MariaDB read
 /// them, so that a statement given a different number of parameters is
 /// refused before it runs. MySQLNIO 1.9.1 sends every bind it is given
@@ -26,10 +28,11 @@
 /// given two returned 65544 (verified against MySQL 8.4.11 and MariaDB
 /// 11.8.9).
 ///
-/// MariaDB's ORACLE mode also reads `:1` as a placeholder, which this count
-/// does not see. Such a statement holds more placeholders than counted and
-/// fails at the server, as one given too few parameters does (verified
-/// against MariaDB 11.8.9).
+/// Where the count cannot follow how the server reads the text, a statement
+/// given parameters is refused instead (`refusal(of:parameters:in:)`): a
+/// text with a NUL character, a session in MariaDB's MSSQL or ORACLE mode,
+/// and a client character set in which a multi-byte character can end in
+/// the byte of a backslash (`Session`).
 enum MySQLPlaceholders {
     /// How quotes read in a session, from its SQL mode
     /// (https://dev.mysql.com/doc/refman/8.4/en/sql-mode.html). Verified
@@ -60,6 +63,70 @@ enum MySQLPlaceholders {
             backslashEscapes = !modes.contains("NO_BACKSLASH_ESCAPES")
             doubleQuotesIdentifier = modes.contains("ANSI_QUOTES")
         }
+    }
+
+    /// What `prepareReadOnly()` read of a session that the count depends on.
+    /// Verified against MariaDB 11.8.9: MSSQL mode quotes an identifier with
+    /// `[…]`, so `SELECT ?, 1 AS [a?]` given two parameters returned 65544;
+    /// ORACLE mode also reads `:1` as a placeholder. MySQL 8.4.11 refuses
+    /// both modes. The server reads a statement in the session's client
+    /// character set
+    /// (https://dev.mysql.com/doc/refman/8.4/en/charset-connection.html). In
+    /// gbk and big5 the last of the UTF-8 bytes E4 B8 AD (U+4E2D) and a
+    /// backslash after them read as one character, so the quote after the
+    /// backslash ends the string: `SELECT ?, 'X\', '?'` with U+4E2D for X,
+    /// given two parameters, returned 65544 (verified against MySQL 8.4.11
+    /// and MariaDB 11.8.9). Only the UTF-8 sets, whose multi-byte characters
+    /// hold no ASCII byte, and sets without multi-byte characters are
+    /// counted.
+    struct Session: Equatable, Sendable {
+        /// What in the session reads text in a way the count does not follow.
+        enum Unfollowed: Equatable, Sendable {
+            case sqlMode(String)
+            case characterSet(String)
+        }
+
+        var quoting = Quoting.serverDefault
+        var unfollowed: Unfollowed?
+
+        /// The session the server starts, for a connection never prepared.
+        static let serverDefault = Session()
+
+        static let countedCharacterSets: Set<String> = ["utf8mb4", "utf8mb3", "utf8", "latin1", "ascii", "binary"]
+
+        init() {}
+
+        init(sqlMode: String, characterSetClient: String) {
+            quoting = Quoting(sqlMode: sqlMode)
+            let modes = Set(sqlMode.split(separator: ",").map(String.init))
+            let characterSet = characterSetClient.lowercased()
+            if let mode = ["MSSQL", "ORACLE"].first(where: modes.contains) {
+                unfollowed = .sqlMode(mode)
+            } else if !Self.countedCharacterSets.contains(characterSet) {
+                unfollowed = .characterSet(characterSet)
+            }
+        }
+    }
+
+    /// The error a statement given `parameters` parameters ends with before
+    /// it runs, or nil when its placeholders match them. A NUL is refused in
+    /// every session: the server ended `SELECT ?;` followed by a NUL and a
+    /// `?` at the NUL, and that text given two parameters returned 65544
+    /// (verified against MySQL 8.4.11 and MariaDB 11.8.9).
+    static func refusal(of sql: String, parameters: Int, in session: Session) -> DriverError? {
+        if sql.utf8.contains(0) { return notBound("in a text that holds a NUL character") }
+        switch session.unfollowed {
+        case .sqlMode(let mode)?: return notBound("under the session's \(mode) SQL mode")
+        case .characterSet(let name)?: return notBound("with the session's \(name) client character set")
+        case nil: break
+        }
+        let placeholders = count(in: sql, quoting: session.quoting)
+        guard placeholders != parameters else { return nil }
+        return DriverError.placeholderCountMismatch(placeholders: placeholders, parameters: parameters)
+    }
+
+    private static func notBound(_ reason: String) -> DriverError {
+        .queryFailed(message: "Parameters are not bound \(reason); write the values into the statement instead.", code: nil)
     }
 
     static func count(in sql: String, quoting: Quoting = .serverDefault) -> Int {

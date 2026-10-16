@@ -16,6 +16,10 @@ import Foundation
 ///   (https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_execute.html):
 ///   text as VAR_STRING, an integer as LONGLONG, a double as DOUBLE and a
 ///   boolean as an unsigned TINY of 1 or 0 (MySQLNIO 1.9.1, `MySQLData`).
+///   The driver counts the placeholders itself, and refuses parameters
+///   where it cannot follow how the server reads the text: a text with a
+///   NUL character, MariaDB's MSSQL and ORACLE modes, and a client
+///   character set with multi-byte characters other than UTF-8.
 /// - SQLite, `?` or `?1`, `?2`, …: in its own storage classes, a boolean as
 ///   the integer 1 or 0, since SQLite has no boolean type
 ///   (https://www.sqlite.org/datatype3.html#boolean_datatype). A named

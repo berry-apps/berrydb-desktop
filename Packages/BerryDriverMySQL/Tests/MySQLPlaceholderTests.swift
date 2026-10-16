@@ -1,3 +1,5 @@
+import BerryDriverKit
+import Foundation
 import Testing
 
 @testable import BerryDriverMySQL
@@ -120,5 +122,84 @@ struct MySQLPlaceholderTests {
         #expect(MySQLPlaceholders.count(in: "SELECT ? -- it's\n, ?") == 2)
         #expect(MySQLPlaceholders.count(in: "SELECT ? /* it's */ , ?") == 2)
         #expect(MySQLPlaceholders.count(in: "SELECT ? # it's\n, ?") == 2)
+    }
+}
+
+@Suite("MySQL parameter refusals")
+struct MySQLParameterRefusalTests {
+    private func refusal(_ sql: String, _ parameters: Int, _ session: MySQLPlaceholders.Session = .serverDefault) -> String? {
+        MySQLPlaceholders.refusal(of: sql, parameters: parameters, in: session)?.detail
+    }
+
+    @Test func aMatchingCountIsNotRefused() {
+        #expect(refusal("SELECT ?, ?", 2) == nil)
+    }
+
+    @Test func aMismatchedCountIsRefused() {
+        #expect(refusal("SELECT ?", 2) == "The statement has 1 placeholder and 2 parameters were given.")
+    }
+
+    /// The server ends the text at a NUL after `;`, and a comment at a NUL,
+    /// where this count reads on.
+    @Test func aTextWithANulIsRefusedInEverySession() {
+        let message = "Parameters are not bound in a text that holds a NUL character; write the values into the statement instead."
+        #expect(refusal("SELECT ?;\u{0}?", 2) == message)
+        #expect(refusal("SELECT ?;\u{0}?", 1) == message)
+        #expect(refusal("SELECT '\u{0}', ?", 1, MySQLPlaceholders.Session(sqlMode: "", characterSetClient: "utf8mb4")) == message)
+    }
+
+    @Test func modesThatQuoteOtherwiseAreRefused() {
+        for mode in ["MSSQL", "ORACLE"] {
+            let session = MySQLPlaceholders.Session(sqlMode: "PIPES_AS_CONCAT,ANSI_QUOTES,\(mode),NO_KEY_OPTIONS", characterSetClient: "utf8mb4")
+            #expect(
+                refusal("SELECT ?", 1, session)
+                    == "Parameters are not bound under the session's \(mode) SQL mode; write the values into the statement instead."
+            )
+        }
+    }
+
+    /// A character set whose multi-byte characters can end in the byte of a
+    /// backslash, read here as an escape.
+    @Test func aMultiByteClientCharacterSetIsRefused() {
+        for characterSet in ["gbk", "big5", "sjis", "cp932", "gb18030", "ujis"] {
+            let session = MySQLPlaceholders.Session(sqlMode: "", characterSetClient: characterSet)
+            #expect(
+                refusal("SELECT ?", 1, session)
+                    == "Parameters are not bound with the session's \(characterSet) client character set; write the values into the statement instead."
+            )
+        }
+    }
+
+    @Test func characterSetsWithoutMultiByteCharactersOrInUTF8AreCounted() {
+        for characterSet in ["utf8mb4", "utf8mb3", "utf8", "latin1", "ascii", "binary", "UTF8MB4"] {
+            let session = MySQLPlaceholders.Session(sqlMode: "ANSI_QUOTES", characterSetClient: characterSet)
+            #expect(refusal(#"SELECT "a\", ?"#, 1, session) == nil, "\(characterSet)")
+            #expect(session.quoting.doubleQuotesIdentifier)
+        }
+    }
+
+    /// What `prepareReadOnly()` reads back: the lock wait, the SQL mode and
+    /// the client character set, in one row.
+    @Test func theSessionIsReadFromOneRowOfThreeValues() throws {
+        let session = try MySQLDriverConnection.readOnlySession(from: [[.int(5), .text("NO_BACKSLASH_ESCAPES"), .text("gbk")]])
+        #expect(session == MySQLPlaceholders.Session(sqlMode: "NO_BACKSLASH_ESCAPES", characterSetClient: "gbk"))
+        #expect(try MySQLDriverConnection.readOnlySession(from: [[.text("5"), .bytes(Data("ANSI_QUOTES".utf8)), .text("utf8mb4")]])
+            == MySQLPlaceholders.Session(sqlMode: "ANSI_QUOTES", characterSetClient: "utf8mb4"))
+    }
+
+    @Test func aReadBackOfTheWrongShapeSaysSo() {
+        let shapes: [[[BerryValue]]] = [
+            [],
+            [[.int(5), .text("")]],
+            [[.int(5), .text(""), .text("utf8mb4")], [.int(5), .text(""), .text("utf8mb4")]],
+        ]
+        for settings in shapes {
+            let error = #expect(throws: DriverError.self) { try MySQLDriverConnection.readOnlySession(from: settings) }
+            #expect(error?.detail.contains("did not read back as one row of three values") == true, "\(String(describing: error))")
+        }
+        let lockWait = #expect(throws: DriverError.self) {
+            try MySQLDriverConnection.readOnlySession(from: [[.int(7), .text(""), .text("utf8mb4")]])
+        }
+        #expect(lockWait?.detail.contains("lock_wait_timeout did not read back as 5") == true, "\(String(describing: lockWait))")
     }
 }
