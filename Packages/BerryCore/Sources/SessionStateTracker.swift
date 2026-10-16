@@ -74,8 +74,10 @@ public final class SessionStateTracker: @unchecked Sendable {
                 state.isAutocommitOff = true
                 state.hasOpenTransaction = true
             case .turnsAutocommitOn:
+                // Commits only when autocommit was off; inside a transaction
+                // opened with autocommit on it ends nothing.
+                if state.isAutocommitOff { state.hasOpenTransaction = false }
                 state.isAutocommitOff = false
-                state.hasOpenTransaction = false
             }
         }
         states[sessionID] = state
@@ -152,7 +154,8 @@ public final class SessionStateTracker: @unchecked Sendable {
     /// and a COMMIT or ROLLBACK does not end that: the server opens the next
     /// transaction at once, holding rows another connection cannot see. So the
     /// session stays hidden until autocommit is turned back on, which commits
-    /// the open transaction (https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html).
+    /// the open transaction if autocommit was off, and only then
+    /// (https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html).
     private static func autocommitEffect(_ value: String?) -> Effect? {
         switch value {
         case "0", "OFF", "FALSE": .turnsAutocommitOff

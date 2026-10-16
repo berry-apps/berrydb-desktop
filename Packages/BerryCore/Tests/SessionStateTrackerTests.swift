@@ -138,6 +138,19 @@ struct SessionStateTrackerTests {
         #expect(tracker.state(for: session) == State())
     }
 
+    /// `SET autocommit = 1` commits only when autocommit was off
+    /// (https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html), so
+    /// inside a transaction opened with autocommit on it ends nothing.
+    @Test func turningAutocommitOnWhileItIsOnKeepsTheTransactionOpen() {
+        let tracker = SessionStateTracker()
+        let session = UUID()
+        tracker.recordSucceeded("BEGIN", sessionID: session)
+
+        tracker.recordSucceeded("SET autocommit = 1", sessionID: session)
+
+        #expect(tracker.state(for: session) == State(hasOpenTransaction: true))
+    }
+
     @Test(arguments: [
         "COMMIT", "commit;", "ROLLBACK", "ROLLBACK WORK", "END", "END TRANSACTION", "ABORT",
         "COMMIT AND NO CHAIN", "ROLLBACK AND NO CHAIN", "ROLLBACK WORK AND NO CHAIN",
