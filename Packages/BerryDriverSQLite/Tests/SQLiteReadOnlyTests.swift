@@ -172,12 +172,15 @@ struct SQLiteReadOnlyTests {
 
     @Test func aParameterCountMismatchFails() async throws {
         try await withOpened { _, readOnly in
-            await #expect(throws: DriverError.self) {
+            let tooFew = await #expect(throws: DriverError.self) {
                 try await drain(readOnly.executeReadOnly("SELECT ?, ?", parameters: [.int(1)], timeout: .seconds(5)))
             }
-            await #expect(throws: DriverError.self) {
+            let tooMany = await #expect(throws: DriverError.self) {
                 try await drain(readOnly.executeReadOnly("SELECT ?", parameters: [.int(1), .int(2)], timeout: .seconds(5)))
             }
+
+            #expect(tooFew?.detail == "The statement has 2 placeholders and 1 parameter was given.")
+            #expect(tooMany?.detail == "The statement has 1 placeholder and 2 parameters were given.")
         }
     }
 }

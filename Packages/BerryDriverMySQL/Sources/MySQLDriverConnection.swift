@@ -641,6 +641,20 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
             continuation.finish(throwing: refusal)
             return
         }
+        // Without parameters the server refuses a placeholder that has
+        // nothing bound (verified against MySQL 8.4.11 and MariaDB 11.8.9),
+        // so only a statement with parameters is counted, and a text that
+        // `MySQLPlaceholders` miscounts, such as a string ending in a
+        // backslash under NO_BACKSLASH_ESCAPES, still runs without them.
+        if !parameters.isEmpty {
+            let placeholders = MySQLPlaceholders.count(in: statement)
+            guard placeholders == parameters.count else {
+                continuation.finish(throwing: DriverError.placeholderCountMismatch(
+                    placeholders: placeholders, parameters: parameters.count
+                ))
+                return
+            }
+        }
         guard !isClosed else {
             continuation.finish(throwing: DriverError.notConnected)
             return

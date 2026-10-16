@@ -257,14 +257,54 @@ struct MySQLReadOnlyTests {
         #expect(rows.first?.map(\.displayString) == ["9000000000", "2.5", "1", "x"])
     }
 
-    @Test func aParameterCountMismatchFails() async throws {
+    /// MySQLNIO 1.9.1 sends every bind it is given, and the server reads the
+    /// values by its own count of placeholders: unrefused, this statement
+    /// returned 65544 (verified against MySQL 8.4.11 and MariaDB 11.8.9).
+    @Test func tooManyParametersAreRefused() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let error = await #expect(throws: DriverError.self) {
+            try await drain(opened.readOnly.executeReadOnly("SELECT ?", parameters: [.int(1), .int(2)], timeout: .seconds(30)))
+        }
+
+        #expect(refusal(error) == "The statement has 1 placeholder and 2 parameters were given.", "\(String(describing: error))")
+        #expect(try await readOnly("SELECT 1", on: opened).first?.first?.displayString == "1")
+    }
+
+    @Test func tooFewParametersAreRefusedWithACount() async throws {
         let opened = try await open()
         defer { Task { await close(opened) } }
 
         let error = await #expect(throws: DriverError.self) {
             try await drain(opened.readOnly.executeReadOnly("SELECT ?, ?", parameters: [.int(1)], timeout: .seconds(30)))
         }
-        #expect(refusal(error) != nil, "\(String(describing: error))")
+
+        #expect(refusal(error) == "The statement has 2 placeholders and 1 parameter was given.", "\(String(describing: error))")
+        #expect(try await readOnly("SELECT 1", on: opened).first?.first?.displayString == "1")
+    }
+
+    /// The columns are named apart because the driver reads a cell by its
+    /// column's name (MySQLNIO 1.9.1, `MySQLRow.column(_:table:)`), and
+    /// unnamed, `'?'` and `?` would both be named `?`.
+    @Test func aQuestionMarkInAStringOrCommentIsNotAPlaceholder() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT '?' AS literal, ? AS bound /* ? */ -- ?\n", parameters: [.int(7)], timeout: .seconds(30)
+        ))
+
+        #expect(rows.first?.map(\.displayString) == ["?", "7"])
+    }
+
+    @Test func aBoolBinds() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let rows = try await drain(opened.readOnly.executeReadOnly("SELECT ?", parameters: [.bool(true)], timeout: .seconds(30)))
+
+        #expect(rows.first?.map(\.displayString) == ["1"])
     }
 
     /// On MariaDB the statement is wrapped in SET STATEMENT ... FOR, which

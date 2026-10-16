@@ -304,10 +304,10 @@ extension SQLiteConnection: ReadOnlyExecuting {
         }
         // An unbound placeholder reads as NULL (https://www.sqlite.org/c3ref/bind_blob.html),
         // so a count that does not match is refused instead of run.
-        guard Int(sqlite3_bind_parameter_count(stmt)) == parameters.count else {
-            continuation.finish(throwing: DriverError.queryFailed(
-                message: "The statement has \(sqlite3_bind_parameter_count(stmt)) placeholders and \(parameters.count) parameters were given.",
-                code: nil
+        let placeholders = Int(sqlite3_bind_parameter_count(stmt))
+        guard placeholders == parameters.count else {
+            continuation.finish(throwing: DriverError.placeholderCountMismatch(
+                placeholders: placeholders, parameters: parameters.count
             ))
             return
         }
