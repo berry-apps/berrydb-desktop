@@ -116,15 +116,23 @@ public struct MCPProjectResolver: Sendable {
         self.loadProfile = Self.storeProfileLoader(store: store, credentialResolver: credentialResolver)
     }
 
+    /// The drivers `MCPConnectionFactories.enforceSQLReadOnly` opens a
+    /// read-only session for; the helper reads secrets for no other.
+    private static let liveReadDrivers: Set<DriverID> = [.postgres, .mysql, .sqlite]
+
     /// Loads a saved profile and its secrets from `store`; nil when no such
     /// profile exists. `isProduction` follows the profile's environment label.
+    /// A profile whose driver has no read-only session the helper can open
+    /// throws `unsupportedDriver` before its secrets are read, so its
+    /// Keychain items are never asked for and no connection is attempted,
+    /// whatever check a caller made before.
     public static func storeProfileLoader(
         store: BerryStore,
         credentialResolver: MCPCredentialResolver
     ) -> @Sendable (UUID) async throws -> MCPConnectionProfile? {
         { profileID in
             guard let profile = try store.allProfiles().first(where: { $0.id == profileID }) else { return nil }
-            guard let driverID = DriverID(rawValue: profile.driverID) else {
+            guard let driverID = DriverID(rawValue: profile.driverID), liveReadDrivers.contains(driverID) else {
                 throw MCPProjectResolutionError.unsupportedDriver(profile.driverID)
             }
             let secrets = try await credentialResolver.resolve(profileID)

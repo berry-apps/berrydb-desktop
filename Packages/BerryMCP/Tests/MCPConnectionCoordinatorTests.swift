@@ -259,6 +259,48 @@ struct MCPConnectionCoordinatorTests {
         #expect(await unassigned.tracker.opens == 0)
     }
 
+    /// A driver without a read-only session the helper can open is refused
+    /// from the stored profile alone: its secrets are never read, so no
+    /// Keychain prompt appears, and no connection or tunnel is attempted.
+    @Test(arguments: [DriverID.redis, .sqlserver, .dynamodb, .mongodb, .qdrant, .elasticsearch])
+    func aDriverWithoutLiveReadsIsRefusedBeforeItsSecretsAreRead(driver: DriverID) async throws {
+        let store = try BerryStore(path: ":memory:")
+        let profile = ConnectionProfile(driverID: driver.rawValue, name: "Other", host: "db.internal.example")
+        try store.save(profile)
+        let reads = CredentialReads()
+        let resolver = MCPProjectResolver(
+            loadProject: {
+                MCPVerifiedProject(
+                    project: MCPProject(
+                        name: "P", isEnabled: true,
+                        profiles: [MCPProfileAccess(profileID: profile.id, liveRead: true)]
+                    ),
+                    liveReadProfileIDs: [profile.id]
+                )
+            },
+            profile: MCPProjectResolver.storeProfileLoader(
+                store: store,
+                credentialResolver: MCPCredentialResolver { _ in
+                    await reads.record()
+                    return ConnectionSecrets()
+                }
+            )
+        )
+        let tracker = Tracker()
+        let coordinator = MCPConnectionCoordinator(
+            resolver: resolver,
+            sqlFactory: { _ in
+                _ = await tracker.opened()
+                return MCPSQLSession(connection: FakeSQLConnection(), lifecycle: MCPConnectionLifecycle(cancel: {}, closeConnection: {}))
+            }
+        )
+        await #expect(throws: MCPProjectResolutionError.unsupportedDriver(driver.rawValue)) {
+            try await coordinator.withSQLSession(requestID: "other", profileID: profile.id) { _ in () }
+        }
+        #expect(await reads.count == 0)
+        #expect(await tracker.opens == 0)
+    }
+
     @Test func missingProfileIsRejectedBeforeOpening() async throws {
         let fixture = Fixture(profileExists: false)
         await #expect(throws: MCPProjectResolutionError.self) {
@@ -633,6 +675,11 @@ private actor Authorization {
 private actor Flag {
     var value = false
     func set() { value = true }
+}
+
+private actor CredentialReads {
+    var count = 0
+    func record() { count += 1 }
 }
 
 private actor AsyncGate {
