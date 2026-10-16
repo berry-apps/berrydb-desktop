@@ -58,9 +58,14 @@ this user's files or Keychain), a compromised BerryDB binary.
 | Mechanism | Boundary against the primary adversary? | Reason |
 |---|---|---|
 | Keychain ACL on connection secrets | Yes | Only BerryDB-signed binaries can read items; the helper never emits secrets. |
-| Helper-side capability policy (read-only, limits, no `Scan`) | Yes | Enforced in signed code the agent cannot modify. |
-| Database session read-only + least-privilege DB user | Yes | Enforced by the database itself. |
-| Per-profile live-read setting and project settings | Yes, via integrity check | Stored in a user-writable file; an HMAC keyed from Keychain is what stops the agent from enabling itself. |
+| Helper-side tool surface (read-only tools, no `Scan`) | Yes | Enforced in signed code the agent cannot modify. |
+| Database read-only session for live reads | Yes | Enforced by the database itself, and the only boundary on what a live read can change (see [Read-only enforcement layers](#read-only-enforcement-layers)). |
+| SQL read policy | No (defense in depth) | Refuses a statement before it reaches the server, but it is lexical: it cannot see a function behind a view, an operator or a cast. |
+| Privilege check when live reads are turned on | No (warning) | Settings warns when the connection's database user can write; the owner can confirm and turn live reads on anyway. |
+| SELECT-only database user | Yes, where configured | Enforced by the database. Recommended, not required: nothing checks for it except the warning above. |
+| Default result limits (rows, size, time) | Yes | Enforced in signed code. |
+| Stricter limits of a production-labeled connection | No | The label is stored outside the sealed fields, so these limits guard against mistakes, not against a same-user process that edits the store file (see [Limits](#limits)). |
+| Per-profile live-read setting, redacted columns and project settings | Yes, via integrity check | Stored in a user-writable file; an HMAC keyed from Keychain is what stops the agent from enabling itself. |
 | Project selection (which project a process serves) | No | A process can pass `--project` with any project ID or name it can read from the store, and a repository's own agent configuration can name any project. An interactive Claude Code session asks before it uses a repository's `.mcp.json` and Codex reads a repository's `.codex/config.toml` only for a trusted project, but `claude -p` runs, Agent SDK sessions and cloud sessions load a repository's `.mcp.json` without asking ([Project scope](https://code.claude.com/docs/en/mcp#project-scope)). Selection prevents mistakes and limits exposure; it does not stop a hostile agent or repository from reaching another project's already-enabled capabilities. |
 | Audit log | No (visibility only) | The agent can edit it. |
 
@@ -633,9 +638,11 @@ Input: `connection_id`, `sql` (at most 65,536 characters), optional `parameters`
 database, so it declares `openWorldHint: true` and no `idempotentHint`.
 
 `DangerGuard`, `QueryToolExecutor.isReadOnly`, and `dangerPreconfirmed: true`
-are never used in MCP code. Enforcement is layered; the database's own
-read-only mode and the privilege check run when live reads are turned on are
-the boundary, the SQL policy parser is defense in depth:
+are never used in MCP code. Enforcement is layered. The database's own
+read-only mode is the boundary. The privilege check is a warning shown
+before live reads turn on, which the owner can confirm and go past, and the
+SQL read policy is defense in depth that refuses a statement before it
+reaches the server:
 
 1. **Database session read-only, per statement.** PostgreSQL: `BEGIN READ
    ONLY` with a statement timeout and a lock timeout. MySQL/MariaDB: a
@@ -644,23 +651,29 @@ the boundary, the SQL policy parser is defense in depth:
    in the normal mode, not `SQLITE_OPEN_READONLY`, so `query_only` is what
    refuses a write. A driver that cannot enforce this does not advertise the
    tool.
-2. **Privilege check, run by Settings when live reads are turned on.** It
-   looks for a role that could write, including through inherited roles,
-   `rds_superuser` membership, ownership, or column-level write privileges
-   ([gate G3](../mcp-server-compatibility.md#g3-privilege-checks) verified its
-   queries). A role that can write produces a warning the user must
-   acknowledge before live reads turn on; the helper does not refuse such a
-   role, so the recommended setup is a read-only database user, and for a
+2. **Privilege check, a warning before live reads turn on.** When a save
+   turns live reads on for a PostgreSQL or MySQL/MariaDB connection,
+   Settings first checks whether its database user could write, including
+   through inherited roles, `rds_superuser` membership, ownership, or
+   column-level write privileges (the queries and how they were verified are
+   in [Privilege checks](../mcp-server-compatibility.md#g3-privilege-checks)).
+   A user that can write, or a check that cannot run or cannot read the
+   server's answer, produces a warning; the owner can confirm it and turn
+   live reads on anyway, and the helper never refuses such a user. A
+   SELECT-only database user is recommended, not required, and for a
    production database a read replica. SQLite has no equivalent step.
-3. **Statement allowlist and SQL policy parser, before the server sees the
-   text.** Exactly one statement, an enumerated read grammar, a function
-   allowlist, deny-by-default for anything not understood. It cannot see
-   function invocation written without `name(` syntax — attribute notation,
-   operators, casts, `search_path` shadowing, views, or defaults — so it stops
-   side-effecting calls the session-level guard misses (e.g. `dblink`,
-   file-reading functions, `pg_sleep`, advisory locks) rather than
-   substituting for layers 1–2. The MCP role must lack `CREATE` on its
-   `search_path` schemas.
+3. **Statement allowlist and SQL policy parser, defense in depth before
+   the server sees the text.** Exactly one statement, an enumerated read
+   grammar, a function allowlist, deny-by-default for anything not
+   understood. It cannot see function invocation written without `name(`
+   syntax — attribute notation, operators, casts, `search_path` shadowing,
+   views, or defaults — so it stops side-effecting calls the session-level
+   guard misses (e.g. `dblink`, file-reading functions, `pg_sleep`, advisory
+   locks) rather than substituting for layer 1. Nothing requires the
+   PostgreSQL user to lack `CREATE` on the schemas in its `search_path`;
+   the privilege check reports it as `schema_create`. A user that has it
+   can create a function that shadows an allowlisted name, and only the
+   read-only session then refuses that function's writes.
 4. **Bound parameters.** Values go to the driver as parameters, never into the
    SQL text, and the helper checks the placeholder count against
    `parameters`. On MySQL/MariaDB the count cannot always be made reliable, so
@@ -671,6 +684,14 @@ the boundary, the SQL policy parser is defense in depth:
 
 DynamoDB `Query` is not available: `berrydb_execute_read_query` refuses a
 DynamoDB connection, and `Scan` and PartiQL are never issued from MCP code.
+
+Known limitation: on MySQL and MariaDB, `SELECT … INTO OUTFILE` and `INTO
+DUMPFILE` write a file on the database server from inside `START
+TRANSACTION READ ONLY` (verified against MySQL 8.4.11 and MariaDB 11.8.9
+with the read policy bypassed). For a database user with the `FILE`
+privilege, only the read policy, which refuses `INTO`, `OUTFILE` and
+`DUMPFILE`, and the server's `secure_file_priv` stop it. The privilege
+check lists `FILE` among its findings.
 
 Returned rows leave BerryDB: they go to the calling MCP host and from there
 potentially to that host's model provider; the server running locally does
@@ -693,6 +714,13 @@ stricter production-labeled limits below. The pane's per-connection **Live
 reads** switch exists for PostgreSQL, MySQL/MariaDB and SQLite connections;
 a save carries each profile's `liveRead` over from the verified editing
 copy, so a save never turns one on by itself.
+
+The production label is the connection's environment label, a display
+field stored outside the sealed fields (see the fingerprint above). Whether
+live reads are on, and which columns are redacted, are sealed; which row of
+the table applies is not. The stricter production limits therefore guard
+against mistakes, not against a process running as the same macOS user that
+can edit the store file and remove the label.
 
 | Limit | Default | Production-labeled profile |
 |---|---|---|
