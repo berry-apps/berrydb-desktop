@@ -31,8 +31,8 @@ import BerryDriverKit
 /// Where the count cannot follow how the server reads the text, a statement
 /// given parameters is refused instead (`refusal(of:parameters:in:)`): a
 /// text with a NUL character, a session in MariaDB's MSSQL or ORACLE mode,
-/// and a client character set in which a multi-byte character can end in
-/// the byte of a backslash (`Session`).
+/// and any client character set other than utf8mb4, utf8mb3, utf8, latin1,
+/// ascii and binary (`Session`).
 enum MySQLPlaceholders {
     /// How quotes read in a session, from its SQL mode
     /// (https://dev.mysql.com/doc/refman/8.4/en/sql-mode.html). Verified
@@ -76,9 +76,10 @@ enum MySQLPlaceholders {
     /// backslash after them read as one character, so the quote after the
     /// backslash ends the string: `SELECT ?, 'X\', '?'` with U+4E2D for X,
     /// given two parameters, returned 65544 (verified against MySQL 8.4.11
-    /// and MariaDB 11.8.9). Only the UTF-8 sets, whose multi-byte characters
-    /// hold no ASCII byte, and sets without multi-byte characters are
-    /// counted.
+    /// and MariaDB 11.8.9). The count follows only an allowed list of client
+    /// character sets: utf8mb4, utf8mb3 and utf8, whose multi-byte characters
+    /// hold no ASCII byte, and latin1, ascii and binary; every other set is
+    /// refused, single-byte ones included.
     struct Session: Equatable, Sendable {
         /// What in the session reads text in a way the count does not follow.
         enum Unfollowed: Equatable, Sendable {

@@ -341,11 +341,13 @@ extension SQLiteConnection: ReadOnlyExecuting {
     /// SQLite numbers `:name`, `@name` and `$name` by where each first
     /// appears, so in `SELECT $2, $1` the first value would go to `$2`, and
     /// `?2` alone makes two parameters, the first of which binds to nothing
-    /// (https://www.sqlite.org/c3ref/bind_blob.html). A bare `?` and an
-    /// unused number both have no name
-    /// (https://www.sqlite.org/c3ref/bind_parameter_name.html), so a bare
-    /// `?` among numbered ones is refused with the gap it cannot be told
-    /// from.
+    /// (https://www.sqlite.org/c3ref/bind_blob.html). A bare `?` takes the
+    /// number after the largest one before it
+    /// (https://www.sqlite.org/lang_expr.html#parameters); when no `?NNN`
+    /// names that number it has no name, like an unused number
+    /// (https://www.sqlite.org/c3ref/bind_parameter_name.html), and is
+    /// refused with the gap it cannot be told from, while `SELECT ?, ?1`
+    /// binds its one value to both.
     private static func placeholderRefusal(_ stmt: OpaquePointer) -> DriverError? {
         let count = sqlite3_bind_parameter_count(stmt)
         guard count > 0 else { return nil }

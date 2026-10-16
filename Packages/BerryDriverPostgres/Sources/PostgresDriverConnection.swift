@@ -275,14 +275,32 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
     /// - A number compares with a varchar column, which has no operator for
     ///   bigint, and a double with a numeric column exactly, where float8
     ///   compared each numeric rounded to a double.
-    /// - A double that is a whole number within Int64 goes as an integer:
-    ///   an integer column refuses `3.0`, as Swift writes the double, with
-    ///   "invalid input syntax for type integer", and float8 and numeric
-    ///   read `3` as well.
+    /// - A double that is a whole number goes as an integer where that is
+    ///   the same number (`text(of:)`): an integer column refuses `3.0`, as
+    ///   Swift writes the double, with "invalid input syntax for type
+    ///   integer", and float8 and numeric read `3` as well.
     /// - The cost: a parameter with nothing around it to give it a type is
     ///   read as text (`SELECT $1` returns the text `1`), and where text
     ///   does not fit, as in `$1 + $2`, the statement fails until a cast
     ///   gives the parameter a type (`$1::int8 + $2`).
+    /// The text a double is sent as. A whole number that is the same number
+    /// as Swift's shortest form of the double goes as an integer, which an
+    /// integer column reads and which float8 and numeric read as the same
+    /// value. Any other double keeps Swift's shortest form: a whole number
+    /// past 2^53 whose exact value differs from that form (2^60 + 1 as a
+    /// double prints as `1.152921504606847e+18`, exactly
+    /// 1152921504606846976) then reaches numeric as the decimal it reads
+    /// today, and negative zero keeps its sign, which float8 keeps (verified
+    /// against PostgreSQL 16.15: `'-0.0'::float8` is `-0`, `'0'::float8` is
+    /// `0`).
+    static func text(of value: Double) -> String {
+        let shortest = String(value)
+        guard !(value == 0 && value.sign == .minus), let integer = Int64(exactly: value),
+              Decimal(string: shortest) == Decimal(integer)
+        else { return shortest }
+        return String(integer)
+    }
+
     static func bindings(for parameters: [SQLParameter]) -> PostgresBindings {
         var bindings = PostgresBindings(capacity: parameters.count)
         for parameter in parameters {
@@ -290,7 +308,7 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
             case .null: bindings.appendNull()
             case .bool(let value): bindings.append(UntypedText(value: value ? "true" : "false"))
             case .int(let value): bindings.append(UntypedText(value: String(value)))
-            case .double(let value): bindings.append(UntypedText(value: Int64(exactly: value).map { String($0) } ?? String(value)))
+            case .double(let value): bindings.append(UntypedText(value: text(of: value)))
             case .text(let value): bindings.append(UntypedText(value: value))
             }
         }

@@ -18,18 +18,21 @@ import Foundation
 ///   boolean as an unsigned TINY of 1 or 0 (MySQLNIO 1.9.1, `MySQLData`).
 ///   The driver counts the placeholders itself, and refuses parameters
 ///   where it cannot follow how the server reads the text: a text with a
-///   NUL character, MariaDB's MSSQL and ORACLE modes, and a client
-///   character set with multi-byte characters other than UTF-8.
+///   NUL character, MariaDB's MSSQL and ORACLE modes, and any client
+///   character set other than utf8mb4, utf8mb3, utf8, latin1, ascii and
+///   binary.
 /// - SQLite, `?` or `?1`, `?2`, …: in its own storage classes, a boolean as
 ///   the integer 1 or 0, since SQLite has no boolean type
 ///   (https://www.sqlite.org/datatype3.html#boolean_datatype). A named
 ///   placeholder is refused, because SQLite numbers it by where it first
 ///   appears, and so is a `?NNN` numbering that skips a number, which
 ///   leaves a parameter bound to nothing
-///   (https://www.sqlite.org/c3ref/bind_blob.html). A bare `?` among `?NNN`
-///   placeholders is refused too: like a skipped number it has no name
-///   (https://www.sqlite.org/c3ref/bind_parameter_name.html), so the two
-///   cannot be told apart.
+///   (https://www.sqlite.org/c3ref/bind_blob.html). A bare `?` takes the
+///   number after the largest one before it
+///   (https://www.sqlite.org/lang_expr.html#parameters); when no `?NNN`
+///   names that number it has no name, like a skipped number
+///   (https://www.sqlite.org/c3ref/bind_parameter_name.html), and is
+///   refused, while one that shares a `?NNN`'s number binds that value.
 public enum SQLParameter: Sendable, Hashable {
     case null
     case bool(Bool)

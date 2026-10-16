@@ -24,6 +24,19 @@ struct PostgresReadOnlyStatementTests {
         #expect(PostgresDriverConnection.readOnlyPreamble(timeout: .zero)[1].contains("'statement_timeout', '1ms', true"))
     }
 
+    /// A whole number goes as an integer only where that integer is the
+    /// number Swift's shortest form names; otherwise, and for negative zero,
+    /// Swift's own form keeps the value numeric and float8 read.
+    @Test func aDoubleGoesAsAnIntegerOnlyWhereThatKeepsItsValue() {
+        #expect(PostgresDriverConnection.text(of: 3.0) == "3")
+        #expect(PostgresDriverConnection.text(of: -3.0) == "-3")
+        #expect(PostgresDriverConnection.text(of: 9_007_199_254_740_992) == "9007199254740992")
+        #expect(PostgresDriverConnection.text(of: 18_014_398_509_481_984) == "18014398509481984")
+        #expect(PostgresDriverConnection.text(of: 1_152_921_504_606_846_977) == "1.152921504606847e+18")
+        #expect(PostgresDriverConnection.text(of: -0.0) == "-0.0")
+        #expect(PostgresDriverConnection.text(of: 2.5) == "2.5")
+    }
+
     @Test func theApplicationNameIsSentAtStartup() {
         let config = ConnectionConfig(driver: .postgres, name: "p", host: "db")
 
