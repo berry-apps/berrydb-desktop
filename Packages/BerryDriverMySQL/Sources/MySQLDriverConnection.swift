@@ -33,6 +33,10 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
     private var perStatementForm: PerStatementForm?
     /// Set by `boundEachStatement(by:)`.
     private var statementTimeout: Duration?
+    /// How the read-only path counts placeholders, from the session's SQL
+    /// mode as `prepareReadOnly()` read it. A connection never prepared
+    /// counts as the server's default mode reads.
+    private var placeholderQuoting = MySQLPlaceholders.Quoting.serverDefault
     /// Held by a read-only statement from its first control statement to its
     /// COMMIT, so two read-only statements never share one transaction: the
     /// COMMIT of one would leave the other running in none. Only
@@ -583,14 +587,23 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
     /// a transaction has no variable to read back: `transaction_read_only`
     /// holds the session's default
     /// (https://dev.mysql.com/doc/refman/8.4/en/set-transaction.html).
+    ///
+    /// The session's SQL mode is read with the lock wait, for the
+    /// placeholder count (`MySQLPlaceholders.Quoting`), and holds for every
+    /// statement after it: the connection then runs only statements that
+    /// start like a read, a SELECT cannot assign a system variable, and a
+    /// stored function's `SET SESSION sql_mode` is gone once it returns
+    /// (verified against MySQL 8.4.11 and MariaDB 11.8.9). A SET_VAR hint
+    /// does not change how its own statement is read (verified against
+    /// MySQL 8.4.11), and MariaDB reads the hint as a comment.
     public func prepareReadOnly() async throws {
         guard !isClosed else { throw DriverError.notConnected }
         await turn.take()
         defer { turn.give() }
-        let lockWait: [[BerryValue]]
+        let settings: [[BerryValue]]
         do {
             _ = try await textQuery("SET SESSION lock_wait_timeout = \(Self.readOnlyLockWaitSeconds)")
-            lockWait = try await textQuery("SELECT @@SESSION.lock_wait_timeout")
+            settings = try await textQuery("SELECT @@SESSION.lock_wait_timeout, @@SESSION.sql_mode")
             for control in Self.readOnlyPreamble {
                 _ = try await textQuery(control)
             }
@@ -599,8 +612,14 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
             _ = try? await textQuery("ROLLBACK")
             throw DriverError.readOnlyUnavailable(Self.mapError(error).detail)
         }
-        guard lockWait.first?.first?.displayString == String(Self.readOnlyLockWaitSeconds) else {
+        guard let row = settings.first, row.count == 2,
+              row[0].displayString == String(Self.readOnlyLockWaitSeconds) else {
             throw DriverError.readOnlyUnavailable("lock_wait_timeout did not read back as \(Self.readOnlyLockWaitSeconds)")
+        }
+        switch row[1] {
+        case .text(let sqlMode): placeholderQuoting = MySQLPlaceholders.Quoting(sqlMode: sqlMode)
+        case .bytes(let sqlMode): placeholderQuoting = MySQLPlaceholders.Quoting(sqlMode: String(decoding: sqlMode, as: UTF8.self))
+        default: throw DriverError.readOnlyUnavailable("sql_mode could not be read")
         }
         if (try? await textQuery("DO 1; DO 1")) != nil {
             throw DriverError.readOnlyUnavailable("the server ran two statements sent as one")
@@ -646,10 +665,10 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
         // Without parameters the server refuses a placeholder that has
         // nothing bound (verified against MySQL 8.4.11 and MariaDB 11.8.9),
         // so only a statement with parameters is counted, and a text that
-        // `MySQLPlaceholders` miscounts, such as a string ending in a
-        // backslash under NO_BACKSLASH_ESCAPES, still runs without them.
+        // `MySQLPlaceholders` miscounts, as on a connection whose SQL mode
+        // was never read, still runs without them.
         if !parameters.isEmpty {
-            let placeholders = MySQLPlaceholders.count(in: statement)
+            let placeholders = MySQLPlaceholders.count(in: statement, quoting: placeholderQuoting)
             guard placeholders == parameters.count else {
                 continuation.finish(throwing: DriverError.placeholderCountMismatch(
                     placeholders: placeholders, parameters: parameters.count

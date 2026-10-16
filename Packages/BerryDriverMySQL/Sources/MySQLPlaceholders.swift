@@ -7,8 +7,8 @@
 /// error, on MySQL 8.4.11 and MariaDB 11.8.9.
 ///
 /// A `?` inside a string, a quoted identifier or a comment is not a
-/// placeholder. A string is quoted with `'` or `"`, a backslash escapes the
-/// character after it and a doubled quote stands for one
+/// placeholder. A string is quoted with `'`, or with `"` unless the session
+/// reads `"` as an identifier quote, and a doubled quote stands for one
 /// (https://dev.mysql.com/doc/refman/8.4/en/string-literals.html). An
 /// identifier is quoted with backticks, a doubled backtick stands for one,
 /// and a backslash is an ordinary character
@@ -18,17 +18,51 @@
 /// UTF-8 bytes, as MySQLNIO 1.9.1 sends it to a utf8mb4 connection, and no
 /// byte of a multi-byte UTF-8 character is ASCII.
 ///
-/// The count follows the server's default SQL mode. With NO_BACKSLASH_ESCAPES
-/// a backslash in a string is an ordinary character, and with ANSI_QUOTES a
-/// double-quoted text is an identifier, in which it is one too
-/// (https://dev.mysql.com/doc/refman/8.4/en/sql-mode.html). In a session
-/// with either mode the count can be wrong in either direction, and a wrong
-/// count can accept a mismatch. Verified against MySQL 8.4.11 and MariaDB
-/// 11.8.9 with NO_BACKSLASH_ESCAPES: `SELECT 'a\', '?'` holds no
-/// placeholder but counts one here, and the parameter given for it is
-/// ignored; `SELECT ?, 'a\', '?'` given two parameters returns 65544.
+/// Whether a backslash escapes, and what `"` quotes, follow the session's
+/// SQL mode (`Quoting`). Counted in the wrong mode, a statement with a
+/// mismatch can run: in a session with NO_BACKSLASH_ESCAPES, read with
+/// backslash escapes, `SELECT 'a\', '?'` counts one placeholder, holds
+/// none, and the parameter given for it was ignored; `SELECT ?, 'a\', '?'`
+/// given two returned 65544 (verified against MySQL 8.4.11 and MariaDB
+/// 11.8.9).
+///
+/// MariaDB's ORACLE mode also reads `:1` as a placeholder, which this count
+/// does not see. Such a statement holds more placeholders than counted and
+/// fails at the server, as one given too few parameters does (verified
+/// against MariaDB 11.8.9).
 enum MySQLPlaceholders {
-    static func count(in sql: String) -> Int {
+    /// How quotes read in a session, from its SQL mode
+    /// (https://dev.mysql.com/doc/refman/8.4/en/sql-mode.html). Verified
+    /// against MySQL 8.4.11 and MariaDB 11.8.9: with NO_BACKSLASH_ESCAPES a
+    /// backslash is an ordinary character in `'…'` and `"…"`; with
+    /// ANSI_QUOTES `"…"` is an identifier, in which a backslash is an
+    /// ordinary character and `""` stands for `"`, while a backslash still
+    /// escapes in `'…'`. A doubled quote stands for one in every mode.
+    struct Quoting: Equatable, Sendable {
+        /// A backslash escapes the character after it in a string; false
+        /// under NO_BACKSLASH_ESCAPES.
+        var backslashEscapes = true
+        /// `"…"` quotes an identifier rather than a string; true under
+        /// ANSI_QUOTES.
+        var doubleQuotesIdentifier = false
+
+        /// Neither mode, as the default SQL mode of MySQL 8.4.11 and of
+        /// MariaDB 11.8.9 reads.
+        static let serverDefault = Quoting()
+
+        init() {}
+
+        /// `sqlMode` as `@@SESSION.sql_mode` reads: its modes joined by
+        /// commas, a combination listed with the modes it sets, as MariaDB
+        /// 11.8.9 lists ORACLE with ANSI_QUOTES.
+        init(sqlMode: String) {
+            let modes = Set(sqlMode.split(separator: ",").map(String.init))
+            backslashEscapes = !modes.contains("NO_BACKSLASH_ESCAPES")
+            doubleQuotesIdentifier = modes.contains("ANSI_QUOTES")
+        }
+    }
+
+    static func count(in sql: String, quoting: Quoting = .serverDefault) -> Int {
         let bytes = Array(sql.utf8)
         var count = 0
         var index = 0
@@ -37,8 +71,11 @@ enum MySQLPlaceholders {
             case UInt8(ascii: "?"):
                 count += 1
                 index += 1
-            case UInt8(ascii: "'"), UInt8(ascii: "\""):
-                index = endOfQuoted(bytes, from: index, backslashEscapes: true)
+            case UInt8(ascii: "'"):
+                index = endOfQuoted(bytes, from: index, backslashEscapes: quoting.backslashEscapes)
+            case UInt8(ascii: "\""):
+                let escapes = quoting.backslashEscapes && !quoting.doubleQuotesIdentifier
+                index = endOfQuoted(bytes, from: index, backslashEscapes: escapes)
             case UInt8(ascii: "`"):
                 index = endOfQuoted(bytes, from: index, backslashEscapes: false)
             case UInt8(ascii: "#"):
