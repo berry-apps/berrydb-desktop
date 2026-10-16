@@ -94,6 +94,19 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// entry is not checked. Cleared by `reload()`.
     @Published public private(set) var privilegeStates: [UUID: PrivilegeState] = [:]
 
+    /// What the latest check of a profile ran on. `serial` lets only that
+    /// check set the profile's state; `endpoint` lets `save` discard a
+    /// result once the profile points at another server or account.
+    private struct PrivilegeCheck {
+        let serial: Int
+        let endpoint: ConnectionProfile
+    }
+
+    private var privilegeChecks: [UUID: PrivilegeCheck] = [:]
+    /// Never reset, so a check started before `reload()` cannot match the
+    /// serial of one started after it.
+    private var privilegeCheckSerial = 0
+
     @Published public private(set) var projects: [MCPProject] = []
     @Published public private(set) var profiles: [ConnectionProfile] = []
     /// Projects whose own integrity tag does not verify under the stored
@@ -154,19 +167,43 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         reload()
     }
 
-    /// Runs the privilege check of `profileID`, publishing `.checking` and
-    /// then the result: `.readOnlyRole` without findings, `.writableRole`
-    /// with them, `.failed` when the check throws. A profile no longer
-    /// listed is left alone.
+    /// Runs the privilege check of `profileID` on the profile as stored now,
+    /// publishing `.checking` and then the result: `.readOnlyRole` without
+    /// findings, `.writableRole` with them, `.failed` when the check throws.
+    /// A check that another check of the same profile, or `reload()`, has
+    /// superseded by the time it finishes sets nothing. A profile that is no
+    /// longer stored, or a store that cannot be read, is left alone.
     public func checkPrivileges(of profileID: UUID) async {
-        guard let profile = profiles.first(where: { $0.id == profileID }) else { return }
+        guard let profile = (try? store.allProfiles())?.first(where: { $0.id == profileID }) else { return }
+        privilegeCheckSerial += 1
+        let serial = privilegeCheckSerial
+        privilegeChecks[profileID] = PrivilegeCheck(serial: serial, endpoint: Self.endpoint(of: profile))
         privilegeStates[profileID] = .checking
+        let state: PrivilegeState
         do {
             let findings = try await privilegeChecker(profile)
-            privilegeStates[profileID] = findings.isEmpty ? .readOnlyRole : .writableRole(findings)
+            state = findings.isEmpty ? .readOnlyRole : .writableRole(findings)
         } catch {
-            privilegeStates[profileID] = .failed(error.localizedDescription)
+            state = .failed(error.localizedDescription)
         }
+        guard privilegeChecks[profileID]?.serial == serial else { return }
+        privilegeStates[profileID] = state
+    }
+
+    /// `profile` with the fields blanked that only label it: the ones the
+    /// store's integrity seal also leaves out of a profile's endpoint, since
+    /// they do not decide which server and account a connection reaches.
+    /// Every other field counts, so a connection field added to profiles
+    /// later invalidates a check by default.
+    nonisolated private static func endpoint(of profile: ConnectionProfile) -> ConnectionProfile {
+        var endpoint = profile
+        endpoint.name = ""
+        endpoint.groupName = nil
+        endpoint.envColor = nil
+        endpoint.sortOrder = 0
+        endpoint.createdAt = .distantPast
+        endpoint.historyEnabled = false
+        return endpoint
     }
 
     /// True for the drivers the helper serves live reads for, each opened in
@@ -269,6 +306,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     public func reload() {
         errorMessage = nil
         privilegeStates = [:]
+        privilegeChecks = [:]
         do {
             let stored = try store.mcpProjects()
             let key = keyStore.load()
@@ -326,8 +364,9 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// production-labeled and `acknowledged` lacks `.production`, or when
     /// it needs a privilege check whose state is not `.readOnlyRole` and is
     /// not a `.writableRole` or `.failed` result that `acknowledged`
-    /// accepts with `.writableRole`. Live reads that stay on are not checked
-    /// again. These rules compare with the verified editing copy, which
+    /// accepts with `.writableRole`. A result counts only while the stored
+    /// profile still reaches the server and account it was checked on. Live
+    /// reads that stay on are not checked again. These rules compare with the verified editing copy, which
     /// takes the stored key to read, so they run after the key is read and
     /// before a new one is stored: a refused draft changes nothing either.
     ///
@@ -689,7 +728,8 @@ public final class MCPProjectsSettingsModel: ObservableObject {
                 return L("Live reads on \(profile.name) need your confirmation that you reviewed its redacted columns and accept reads on this production database.")
             }
             guard Self.needsPrivilegeCheck(profile) else { continue }
-            switch privilegeStates[profile.id] ?? .notChecked {
+            let checkedAsStored = privilegeChecks[profile.id]?.endpoint == Self.endpoint(of: profile)
+            switch checkedAsStored ? privilegeStates[profile.id] ?? .notChecked : .notChecked {
             case .readOnlyRole:
                 break
             case .writableRole, .failed:
