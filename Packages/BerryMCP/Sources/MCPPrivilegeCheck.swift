@@ -12,7 +12,7 @@ public enum MCPPrivilegeCheck {
         switch driver {
         case .postgres:
             let rows = try await collect(connection.execute(postgresQuery))
-            return postgresFindings(row: rows.first?.first)
+            return try postgresFindings(row: rows.first?.first)
         case .mysql:
             return try await mysqlFindings(on: connection)
         case .sqlite:
@@ -57,10 +57,22 @@ UNION ALL SELECT 'setrole_writer' WHERE EXISTS (SELECT 1 FROM pg_auth_members m 
 ) x;
 """
 
-    static func postgresFindings(row: BerryValue?) -> [String] {
-        guard case let .text(list)? = row else { return [] }
-        return list.split(separator: ",").map(String.init)
+    /// The query, an aggregate without GROUP BY, answers one row: NULL for a
+    /// role with no findings and text otherwise (verified against
+    /// PostgreSQL 16.15). Any other answer throws rather than reading as no
+    /// findings, which would report a role that can write as one that
+    /// cannot.
+    static func postgresFindings(row: BerryValue?) throws -> [String] {
+        switch row {
+        case let .text(list)?: return list.split(separator: ",").map(String.init)
+        case .null?: return []
+        default: throw unreadableAnswer
+        }
     }
+
+    private static let unreadableAnswer = DriverError.unsupported(
+        "The privilege check could not read the database's answer."
+    )
 
     /// Privilege names that read data and nothing else; every other name on a
     /// grant line is a write, a schema change or an administrative right.
@@ -139,7 +151,12 @@ UNION ALL SELECT 'setrole_writer' WHERE EXISTS (SELECT 1 FROM pg_auth_members m 
         let grants = try await collect(connection.execute(
             rolesNotChecked ? "SHOW GRANTS" : "SHOW GRANTS FOR CURRENT_USER()"
         ))
-        let lines = grants.compactMap { $0.first.flatMap(text(of:)) }
+        // A line that cannot be read could hold any privilege, so it throws
+        // instead of being left out of the findings.
+        let lines = try grants.map { row in
+            guard let line = row.first.flatMap(text(of:)) else { throw unreadableAnswer }
+            return line
+        }
         var found = mysqlFindings(grantLines: lines)
         if rolesNotChecked, lines.contains(where: isRoleMembershipLine) {
             found.append("roles_not_checked")

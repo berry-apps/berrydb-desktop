@@ -53,13 +53,12 @@ struct MCPPrivilegeCheckParsingTests {
         ]) == ["DELETE", "INSERT", "UPDATE"])
     }
 
-    @Test func postgresRowSplitsTheCommaList() {
-        #expect(MCPPrivilegeCheck.postgresFindings(row: .text("column_write,table_write")) == ["column_write", "table_write"])
+    @Test func postgresRowSplitsTheCommaList() throws {
+        #expect(try MCPPrivilegeCheck.postgresFindings(row: .text("column_write,table_write")) == ["column_write", "table_write"])
     }
 
-    @Test func postgresNullRowHasNoFindings() {
-        #expect(MCPPrivilegeCheck.postgresFindings(row: .null) == [])
-        #expect(MCPPrivilegeCheck.postgresFindings(row: nil) == [])
+    @Test func postgresNullRowHasNoFindings() throws {
+        #expect(try MCPPrivilegeCheck.postgresFindings(row: .null) == [])
     }
 
     @Test func postgresQueryIsTheDocumentedOne() {
@@ -107,6 +106,67 @@ struct MCPPrivilegeCheckCoverageTests {
         let connection = RecordingConnection()
         #expect(try await MCPPrivilegeCheck.findings(on: connection, driver: .sqlite) == [])
         #expect(connection.statements.isEmpty)
+    }
+}
+
+/// Answers each statement with the rows scripted for it, and with no rows
+/// for any other statement.
+private actor ScriptedConnection: DriverConnection {
+    nonisolated let id = UUID()
+    private nonisolated let rows: [String: [[BerryValue]]]
+
+    init(rows: [String: [[BerryValue]]]) { self.rows = rows }
+
+    nonisolated func execute(_ sql: String) -> AsyncThrowingStream<ResultEvent, Error> {
+        let batch = rows[sql] ?? []
+        return .init { continuation in
+            if !batch.isEmpty { continuation.yield(.rows(batch)) }
+            continuation.finish()
+        }
+    }
+    nonisolated func cancelCurrentQuery() {}
+    func setDatabase(_ name: String) async throws {}
+    nonisolated var introspector: any Introspector { fatalError("unused") }
+    func ping() async -> Bool { true }
+    func close() async {}
+}
+
+/// An answer the check cannot read must not read as a role that cannot
+/// write: Settings would then turn live reads on without a warning.
+@Suite("MCP privilege check on an unexpected answer")
+struct MCPPrivilegeCheckUnreadableAnswerTests {
+    @Test(arguments: [BerryValue.int(1), .bytes(Data("table_write".utf8)), .json("[]")])
+    func aPostgresValueThatIsNotTextThrows(value: BerryValue) async {
+        let connection = ScriptedConnection(rows: [MCPPrivilegeCheck.postgresQuery: [[value]]])
+        await #expect(throws: DriverError.self) {
+            _ = try await MCPPrivilegeCheck.findings(on: connection, driver: .postgres)
+        }
+    }
+
+    @Test func aPostgresAnswerWithoutARowThrows() async {
+        let connection = ScriptedConnection(rows: [:])
+        await #expect(throws: DriverError.self) {
+            _ = try await MCPPrivilegeCheck.findings(on: connection, driver: .postgres)
+        }
+    }
+
+    @Test(arguments: [[BerryValue.int(5)], [.bytes(Data([0xFF, 0xFE]))], [.null], []])
+    func aMySQLGrantLineThatCannotBeDecodedThrows(line: [BerryValue]) async {
+        let connection = ScriptedConnection(rows: ["SHOW GRANTS FOR CURRENT_USER()": [
+            [.text("GRANT SELECT ON `app`.* TO `u`@`%`")],
+            line,
+        ]])
+        await #expect(throws: DriverError.self) {
+            _ = try await MCPPrivilegeCheck.findings(on: connection, driver: .mysql)
+        }
+    }
+
+    @Test func readableGrantLinesStillParse() async throws {
+        let connection = ScriptedConnection(rows: ["SHOW GRANTS FOR CURRENT_USER()": [
+            [.text("GRANT SELECT ON `app`.* TO `u`@`%`")],
+            [.bytes(Data("GRANT INSERT ON `app`.* TO `u`@`%`".utf8))],
+        ]])
+        #expect(try await MCPPrivilegeCheck.findings(on: connection, driver: .mysql) == ["INSERT"])
     }
 }
 
