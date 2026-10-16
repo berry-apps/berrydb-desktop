@@ -180,6 +180,7 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
     /// statement's statistics, leaving the stream open for the caller.
     private func stream(
         _ sql: String,
+        binds: [MySQLData] = [],
         clock: ContinuousClock,
         started: ContinuousClock.Instant,
         into continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
@@ -190,6 +191,7 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
         do {
             try await connection.query(
                 sql,
+                binds,
                 onRow: { row in
                     if !state.sentColumns {
                         state.sentColumns = true
@@ -216,7 +218,9 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
             // 1295). Nothing has streamed yet, so retry once via the text
             // protocol, keeping every statement on the single SQL path.
             let untouched = !state.sentColumns && state.batch.isEmpty && state.affectedRows == nil
-            if untouched, Self.isUnsupportedPreparedStatement(error) {
+            // The text protocol cannot carry binds, so a statement with binds
+            // is not retried there: the error is the answer.
+            if untouched, binds.isEmpty, Self.isUnsupportedPreparedStatement(error) {
                 return try await streamViaTextProtocol(sql, state: state, clock: clock, started: started, into: continuation)
             }
             if !state.batch.isEmpty { continuation.yield(.rows(state.batch)) }
@@ -602,10 +606,18 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
     }
 
     public nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error> {
+        executeReadOnly(sql, parameters: [], timeout: timeout)
+    }
+
+    /// MySQLNIO sends every statement as a prepared statement, so binds
+    /// change nothing in how rows decode (MySQLNIO 1.9.1, `MySQLQueryCommand`).
+    public nonisolated func executeReadOnly(
+        _ sql: String, parameters: [SQLParameter], timeout: Duration
+    ) -> AsyncThrowingStream<ResultEvent, Error> {
         AsyncThrowingStream { continuation in
             let readOnlyTurn = ReadOnlyTurn()
             let task = Task {
-                await self.runReadOnly(sql, timeout: timeout, readOnlyTurn: readOnlyTurn, continuation: continuation)
+                await self.runReadOnly(sql, parameters: parameters, timeout: timeout, readOnlyTurn: readOnlyTurn, continuation: continuation)
             }
             continuation.onTermination = { termination in
                 guard case .cancelled = termination else { return }
@@ -622,7 +634,7 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
     /// carries the server's own execution-time bound where the server has
     /// one (`statement(_:form:timeout:groupConcatMaxLength:)`).
     private func runReadOnly(
-        _ statement: String, timeout: Duration, readOnlyTurn: ReadOnlyTurn,
+        _ statement: String, parameters: [SQLParameter], timeout: Duration, readOnlyTurn: ReadOnlyTurn,
         continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
     ) async {
         if let refusal = ReadOnlyAllowlist.mysql.refusal(of: statement) {
@@ -670,13 +682,27 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
         }
         do {
             let sql = Self.statement(statement, form: form, timeout: timeout, groupConcatMaxLength: nil)
-            let stats = try await stream(sql, clock: clock, started: started, into: continuation)
+            let stats = try await stream(
+                sql, binds: Self.binds(for: parameters), clock: clock, started: started, into: continuation
+            )
             _ = try? await connection.simpleQuery("COMMIT").get()
             continuation.yield(.complete(stats))
             continuation.finish()
         } catch {
             _ = try? await connection.simpleQuery("ROLLBACK").get()
             continuation.finish(throwing: Self.mapError(error))
+        }
+    }
+
+    static func binds(for parameters: [SQLParameter]) -> [MySQLData] {
+        parameters.map { parameter in
+            switch parameter {
+            case .null: .null
+            case .bool(let value): MySQLData(bool: value)
+            case .int(let value): MySQLData(int: Int(value))
+            case .double(let value): MySQLData(double: value)
+            case .text(let value): MySQLData(string: value)
+            }
         }
     }
 

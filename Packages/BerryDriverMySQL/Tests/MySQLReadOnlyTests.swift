@@ -233,6 +233,66 @@ struct MySQLReadOnlyTests {
         #expect(try await readOnly("SELECT 1", on: opened).first?.first?.displayString == "1")
     }
 
+    @Test func parametersBindInOrder() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+        try await drain(opened.main.execute("INSERT INTO \(opened.table) VALUES (2), (3)"))
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT id FROM \(opened.table) WHERE id = ? OR id = ?", parameters: [.text("3"), .int(2)], timeout: .seconds(30)
+        ))
+
+        #expect(Set(rows.compactMap { $0.first?.displayString }) == ["2", "3"])
+    }
+
+    @Test func everyParameterKindBinds() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT ? + 0, ? + 0.0, ? IS NULL, ?", parameters: [.int(9_000_000_000), .double(2.5), .null, .text("x")],
+            timeout: .seconds(30)
+        ))
+
+        #expect(rows.first?.map(\.displayString) == ["9000000000", "2.5", "1", "x"])
+    }
+
+    @Test func aParameterCountMismatchFails() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let error = await #expect(throws: DriverError.self) {
+            try await drain(opened.readOnly.executeReadOnly("SELECT ?, ?", parameters: [.int(1)], timeout: .seconds(30)))
+        }
+        #expect(refusal(error) != nil, "\(String(describing: error))")
+    }
+
+    /// On MariaDB the statement is wrapped in SET STATEMENT ... FOR, which
+    /// must still prepare with its placeholders. An interrupted SLEEP returns
+    /// 1 on MySQL and fails on MariaDB, so the test times the statement and
+    /// accepts either outcome, but not a refusal of the parameters.
+    @Test func theServerBoundStillAppliesWithParameters() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let started = ContinuousClock.now
+        var outcome: [[BerryValue]]?
+        var failure: DriverError?
+        do {
+            outcome = try await drain(opened.readOnly.executeReadOnly(
+                "SELECT SLEEP(?)", parameters: [.int(5)], timeout: .milliseconds(300)
+            ))
+        } catch { failure = error as? DriverError }
+
+        #expect(ContinuousClock.now - started < .seconds(4))
+        // Interrupted: 1 on MySQL; on MariaDB the driver reports the aborted
+        // statement as cancelled (verified against MariaDB 11.8.9).
+        var interrupted = outcome?.first?.first?.displayString == "1"
+        if case .cancelled? = failure { interrupted = true }
+        #expect(interrupted, "\(String(describing: outcome)) \(String(describing: failure))")
+        #expect(try await readOnly("SELECT 1", on: opened).first?.first?.displayString == "1")
+    }
+
     /// Writes sent at once all fail, in whatever order their control
     /// statements reach the server. Whether two statements shared a
     /// transaction does not show here: the function's INSERT fails in a
