@@ -55,12 +55,9 @@ final class PostgresCancelBox: @unchecked Sendable {
     }
 }
 
-/// A text parameter sent with no type (OID 0), so the server infers its
-/// type from where the placeholder stands, as it does for a client that
-/// sends no parameter types
-/// (https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-PARSE).
-/// Verified against PostgreSQL 16.15: sent as `text` instead,
-/// `int_column = $1` fails with "operator does not exist: integer = text".
+/// A parameter sent as text with no type (OID 0), which the server reads as
+/// the type its place in the statement gives it
+/// (`PostgresDriverConnection.bindings(for:)`).
 struct UntypedText: PostgresDynamicTypeEncodable {
     let value: String
 
@@ -264,14 +261,32 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
         if !batch.isEmpty { continuation.yield(.rows(batch)) }
     }
 
+    /// Every value is sent as text with no type (OID 0), and the server
+    /// gives each parameter the type its place in the statement asks for, as
+    /// for a client that sends no parameter types
+    /// (https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-PARSE).
+    /// A NULL already goes without a type (`appendNull()`, PostgresNIO
+    /// 1.33.0). Verified against PostgreSQL 16.15, where the server accepts
+    /// `inf` and `nan`, as Swift writes a Double, for float8 and numeric:
+    /// - A parameter the statement never uses is left without a type, which
+    ///   fails the statement with "could not determine data type of
+    ///   parameter". Sent with its type, it was accepted and ignored, so a
+    ///   statement given too many parameters ran.
+    /// - A number compares with a varchar column, which has no operator for
+    ///   bigint, and a double with a numeric column exactly, where float8
+    ///   compared each numeric rounded to a double.
+    /// - The cost: a parameter with nothing around it to give it a type is
+    ///   read as text (`SELECT $1` returns the text `1`), and where text
+    ///   does not fit, as in `$1 + $2`, the statement fails until a cast
+    ///   gives the parameter a type (`$1::int8 + $2`).
     static func bindings(for parameters: [SQLParameter]) -> PostgresBindings {
         var bindings = PostgresBindings(capacity: parameters.count)
         for parameter in parameters {
             switch parameter {
             case .null: bindings.appendNull()
-            case .bool(let value): bindings.append(value)
-            case .int(let value): bindings.append(value)
-            case .double(let value): bindings.append(value)
+            case .bool(let value): bindings.append(UntypedText(value: value ? "true" : "false"))
+            case .int(let value): bindings.append(UntypedText(value: String(value)))
+            case .double(let value): bindings.append(UntypedText(value: String(value)))
             case .text(let value): bindings.append(UntypedText(value: value))
             }
         }
