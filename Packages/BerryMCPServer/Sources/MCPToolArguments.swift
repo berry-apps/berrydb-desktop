@@ -1,3 +1,4 @@
+import BerryDriverKit
 import BerryGraph
 import BerryMCP
 import Foundation
@@ -19,6 +20,9 @@ struct MCPToolArguments {
     static let changesLimitRange = 1 ... 200
     static let defaultChangesLimit = 50
     static let maximumSinceLength = 64
+    static let maximumSQLBytes = 65_536
+    static let maximumParameters = 100
+    static let rowLimitRange = 1 ... 100
 
     private let values: [String: Value]
 
@@ -40,6 +44,7 @@ struct MCPToolArguments {
         case .graphQuery: return ["connection_id", "operation", "node", "from", "to", "limit"]
         case .getGraphStats: return ["connection_id", "object"]
         case .getSchemaChanges: return ["connection_id", "since", "limit"]
+        case .executeReadQuery: return ["connection_id", "sql", "parameters", "row_limit"]
         }
     }
 
@@ -141,6 +146,52 @@ struct MCPToolArguments {
                 "operation must be one of neighbors, path, blast_radius, circular_dependencies, top_centrality"
             )
         }
+    }
+
+    /// The statement as sent; the read policy, not this check, decides
+    /// whether it is one read.
+    func sql() throws -> String {
+        guard let sql = try string("sql") else { throw MCPError.invalidParams("sql is required") }
+        guard (1 ... Self.maximumSQLBytes).contains(sql.utf8.count) else {
+            throw MCPError.invalidParams("sql must be 1 to \(Self.maximumSQLBytes) bytes")
+        }
+        return sql
+    }
+
+    /// The values bound to the statement's placeholders, in order; none when
+    /// absent. A JSON number binds as an integer when the SDK decoded it as
+    /// one, which it does for any integral value that fits in 64 bits, `2.0`
+    /// and `1e3` included (Foundation's `JSONDecoder`, observed on macOS
+    /// 26.6), and as a double otherwise.
+    ///
+    /// A string shaped like a data URL (`data:…,…`) reaches this point as
+    /// `.data`: the SDK's `Value` decoder converts it and keeps only the
+    /// decoded bytes (`Value.init(from:)` in swift-sdk 0.12.1), so the text
+    /// the host sent cannot be rebuilt and binding a re-encoded one would
+    /// compare against a different string. Such a value is refused.
+    func parameters() throws -> [SQLParameter] {
+        guard let value = values["parameters"], !value.isNull else { return [] }
+        guard let items = value.arrayValue else { throw MCPError.invalidParams("parameters must be an array") }
+        guard items.count <= Self.maximumParameters else {
+            throw MCPError.invalidParams("parameters accepts at most \(Self.maximumParameters) values")
+        }
+        return try items.map { item in
+            switch item {
+            case .null: return .null
+            case let .bool(flag): return .bool(flag)
+            case let .int(number): return .int(Int64(number))
+            case let .double(number): return .double(number)
+            case let .string(text): return .text(text)
+            case .data: throw MCPError.invalidParams("parameters cannot hold a data: URL string")
+            case .array, .object:
+                throw MCPError.invalidParams("parameters must hold only strings, numbers, booleans or null")
+            }
+        }
+    }
+
+    /// The rows the caller wants at most; nil leaves the profile's limit.
+    func rowLimit() throws -> Int? {
+        try integer("row_limit", in: Self.rowLimitRange)
     }
 
     /// The optional statistics target; a blank value means every table.

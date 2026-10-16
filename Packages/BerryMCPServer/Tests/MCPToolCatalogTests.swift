@@ -1,10 +1,11 @@
+import BerryDriverKit
 import BerryGraph
-import BerryMCP
 import Foundation
 import GRDB
 import MCP
 import Testing
 
+@testable import BerryMCP
 @testable import BerryMCPServer
 @testable import BerryStore
 
@@ -79,20 +80,24 @@ struct MCPToolCatalogTests {
 
     static let projectID = UUID()
 
-    func project(integrity: Bool = true, roots: [String] = []) -> MCPVerifiedProject {
+    /// The shop project; `liveRead` turns live reads on for `shop` and
+    /// verifies that switch.
+    func project(integrity: Bool = true, roots: [String] = [], liveRead: Bool = false) -> MCPVerifiedProject {
         MCPVerifiedProject(
             project: MCPProject(
                 id: Self.projectID, name: "Shop project", isEnabled: true, workspaceRoots: roots,
-                profiles: [MCPProfileAccess(profileID: shop.id)]
+                profiles: [MCPProfileAccess(profileID: shop.id, liveRead: liveRead)]
             ),
-            liveReadProfileIDs: [],
+            liveReadProfileIDs: liveRead ? [shop.id] : [],
             projectTagValid: integrity
         )
     }
 
     /// Selected by the working directory `/work/shop`.
-    func selected(integrity: Bool = true, roots: [String] = []) -> MCPProjectContext {
-        .selected(project(integrity: integrity, roots: roots), source: .workingDirectory, workspace: "/work/shop")
+    func selected(integrity: Bool = true, roots: [String] = [], liveRead: Bool = false) -> MCPProjectContext {
+        .selected(
+            project(integrity: integrity, roots: roots, liveRead: liveRead), source: .workingDirectory, workspace: "/work/shop"
+        )
     }
 
     /// `orders` (10 rows) references `customers` (3 rows); `orders` has an
@@ -186,6 +191,7 @@ struct MCPToolCatalogTests {
         #expect(MCPToolName.allCases.map(\.rawValue) == [
             "berrydb_status", "berrydb_list_connections", "berrydb_get_schema",
             "berrydb_search_schema", "berrydb_graph_query", "berrydb_get_graph_stats", "berrydb_get_schema_changes",
+            "berrydb_execute_read_query",
         ])
     }
 
@@ -194,9 +200,11 @@ struct MCPToolCatalogTests {
         #expect(tools.map(\.name) == ["berrydb_status"])
     }
 
+    /// Without a live-read connection every tool but the live one is listed.
     @Test func selectedContextListsEveryToolWithStrictSchemas() throws {
         let tools = MCPToolCatalog.tools(for: selected())
-        #expect(tools.map(\.name) == MCPToolName.allCases.map(\.rawValue))
+        #expect(tools.map(\.name) == MCPToolName.allCases.filter { $0 != .executeReadQuery }.map(\.rawValue))
+        #expect(MCPToolCatalog.tools(for: selected(), liveReadConnectionIDs: []).map(\.name) == tools.map(\.name))
         for tool in tools {
             let input = try #require(tool.inputSchema.objectValue)
             #expect(input["type"]?.stringValue == "object")
@@ -259,6 +267,61 @@ struct MCPToolCatalogTests {
         let stats = try properties(.getGraphStats)
         #expect(Set(stats.keys) == ["connection_id", "object"])
         #expect(required(.getGraphStats) == ["connection_id"])
+    }
+
+    @Test func theLiveToolIsListedOnlyWithALiveReadConnection() throws {
+        let live = MCPToolName.executeReadQuery.rawValue
+        #expect(!MCPToolCatalog.tools(for: selected(), liveReadConnectionIDs: []).map(\.name).contains(live))
+        let unconfigured = MCPProjectContext.unconfigured(.noMatchingProject, workspace: nil)
+        #expect(MCPToolCatalog.tools(for: unconfigured, liveReadConnectionIDs: [shop.id]).map(\.name) == ["berrydb_status"])
+
+        let tools = MCPToolCatalog.tools(for: selected(liveRead: true), liveReadConnectionIDs: [shop.id])
+        #expect(tools.map(\.name) == MCPToolName.allCases.map(\.rawValue))
+        let tool = try #require(tools.first { $0.name == live })
+        #expect(tool.description == "Runs one read-only SQL statement on a connection whose live reads the user turned on, and returns at most row_limit rows. Placeholders are $1, $2, … on PostgreSQL and ? on MySQL, MariaDB and SQLite; pass their values in parameters. The database refuses any write. Results go to this host and its model provider.")
+        #expect(tool.annotations.readOnlyHint == true)
+        #expect(tool.annotations.destructiveHint == false)
+        #expect(tool.annotations.idempotentHint == false)
+        #expect(tool.annotations.openWorldHint == true)
+
+        let input = try #require(tool.inputSchema.objectValue)
+        #expect(input["type"]?.stringValue == "object")
+        #expect(input["additionalProperties"] == .bool(false))
+        #expect(input["required"]?.arrayValue?.compactMap(\.stringValue) == ["connection_id", "sql"])
+        let properties = try #require(input["properties"]?.objectValue)
+        #expect(Set(properties.keys) == ["connection_id", "sql", "parameters", "row_limit"])
+        #expect(properties["connection_id"]?.objectValue?["format"]?.stringValue == "uuid")
+        let sql = try #require(properties["sql"]?.objectValue)
+        #expect(sql["type"]?.stringValue == "string")
+        #expect(sql["minLength"]?.intValue == 1)
+        #expect(sql["maxLength"]?.intValue == 65_536)
+        let parameters = try #require(properties["parameters"]?.objectValue)
+        #expect(parameters["type"]?.stringValue == "array")
+        #expect(parameters["maxItems"]?.intValue == 100)
+        #expect(parameters["items"]?.objectValue?["type"]?.arrayValue?.compactMap(\.stringValue) == [
+            "string", "number", "boolean", "null",
+        ])
+        let rowLimit = try #require(properties["row_limit"]?.objectValue)
+        #expect(rowLimit["type"]?.stringValue == "integer")
+        #expect(rowLimit["minimum"]?.intValue == 1)
+        #expect(rowLimit["maximum"]?.intValue == 100)
+
+        let output = try #require(tool.outputSchema?.objectValue)
+        #expect(output["additionalProperties"] == .bool(false))
+        let fields = [
+            "columns", "rows", "row_count", "truncated", "has_more_rows", "truncated_cells", "byte_limit_reached",
+            "elapsed_ms", "redacted_columns",
+        ]
+        #expect(output["required"]?.arrayValue?.compactMap(\.stringValue) == fields)
+        #expect(Set(output["properties"]?.objectValue?.keys.map { $0 } ?? []) == Set(fields))
+        let cell = output["properties"]?.objectValue?["rows"]?.objectValue?["items"]?.objectValue?["items"]
+        #expect(cell?.objectValue?["type"]?.arrayValue?.compactMap(\.stringValue) == ["string", "null"])
+
+        // The metadata tools keep their annotations next to the live one.
+        for metadataTool in tools where metadataTool.name != live {
+            #expect(metadataTool.annotations.idempotentHint == true)
+            #expect(metadataTool.annotations.openWorldHint == false)
+        }
     }
 
     // MARK: Argument validation
@@ -365,6 +428,141 @@ struct MCPToolCatalogTests {
         #expect(graph(["operation": "blast_radius", "node": "a", "from": .bool(true)])?.contains("from") == true)
         #expect(graph(["operation": "top_centrality", "to": .int(1)])?.contains("to") == true)
         #expect(graph(["operation": "circular_dependencies", "limit": .int(0)])?.contains("limit") == true)
+    }
+
+    /// A live tool whose coordinator serves no project, so a call that passes
+    /// its argument checks ends at the service without opening anything.
+    func liveTool() -> MCPLiveReadTool {
+        let resolver = MCPProjectResolver(loadProject: { nil }, profile: { _ in nil })
+        let coordinator = MCPConnectionCoordinator(resolver: resolver, sqlFactory: { _ in throw CancellationError() })
+        return MCPLiveReadTool(service: MCPLiveReadService(coordinator: coordinator))
+    }
+
+    /// The `invalidParams` message the live tool throws, nil when it throws none.
+    func liveInvalidParamsMessage(_ arguments: [String: Value]?) async -> String? {
+        do {
+            _ = try await liveTool().call(arguments, context: selected(liveRead: true), metadata: try service())
+            return nil
+        } catch let MCPError.invalidParams(message) {
+            return message ?? ""
+        } catch {
+            return nil
+        }
+    }
+
+    @Test func parametersMustBeScalars() async throws {
+        let id = connectionID
+        func read(_ parameters: Value) async -> String? {
+            await liveInvalidParamsMessage(["connection_id": id, "sql": "SELECT 1", "parameters": parameters])
+        }
+        let scalars = "parameters must hold only strings, numbers, booleans or null"
+        #expect(await read([["a": 1]]) == scalars)
+        #expect(await read([.string("ok"), .array([.int(1)])]) == scalars)
+        #expect(await read("1") == "parameters must be an array")
+        #expect(await read(.array(Array(repeating: .int(1), count: 101))) == "parameters accepts at most 100 values")
+        // The SDK decodes a string shaped like a data URL into bytes and the
+        // original text cannot be recovered, so it is refused, not rebound.
+        #expect(await read([.data(mimeType: "text/plain", Data("x".utf8))]) == "parameters cannot hold a data: URL string")
+
+        let secret = "s3cr3t-parameter-value"
+        for rejected: Value in [[["k": .string(secret)]], [.array([.string(secret)])], .string(secret)] {
+            let message = await read(rejected)
+            #expect(message != nil)
+            #expect(message?.contains(secret) == false)
+        }
+
+        let bound = try MCPToolArguments(
+            ["parameters": [.string("a"), .int(2), .double(2.5), .bool(true), .null]],
+            allowing: MCPToolArguments.allowedKeys(for: .executeReadQuery)
+        ).parameters()
+        #expect(bound == [.text("a"), .int(2), .double(2.5), .bool(true), .null])
+        let absent = try MCPToolArguments([:], allowing: MCPToolArguments.allowedKeys(for: .executeReadQuery))
+        #expect(try absent.parameters() == [])
+        #expect(try absent.rowLimit() == nil)
+        #expect(await read(.array(Array(repeating: .int(1), count: 100))) == nil)
+    }
+
+    @Test func sqlIsRequiredAndBounded() async throws {
+        let id = connectionID
+        func read(_ arguments: [String: Value]) async -> String? {
+            await liveInvalidParamsMessage(arguments)
+        }
+        let length = "sql must be 1 to 65536 bytes"
+        #expect(await read(["connection_id": id]) == "sql is required")
+        #expect(await read(["connection_id": id, "sql": .null]) == "sql is required")
+        #expect(await read(["connection_id": id, "sql": .int(1)]) == "sql must be a string")
+        #expect(await read(["connection_id": id, "sql": ""]) == length)
+        // The bound counts UTF-8 bytes: "é" takes two.
+        #expect(await read(["connection_id": id, "sql": .string(String(repeating: "a", count: 65_536))]) == nil)
+        #expect(await read(["connection_id": id, "sql": .string(String(repeating: "a", count: 65_535) + "é")]) == length)
+        #expect(await read(["sql": "SELECT 1"]) == "connection_id is required")
+        #expect(await read(["connection_id": "nope", "sql": "SELECT 1"]) == "connection_id must be a UUID")
+        #expect(await read(["connection_id": id, "sql": "SELECT 1", "row_limit": .int(0)]) == "row_limit must be between 1 and 100")
+        #expect(await read(["connection_id": id, "sql": "SELECT 1", "row_limit": .int(101)]) == "row_limit must be between 1 and 100")
+        #expect(await read(["connection_id": id, "sql": "SELECT 1", "row_limit": "ten"]) == "row_limit must be an integer")
+        #expect(await read(["connection_id": id, "sql": "SELECT 1", "query": "SELECT 2"]) == "Unexpected argument: query")
+        let limited = try MCPToolArguments(
+            ["row_limit": .int(7)], allowing: MCPToolArguments.allowedKeys(for: .executeReadQuery)
+        )
+        #expect(try limited.rowLimit() == 7)
+    }
+
+    /// The live tool answers an unassigned and a deleted profile alike, and a
+    /// driver without a SQL dialect with the unsupported text, all before
+    /// the service resolves anything; without a project it answers like the
+    /// metadata tools.
+    @Test func theLiveToolRefusesWhatItCannotRunBeforeConnecting() async throws {
+        let cache = ConnectionProfile(driverID: "redis", name: "Cache")
+        let deleted = UUID()
+        let store = try BerryStore(path: ":memory:")
+        for profile in [shop, outsider, cache] {
+            try store.save(profile)
+        }
+        let metadata = MCPMetadataService(store: store)
+        let project = MCPVerifiedProject(
+            project: MCPProject(
+                id: Self.projectID, name: "Shop project", isEnabled: true,
+                profiles: [shop.id, cache.id, deleted].map { MCPProfileAccess(profileID: $0, liveRead: true) }
+            ),
+            liveReadProfileIDs: [shop.id, cache.id, deleted]
+        )
+        let context = MCPProjectContext.selected(project, source: .workingDirectory, workspace: "/work/shop")
+        func call(_ id: UUID, context: MCPProjectContext) async throws -> CallTool.Result {
+            try await liveTool().call(
+                ["connection_id": .string(id.uuidString), "sql": "SELECT 1"], context: context, metadata: metadata
+            )
+        }
+
+        let unassigned = try await call(outsider.id, context: context)
+        let missing = try await call(deleted, context: context)
+        let random = try await call(UUID(), context: context)
+        for result in [unassigned, missing, random] {
+            #expect(result.isError == true)
+            #expect(text(result) == "Unknown connection for this project")
+            #expect(result.structuredContent == nil)
+        }
+        #expect(unassigned == missing)
+
+        let unsupported = try await call(cache.id, context: context)
+        #expect(unsupported.isError == true)
+        #expect(text(unsupported) == MCPLiveReadError.unsupportedDatabase.description)
+
+        let noProject = try await call(shop.id, context: .unconfigured(.noMatchingProject, workspace: "/work"))
+        #expect(noProject.isError == true)
+        #expect(text(noProject) == Self.noProjectText)
+
+        // A call that passes every check reaches the service, whose
+        // coordinator here serves no project.
+        let reached = try await call(shop.id, context: context)
+        #expect(text(reached) == MCPLiveReadError.noProject.description)
+    }
+
+    /// A server built without live reads never runs the tool; the router
+    /// answers with a fixed text.
+    @Test func aRouterWithoutLiveReadsRefusesTheLiveTool() throws {
+        let result = try call(.executeReadQuery, ["connection_id": connectionID, "sql": "SELECT 1"], context: selected(liveRead: true))
+        #expect(result.isError == true)
+        #expect(text(result) == "Live reads are not available in this helper.")
     }
 
     @Test func whitespaceOnlyQueryIsInvalidParams() {
@@ -678,6 +876,24 @@ struct MCPToolCatalogTests {
         #expect(try connections().first?["stale"]?.boolValue == true)
     }
 
+    @Test func statusReportsLiveReads() throws {
+        func liveReads(_ context: MCPProjectContext, router: MCPToolRouter? = nil) throws -> String? {
+            object(try call(.status, nil, context: context, router: router))["live_reads"]?.stringValue
+        }
+        #expect(try liveReads(selected(liveRead: true)) == "available")
+        #expect(try liveReads(selected()) == "not_available")
+        #expect(try liveReads(.unconfigured(.noMatchingProject, workspace: nil)) == "not_available")
+
+        // A store that cannot be read offers no live read, and the status still answers.
+        let reader = GraphReader(store: try BerryStore(path: ":memory:"))
+        let unreadable = MCPToolRouter(metadata: MCPMetadataService(
+            profiles: { throw PathLeakingError() }, reader: reader, graph: BerryGraphQueryService(reader: reader)
+        ))
+        let status = try call(.status, nil, context: selected(liveRead: true), router: unreadable)
+        #expect(status.isError != true)
+        #expect(object(status)["live_reads"]?.stringValue == "not_available")
+    }
+
     @Test func statusReportsUnconfiguredReasonAndWorkspace() throws {
         let result = try call(.status, nil, context: .unconfigured(.ambiguousProjects, workspace: "/work/app"))
         let status = object(result)
@@ -941,7 +1157,9 @@ struct MCPToolCatalogTests {
     }
 
     @Test func structuredResultsConformToTheirOutputSchemas() throws {
-        let tools = Dictionary(uniqueKeysWithValues: MCPToolCatalog.tools(for: selected()).map { ($0.name, $0) })
+        let tools = Dictionary(uniqueKeysWithValues: MCPToolCatalog.tools(
+            for: selected(liveRead: true), liveReadConnectionIDs: [shop.id]
+        ).map { ($0.name, $0) })
         let id = connectionID
         let graph: (String, [String: Value]) -> [String: Value] = { operation, extra in
             ["connection_id": id, "operation": .string(operation)].merging(extra) { $1 }
@@ -970,8 +1188,21 @@ struct MCPToolCatalogTests {
             let schema = try #require(tools[name.rawValue]?.outputSchema)
             #expect(violation(structured, against: schema) == nil, "\(name.rawValue): \(violation(structured, against: schema) ?? "")")
         }
+        // A live read answers through the same encoding; a NULL cell is null.
+        let read = MCPLiveReadResult(
+            columns: ["id", "createdAt"], rows: [["1", "a/b"], ["2", nil]], rowCount: 2, truncated: true,
+            hasMoreRows: true, truncatedCells: 0, byteLimitReached: false, elapsedMs: 3, redactedColumns: ["createdAt"]
+        )
+        let live = try MCPToolRouter.respond(read)
+        expectJSONText(live)
+        let liveSchema = try #require(tools["berrydb_execute_read_query"]?.outputSchema)
+        let liveStructured = try #require(live.structuredContent)
+        #expect(violation(liveStructured, against: liveSchema) == nil, "\(violation(liveStructured, against: liveSchema) ?? "")")
+        #expect(object(live)["rows"] == [["1", "a/b"], ["2", .null]])
+        #expect(object(live)["has_more_rows"] == .bool(true))
+
         let contexts: [MCPProjectContext] = [
-            selected(), selected(integrity: false),
+            selected(), selected(integrity: false), selected(liveRead: true),
             .selected(project(), source: .roots, workspace: "/work/repo"),
             .selected(project(), source: .explicit, workspace: nil),
             .unconfigured(.integrityUnavailable, workspace: nil),

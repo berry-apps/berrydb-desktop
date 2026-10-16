@@ -204,6 +204,60 @@ struct MCPMetadataServiceTests {
         }
     }
 
+    /// Live reads are offered for a profile only when its switch verified,
+    /// the project assigns it, it is still saved, and its driver has a SQL
+    /// dialect the read policy checks.
+    @Test func liveReadConnectionsAreVerifiedAssignedSQLProfiles() throws {
+        let local = ConnectionProfile(driverID: "sqlite", name: "Local", sortOrder: 3, filePath: "/data/local.db")
+        let orders = ConnectionProfile(driverID: "dynamodb", name: "Orders", sortOrder: 4)
+        let deleted = UUID()
+        let store = try makeStore()
+        for profile in [local, orders] {
+            try store.save(profile)
+        }
+        let counter = CallCounter()
+        let service = try makeService(store: store, counter: counter)
+        let project = MCPVerifiedProject(
+            project: MCPProject(
+                name: "P", isEnabled: true,
+                profiles: [
+                    MCPProfileAccess(profileID: local.id, liveRead: true),
+                    MCPProfileAccess(profileID: orders.id, liveRead: true),
+                    // Claims live reads, but its tag did not verify.
+                    MCPProfileAccess(profileID: production.id, liveRead: true),
+                    MCPProfileAccess(profileID: staging.id),
+                    MCPProfileAccess(profileID: deleted, liveRead: true),
+                ]
+            ),
+            // `outsider` is listed as verified but not assigned to this project.
+            liveReadProfileIDs: [local.id, orders.id, deleted, outsider.id],
+            rejectedLiveReadProfileIDs: [production.id]
+        )
+        #expect(try service.liveReadConnectionIDs(in: project) == [local.id])
+        #expect(counter.count("profiles") == 1)
+    }
+
+    @Test func dialectFollowsTheSavedDriver() throws {
+        let orders = ConnectionProfile(driverID: "dynamodb", name: "Orders", sortOrder: 4)
+        let store = try makeStore()
+        try store.save(orders)
+        let service = try makeService(store: store)
+        #expect(try service.dialect(of: production.id) == .postgresql)
+        #expect(try service.dialect(of: staging.id) == .mysql)
+        #expect(try service.dialect(of: outsider.id) == .sqlite)
+        #expect(try service.dialect(of: orders.id) == nil)
+        #expect(throws: MCPMetadataError.unknownConnection) { try service.dialect(of: UUID()) }
+    }
+
+    @Test func capabilitiesNameTheLiveTool() throws {
+        let counter = CallCounter()
+        let live = MCPVerifiedProject(project: project.project, liveReadProfileIDs: [staging.id])
+        let descriptors = try makeService(counter: counter).listConnections(in: live)
+        #expect(descriptors.map(\.id) == [production.id, staging.id])
+        #expect(descriptors.map(\.capabilities) == [["schema", "graph"], ["schema", "graph", "execute_read_query"]])
+        #expect(counter.count("profiles") == 1)
+    }
+
     /// A pass that found no tables or views still records a change, and the
     /// graph tools then answer that no graph was harvested; the connection
     /// must not claim a harvest time the tools contradict.

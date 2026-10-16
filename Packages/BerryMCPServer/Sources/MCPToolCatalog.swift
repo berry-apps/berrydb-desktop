@@ -16,6 +16,7 @@ public enum MCPToolName: String, CaseIterable, Sendable {
     case graphQuery = "berrydb_graph_query"
     case getGraphStats = "berrydb_get_graph_stats"
     case getSchemaChanges = "berrydb_get_schema_changes"
+    case executeReadQuery = "berrydb_execute_read_query"
 }
 
 /// Tool definitions, independent of any transport.
@@ -23,14 +24,26 @@ public enum MCPToolName: String, CaseIterable, Sendable {
 /// Invariant: every tool declares a closed input schema (`additionalProperties`
 /// false) and an output schema, and only `berrydb_status` is listed when no
 /// project is selected, so an unconfigured session exposes no metadata tool.
+/// `berrydb_execute_read_query` is listed only while the selected project
+/// has a connection it can run on.
 public enum MCPToolCatalog {
     /// Largest serialized structured result a tool returns, in bytes.
     public static let maximumResultBytes = 1_048_576
 
-    /// Tools listed for a context: only `berrydb_status` unless a project is selected.
+    /// Tools listed for a context whose project has no live-read connection.
     public static func tools(for context: MCPProjectContext) -> [Tool] {
+        tools(for: context, liveReadConnectionIDs: [])
+    }
+
+    /// Tools listed for a context: only `berrydb_status` unless a project is
+    /// selected, and the live read tool only when `liveReadConnectionIDs`,
+    /// the project's connections as `MCPMetadataService.liveReadConnectionIDs(in:)`
+    /// reports them, is not empty.
+    public static func tools(for context: MCPProjectContext, liveReadConnectionIDs: Set<UUID>) -> [Tool] {
         guard case .selected = context else { return [definition(.status)] }
-        return MCPToolName.allCases.map(definition)
+        return MCPToolName.allCases
+            .filter { $0 != .executeReadQuery || !liveReadConnectionIDs.isEmpty }
+            .map(definition)
     }
 
     private static func definition(_ tool: MCPToolName) -> Tool {
@@ -107,12 +120,30 @@ public enum MCPToolCatalog {
                 required: ["connection_id"]
             )
             output = changesOutput
+        case .executeReadQuery:
+            description = "Runs one read-only SQL statement on a connection whose live reads the user turned on, and returns at most row_limit rows. Placeholders are $1, $2, … on PostgreSQL and ? on MySQL, MariaDB and SQLite; pass their values in parameters. The database refuses any write. Results go to this host and its model provider."
+            input = object(
+                [
+                    "connection_id": connectionID,
+                    "sql": ["type": "string", "minLength": 1, "maxLength": 65_536],
+                    "parameters": [
+                        "type": "array", "maxItems": 100, "items": ["type": ["string", "number", "boolean", "null"]],
+                    ],
+                    "row_limit": ["type": "integer", "minimum": 1, "maximum": 100],
+                ],
+                required: ["connection_id", "sql"]
+            )
+            output = liveReadOutput
         }
+        // A live read leaves BerryDB's store for the user's database, an
+        // open world in the terms of `Tool.Annotations` (swift-sdk 0.12.1),
+        // and the same statement answers differently as that data changes.
+        let live = tool == .executeReadQuery
         return Tool(
             name: tool.rawValue,
             description: description,
             inputSchema: input,
-            annotations: .init(readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false),
+            annotations: .init(readOnlyHint: true, destructiveHint: false, idempotentHint: !live, openWorldHint: live),
             outputSchema: output
         )
     }
@@ -183,11 +214,27 @@ public enum MCPToolCatalog {
             "project": ["type": ["object", "null"], "properties": ["id": connectionID, "name": text]],
             "selected_by": ["type": ["string", "null"]],
             "workspace": ["type": ["string", "null"]],
-            "live_reads": ["type": "string", "enum": ["not_available"]],
+            "live_reads": ["type": "string", "enum": ["available", "not_available"]],
             "integrity": ["type": ["string", "null"], "enum": ["verified", "unavailable", .null]],
             "connections": ["type": ["array", "null"], "items": connectionFreshness],
         ],
         required: ["state", "reason", "project", "selected_by", "workspace", "live_reads", "integrity", "connections"]
+    )
+
+    /// Rows are arrays aligned with `columns`: as object keys, column names
+    /// would be renamed by the snake_case key encoding and a repeated name
+    /// would keep one value only.
+    private static let liveReadOutput: Value = object(
+        [
+            "columns": array(of: text),
+            "rows": array(of: array(of: ["type": ["string", "null"]])),
+            "row_count": integer, "truncated": boolean, "has_more_rows": boolean, "truncated_cells": integer,
+            "byte_limit_reached": boolean, "elapsed_ms": integer, "redacted_columns": array(of: text),
+        ],
+        required: [
+            "columns", "rows", "row_count", "truncated", "has_more_rows", "truncated_cells", "byte_limit_reached",
+            "elapsed_ms", "redacted_columns",
+        ]
     )
 
     private static let schemaOutput: Value = {
@@ -284,11 +331,13 @@ public enum MCPToolCatalog {
 /// (`MCPError.invalidParams`); everything else is a tool result. Only
 /// `MCPMetadataError` texts, which are written for the agent, are ever shown;
 /// any other failure becomes a fixed text, because a store error can carry a
-/// file path.
+/// file path. A live read is served by `MCPLiveReadTool`; the router answers
+/// one only in a server built without live reads.
 public struct MCPToolRouter: Sendable {
     static let noProjectText = "No BerryDB project is selected for this workspace. Call berrydb_status for details."
     static let tooLargeText = "Result too large; narrow the request"
     static let storeFailureText = "BerryDB could not read its store for this request."
+    static let noLiveReadsText = "Live reads are not available in this helper."
 
     private let metadata: MCPMetadataService
 
@@ -325,36 +374,38 @@ public struct MCPToolRouter: Sendable {
             return status(context)
         case .listConnections:
             let connections = try metadata.listConnections(in: project)
-            return try respond(ConnectionList(connections: connections))
+            return try Self.respond(ConnectionList(connections: connections))
         case .getSchema:
             let listing = try metadata.schema(
                 in: project, connectionID: try arguments.connectionID(),
                 objectNames: try arguments.objectNames(), detail: try arguments.schemaDetail(),
                 offset: try arguments.offset()
             )
-            return try respond(listing)
+            return try Self.respond(listing)
         case .searchSchema:
             let matches = try metadata.searchSchema(
                 in: project, connectionID: try arguments.connectionID(),
                 query: try arguments.query(), limit: try arguments.searchLimit()
             )
-            return try respond(MatchList(matches: matches.value, checkedAt: matches.checkedAt, stale: matches.stale))
+            return try Self.respond(MatchList(matches: matches.value, checkedAt: matches.checkedAt, stale: matches.stale))
         case .graphQuery:
             let result = try metadata.graphQuery(
                 in: project, connectionID: try arguments.connectionID(), operation: try arguments.graphOperation()
             )
-            return try respond(Fresh(result))
+            return try Self.respond(Fresh(result))
         case .getGraphStats:
             let stats = try metadata.graphStats(
                 in: project, connectionID: try arguments.connectionID(), object: try arguments.statisticsObject()
             )
-            return try respond(Fresh(stats))
+            return try Self.respond(Fresh(stats))
         case .getSchemaChanges:
             let changes = try metadata.schemaChanges(
                 in: project, connectionID: try arguments.connectionID(),
                 since: try arguments.since(), limit: try arguments.changesLimit()
             )
-            return try respond(changes)
+            return try Self.respond(changes)
+        case .executeReadQuery:
+            return Self.failure(Self.noLiveReadsText)
         }
     }
 
@@ -377,9 +428,18 @@ public struct MCPToolRouter: Sendable {
                 "connections": .null,
             ]
         }
-        fields["live_reads"] = "not_available"
-        guard let result = try? respond(Value.object(fields)) else { return Self.failure(Self.storeFailureText) }
+        fields["live_reads"] = liveReadsAvailable(context) ? "available" : "not_available"
+        guard let result = try? Self.respond(Value.object(fields)) else { return Self.failure(Self.storeFailureText) }
         return result
+    }
+
+    /// Whether the selected project has a connection the live read tool runs
+    /// on; false when the store cannot be read, so the status still answers.
+    private func liveReadsAvailable(_ context: MCPProjectContext) -> Bool {
+        guard case let .selected(project, _, _) = context,
+              let ids = try? metadata.liveReadConnectionIDs(in: project)
+        else { return false }
+        return !ids.isEmpty
     }
 
     /// How current each connection's stored schema is, and why a stale one is,
@@ -432,7 +492,7 @@ public struct MCPToolRouter: Sendable {
     /// hosts that ignore `structuredContent` would otherwise get no data at
     /// all. `structuredContent` is built from that same JSON and encodes back
     /// to the text's bytes. The size ceiling applies to that one JSON.
-    private func respond<T: Encodable>(_ payload: T) throws -> CallTool.Result {
+    static func respond<T: Encodable>(_ payload: T) throws -> CallTool.Result {
         let data = try MCPStructuredEncoding.data(payload)
         guard data.count <= MCPToolCatalog.maximumResultBytes else { return Self.failure(Self.tooLargeText) }
         return CallTool.Result(
@@ -443,7 +503,7 @@ public struct MCPToolRouter: Sendable {
 
     /// An error result keeps a plain one-line text; collapsing whitespace
     /// stops a name inside a metadata error from splitting it.
-    private static func failure(_ message: String) -> CallTool.Result {
+    static func failure(_ message: String) -> CallTool.Result {
         let line = message.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         return CallTool.Result(content: [.text(text: line, annotations: nil, _meta: nil)], isError: true)
     }

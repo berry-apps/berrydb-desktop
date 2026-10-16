@@ -352,7 +352,7 @@ let package = Package(
         .target(
             name: "BerryMCPServer",
             dependencies: [
-                "BerryMCP", "BerryStore", "BerryGraph",
+                "BerryMCP", "BerryStore", "BerryGraph", "BerryDriverKit",
                 .product(name: "MCP", package: "swift-sdk"),
             ],
             path: "Packages/BerryMCPServer/Sources"
@@ -554,8 +554,9 @@ let package = Package(
         .testTarget(
             name: "BerryMCPServerTests",
             // GRDB: a test breaks a store's tables to make every read fail.
+            // BerryDriverKit: a scripted read-only connection serves live reads.
             dependencies: [
-                "BerryMCPServer", "BerryMCP", "BerryStore", "BerryGraph",
+                "BerryMCPServer", "BerryMCP", "BerryStore", "BerryGraph", "BerryDriverKit",
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
