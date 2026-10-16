@@ -1,3 +1,4 @@
+import BerryCredentials
 import BerryDriverKit
 import BerryStore
 import Foundation
@@ -7,6 +8,28 @@ import Testing
 
 @Suite("MCP project resolver")
 struct MCPProjectResolverTests {
+
+    @Test func liveAccessCarriesTheVerifiedRedactions() async throws {
+        let id = UUID()
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: id, liveRead: true, redactedColumns: ["Email"]),
+        ])
+        let resolver = MCPProjectResolver(
+            loadProject: { MCPVerifiedProject(project: project, liveReadProfileIDs: [id]) },
+            profile: { _ in MCPConnectionProfile(id: id, driverID: .sqlite, config: .sqlite(path: ":memory:")) }
+        )
+        #expect(try await resolver.resolve(profileID: id, access: .liveRead).redactedColumns == ["email"])
+    }
+
+    @Test func theStoreLoaderMarksAProductionProfile() async throws {
+        let store = try BerryStore(path: ":memory:")
+        let profile = ConnectionProfile(driverID: "sqlite", name: "Prod", envColor: "production", filePath: "/tmp/x.db")
+        try store.save(profile)
+        let loader = MCPProjectResolver.storeProfileLoader(
+            store: store, credentialResolver: MCPCredentialResolver { _ in ConnectionSecrets() }
+        )
+        #expect(try await loader(profile.id)?.isProduction == true)
+    }
     let a = UUID()
     let b = UUID()
     let outsider = UUID()

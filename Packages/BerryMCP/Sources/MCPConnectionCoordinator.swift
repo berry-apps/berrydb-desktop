@@ -42,7 +42,7 @@ public struct MCPConnectionFactories: Sendable {
     public let sql: MCPConnectionCoordinator.SQLFactory
 
     /// Builds the SQL factory. `enforceSQLReadOnly` defaults to
-    /// `enforceSQLReadOnly(profile:connection:)`, which only admits SQLite;
+    /// `enforceSQLReadOnly(profile:connection:)`, which admits PostgreSQL, MySQL and SQLite connections that implement the read-only contract;
     /// `openTunnel` defaults to `openTunnel(_:)`. Either override must keep
     /// the guarantee that no session escapes without read-only enforcement.
     // A public default-argument closure is re-emitted in every client module; the linker can pair one copy's
@@ -61,7 +61,7 @@ public struct MCPConnectionFactories: Sendable {
             let endpoint = try await openTunnel(profile.config)
             let connection: any DriverConnection
             do {
-                connection = try await driver.init().connect(endpoint.config)
+                connection = try await driver.init().connect(endpoint.config.withApplicationName("BerryDB MCP (read-only)"))
             } catch {
                 await endpoint.close()
                 throw error
@@ -73,7 +73,7 @@ public struct MCPConnectionFactories: Sendable {
             )
             do {
                 try await enforceSQLReadOnly(profile, connection)
-                return MCPSQLSession(connection: connection, recordsHistory: false, lifecycle: lifecycle)
+                return MCPSQLSession(connection: connection, recordsHistory: false, lifecycle: lifecycle, profile: profile)
             } catch {
                 try? await lifecycle.close()
                 throw error
@@ -81,17 +81,21 @@ public struct MCPConnectionFactories: Sendable {
         }
     }
 
-    /// Establishes database-enforced read-only state before a connection can
-    /// escape its factory. Callers may inject a dialect-specific implementation
-    /// as more drivers acquire a reliable session-level read-only primitive.
+    /// Prepares the database-enforced read-only mode every statement of the
+    /// session runs under (`ReadOnlyExecuting`): a read-only transaction per
+    /// statement on PostgreSQL and MySQL, `PRAGMA query_only` re-asserted
+    /// per statement on SQLite. A driver without that contract gets no
+    /// session.
     public static func enforceSQLReadOnly(
         profile: MCPConnectionProfile,
         connection: any DriverConnection
     ) async throws {
-        guard profile.driverID == .sqlite else {
+        guard [.postgres, .mysql, .sqlite].contains(profile.driverID),
+              let readOnly = connection as? any ReadOnlyExecuting
+        else {
             throw MCPConnectionCoordinatorError.sqlReadOnlyEnforcementUnavailable(profile.driverID)
         }
-        for try await _ in connection.execute("PRAGMA query_only = ON") {}
+        try await readOnly.prepareReadOnly()
     }
 
     /// Opens an SSH tunnel when the profile has one and returns the local
@@ -194,13 +198,20 @@ public struct MCPSQLSession: Sendable {
     public let connection: any DriverConnection
     public let recordsHistory: Bool
     public let lifecycle: MCPConnectionLifecycle
+    /// The profile the session was opened for: its production label and
+    /// verified redactions travel with the session.
+    public let profile: MCPConnectionProfile?
 
     /// `lifecycle` must close `connection`; `recordsHistory` is false for
     /// helper sessions, which never write query history.
-    public init(connection: any DriverConnection, recordsHistory: Bool = false, lifecycle: MCPConnectionLifecycle) {
+    public init(
+        connection: any DriverConnection, recordsHistory: Bool = false,
+        lifecycle: MCPConnectionLifecycle, profile: MCPConnectionProfile? = nil
+    ) {
         self.connection = connection
         self.recordsHistory = recordsHistory
         self.lifecycle = lifecycle
+        self.profile = profile
     }
 }
 
