@@ -67,6 +67,28 @@ public protocol ReadOnlyExecuting: DriverConnection {
     /// statements come from outside the app and are safe only because the
     /// server refuses their writes.
     nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error>
+
+    /// Runs exactly one statement as `executeReadOnly(_:timeout:)` does, with
+    /// `parameters` bound to its placeholders in order. A count that does
+    /// not match the placeholders fails the statement.
+    nonisolated func executeReadOnly(
+        _ sql: String, parameters: [SQLParameter], timeout: Duration
+    ) -> AsyncThrowingStream<ResultEvent, Error>
+}
+
+extension ReadOnlyExecuting {
+    /// For a connection that has no bind path of its own: without
+    /// parameters it runs the statement as `executeReadOnly(_:timeout:)`
+    /// does; with any, it refuses rather than run the text with its
+    /// placeholders unbound.
+    public nonisolated func executeReadOnly(
+        _ sql: String, parameters: [SQLParameter], timeout: Duration
+    ) -> AsyncThrowingStream<ResultEvent, Error> {
+        guard parameters.isEmpty else {
+            return AsyncThrowingStream { $0.finish(throwing: DriverError.unsupported("This connection does not bind parameters.")) }
+        }
+        return executeReadOnly(sql, timeout: timeout)
+    }
 }
 
 /// The catalog reads of one harvest pass or statistics refresh, which a
