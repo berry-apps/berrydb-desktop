@@ -567,6 +567,7 @@ let package = Package(
             // GRDB: a test breaks a store's tables to make every read fail.
             dependencies: [
                 "BerryMCP", "BerryCredentials", "BerryDriverKit", "BerryGraph", "BerryStore", "BerryDriverSQLite",
+                "BerryDriverTestKit", "BerryDriverPostgres", "BerryDriverMySQL",
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Packages/BerryMCP/Tests"
