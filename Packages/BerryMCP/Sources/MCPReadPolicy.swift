@@ -395,6 +395,21 @@ public struct MCPReadPolicy: Sendable {
     }
 
     private func rejectProhibitedTokenPatterns(_ tokens: [SQLToken], dialect: MCPSQLDialect) throws {
+        // `NEXT VALUE FOR seq` advances a sequence without call syntax, so
+        // neither the denied words nor the function allowlist see it.
+        // Verified against MariaDB 11.8.9: two reads returned 1 then 2, in
+        // upper and lower case and across a line break, and inside START
+        // TRANSACTION READ ONLY the server refused it with error 1792. The
+        // three words must be adjacent tokens, as for the server, so a
+        // string or a column named `next` still passes. PostgreSQL 16.15
+        // and SQLite 3.51.0 reject it as a syntax error, so refusing it in
+        // every dialect turns away nothing they would run.
+        for index in tokens.indices.dropLast(2)
+        where tokens[index].isWord && tokens[index].text.uppercased() == "NEXT"
+            && tokens[index + 1].isWord && tokens[index + 1].text.uppercased() == "VALUE"
+            && tokens[index + 2].isWord && tokens[index + 2].text.uppercased() == "FOR" {
+            throw MCPReadPolicyError.prohibitedOperation("NEXT VALUE FOR")
+        }
         guard dialect == .mysql else { return }
         for index in tokens.indices.dropLast() where tokens[index].text == ":" && tokens[index + 1].text == "=" {
             throw MCPReadPolicyError.prohibitedOperation("MySQL assignment")

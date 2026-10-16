@@ -407,6 +407,37 @@ struct MCPReadPolicyTests {
         #expect(throws: (any Error).self) { try policy.validate("SELECT * FROM pragma_table_info('t')", dialect: .sqlite) }
     }
 
+    /// `NEXT VALUE FOR` advances a MariaDB sequence without call syntax, so
+    /// neither the denied words nor the function allowlist see it.
+    /// PostgreSQL 16.15 and SQLite 3.51.0 reject it as a syntax error, so
+    /// every dialect refuses it.
+    @Test func nextValueForIsRefusedInEveryDialect() {
+        let spellings = [
+            "SELECT NEXT VALUE FOR s",
+            "select next value for s",
+            "SELECT Next  Value\n\tFOR s",
+            "SELECT NEXT /* c */ VALUE FOR s",
+        ]
+        for dialect in MCPSQLDialect.allCases {
+            for sql in spellings {
+                #expect(throws: MCPReadPolicyError.prohibitedOperation("NEXT VALUE FOR"), "\(dialect): \(sql)") {
+                    try policy.validate(sql, dialect: dialect)
+                }
+            }
+        }
+        let accepted: [(MCPSQLDialect, String)] = [
+            (.mysql, "SELECT 'next value for' AS phrase"),
+            (.postgresql, "SELECT 'next value for' AS phrase"),
+            (.sqlite, "SELECT 'next value for' AS phrase"),
+            (.mysql, "SELECT next FROM queue"),
+            (.mysql, "SELECT next, value FROM queue"),
+            (.postgresql, "SELECT next, value FROM queue"),
+        ]
+        for (dialect, sql) in accepted {
+            #expect(throws: Never.self, "\(dialect): \(sql)") { try policy.validate(sql, dialect: dialect) }
+        }
+    }
+
     @Test func adversarialCorpusIsDenied() {
         let fixtures: [(MCPSQLDialect, String)] = [
             (.postgresql, "WITH changed AS (UPDATE users SET admin = true RETURNING *) SELECT * FROM changed"),

@@ -444,11 +444,9 @@ private enum LiveRead {
             if fixture.isMariaDB {
                 attempts += [
                     Attempt(sql: "SELECT NEXTVAL(\(table)_seq)", refusal: .policy("Prohibited operation: NEXTVAL")),
-                    // NEXT VALUE FOR is not call syntax, so the policy lets it
-                    // through; the read-only transaction refuses it.
                     Attempt(
                         sql: "SELECT NEXT VALUE FOR \(table)_seq",
-                        refusal: .database(reader: ["command denied", readOnly], writer: [readOnly])
+                        refusal: .policy("Prohibited operation: NEXT VALUE FOR")
                     ),
                 ]
             }
