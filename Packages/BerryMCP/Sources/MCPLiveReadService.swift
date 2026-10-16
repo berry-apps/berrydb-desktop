@@ -18,6 +18,10 @@ public struct MCPLiveReadRequest: Sendable {
     }
 }
 
+/// A bounded live read. Its JSON stays within the profile's byte ceiling
+/// when encoded with sorted keys and unescaped slashes
+/// (`[.sortedKeys, .withoutEscapingSlashes]`), the settings
+/// `MCPResultLimiter` measures with; escaping `/` as `\/` can exceed it.
 public struct MCPLiveReadResult: Encodable, Equatable, Sendable {
     public let columns: [String]
     /// One array per row, aligned with `columns`; nil is SQL NULL.
@@ -85,13 +89,15 @@ public struct MCPLiveReadService: Sendable {
         let requestID = UUID().uuidString
         let coordinator = self.coordinator
         do {
+            // The statement's own bound already has a second for the server's
+            // bound to fire first; two more cover building the result and
+            // closing the session.
             return try await MCPRequestDeadline.run(
-                openBudget + MCPResultLimits.liveRead.maximumElapsed, opening: openBudget
+                openBudget + MCPResultLimits.liveRead.maximumElapsed + .seconds(2), opening: openBudget
             ) { opening in
                 try await coordinator.withSQLSession(requestID: requestID, profileID: request.profileID) { session in
-                    opening.opened()
                     do {
-                        return try await Self.read(decision, request: request, session: session)
+                        return try await Self.read(decision, request: request, session: session, opening: opening)
                     } catch {
                         throw ReadFailure(underlying: error)
                     }
@@ -123,13 +129,15 @@ public struct MCPLiveReadService: Sendable {
     }
 
     private static func read(
-        _ decision: MCPReadDecision, request: MCPLiveReadRequest, session: MCPSQLSession
+        _ decision: MCPReadDecision, request: MCPLiveReadRequest, session: MCPSQLSession,
+        opening: MCPRequestDeadline.Opening
     ) async throws -> MCPLiveReadResult {
         // The profile carries the production label and the redactions;
         // without it neither is known, so nothing runs.
         guard let profile = session.profile else { throw SessionFault.missingProfile }
         guard profile.driverID == driverID(for: request.dialect) else { throw MCPLiveReadError.unsupportedDatabase }
         let limits: MCPResultLimits = profile.isProduction ? .productionLiveRead : .liveRead
+        opening.opened(statementLimit: limits.maximumElapsed)
         let rowLimit = max(0, min(request.rowLimit ?? limits.maximumRows, limits.maximumRows))
         guard let readOnly = session.connection as? any ReadOnlyExecuting else {
             throw MCPLiveReadError.readOnlyUnavailable
@@ -194,13 +202,20 @@ public struct MCPLiveReadService: Sendable {
             columns: names,
             rows: rows,
             rowCount: rows.count,
-            truncated: collected.hasMoreRows || bounded.metadata.truncated,
+            truncated: leftSomethingOut(hasMoreRows: collected.hasMoreRows, bounded.metadata),
             hasMoreRows: collected.hasMoreRows,
             truncatedCells: bounded.metadata.truncatedCells,
             byteLimitReached: bounded.metadata.byteLimitReached,
             elapsedMs: milliseconds(collected.elapsed),
             redactedColumns: Set(bounded.metadata.redactedColumns.compactMap { nameForKey[$0] }).sorted()
         )
+    }
+
+    /// Whether any row, cell or byte was left out. The limiter's own
+    /// `truncated` also counts a read that ran past its time limit, which
+    /// leaves nothing out once every row was read.
+    static func leftSomethingOut(hasMoreRows: Bool, _ metadata: MCPTruncationMetadata) -> Bool {
+        hasMoreRows || metadata.omittedRows > 0 || metadata.truncatedCells > 0 || metadata.byteLimitReached
     }
 
     /// Keeps at most `rowLimit` rows and reads one more only to learn that
@@ -262,15 +277,18 @@ public struct MCPLiveReadService: Sendable {
     /// a tunnel's connect error can name the host, the user or a file path;
     /// a statement's own error is forwarded as one sanitized line.
     private static func mapped(_ error: Error) -> Error {
+        // A cancelled caller gets cancellation whatever its request ended
+        // with; it is never turned into a tool error.
+        if Task.isCancelled { return CancellationError() }
         let readFailure = error as? ReadFailure
         let underlying = readFailure?.underlying ?? error
         let wasRead = readFailure != nil
         var isCancel = underlying is CancellationError
         if case .cancelled? = underlying as? DriverError { isCancel = true }
         if isCancel {
-            // A cancel the calling task did not ask for comes from the
+            // The calling task is not cancelled, so the cancel came from the
             // coordinator shutting down.
-            return Task.isCancelled ? CancellationError() : MCPLiveReadError.queryFailed(unexpected)
+            return MCPLiveReadError.queryFailed(unexpected)
         }
         switch underlying {
         case let error as MCPLiveReadError:
@@ -309,9 +327,16 @@ public struct MCPLiveReadService: Sendable {
     }
 
     /// One line of at most 500 characters: a server message can span lines
-    /// and quote the whole statement back.
+    /// and quote the whole statement back. MySQL and MariaDB name an account
+    /// as `'user'@'host'` (https://dev.mysql.com/doc/refman/8.4/en/account-names.html),
+    /// for example in error 1142, "SELECT command denied to user …"; every
+    /// such pair is masked before the cut, so neither the user name nor the
+    /// client host reaches the agent, even in part. `[^']*` cannot match a
+    /// quote, so no attempt scans past the next quote and masking stays
+    /// linear in the message.
     private static func sanitized(_ message: String) -> String {
-        let line = message.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let masked = message.replacing(#/'[^']*'@'[^']*'/#, with: "'…'@'…'")
+        let line = masked.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard line.count > 500 else { return line }
         return String(line.prefix(499)) + "…"
     }

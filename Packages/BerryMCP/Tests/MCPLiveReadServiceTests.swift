@@ -1,5 +1,5 @@
 import BerryDriverKit
-import BerryMCP
+@testable import BerryMCP
 import BerryStore
 import Foundation
 import Synchronization
@@ -122,7 +122,9 @@ struct MCPLiveReadServiceTests {
         #expect(result.rows.count <= 50)
         #expect(result.byteLimitReached)
         #expect(result.truncated)
-        #expect(try JSONEncoder().encode(result).count <= 262_144)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        #expect(try encoder.encode(result).count <= 262_144)
     }
 
     @Test func aConnectionThatNeverOpensTimesOut() async throws {
@@ -192,19 +194,142 @@ struct MCPLiveReadServiceTests {
         let log = connection.log
         try await withDeadline(.seconds(60)) { await log.waitForStatement() }
         task.cancel()
-        let outcome = try await withDeadline(.seconds(60)) { () -> String in
+        #expect(try await withDeadline(.seconds(60)) { await outcome(of: task) } == "cancelled")
+        // The caller returns at once; the request unwinds after it.
+        let tracker = harness.tracker
+        try await withDeadline(.seconds(60)) { await tracker.waitForCloses(1) }
+        try await withDeadline(.seconds(60)) { await log.waitForCancellations(1) }
+    }
+
+    @Test func cancellingTheCallerDuringAHungOpenReturnsAtOnce() async throws {
+        let gate = AsyncGate()
+        let harness = Harness(openBudget: .seconds(15), open: { await gate.wait() })
+        let service = harness.service
+        let request = harness.request("SELECT 1")
+        let tracker = harness.tracker
+        let task = Task { try await service.run(request) }
+        try await withDeadline(.seconds(60)) { await tracker.waitForFactoryCalls(1) }
+        let clock = ContinuousClock()
+        let cancelled = clock.now
+        task.cancel()
+        #expect(try await withDeadline(.seconds(60)) { await outcome(of: task) } == "cancelled")
+        #expect(clock.now - cancelled < .seconds(5))
+        // The connection that opens after the caller left is still closed.
+        await gate.open()
+        try await withDeadline(.seconds(60)) { await tracker.waitForCloses(1) }
+    }
+
+    @Test func aQueryErrorNamesNoAccount() async throws {
+        let denied = ScriptedReadConnection(
+            events: [],
+            ending: .fail(.queryFailed(message: "SELECT command denied to user 'app'@'10.0.0.5' for table 't'", code: 1142))
+        )
+        let error = await Harness(connection: denied).failure("SELECT a FROM t")
+        #expect(error == .queryFailed("SELECT command denied to user '…'@'…' for table 't'"))
+        #expect(error?.description.contains("'…'@'…'") == true)
+        #expect(error?.description.contains("app") == false)
+        #expect(error?.description.contains("10.0.0.5") == false)
+
+        // An account at the 500-character cut is masked before the cut.
+        let late = ScriptedReadConnection(
+            events: [],
+            ending: .fail(.queryFailed(message: String(repeating: "x", count: 488) + " user 'app'@'10.0.0.5' end", code: nil))
+        )
+        guard case .queryFailed(let line) = await Harness(connection: late).failure("SELECT a FROM t") else {
+            Issue.record("expected queryFailed")
+            return
+        }
+        #expect(line.count == 500)
+        #expect(!line.contains("app"))
+        #expect(!line.contains("10.0"))
+    }
+
+    @Test func redactionIgnoresTheColumnNamesCase() async throws {
+        let connection = ScriptedReadConnection(events: [
+            .columns([ColumnMeta(name: "EMAIL", declaredType: "TEXT"), ColumnMeta(name: "id", declaredType: "INTEGER")]),
+            .rows([[.text("a@example.com"), .int(1)]]),
+        ])
+        let result = try await Harness(connection: connection, redactedColumns: ["email"]).read("SELECT EMAIL, id FROM users")
+        #expect(result.rows == [["[REDACTED]", "1"]])
+        #expect(result.redactedColumns == ["EMAIL"])
+    }
+
+    @Test func aReadOnlyRefusalUsesItsText() async throws {
+        let connection = ScriptedReadConnection(events: [], ending: .fail(.readOnlyUnavailable("transaction_read_only reads off")))
+        let error = await Harness(connection: connection).failure("SELECT 1")
+        #expect(error == .readOnlyUnavailable)
+        #expect(error?.description == "BerryDB could not open a read-only session on this database, so the query did not run.")
+    }
+
+    @Test func anUnsupportedStatementIsAQueryFailure() async throws {
+        let connection = ScriptedReadConnection(events: [], ending: .fail(.unsupported("This connection does not bind parameters.")))
+        let error = await Harness(connection: connection).failure("SELECT 1")
+        #expect(error == .queryFailed("This connection does not bind parameters."))
+    }
+
+    @Test func aColumnListTooLargeForTheCeilingIsRefused() async throws {
+        // About 145 KB of column names, all redacted: the limiter's own
+        // metadata then lists them again and cannot fit the 256 KiB ceiling.
+        let names = (0..<1_400).map { "secret_column_\($0)_" + String(repeating: "x", count: 85) }
+        let connection = ScriptedReadConnection(events: [
+            .columns(names.map { ColumnMeta(name: $0, declaredType: "TEXT") }),
+            .rows([names.map { _ in BerryValue.text("v") }]),
+        ])
+        let harness = Harness(connection: connection, isProduction: true, redactedColumns: names)
+        let error = await harness.failure("SELECT * FROM wide")
+        #expect(error == .resultTooLarge)
+        #expect(error?.description == "Result too large; narrow the request")
+    }
+
+    @Test func theStatementDeadlineReportsTheProfileLimit() async throws {
+        let connection = ScriptedReadConnection(events: [.columns([ColumnMeta(name: "n", declaredType: "")])], ending: .never)
+        let error = await Harness(connection: connection, isProduction: true).failure("SELECT n FROM numbers")
+        #expect(error == .timedOut(seconds: 5))
+        let log = connection.log
+        try await withDeadline(.seconds(60)) { await log.waitForCancellations(1) }
+    }
+
+    @Test func aSlowReadThatKeptEveryRowIsNotTruncated() {
+        let complete = MCPTruncationMetadata(
+            truncated: false, omittedRows: 0, omittedObjects: 0, omittedGraphNodes: 0, omittedGraphEdges: 0,
+            truncatedCells: 0, byteLimitReached: false, elapsedLimitReached: false, redactedColumns: []
+        )
+        var slow = complete
+        slow.elapsedLimitReached = true
+        slow.truncated = true
+        #expect(MCPLiveReadService.leftSomethingOut(hasMoreRows: false, slow) == false)
+        #expect(MCPLiveReadService.leftSomethingOut(hasMoreRows: false, complete) == false)
+        #expect(MCPLiveReadService.leftSomethingOut(hasMoreRows: true, complete))
+        var omitted = complete
+        omitted.omittedRows = 1
+        #expect(MCPLiveReadService.leftSomethingOut(hasMoreRows: false, omitted))
+        var cut = complete
+        cut.truncatedCells = 1
+        #expect(MCPLiveReadService.leftSomethingOut(hasMoreRows: false, cut))
+        var full = complete
+        full.byteLimitReached = true
+        #expect(MCPLiveReadService.leftSomethingOut(hasMoreRows: false, full))
+    }
+}
+
+@Suite("MCP request deadline")
+struct MCPRequestDeadlineTests {
+    @Test func anExpiryAfterTheOpenReportsTheStatementLimit() async throws {
+        let gate = AsyncGate()
+        let outcome = try await withDeadline(.seconds(60)) { () -> MCPLiveReadError? in
             do {
-                _ = try await task.value
-                return "returned"
-            } catch is CancellationError {
-                return "cancelled"
+                _ = try await MCPRequestDeadline.run(.milliseconds(300), opening: .milliseconds(100)) { opening in
+                    opening.opened(statementLimit: .seconds(7))
+                    await gate.wait()
+                    return 0
+                }
+                return nil
             } catch {
-                return "\(error)"
+                return error as? MCPLiveReadError
             }
         }
-        #expect(outcome == "cancelled")
-        #expect(await harness.tracker.closes == 1)
-        #expect(log.snapshot().cancellations == 1)
+        #expect(outcome == .timedOut(seconds: 7))
+        await gate.open()
     }
 
     @Test func aProfileWithoutLiveReadsIsRefusedWithoutConnecting() async throws {
@@ -364,6 +489,21 @@ private actor Tracker {
     func waitForCloses(_ count: Int) async {
         while closes < count { try? await Task.sleep(for: .milliseconds(5)) }
     }
+    func waitForFactoryCalls(_ count: Int) async {
+        while factoryCalls < count { try? await Task.sleep(for: .milliseconds(5)) }
+    }
+}
+
+/// How a request task ended, as text, so a test can compare it.
+private func outcome(of task: Task<MCPLiveReadResult, Error>) async -> String {
+    do {
+        _ = try await task.value
+        return "returned"
+    } catch is CancellationError {
+        return "cancelled"
+    } catch {
+        return "\(error)"
+    }
 }
 
 private actor AsyncGate {
@@ -407,6 +547,9 @@ private final class ScriptLog: Sendable {
     func cancelled() { state.withLock { $0.cancellations += 1 } }
     func waitForStatement() async {
         while snapshot().statements.isEmpty { try? await Task.sleep(for: .milliseconds(5)) }
+    }
+    func waitForCancellations(_ count: Int) async {
+        while snapshot().cancellations < count { try? await Task.sleep(for: .milliseconds(5)) }
     }
 }
 
