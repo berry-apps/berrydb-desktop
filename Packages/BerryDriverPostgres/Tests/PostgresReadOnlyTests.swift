@@ -32,6 +32,11 @@ struct PostgresReadOnlyStatementTests {
         #expect(named.map { "\($0.0)=\($0.1)" } == ["application_name=BerryDB AI (read-only)"])
         #expect(PostgresDriverConnection.startupParameters(for: config).isEmpty)
     }
+
+    @Test func everyParameterBecomesOneBinding() {
+        let bindings = PostgresDriverConnection.bindings(for: [.text("42"), .int(7), .double(1.5), .bool(true), .null])
+        #expect(bindings.count == 5)
+    }
 }
 
 /// Runs against a real PostgreSQL from `BERRYDB_TEST_POSTGRES`; skipped when
@@ -98,6 +103,54 @@ struct PostgresReadOnlyLiveTests {
     private func refusal(_ error: DriverError?) -> String? {
         if case .queryFailed(let message, _)? = error { return message }
         return nil
+    }
+
+    @Test func aTextParameterComparesWithAnIntegerColumn() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+        try await drain(opened.main.execute("INSERT INTO \(opened.table) VALUES (2), (3)"))
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT id FROM \(opened.table) WHERE id = $1", parameters: [.text("3")], timeout: .seconds(30)
+        ))
+
+        #expect(rows == [[.int(3)]])
+    }
+
+    @Test func everyParameterKindBinds() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT $1::int8, $2::float8, $3::bool, $4::text IS NULL, $5",
+            parameters: [.int(9_000_000_000), .double(2.5), .bool(true), .null, .text("x")],
+            timeout: .seconds(30)
+        ))
+
+        #expect(rows == [[.int(9_000_000_000), .double(2.5), .bool(true), .bool(true), .text("x")]])
+    }
+
+    @Test func aParameterCountMismatchFails() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let error = await #expect(throws: DriverError.self) {
+            try await drain(opened.readOnly.executeReadOnly("SELECT $1, $2", parameters: [.int(1)], timeout: .seconds(30)))
+        }
+        #expect(refusal(error) != nil)
+    }
+
+    /// A parameter is a value: text that looks like SQL stays a value.
+    @Test func aParameterCannotWrite() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT $1::text", parameters: [.text("1); INSERT INTO \(opened.table) VALUES (5); --")], timeout: .seconds(30)
+        ))
+
+        #expect(rows.count == 1)
+        #expect(try await rowCount(opened) == [[.int(0)]])
     }
 
     @Test func theConnectionIsNamedForTheServerAndReads() async throws {

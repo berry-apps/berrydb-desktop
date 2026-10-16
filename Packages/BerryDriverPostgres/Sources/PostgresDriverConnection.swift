@@ -55,6 +55,25 @@ final class PostgresCancelBox: @unchecked Sendable {
     }
 }
 
+/// A text parameter sent with no type (OID 0), so the server infers its
+/// type from where the placeholder stands, as it does for a client that
+/// sends no parameter types
+/// (https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-PARSE).
+/// Verified against PostgreSQL 16.15: sent as `text` instead,
+/// `int_column = $1` fails with "operator does not exist: integer = text".
+struct UntypedText: PostgresDynamicTypeEncodable {
+    let value: String
+
+    var psqlType: PostgresDataType { .null }
+    var psqlFormat: PostgresFormat { .text }
+
+    func encode<JSONEncoder: PostgresJSONEncoder>(
+        into byteBuffer: inout ByteBuffer, context: PostgresEncodingContext<JSONEncoder>
+    ) {
+        byteBuffer.writeString(value)
+    }
+}
+
 public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadScoping {
     public nonisolated let id = UUID()
 
@@ -214,10 +233,15 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
 
     /// Streams the rows of `sql` into `continuation` in batches, leaving the
     /// stream open for the caller to complete.
-    private func streamRows(_ sql: String, into continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation) async throws {
+    private func streamRows(
+        _ sql: String, parameters: [SQLParameter] = [],
+        into continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
+    ) async throws {
         let running = cancelBox.started(sql)
         defer { cancelBox.ended(running) }
-        let rows = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger)
+        let rows = try await connection.query(
+            PostgresQuery(unsafeSQL: sql, binds: Self.bindings(for: parameters)), logger: Self.logger
+        )
         var sentColumns = false
         var batch: [[BerryValue]] = []
         batch.reserveCapacity(Self.batchSize)
@@ -238,6 +262,20 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
             }
         }
         if !batch.isEmpty { continuation.yield(.rows(batch)) }
+    }
+
+    static func bindings(for parameters: [SQLParameter]) -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: parameters.count)
+        for parameter in parameters {
+            switch parameter {
+            case .null: bindings.appendNull()
+            case .bool(let value): bindings.append(value)
+            case .int(let value): bindings.append(value)
+            case .double(let value): bindings.append(value)
+            case .text(let value): bindings.append(UntypedText(value: value))
+            }
+        }
+        return bindings
     }
 
  // MARK: - Value mapping (no information loss)
@@ -523,10 +561,16 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
     }
 
     public nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error> {
+        executeReadOnly(sql, parameters: [], timeout: timeout)
+    }
+
+    public nonisolated func executeReadOnly(
+        _ sql: String, parameters: [SQLParameter], timeout: Duration
+    ) -> AsyncThrowingStream<ResultEvent, Error> {
         AsyncThrowingStream { continuation in
             let readOnlyTurn = ReadOnlyTurn()
             let task = Task {
-                await self.runReadOnly(sql, timeout: timeout, readOnlyTurn: readOnlyTurn, continuation: continuation)
+                await self.runReadOnly(sql, parameters: parameters, timeout: timeout, readOnlyTurn: readOnlyTurn, continuation: continuation)
             }
             continuation.onTermination = { termination in
                 guard case .cancelled = termination else { return }
@@ -575,7 +619,7 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
     /// BEGIN or SET LOCAL, or a cancel during them, ends the call before the
     /// statement runs.
     private func runReadOnly(
-        _ sql: String, timeout: Duration, readOnlyTurn: ReadOnlyTurn,
+        _ sql: String, parameters: [SQLParameter], timeout: Duration, readOnlyTurn: ReadOnlyTurn,
         continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
     ) async {
         if let refusal = ReadOnlyAllowlist.postgres.refusal(of: sql) {
@@ -621,7 +665,7 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
             return
         }
         do {
-            try await streamRows(sql, into: continuation)
+            try await streamRows(sql, parameters: parameters, into: continuation)
             await finishTransaction(commit: true)
             continuation.yield(.complete(QueryStats(rowsAffected: nil, duration: clock.now - started)))
             continuation.finish()
