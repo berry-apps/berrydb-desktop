@@ -127,6 +127,31 @@ struct BerryMCPStdioTests {
         Self.expectOnlyJSONRPC(helper.stdout, messages: 3)
     }
 
+    /// Live reads are wired into the helper, yet a session that selects no
+    /// project lists no live read tool and still ends cleanly: closing the
+    /// coordinator on the way out must not delay or fail the exit. A project
+    /// with a live-read profile would need the Keychain's integrity key, which
+    /// tests never read, so listing for such a project is covered in-process.
+    @Test
+    func sessionWithoutProjectListsNoLiveReadToolAndExitsCleanly() async throws {
+        let store = try TemporaryStore()
+        defer { store.remove() }
+        let helper = try HelperProcess(arguments: ["--store-path", store.path], workingDirectory: store.directory)
+        defer { helper.stop() }
+
+        try helper.send(Self.initialize(id: 1, protocolVersion: "2025-11-25", client: "berrydb-tests"))
+        _ = try await helper.response(id: 1)
+        try helper.send(["jsonrpc": "2.0", "method": "notifications/initialized"])
+        try helper.send(["jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": [:]])
+        let names = try await Self.toolNames(helper.response(id: 2))
+        #expect(!names.contains("berrydb_execute_read_query"))
+
+        try helper.closeInput()
+        let termination = try await helper.termination()
+        #expect(termination.reason == .exit)
+        #expect(termination.status == 0)
+    }
+
     /// `--project` with a name no project has selects nothing, and an
     /// explicit project keeps the helper from asking for the host's roots
     /// even though the host declared the capability.

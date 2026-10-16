@@ -40,15 +40,14 @@ do {
 let metadata = MCPMetadataService(store: store)
 let memory = StoreMemoryManager(store: store, onPressure: { [metadata] in metadata.dropCachedGraphs() })
 
-let (server, start) = await BerryMCPServerFactory.makeServer(
-    BerryDBMCPComposition.dependencies(
-        store: store,
-        metadata: metadata,
-        explicitProject: arguments.project,
-        workingDirectory: FileManager.default.currentDirectoryPath,
-        onRequest: { [memory] in memory.touch() }
-    )
+let (dependencies, coordinator) = BerryDBMCPComposition.dependencies(
+    store: store,
+    metadata: metadata,
+    explicitProject: arguments.project,
+    workingDirectory: FileManager.default.currentDirectoryPath,
+    onRequest: { [memory] in memory.touch() }
 )
+let (server, start) = await BerryMCPServerFactory.makeServer(dependencies)
 
 do {
     try await start(HostCompatibleStdioTransport())
@@ -63,4 +62,7 @@ await shutdown.serving(server)
 // standard input or signalled the helper has ended the session and reads no
 // further responses.
 await server.waitUntilCompleted()
+// Close every database connection and SSH tunnel a live read still holds,
+// within the coordinator's shutdown deadline, before the process exits.
+_ = await coordinator.closeAll()
 exit(0)
