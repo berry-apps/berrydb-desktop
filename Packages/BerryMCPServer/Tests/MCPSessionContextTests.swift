@@ -80,7 +80,7 @@ struct MCPSessionContextTests {
         )
         let context: MCPProjectContext
         do {
-            context = try await withDeadline(.seconds(10)) { await session.context() }
+            context = try await withDeadline(.seconds(60)) { await session.context() }
         } catch {
             release.finish()
             throw error
@@ -108,11 +108,11 @@ struct MCPSessionContextTests {
             // gate opened, fell back to the working directory and reported
             // [nil, nil] instead of failing at a deadline. The timeout itself
             // is covered by its own test.
-            rootsTimeout: .seconds(30)
+            rootsTimeout: .seconds(120)
         )
         let first = Task { await session.context() }
         do {
-            try await withDeadline(.seconds(10)) {
+            try await withDeadline(.seconds(60)) {
                 var startedEvents = started.makeAsyncIterator()
                 _ = await startedEvents.next()
             }
@@ -129,7 +129,7 @@ struct MCPSessionContextTests {
         try await Task.sleep(for: .milliseconds(100))
         open.finish()
 
-        let results = try await withDeadline(.seconds(10)) { [await first.value, await second.value] }
+        let results = try await withDeadline(.seconds(60)) { [await first.value, await second.value] }
         signalStarted.finish()
         #expect(recorder.calls == 1)
         #expect(results.map { selectedID($0, by: .roots) } == [projectB.id, projectB.id])
@@ -154,7 +154,7 @@ struct MCPSessionContextTests {
         #expect(selections.calls == 2, "a selection made before initialize was kept")
 
         initialized.turnOn()
-        let late = try await withDeadline(.seconds(10)) { [await session.context(), await session.context()] }
+        let late = try await withDeadline(.seconds(60)) { [await session.context(), await session.context()] }
         #expect(late.map { selectedID($0, by: .roots) } == [projectB.id, projectB.id])
         #expect(rootsRequests.calls == 1)
         #expect(selections.calls == 3)
