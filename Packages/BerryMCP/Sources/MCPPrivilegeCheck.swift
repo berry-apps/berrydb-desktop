@@ -7,7 +7,7 @@ public enum MCPPrivilegeCheck {
     /// Runs the check on `connection`, which the caller opened for this
     /// check alone and closes afterwards: the MySQL check runs SET ROLE ALL,
     /// which changes the session. Empty for drivers without roles to check
-    /// (SQLite and the non-SQL stores).
+    /// (SQLite); every other driver throws.
     public static func findings(on connection: any DriverConnection, driver: DriverID) async throws -> [String] {
         switch driver {
         case .postgres:
@@ -15,8 +15,13 @@ public enum MCPPrivilegeCheck {
             return postgresFindings(row: rows.first?.first)
         case .mysql:
             return try await mysqlFindings(on: connection)
-        default:
+        case .sqlite:
+            // A SQLite database is a file with no accounts or roles.
             return []
+        default:
+            // An empty result means "verified read-only", so a driver the
+            // check cannot inspect must fail rather than look clean.
+            throw DriverError.unsupported("The privilege check covers PostgreSQL, MySQL and MariaDB.")
         }
     }
 
@@ -69,7 +74,9 @@ UNION ALL SELECT 'setrole_writer' WHERE EXISTS (SELECT 1 FROM pg_auth_members m 
                 let privilege = withoutColumnList(name).uppercased()
                 if !privilege.isEmpty, !readOnlyPrivileges.contains(privilege) { found.insert(privilege) }
             }
-            if line.trimmingCharacters(in: .whitespaces).uppercased().hasSuffix("WITH GRANT OPTION") {
+            // MySQL 5.7 can append resource limits after the option, so it is
+            // not necessarily the end of the line.
+            if line.uppercased().contains(" WITH GRANT OPTION") {
                 found.insert("GRANT OPTION")
             }
         }

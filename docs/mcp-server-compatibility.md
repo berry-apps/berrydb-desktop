@@ -251,6 +251,15 @@ UNION ALL SELECT 'setrole_writer' WHERE EXISTS (SELECT 1 FROM pg_auth_members m 
 
 MySQL: after `SET ROLE ALL`, for every `SHOW GRANTS FOR CURRENT_USER()` line matching `GRANT <privileges> ON `, split `<privileges>` on commas outside parentheses, drop any column list, uppercase, and reject if any name is outside the allowlist or the line ends with `WITH GRANT OPTION`. Role-membership lines (`GRANT <role> TO`) are skipped because `SET ROLE ALL` has already folded their privileges into the output.
 
+MariaDB has no `SET ROLE ALL`; verified against MariaDB 11.8.9, where it fails
+with a syntax error near `ALL`. The check then runs `SHOW GRANTS` alone, applies
+the same rules to the privilege lines, and adds the finding `roles_not_checked`
+when any role-membership line is present, because MariaDB lists roles without
+expanding them and a write granted through a role would otherwise go unseen.
+
+The check runs on a connection opened for it alone and closed afterwards,
+because `SET ROLE ALL` changes the session.
+
 ### G4 DynamoDB harvest
 
 Question: does the existing `SchemaHarvester` produce a usable schema graph

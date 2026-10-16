@@ -36,6 +36,12 @@ struct MCPPrivilegeCheckParsingTests {
         ]) == ["GRANT OPTION"])
     }
 
+    @Test func grantOptionFollowedByResourceLimitsIsStillReported() {
+        #expect(MCPPrivilegeCheck.mysqlFindings(grantLines: [
+            "GRANT SELECT ON `app`.* TO `u`@`%` WITH GRANT OPTION MAX_QUERIES_PER_HOUR 10",
+        ]) == ["GRANT OPTION"])
+    }
+
     @Test func roleMembershipLinesAreSkipped() {
         #expect(MCPPrivilegeCheck.mysqlFindings(grantLines: ["GRANT `reader`@`%` TO `u`@`%`"]) == [])
     }
@@ -59,6 +65,48 @@ struct MCPPrivilegeCheckParsingTests {
     @Test func postgresQueryIsTheDocumentedOne() {
         #expect(MCPPrivilegeCheck.postgresQuery.hasPrefix("SELECT string_agg(reason, ',' ORDER BY reason) FROM ("))
         #expect(MCPPrivilegeCheck.postgresQuery.contains("'setrole_writer'"))
+    }
+}
+
+/// Records every statement it is asked to run; the check must not run any on
+/// a driver it does not cover.
+private actor RecordingConnection: DriverConnection {
+    nonisolated let id = UUID()
+    private let log = StatementLog()
+    nonisolated func execute(_ sql: String) -> AsyncThrowingStream<ResultEvent, Error> {
+        log.add(sql)
+        return .init { $0.finish() }
+    }
+    nonisolated func cancelCurrentQuery() {}
+    func setDatabase(_ name: String) async throws {}
+    nonisolated var introspector: any Introspector { fatalError("unused") }
+    func ping() async -> Bool { true }
+    func close() async {}
+    nonisolated var statements: [String] { log.all }
+}
+
+private final class StatementLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var statements: [String] = []
+    func add(_ sql: String) { lock.lock(); statements.append(sql); lock.unlock() }
+    var all: [String] { lock.lock(); defer { lock.unlock() }; return statements }
+}
+
+@Suite("MCP privilege check driver coverage")
+struct MCPPrivilegeCheckCoverageTests {
+    @Test(arguments: [DriverID.sqlserver, .dynamodb, .redis, .mongodb])
+    func aDriverTheCheckDoesNotCoverThrowsInsteadOfPassing(driver: DriverID) async {
+        let connection = RecordingConnection()
+        await #expect(throws: DriverError.self) {
+            _ = try await MCPPrivilegeCheck.findings(on: connection, driver: driver)
+        }
+        #expect(connection.statements.isEmpty)
+    }
+
+    @Test func sqliteHasNoRolesAndNothingToFind() async throws {
+        let connection = RecordingConnection()
+        #expect(try await MCPPrivilegeCheck.findings(on: connection, driver: .sqlite) == [])
+        #expect(connection.statements.isEmpty)
     }
 }
 
