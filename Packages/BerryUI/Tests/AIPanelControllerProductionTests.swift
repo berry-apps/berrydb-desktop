@@ -65,6 +65,7 @@ struct AIPanelControllerProductionTests {
             license: license, backendURL: URL(string: "https://example.invalid")!,
             store: try BerryStore(path: ":memory:")
         )
+        controller.useOfflineAccount()
         controller.loadSettings = { _ in saved }
         controller.saveSettings = { _, settings in saves.value = settings }
         return controller

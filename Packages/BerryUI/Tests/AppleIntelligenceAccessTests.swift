@@ -121,6 +121,7 @@ struct AppleIntelligenceAccessTests {
             store: try BerryStore(path: ":memory:")
         )
         controller.onDeviceModelAvailable = { true }
+        controller.useOfflineAccount()
         let session = try await makeSQLiteSession()
         controller.bind(session: session, catalog: nil, objects: [], profileID: nil)
         if consent { controller.giveConsentAndEnable() }
