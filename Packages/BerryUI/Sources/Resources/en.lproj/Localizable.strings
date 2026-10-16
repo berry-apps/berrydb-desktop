@@ -771,7 +771,16 @@
 "This is your home folder: every repository inside it selects this project unless another project has a more specific folder." = "This is your home folder: every repository inside it selects this project unless another project has a more specific folder.";
 "Add Folder…" = "Add Folder…";
 "No saved connections yet." = "No saved connections yet.";
-"Schema and graph metadata of these connections becomes visible to coding agents you configure, and to their model providers." = "Schema and graph metadata of these connections becomes visible to coding agents you configure, and to their model providers.";
+"Live reads" = "Live reads";
+"Redacted columns" = "Redacted columns";
+"Values in these result columns are replaced before an agent sees them. A column read under another name is not redacted; use database column privileges for sensitive columns." = "Values in these result columns are replaced before an agent sees them. A column read under another name is not redacted; use database column privileges for sensitive columns.";
+"Live reads on a production database use its resources and take shared locks, which can delay migrations. Point this connection at a read replica where you can." = "Live reads on a production database use its resources and take shared locks, which can delay migrations. Point this connection at a read replica where you can.";
+"I reviewed the redacted columns and accept reads on this production database" = "I reviewed the redacted columns and accept reads on this production database";
+"Checking this connection’s privileges…" = "Checking this connection’s privileges…";
+"This database user can change data (%@). BerryDB runs every agent query in a read-only transaction, but a read-only database user is the safer setup." = "This database user can change data (%@). BerryDB runs every agent query in a read-only transaction, but a read-only database user is the safer setup.";
+"Use this connection for live reads anyway" = "Use this connection for live reads anyway";
+"BerryDB could not check this user’s privileges: %@" = "BerryDB could not check this user’s privileges: %@";
+"Schema and graph metadata of these connections, and the rows of live reads, become visible to coding agents you configure and to their model providers." = "Schema and graph metadata of these connections, and the rows of live reads, become visible to coding agents you configure and to their model providers.";
 "Agent Setup" = "Agent Setup";
 "Each user-level command adds an entry named berrydb to the agent’s user configuration; run one of them once per agent. The shared entry works in every repository and selects the project from the agent’s folder." = "Each user-level command adds an entry named berrydb to the agent’s user configuration; run one of them once per agent. The shared entry works in every repository and selects the project from the agent’s folder.";
 "An entry marked “always this project” serves this project in every folder the agent works in, whatever workspace folders would select, except in a repository with its own entry." = "An entry marked “always this project” serves this project in every folder the agent works in, whatever workspace folders would select, except in a repository with its own entry.";
@@ -792,6 +801,10 @@
 "A project name cannot have the form of a project ID." = "A project name cannot have the form of a project ID.";
 "Another project already uses this name. Agent entries can select a project by its name." = "Another project already uses this name. Agent entries can select a project by its name.";
 "Another project already uses the workspace folder %@. Agents working there would get neither project." = "Another project already uses the workspace folder %@. Agents working there would get neither project.";
+"Live reads are not available for %@." = "Live reads are not available for %@.";
+"Live reads on %@ need your confirmation that you reviewed its redacted columns and accept reads on this production database." = "Live reads on %@ need your confirmation that you reviewed its redacted columns and accept reads on this production database.";
+"Live reads on %@ need your confirmation to use this connection anyway, since its privileges were not found read-only." = "Live reads on %@ need your confirmation to use this connection anyway, since its privileges were not found read-only.";
+"Live reads on %@ need a finished privilege check. Save again once it is done." = "Live reads on %@ need a finished privilege check. Save again once it is done.";
 
 /* Local store failed to open at launch */
 "BerryDB could not open its data store." = "BerryDB could not open its data store.";

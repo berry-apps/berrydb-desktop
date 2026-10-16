@@ -771,7 +771,16 @@
 "This is your home folder: every repository inside it selects this project unless another project has a more specific folder." = "Đây là thư mục home của bạn: mọi repository bên trong sẽ chọn dự án này, trừ khi một dự án khác có thư mục cụ thể hơn.";
 "Add Folder…" = "Thêm thư mục…";
 "No saved connections yet." = "Chưa có kết nối nào được lưu.";
-"Schema and graph metadata of these connections becomes visible to coding agents you configure, and to their model providers." = "Metadata schema và graph của các kết nối này sẽ hiển thị cho các coding agent bạn cấu hình, và cho nhà cung cấp mô hình của chúng.";
+"Live reads" = "Đọc dữ liệu thật";
+"Redacted columns" = "Cột cần che";
+"Values in these result columns are replaced before an agent sees them. A column read under another name is not redacted; use database column privileges for sensitive columns." = "Giá trị trong các cột kết quả này được thay thế trước khi agent nhìn thấy. Một cột được đọc dưới tên khác sẽ không bị che; hãy dùng quyền theo cột của database cho các cột nhạy cảm.";
+"Live reads on a production database use its resources and take shared locks, which can delay migrations. Point this connection at a read replica where you can." = "Việc đọc dữ liệu thật trên database production dùng tài nguyên của database đó và giữ shared lock, có thể làm chậm các migration. Khi có thể, hãy trỏ kết nối này tới một read replica.";
+"I reviewed the redacted columns and accept reads on this production database" = "Tôi đã xem các cột cần che và chấp nhận việc đọc trên database production này";
+"Checking this connection’s privileges…" = "Đang kiểm tra quyền của kết nối này…";
+"This database user can change data (%@). BerryDB runs every agent query in a read-only transaction, but a read-only database user is the safer setup." = "Người dùng database này có thể thay đổi dữ liệu (%@). BerryDB chạy mọi truy vấn của agent trong một transaction chỉ đọc, nhưng dùng người dùng database chỉ có quyền đọc vẫn là cách thiết lập an toàn hơn.";
+"Use this connection for live reads anyway" = "Vẫn dùng kết nối này để đọc dữ liệu thật";
+"BerryDB could not check this user’s privileges: %@" = "BerryDB không thể kiểm tra quyền của người dùng này: %@";
+"Schema and graph metadata of these connections, and the rows of live reads, become visible to coding agents you configure and to their model providers." = "Metadata schema và graph của các kết nối này, cùng các dòng dữ liệu mà việc đọc dữ liệu thật trả về, sẽ hiển thị cho các coding agent bạn cấu hình và cho nhà cung cấp mô hình của chúng.";
 "Agent Setup" = "Thiết lập agent";
 "Each user-level command adds an entry named berrydb to the agent’s user configuration; run one of them once per agent. The shared entry works in every repository and selects the project from the agent’s folder." = "Mỗi lệnh cấp người dùng thêm một mục tên berrydb vào cấu hình người dùng của agent; chạy một trong các lệnh đó một lần cho mỗi agent. Mục dùng chung hoạt động ở mọi repository và chọn dự án theo thư mục của agent.";
 "An entry marked “always this project” serves this project in every folder the agent works in, whatever workspace folders would select, except in a repository with its own entry." = "Mục có ghi “luôn dùng dự án này” phục vụ dự án này ở mọi thư mục mà agent làm việc, bất kể các thư mục làm việc sẽ chọn dự án nào, trừ trong repository có mục riêng.";
@@ -792,6 +801,10 @@
 "A project name cannot have the form of a project ID." = "Tên dự án không được có dạng ID của dự án.";
 "Another project already uses this name. Agent entries can select a project by its name." = "Một dự án khác đã dùng tên này. Mục agent có thể chọn dự án theo tên.";
 "Another project already uses the workspace folder %@. Agents working there would get neither project." = "Một dự án khác đã dùng thư mục làm việc %@. Agent làm việc ở đó sẽ không nhận được dự án nào.";
+"Live reads are not available for %@." = "Không thể bật đọc dữ liệu thật cho %@.";
+"Live reads on %@ need your confirmation that you reviewed its redacted columns and accept reads on this production database." = "Đọc dữ liệu thật trên %@ cần bạn xác nhận đã xem các cột cần che và chấp nhận việc đọc trên database production này.";
+"Live reads on %@ need your confirmation to use this connection anyway, since its privileges were not found read-only." = "Đọc dữ liệu thật trên %@ cần bạn xác nhận vẫn dùng kết nối này, vì quyền của nó không được xác định là chỉ đọc.";
+"Live reads on %@ need a finished privilege check. Save again once it is done." = "Đọc dữ liệu thật trên %@ cần chờ kiểm tra quyền xong. Hãy lưu lại khi việc kiểm tra hoàn tất.";
 
 /* Local store failed to open at launch */
 "BerryDB could not open its data store." = "BerryDB không thể mở kho dữ liệu cục bộ.";

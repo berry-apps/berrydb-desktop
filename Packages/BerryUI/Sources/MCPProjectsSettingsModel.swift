@@ -1,4 +1,6 @@
+import BerryCore
 import BerryCredentials
+import BerryDriverKit
 import BerryMCP
 import BerryStore
 import Combine
@@ -31,13 +33,11 @@ public enum MCPHelperLocation: Equatable, Sendable {
 /// under the new key with the old one as the re-seal source. Any failure
 /// stops at that step and sets `errorMessage`. A saved value is never built
 /// from unverified rows, so a `liveRead` written into the store file by
-/// another process is never signed by a settings save; this model exposes
-/// no way to turn `liveRead` on.
+/// another process is never signed by a settings save. A draft turns live
+/// reads on only for a profile that passes the rules `save` checks.
 @MainActor
 public final class MCPProjectsSettingsModel: ObservableObject {
-    /// The editable part of a project. Holds no `liveRead` or redaction
-    /// settings: those are carried over from the verified editing copy when
-    /// the draft is saved.
+    /// The editable part of a project.
     public struct Draft: Equatable {
         public var id: UUID
         public var name: String
@@ -45,7 +45,54 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         public var workspaceRoots: [String]
         /// Assigned connection profiles, in the order they were added.
         public var profileIDs: [UUID]
+        /// Live-read settings by profile; a profile without an entry has
+        /// live reads off and no redactions. Only entries of `profileIDs`
+        /// are saved, so taking a connection out of the project and adding
+        /// it back in the same editor keeps what was set for it.
+        public var access: [UUID: AccessDraft] = [:]
+        /// Confirmations given in the editor. `save` asks for them only for
+        /// profiles whose live reads it turns on.
+        public var acknowledged: Set<Acknowledgment> = []
     }
+
+    /// One profile's live-read settings as the editor holds them. The store
+    /// type lowercases, dedupes and sorts `redactedColumns` when saved.
+    public struct AccessDraft: Equatable {
+        public var liveRead: Bool = false
+        public var redactedColumns: [String] = []
+    }
+
+    /// A confirmation a save needs before it turns live reads on.
+    public enum Acknowledgment: Hashable {
+        /// The redacted columns of this production-labeled profile were
+        /// reviewed, and reads on its database accepted.
+        case production(UUID)
+        /// This profile may serve live reads although the privilege check
+        /// found a database user that can write, or could not run.
+        case writableRole(UUID)
+    }
+
+    /// The privilege check of one profile, run when the editor turns its
+    /// live reads on.
+    public enum PrivilegeState: Equatable {
+        case notChecked
+        case checking
+        /// The check found no write privilege.
+        case readOnlyRole
+        /// The write privileges found, as categories from
+        /// `MCPPrivilegeCheck`, never grant lines.
+        case writableRole([String])
+        /// The check could not run; the reason, ready to show.
+        case failed(String)
+    }
+
+    /// The privilege check of a model built for tests without a checker, so
+    /// a test never opens a connection to a real server by accident.
+    struct PrivilegeCheckUnavailable: Error {}
+
+    /// The last privilege check of each profile; a profile without an
+    /// entry is not checked. Cleared by `reload()`.
+    @Published public private(set) var privilegeStates: [UUID: PrivilegeState] = [:]
 
     @Published public private(set) var projects: [MCPProject] = []
     @Published public private(set) var profiles: [ConnectionProfile] = []
@@ -65,31 +112,124 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     private let store: BerryStore
     private let keyStore: MCPAccessKeyStore
     private let helperLocation: MCPHelperLocation
+    private let privilegeChecker: @Sendable (ConnectionProfile) async throws -> [String]
     private var helperURL: URL? {
         guard case let .bundled(url) = helperLocation else { return nil }
         return url
     }
 
     /// `keyStore` defaults to the Keychain item the helper reads; the
-    /// helper is looked up once, inside the running app's bundle.
+    /// helper is looked up once, inside the running app's bundle. Privilege
+    /// checks connect to the profile's server.
     public convenience init(store: BerryStore, keyStore: MCPAccessKeyStore = .keychain) {
         let location = Self.helperLocation(in: Bundle.main.bundleURL, isOnReadOnlyVolume: Self.isOnReadOnlyVolume)
-        self.init(store: store, keyStore: keyStore, helperLocation: location)
-    }
-
-    /// A model whose helper is at `helperURL`, or that has none when it is nil.
-    convenience init(store: BerryStore, keyStore: MCPAccessKeyStore, helperURL: URL?) {
         self.init(
-            store: store, keyStore: keyStore,
-            helperLocation: helperURL.map(MCPHelperLocation.bundled) ?? .notBundled
+            store: store, keyStore: keyStore, helperLocation: location,
+            privilegeChecker: { try await MCPProjectsSettingsModel.livePrivilegeChecker($0) }
         )
     }
 
-    init(store: BerryStore, keyStore: MCPAccessKeyStore, helperLocation: MCPHelperLocation) {
+    /// A model whose helper is at `helperURL`, or that has none when it is nil.
+    convenience init(
+        store: BerryStore, keyStore: MCPAccessKeyStore, helperURL: URL?,
+        privilegeChecker: @escaping @Sendable (ConnectionProfile) async throws -> [String] = { _ in
+            throw PrivilegeCheckUnavailable()
+        }
+    ) {
+        self.init(
+            store: store, keyStore: keyStore,
+            helperLocation: helperURL.map(MCPHelperLocation.bundled) ?? .notBundled,
+            privilegeChecker: privilegeChecker
+        )
+    }
+
+    init(
+        store: BerryStore, keyStore: MCPAccessKeyStore, helperLocation: MCPHelperLocation,
+        privilegeChecker: @escaping @Sendable (ConnectionProfile) async throws -> [String]
+    ) {
         self.store = store
         self.keyStore = keyStore
         self.helperLocation = helperLocation
+        self.privilegeChecker = privilegeChecker
         reload()
+    }
+
+    /// Runs the privilege check of `profileID`, publishing `.checking` and
+    /// then the result: `.readOnlyRole` without findings, `.writableRole`
+    /// with them, `.failed` when the check throws. A profile no longer
+    /// listed is left alone.
+    public func checkPrivileges(of profileID: UUID) async {
+        guard let profile = profiles.first(where: { $0.id == profileID }) else { return }
+        privilegeStates[profileID] = .checking
+        do {
+            let findings = try await privilegeChecker(profile)
+            privilegeStates[profileID] = findings.isEmpty ? .readOnlyRole : .writableRole(findings)
+        } catch {
+            privilegeStates[profileID] = .failed(error.localizedDescription)
+        }
+    }
+
+    /// True for the drivers the helper serves live reads for, each opened in
+    /// a read-only mode its server enforces: PostgreSQL, MySQL and MariaDB
+    /// (driver `mysql`), and SQLite. The editor offers live reads only for
+    /// these, and `save` refuses to turn them on for any other.
+    nonisolated public static func supportsLiveRead(_ profile: ConnectionProfile) -> Bool {
+        switch profile.driver {
+        case .postgres, .mysql, .sqlite: true
+        default: false
+        }
+    }
+
+    /// True for the drivers whose database users can hold the write
+    /// privileges `MCPPrivilegeCheck` looks for; a SQLite file has no users.
+    nonisolated public static func needsPrivilegeCheck(_ profile: ConnectionProfile) -> Bool {
+        switch profile.driver {
+        case .postgres, .mysql: true
+        default: false
+        }
+    }
+
+    /// The column names of `text`, a comma-separated list as typed in the
+    /// editor, each trimmed, empty entries dropped. Letter case and
+    /// duplicates are left to `MCPProfileAccess`, which normalizes both.
+    nonisolated public static func redactedColumns(from text: String) -> [String] {
+        text.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Runs `MCPPrivilegeCheck` on a connection opened for it alone and
+    /// closed on every path, a thrown error or cancellation included: the
+    /// MySQL check runs `SET ROLE ALL`, which changes the privileges of the
+    /// session it runs in (https://dev.mysql.com/doc/refman/8.4/en/set-role.html).
+    /// Secrets are read off the main actor, as the workspace reads them
+    /// before connecting: `SecItemCopyMatching` blocks its calling thread
+    /// (https://developer.apple.com/documentation/security/secitemcopymatching(_:_:)).
+    nonisolated static func livePrivilegeChecker(_ profile: ConnectionProfile) async throws -> [String] {
+        guard let driver = profile.driver else {
+            throw DriverError.unsupported("Driver \(profile.driverID) is not registered")
+        }
+        let profileID = profile.id
+        let (password, sshPassword, sshPassphrase) = await Task.detached {
+            (
+                KeychainService.readPassword(kind: .database, profileID: profileID),
+                KeychainService.readPassword(kind: .ssh, profileID: profileID),
+                KeychainService.readPassword(kind: .sshPassphrase, profileID: profileID)
+            )
+        }.value
+        let config = profile.makeConfig(password: password, sshPassword: sshPassword, sshPassphrase: sshPassphrase)
+        let manager = ConnectionManager()
+        let session = try await manager.open(
+            config, profileID: profileID, isProduction: profile.envColor == "production", recordHistory: false
+        )
+        do {
+            let findings = try await MCPPrivilegeCheck.findings(on: session.connection, driver: driver)
+            await manager.close(session.id)
+            return findings
+        } catch {
+            await manager.close(session.id)
+            throw error
+        }
     }
 
     /// Why the pane offers no setup commands, ready to show; nil when
@@ -123,9 +263,12 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     }
 
     /// Re-reads projects, their verification state and connection profiles,
-    /// reading the key once for all projects.
+    /// reading the key once for all projects. Forgets the privilege checks:
+    /// a result describes a profile as it was when checked, and a profile
+    /// can be edited in the main window before the next editor opens.
     public func reload() {
         errorMessage = nil
+        privilegeStates = [:]
         do {
             let stored = try store.mcpProjects()
             let key = keyStore.load()
@@ -148,16 +291,21 @@ public final class MCPProjectsSettingsModel: ObservableObject {
 
     /// The draft of a stored project, built from the verified editing copy:
     /// a project whose own tag does not verify under the stored key comes
-    /// back disabled.
+    /// back disabled, and a profile's live reads come back off unless its
+    /// own row verifies.
     public func draft(for id: UUID) -> Draft? {
         do {
             guard let project = try store.mcpProjectForEditing(id: id, key: keyStore.load()) else { return nil }
+            let access = project.profiles.map {
+                ($0.profileID, AccessDraft(liveRead: $0.liveRead, redactedColumns: $0.redactedColumns))
+            }
             return Draft(
                 id: project.id,
                 name: project.name,
                 isEnabled: project.isEnabled,
                 workspaceRoots: project.workspaceRoots,
-                profileIDs: project.profiles.map(\.profileID)
+                profileIDs: project.profiles.map(\.profileID),
+                access: Dictionary(access, uniquingKeysWith: { first, _ in first })
             )
         } catch {
             errorMessage = L("MCP projects could not be loaded: \(error.localizedDescription)")
@@ -171,6 +319,17 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// project already uses it, the key cannot be read or written, or the
     /// store refuses the write. Roots and the name are checked before the
     /// key is read, so an invalid draft changes nothing.
+    ///
+    /// It also returns false for a draft that turns live reads on, off in
+    /// the verified editing copy and on in the draft, for an assigned
+    /// profile when its driver has none (`supportsLiveRead`), when it is
+    /// production-labeled and `acknowledged` lacks `.production`, or when
+    /// it needs a privilege check whose state is not `.readOnlyRole` and is
+    /// not a `.writableRole` or `.failed` result that `acknowledged`
+    /// accepts with `.writableRole`. Live reads that stay on are not checked
+    /// again. These rules compare with the verified editing copy, which
+    /// takes the stored key to read, so they run after the key is read and
+    /// before a new one is stored: a refused draft changes nothing either.
     ///
     /// A connection deleted since the draft was made is dropped from it
     /// before the key is read, since deleting a connection removes its
@@ -188,10 +347,12 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             return fail(L("A project name cannot have the form of a project ID."))
         }
         let others: [MCPProject]
-        let savedProfileIDs: Set<UUID>
+        let savedProfiles: [UUID: ConnectionProfile]
         do {
             others = try store.mcpProjects().filter { $0.id != draft.id }
-            savedProfileIDs = Set(try store.allProfiles().map(\.id))
+            savedProfiles = Dictionary(
+                try store.allProfiles().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+            )
         } catch {
             return fail(L("The MCP project could not be saved: \(error.localizedDescription)"))
         }
@@ -210,19 +371,23 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             return fail(L("Another project already uses the workspace folder \(sharedRoot). Agents working there would get neither project."))
         }
         var draft = draft
-        draft.profileIDs.removeAll { !savedProfileIDs.contains($0) }
+        draft.profileIDs.removeAll { savedProfiles[$0] == nil }
         let previousKey: SymmetricKey?
         do {
             previousKey = try keyStore.loadForRotation()
         } catch {
             return fail(Self.keyReadFailure)
         }
-        let project: MCPProject
+        let editing: MCPProject?
         do {
-            project = try editedProject(from: draft, previousKey: previousKey)
+            editing = try store.mcpProjectForEditing(id: draft.id, key: previousKey)
         } catch {
             return fail(L("The MCP project could not be saved: \(error.localizedDescription)"))
         }
+        if let refusal = liveReadRefusal(for: draft, editing: editing, profiles: savedProfiles) {
+            return fail(refusal)
+        }
+        let project = editedProject(from: draft, editing: editing)
         let sealingKey = SymmetricKey(size: .bits256)
         do {
             try keyStore.replace(with: sealingKey)
@@ -506,18 +671,50 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         "BerryDB could not update its MCP access key in the Keychain. Nothing was changed."
     )
 
+    /// Why `draft` cannot be saved, for the first assigned profile whose live
+    /// reads it turns on against `editing`, or nil. `profiles` holds every
+    /// saved profile, and the draft only profiles found there.
+    private func liveReadRefusal(
+        for draft: Draft, editing: MCPProject?, profiles: [UUID: ConnectionProfile]
+    ) -> String? {
+        let alreadyOn = Set(editing?.profiles.filter(\.liveRead).map(\.profileID) ?? [])
+        let turnedOn = draft.profileIDs.compactMap { profiles[$0] }.filter {
+            draft.access[$0.id]?.liveRead == true && !alreadyOn.contains($0.id)
+        }
+        for profile in turnedOn {
+            guard Self.supportsLiveRead(profile) else {
+                return L("Live reads are not available for \(profile.name).")
+            }
+            if profile.envColor == "production", !draft.acknowledged.contains(.production(profile.id)) {
+                return L("Live reads on \(profile.name) need your confirmation that you reviewed its redacted columns and accept reads on this production database.")
+            }
+            guard Self.needsPrivilegeCheck(profile) else { continue }
+            switch privilegeStates[profile.id] ?? .notChecked {
+            case .readOnlyRole:
+                break
+            case .writableRole, .failed:
+                if !draft.acknowledged.contains(.writableRole(profile.id)) {
+                    return L("Live reads on \(profile.name) need your confirmation to use this connection anyway, since its privileges were not found read-only.")
+                }
+            case .notChecked, .checking:
+                return L("Live reads on \(profile.name) need a finished privilege check. Save again once it is done.")
+            }
+        }
+        return nil
+    }
+
     /// The value to seal: the verified editing copy of a stored project, or
-    /// a new project, with the draft applied. A profile kept from the stored
-    /// project keeps its verified access settings; a newly added one starts
-    /// with every access switch off.
-    private func editedProject(from draft: Draft, previousKey: SymmetricKey?) throws -> MCPProject {
-        var project = try store.mcpProjectForEditing(id: draft.id, key: previousKey)
-            ?? MCPProject(id: draft.id, name: draft.name)
-        let kept = Dictionary(project.profiles.map { ($0.profileID, $0) }, uniquingKeysWith: { first, _ in first })
+    /// a new project, with the draft applied, the draft's live-read settings
+    /// included.
+    private func editedProject(from draft: Draft, editing: MCPProject?) -> MCPProject {
+        var project = editing ?? MCPProject(id: draft.id, name: draft.name)
         project.name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         project.isEnabled = draft.isEnabled
         project.workspaceRoots = draft.workspaceRoots.map(Self.canonicalRoot)
-        project.profiles = draft.profileIDs.map { kept[$0] ?? MCPProfileAccess(profileID: $0) }
+        project.profiles = draft.profileIDs.map { id in
+            let access = draft.access[id] ?? AccessDraft()
+            return MCPProfileAccess(profileID: id, liveRead: access.liveRead, redactedColumns: access.redactedColumns)
+        }
         project.updatedAt = Date()
         return project
     }

@@ -150,6 +150,8 @@ private struct MCPProjectEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var rootError: String?
     @State private var confirmDelete = false
+    /// The redacted-columns fields as typed, by profile.
+    @State private var redactionText: [UUID: String] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -287,10 +289,70 @@ private struct MCPProjectEditorSheet: View {
                         Text(detail.text).font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                if draft.profileIDs.contains(profile.id), MCPProjectsSettingsModel.supportsLiveRead(profile) {
+                    liveReadSettings(for: profile, isProduction: detail.isProduction)
+                }
             }
-            Text(L("Schema and graph metadata of these connections becomes visible to coding agents you configure, and to their model providers."))
+            Text(L("Schema and graph metadata of these connections, and the rows of live reads, become visible to coding agents you configure and to their model providers."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// The live-read settings of an assigned profile, indented under its
+    /// row. The redactions, the production consent and the privilege
+    /// check's result are shown only while live reads are on.
+    @ViewBuilder
+    private func liveReadSettings(for profile: ConnectionProfile, isProduction: Bool) -> some View {
+        let id = profile.id
+        Group {
+            Toggle(L("Live reads"), isOn: liveRead(of: profile))
+            if draft.access[id]?.liveRead == true {
+                TextField(L("Redacted columns"), text: redactedColumns(of: id))
+                Text(L("Values in these result columns are replaced before an agent sees them. A column read under another name is not redacted; use database column privileges for sensitive columns."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if isProduction {
+                    Text(L("Live reads on a production database use its resources and take shared locks, which can delay migrations. Point this connection at a read replica where you can."))
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Toggle(
+                        L("I reviewed the redacted columns and accept reads on this production database"),
+                        isOn: acknowledgment(.production(id))
+                    )
+                }
+                privilegeStatus(of: id)
+            }
+        }
+        .padding(.leading, 20)
+    }
+
+    @ViewBuilder
+    private func privilegeStatus(of profileID: UUID) -> some View {
+        switch model.privilegeStates[profileID] ?? .notChecked {
+        case .notChecked, .readOnlyRole:
+            EmptyView()
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text(L("Checking this connection’s privileges…"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case let .writableRole(findings):
+            Text(L("This database user can change data (\(findings.joined(separator: ", "))). BerryDB runs every agent query in a read-only transaction, but a read-only database user is the safer setup."))
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            Toggle(L("Use this connection for live reads anyway"), isOn: acknowledgment(.writableRole(profileID)))
+        case let .failed(message):
+            Text(L("BerryDB could not check this user’s privileges: \(message)"))
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            Toggle(L("Use this connection for live reads anyway"), isOn: acknowledgment(.writableRole(profileID)))
         }
     }
 
@@ -350,6 +412,51 @@ private struct MCPProjectEditorSheet: View {
                     draft.profileIDs.removeAll { $0 == profileID }
                 } else if !draft.profileIDs.contains(profileID) {
                     draft.profileIDs.append(profileID)
+                }
+            }
+        )
+    }
+
+    /// Turning live reads on starts the privilege check of a profile that
+    /// needs one; `save` refuses the draft until the check has a result.
+    private func liveRead(of profile: ConnectionProfile) -> Binding<Bool> {
+        let model = model
+        return Binding(
+            get: { draft.access[profile.id]?.liveRead ?? false },
+            set: { isOn in
+                draft.access[profile.id, default: .init()].liveRead = isOn
+                if isOn, MCPProjectsSettingsModel.needsPrivilegeCheck(profile) {
+                    Task { await model.checkPrivileges(of: profile.id) }
+                }
+            }
+        )
+    }
+
+    /// The field keeps the text as typed, and the draft the columns parsed
+    /// from it: deriving the text from the parsed list would drop a comma
+    /// or space the moment it is typed.
+    private func redactedColumns(of profileID: UUID) -> Binding<String> {
+        Binding(
+            get: {
+                redactionText[profileID]
+                    ?? (draft.access[profileID]?.redactedColumns ?? []).joined(separator: ", ")
+            },
+            set: { text in
+                redactionText[profileID] = text
+                draft.access[profileID, default: .init()].redactedColumns =
+                    MCPProjectsSettingsModel.redactedColumns(from: text)
+            }
+        )
+    }
+
+    private func acknowledgment(_ acknowledgment: MCPProjectsSettingsModel.Acknowledgment) -> Binding<Bool> {
+        Binding(
+            get: { draft.acknowledged.contains(acknowledgment) },
+            set: { isOn in
+                if isOn {
+                    draft.acknowledged.insert(acknowledgment)
+                } else {
+                    draft.acknowledged.remove(acknowledgment)
                 }
             }
         )
