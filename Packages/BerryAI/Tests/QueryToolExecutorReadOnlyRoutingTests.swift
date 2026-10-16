@@ -33,6 +33,24 @@ private final class RoutingGate: AIApprovalGate {
     }
 }
 
+/// A clock a test moves by hand, readable from any isolation.
+private final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current = Date()
+
+    var now: Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return current
+    }
+
+    func advance(by seconds: TimeInterval) {
+        lock.lock()
+        defer { lock.unlock() }
+        current = current.addingTimeInterval(seconds)
+    }
+}
+
 /// Records each statement and the path it took, and answers it with one
 /// row. Serves as a session's own connection and as its read-only one.
 private actor RecordingConnection: ReadOnlyExecuting {
@@ -310,16 +328,18 @@ struct QueryToolExecutorReadOnlyRoutingTests {
     @Test func noCardIsShownOnceTheDeadlineHasPassed() async {
         let main = RecordingConnection()
         let gate = RoutingGate(approves: true)
+        let clock = TestClock()
         let executor = QueryToolExecutor(
             session: session(main: main), gate: gate,
             onPropose: { _, _ in },
             readOnlyRoute: { _ in
-                // Holds the main actor past the deadline, so the route
-                // answers before the deadline's own timer can run.
-                usleep(300_000)
+                // The route answers after the deadline has passed on the
+                // executor's clock, without waiting for it in real time.
+                clock.advance(by: 1)
                 return .unavailable(.sessionState)
             },
-            executionDeadlineSeconds: 0.1
+            executionDeadlineSeconds: 0.1,
+            now: { clock.now }
         )
 
         let outcome = await runSQL(executor, "SELECT id FROM t")
