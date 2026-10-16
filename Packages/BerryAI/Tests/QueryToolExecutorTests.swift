@@ -79,6 +79,15 @@ struct QueryToolExecutorTests {
         return object
     }
 
+    /// The app's routing for these temp-file SQLite sessions: a second
+    /// connection to the same file, which refuses writes.
+    private func sqliteReadOnlyRoute() -> @MainActor (Session) async -> ReadOnlyRoute {
+        let router = ReadOnlyRouter(
+            connections: ReadOnlyConnections(), tracker: SessionStateTracker(), transactionIsActive: { false }
+        )
+        return { await router.route(for: $0) }
+    }
+
     private func makeExecutor(
         session: Session,
         gate: ScriptedGate,
@@ -92,6 +101,7 @@ struct QueryToolExecutorTests {
             gate: gate,
             options: options,
             onPropose: onPropose,
+            readOnlyRoute: sqliteReadOnlyRoute(),
             queryTimeoutSeconds: queryTimeoutSeconds
         )
     }
@@ -103,7 +113,7 @@ struct QueryToolExecutorTests {
             gate: gate,
             options: .init(autoApproveSelects: false),
             onPropose: { _, _ in },
-            executeStatement: { _, lease in
+            executeStatement: { _, lease, _ in
                 guard lease.isValid else { return .denied }
                 actionCount += 1
                 return .payload(["executed": true])
@@ -140,7 +150,7 @@ struct QueryToolExecutorTests {
             gate: gate,
             options: .init(autoApproveSelects: false),
             onPropose: { _, _ in },
-            executeStatement: { _, lease in
+            executeStatement: { _, lease, _ in
                 for _ in 0..<3 {
                     guard lease.isValid else { return .denied }
                     actionCount += 1
@@ -540,7 +550,7 @@ struct QueryToolExecutorTests {
         let executor = QueryToolExecutor(
             gate: gate,
             onPropose: { _, _ in },
-            executeStatement: { sql, _ in
+            executeStatement: { sql, _, _ in
                 executed.append(sql)
                 return .payload(["executed": true])
             }
@@ -577,7 +587,7 @@ struct QueryToolExecutorTests {
         let executor = QueryToolExecutor(
             gate: gate,
             onPropose: { _, _ in },
-            executeStatement: { sql, _ in
+            executeStatement: { sql, _, _ in
                 executed.append(sql)
                 return .payload(["executed": true])
             }
@@ -796,7 +806,8 @@ struct QueryToolExecutorTests {
         let executor = QueryToolExecutor(
             session: session, catalog: SchemaCatalog(session: session), gate: gate,
             onPropose: { _, _ in },
-            activeTabStatements: { _ in ["SELECT id FROM t ORDER BY id", "DELETE FROM t"] }
+            activeTabStatements: { _ in ["SELECT id FROM t ORDER BY id", "DELETE FROM t"] },
+            readOnlyRoute: sqliteReadOnlyRoute()
         )
 
         let outcome = await executor.execute(AIToolCall(id: "c", name: "run_tab_statements", args: ["which": "all"]))
@@ -868,7 +879,7 @@ struct QueryToolExecutorTests {
             options: .init(autoApproveSelects: false),
             onPropose: { _, _ in },
             activeTabStatements: { _ in ["SELECT 1", "SELECT 2"] },
-            executeStatement: { sql, lease in
+            executeStatement: { sql, lease, _ in
                 if sql == "SELECT 1" {
                     try? await Task.sleep(nanoseconds: 30_000_000) // 30ms
                 }
@@ -894,7 +905,7 @@ struct QueryToolExecutorTests {
             gate: ScriptedGate(true),
             onPropose: { _, _ in },
             activeTabStatements: { _ in ["SELECT 1", "SELECT 2"] },
-            executeStatement: { sql, lease in
+            executeStatement: { sql, lease, _ in
                 if sql == "SELECT 2" {
                     try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
                 }
@@ -1007,7 +1018,7 @@ struct QueryToolExecutorTests {
         let executor = QueryToolExecutor(
             gate: ScriptedGate(true),
             onPropose: { _, _ in },
-            executeStatement: { _, _ in
+            executeStatement: { _, _, _ in
                 signal.signalStarted()
                 // Simulates a stuck thread/socket that completely ignores cancellation
                 await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -1447,7 +1458,8 @@ struct QueryToolExecutorTests {
             },
             store: store, profileID: profileID,
             resolveArtifactID: { tabID in tabID == host.tabID ? host.artifactID : nil },
-            linkArtifact: { tabID, artifactID in if tabID == host.tabID { host.artifactID = artifactID } }
+            linkArtifact: { tabID, artifactID in if tabID == host.tabID { host.artifactID = artifactID } },
+            readOnlyRoute: sqliteReadOnlyRoute()
         )
     }
 

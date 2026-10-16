@@ -33,6 +33,10 @@ public enum DriverError: Error, Sendable {
  /// first use — a possible man-in-the-middle. The
     /// connection is refused; the UI offers to trust the new key explicitly.
     case sshHostKeyChanged(host: String, port: Int, stored: String, presented: String)
+    /// A connection could not run a statement under a read-only mode the
+    /// server enforces, so the statement did not run. The payload is the
+    /// server's or the driver's own reason.
+    case readOnlyUnavailable(String)
 }
 
 extension DriverError: LocalizedError {
@@ -58,6 +62,18 @@ extension DriverError: LocalizedError {
                 localized: "The SSH host key for \(host):\(port) has changed. This could be a man-in-the-middle attack. The connection was refused.",
                 bundle: driverKitModuleBundle
             )
+        case .readOnlyUnavailable(let detail):
+            return String(localized: "Read-only mode unavailable: \(detail)", bundle: driverKitModuleBundle)
         }
+    }
+}
+
+extension DriverError {
+    /// The server's or the driver's own words, without the localized wrapper
+    /// `errorDescription` adds, for an error that carries another error's
+    /// reason, such as `readOnlyUnavailable`.
+    public var detail: String {
+        if case .queryFailed(let message, _) = self { return message }
+        return localizedDescription
     }
 }

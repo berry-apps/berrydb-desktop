@@ -541,6 +541,10 @@ struct AIPanelView: View {
                 Label(note, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(.orange)
             }
+            if let reason = approval.notAutoRunMessage {
+                Label(reason, systemImage: "lock.open")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(approval.sql)
                     .font(.system(.callout, design: .monospaced))

@@ -6,6 +6,7 @@
 "Query failed: %@" = "Query failed: %@";
 "Query cancelled" = "Query cancelled";
 "Not connected" = "Not connected";
+"Read-only mode unavailable: %@" = "Read-only mode unavailable: %@";
 "Unsupported: %@" = "Unsupported: %@";
 
 "The SSH host key for %@:%lld has changed. This could be a man-in-the-middle attack. The connection was refused." = "The SSH host key for %1$@:%2$lld has changed. This could be a man-in-the-middle attack. The connection was refused.";

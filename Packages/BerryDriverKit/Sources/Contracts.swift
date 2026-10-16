@@ -45,6 +45,30 @@ public protocol StatementBoundingConnection: DriverConnection {
     func boundEachStatement(by timeout: Duration) async -> Bool
 }
 
+/// A connection that runs a statement under a read-only mode the server
+/// enforces, so a write the statement attempts fails at the server whatever
+/// its text looks like: a function with side effects, a user-defined
+/// function that writes, or a statement that tries to switch the mode off.
+/// Found with `as? any ReadOnlyExecuting`, like `StatementBoundingConnection`.
+public protocol ReadOnlyExecuting: DriverConnection {
+    /// Applies the connection's read-only settings once, after connect, and
+    /// reads them back. Throws `DriverError.readOnlyUnavailable` when the
+    /// server refuses a setting or it does not read back as set; the caller
+    /// then closes the connection without running anything on it.
+    func prepareReadOnly() async throws
+
+    /// Runs exactly one statement under the read-only mode, bounded by
+    /// `timeout` where the server can bound a statement. Finishes with
+    /// `DriverError.readOnlyUnavailable`, without running the statement, when
+    /// the mode cannot be established, and with the `ReadOnlyAllowlist`
+    /// refusal, before the server sees it, when the text does not start like
+    /// a read. There is deliberately no fallback to
+    /// an unscoped run, unlike `CatalogReadScoping.beginCatalogReads`: these
+    /// statements come from outside the app and are safe only because the
+    /// server refuses their writes.
+    nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error>
+}
+
 /// The catalog reads of one harvest pass or statistics refresh, which a
 /// connection can run together, in one transaction.
 public struct CatalogReadScope: Hashable, Sendable {

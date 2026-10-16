@@ -461,6 +461,7 @@ public struct WorkspaceView: View {
             aiController.readActiveTab = { viewModel.activeTabSnapshot() }
             aiController.readOpenTabs = { viewModel.openTabsSnapshot() }
             aiController.activeTabStatements = { which in viewModel.activeEditorStatements(for: which) }
+            aiController.readOnlyRoute = { session in await viewModel.readOnlyRoute(for: session) }
             aiController.resolveArtifactID = { tabID in viewModel.artifactID(forTab: tabID) }
             aiController.linkArtifact = { tabID, artifactID in viewModel.setArtifactID(artifactID, forTab: tabID) }
             aiController.openArtifact = { artifactID in viewModel.openArtifact(id: artifactID) }

@@ -32,19 +32,28 @@ public enum QueryService {
         set { sinkLock.lock(); defer { sinkLock.unlock() }; _confirmsDataDeletion = newValue }
     }
 
+    /// Runs one statement on a connection other than the session's own.
+    public typealias StatementRunner = @Sendable (String) -> AsyncThrowingStream<ResultEvent, Error>
+
+    /// `via` sends the statement to another connection of the same session,
+    /// such as its read-only connection, after the same auto-LIMIT, danger
+    /// gate and history as a statement on the session's own connection. Only
+    /// statements on the session's own connection reach
+    /// `SessionStateTracker`, since only they leave state there.
     public static func execute(
         _ sql: String,
         on session: Session,
         autoLimit: Int? = defaultAutoLimit,
         recordHistory: Bool = true,
-        dangerPreconfirmed: Bool = false
+        dangerPreconfirmed: Bool = false,
+        via runner: StatementRunner? = nil
     ) -> AsyncThrowingStream<ResultEvent, Error> {
         let effectiveSQL = applyAutoLimitIfNeeded(sql, dialect: session.dialect, limit: autoLimit)
         return instrumented(
             sql: effectiveSQL, session: session, recordHistory: recordHistory,
-            dangerPreconfirmed: dangerPreconfirmed
+            dangerPreconfirmed: dangerPreconfirmed, tracksSessionState: runner == nil
         ) {
-            session.connection.execute(effectiveSQL)
+            runner?(effectiveSQL) ?? session.connection.execute(effectiveSQL)
         }
     }
 
@@ -76,9 +85,11 @@ public enum QueryService {
         session: Session,
         recordHistory: Bool = true,
         dangerPreconfirmed: Bool = false,
+        tracksSessionState: Bool = true,
         makeInner: @escaping @Sendable () -> AsyncThrowingStream<ResultEvent, Error>
     ) -> AsyncThrowingStream<ResultEvent, Error> {
         let profileID = session.profileID
+        let sessionID = session.id
  // also honor the connection's history switch, not just the
         // per-call opt-out used by background harvesters.
         let shouldRecord = recordHistory && session.recordHistory
@@ -135,6 +146,9 @@ public enum QueryService {
                         continuation.yield(event)
                     }
                     report(.success)
+                    if tracksSessionState {
+                        SessionStateTracker.shared.recordSucceeded(sql, sessionID: sessionID)
+                    }
                     continuation.finish()
                 } catch let error as DriverError {
                     if case .cancelled = error {
