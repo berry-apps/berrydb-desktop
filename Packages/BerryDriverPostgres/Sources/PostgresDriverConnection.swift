@@ -275,6 +275,10 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
     /// - A number compares with a varchar column, which has no operator for
     ///   bigint, and a double with a numeric column exactly, where float8
     ///   compared each numeric rounded to a double.
+    /// - A double that is a whole number within Int64 goes as an integer:
+    ///   an integer column refuses `3.0`, as Swift writes the double, with
+    ///   "invalid input syntax for type integer", and float8 and numeric
+    ///   read `3` as well.
     /// - The cost: a parameter with nothing around it to give it a type is
     ///   read as text (`SELECT $1` returns the text `1`), and where text
     ///   does not fit, as in `$1 + $2`, the statement fails until a cast
@@ -286,7 +290,7 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
             case .null: bindings.appendNull()
             case .bool(let value): bindings.append(UntypedText(value: value ? "true" : "false"))
             case .int(let value): bindings.append(UntypedText(value: String(value)))
-            case .double(let value): bindings.append(UntypedText(value: String(value)))
+            case .double(let value): bindings.append(UntypedText(value: Int64(exactly: value).map { String($0) } ?? String(value)))
             case .text(let value): bindings.append(UntypedText(value: value))
             }
         }

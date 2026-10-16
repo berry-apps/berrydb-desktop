@@ -46,6 +46,14 @@ struct PostgresReadOnlyStatementTests {
         #expect(bindings([.double(2.5), .double(1e-5), .double(.infinity)]) == bindings([.text("2.5"), .text("1e-05"), .text("inf")]))
         #expect(bindings([.bool(true), .bool(false)]) == bindings([.text("true"), .text("false")]))
     }
+
+    /// An integer column reads `3` but refuses `3.0`, as Swift writes the
+    /// double; a double outside Int64 keeps its own text.
+    @Test func anIntegralDoubleIsBoundAsAnInteger() {
+        let bindings = PostgresDriverConnection.bindings(for:)
+        #expect(bindings([.double(3.0), .double(-2.0), .double(1e16)]) == bindings([.text("3"), .text("-2"), .text("10000000000000000")]))
+        #expect(bindings([.double(1e19), .double(-0.5)]) == bindings([.text("1e+19"), .text("-0.5")]))
+    }
 }
 
 /// Runs against a real PostgreSQL from `BERRYDB_TEST_POSTGRES`; skipped when
@@ -161,6 +169,24 @@ struct PostgresReadOnlyLiveTests {
 
         #expect(refusal(error)?.contains("could not determine data type of parameter $2") == true, "\(String(describing: error))")
         #expect(try await readOnly("SELECT 1", on: opened) == [[.int(1)]])
+    }
+
+    /// Sent as `3.0`, the double failed with "invalid input syntax for type
+    /// integer" (verified against PostgreSQL 16.15).
+    @Test func anIntegralDoubleComparesWithAnIntegerColumn() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+        try await drain(opened.main.execute("INSERT INTO \(opened.table) VALUES (2), (3)"))
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT id FROM \(opened.table) WHERE id = $1", parameters: [.double(3.0)], timeout: .seconds(30)
+        ))
+        let asDouble = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT $1::float8, $2::numeric::text", parameters: [.double(3.0), .double(3.0)], timeout: .seconds(30)
+        ))
+
+        #expect(rows == [[.int(3)]])
+        #expect(asDouble == [[.double(3.0), .text("3")]])
     }
 
     /// Sent as bigint, the number failed with "operator does not exist:
