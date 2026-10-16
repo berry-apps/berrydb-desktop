@@ -1275,6 +1275,53 @@ struct MCPProjectsSettingsModelTests {
         #expect(model.errorMessage == Self.privilegeCheckNotFinished("Orders"))
         #expect(box.writeCount == 0)
         #expect(box.key == sealedKey)
+
+        // The draft's record of what was on is for the editor only.
+        draft.verifiedLiveReads = [orders.id]
+        #expect(model.save(draft) == false)
+        #expect(model.errorMessage == Self.privilegeCheckNotFinished("Orders"))
+        #expect(box.writeCount == 0)
+    }
+
+    /// The editor asks for the production consent and a privilege check only
+    /// for live reads a save would turn on, so the draft records which were
+    /// already on, and verified, when the editor opened.
+    @Test func theDraftMarksTheLiveReadsAlreadyOn() throws {
+        let (store, orders, _) = try makeStore()
+        let reporting = ConnectionProfile(driverID: "mysql", name: "Reporting")
+        let local = ConnectionProfile(driverID: "sqlite", name: "Local", filePath: "/data/local.sqlite")
+        try store.save(reporting)
+        try store.save(local)
+        let box = KeyBox()
+        let sealedKey = SymmetricKey(size: .bits256)
+        box.data = sealedKey.withUnsafeBytes { Data($0) }
+        let seeded = MCPProject(name: "Billing", isEnabled: true, workspaceRoots: ["/work/billing"], profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: true),
+            MCPProfileAccess(profileID: reporting.id),
+            MCPProfileAccess(profileID: local.id),
+        ])
+        try store.saveMCPProject(seeded, sealingKey: sealedKey, previousKey: nil)
+        try store.executeForTesting(
+            "UPDATE mcp_project_profile SET liveRead = 1 WHERE profileID = ?",
+            arguments: [reporting.id]
+        )
+        let model = makeModel(store, box)
+
+        var draft = try #require(model.draft(for: seeded.id))
+
+        #expect(draft.verifiedLiveReads == [orders.id])
+        #expect(!MCPProjectsSettingsModel.turnsLiveReadsOn(orders.id, in: draft))
+        draft.access[orders.id]?.liveRead = false
+        draft.access[orders.id]?.liveRead = true
+        #expect(!MCPProjectsSettingsModel.turnsLiveReadsOn(orders.id, in: draft))
+        #expect(!MCPProjectsSettingsModel.startsPrivilegeCheck(for: orders, in: draft))
+        draft.access[reporting.id]?.liveRead = true
+        #expect(MCPProjectsSettingsModel.turnsLiveReadsOn(reporting.id, in: draft))
+        #expect(MCPProjectsSettingsModel.startsPrivilegeCheck(for: reporting, in: draft))
+        draft.access[local.id]?.liveRead = true
+        #expect(MCPProjectsSettingsModel.turnsLiveReadsOn(local.id, in: draft))
+        #expect(!MCPProjectsSettingsModel.startsPrivilegeCheck(for: local, in: draft))
+        #expect(model.draftForNewProject().verifiedLiveReads.isEmpty)
     }
 
     @Test func aDriverWithoutLiveReadsCannotTurnThemOn() throws {

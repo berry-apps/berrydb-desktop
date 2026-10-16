@@ -53,6 +53,12 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         /// Confirmations given in the editor. `save` asks for them only for
         /// profiles whose live reads it turns on.
         public var acknowledged: Set<Acknowledgment> = []
+        /// Profiles whose live reads were on, and verified, in the editing
+        /// copy this draft was made from; empty for a new project. The
+        /// editor reads it to tell live reads a save would turn on from live
+        /// reads that stay on. `save` does not trust it and reads the
+        /// editing copy again.
+        public internal(set) var verifiedLiveReads: Set<UUID> = []
     }
 
     /// One profile's live-read settings as the editor holds them. The store
@@ -282,6 +288,22 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         }
     }
 
+    /// True when saving `draft` turns live reads on for `profileID`: on in
+    /// the draft and not in `verifiedLiveReads`. Only such a profile needs
+    /// the production consent, a privilege check and, for a database user
+    /// that can write, the confirmation to use it anyway.
+    nonisolated public static func turnsLiveReadsOn(_ profileID: UUID, in draft: Draft) -> Bool {
+        draft.access[profileID]?.liveRead == true && !draft.verifiedLiveReads.contains(profileID)
+    }
+
+    /// True when the editor starts the privilege check of `profile`: `draft`
+    /// turns its live reads on, and its driver has database users to check.
+    /// Switching off and on again live reads that were already on starts
+    /// none.
+    nonisolated public static func startsPrivilegeCheck(for profile: ConnectionProfile, in draft: Draft) -> Bool {
+        needsPrivilegeCheck(profile) && turnsLiveReadsOn(profile.id, in: draft)
+    }
+
     /// True for the drivers whose database users can hold the write
     /// privileges `MCPPrivilegeCheck` looks for; a SQLite file has no users.
     nonisolated public static func needsPrivilegeCheck(_ profile: ConnectionProfile) -> Bool {
@@ -404,7 +426,8 @@ public final class MCPProjectsSettingsModel: ObservableObject {
                 isEnabled: project.isEnabled,
                 workspaceRoots: project.workspaceRoots,
                 profileIDs: project.profiles.map(\.profileID),
-                access: Dictionary(access, uniquingKeysWith: { first, _ in first })
+                access: Dictionary(access, uniquingKeysWith: { first, _ in first }),
+                verifiedLiveReads: Set(project.profiles.filter(\.liveRead).map(\.profileID))
             )
         } catch {
             errorMessage = L("MCP projects could not be loaded: \(error.localizedDescription)")
@@ -772,14 +795,17 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     )
 
     /// Why `draft` cannot be saved, for the first assigned profile whose live
-    /// reads it turns on against `editing`, or nil. `profiles` holds every
-    /// saved profile, and the draft only profiles found there.
+    /// reads it turns on against `editing`, or nil. The live reads already
+    /// on come from `editing`, never from the draft's own record of them.
+    /// `profiles` holds every saved profile, and the draft only profiles
+    /// found there.
     private func liveReadRefusal(
         for draft: Draft, editing: MCPProject?, profiles: [UUID: ConnectionProfile]
     ) -> String? {
-        let alreadyOn = Set(editing?.profiles.filter(\.liveRead).map(\.profileID) ?? [])
+        var current = draft
+        current.verifiedLiveReads = Set(editing?.profiles.filter(\.liveRead).map(\.profileID) ?? [])
         let turnedOn = draft.profileIDs.compactMap { profiles[$0] }.filter {
-            draft.access[$0.id]?.liveRead == true && !alreadyOn.contains($0.id)
+            Self.turnsLiveReadsOn($0.id, in: current)
         }
         for profile in turnedOn {
             guard Self.supportsLiveRead(profile) else {

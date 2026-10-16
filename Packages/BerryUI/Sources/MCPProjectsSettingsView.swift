@@ -300,11 +300,13 @@ private struct MCPProjectEditorSheet: View {
     }
 
     /// The live-read settings of an assigned profile, indented under its
-    /// row. The redactions, the production consent and the privilege
-    /// check's result are shown only while live reads are on.
+    /// row. The redactions are shown while live reads are on; the production
+    /// consent and the privilege check's result only while a save would
+    /// turn them on, since `save` asks for neither for live reads that stay on.
     @ViewBuilder
     private func liveReadSettings(for profile: ConnectionProfile, isProduction: Bool) -> some View {
         let id = profile.id
+        let turnsOn = MCPProjectsSettingsModel.turnsLiveReadsOn(id, in: draft)
         Group {
             Toggle(L("Live reads"), isOn: liveRead(of: profile))
             if draft.access[id]?.liveRead == true {
@@ -318,12 +320,16 @@ private struct MCPProjectEditorSheet: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                if isProduction, turnsOn {
                     Toggle(
                         L("I reviewed the redacted columns and accept reads on this production database"),
                         isOn: acknowledgment(.production(id))
                     )
                 }
-                privilegeStatus(of: id)
+                if turnsOn {
+                    privilegeStatus(of: id)
+                }
             }
         }
         .padding(.leading, 20)
@@ -417,15 +423,17 @@ private struct MCPProjectEditorSheet: View {
         )
     }
 
-    /// Turning live reads on starts the privilege check of a profile that
-    /// needs one; `save` refuses the draft until the check has a result.
+    /// Turning live reads on starts the privilege check when the model asks
+    /// for one; `save` refuses the draft until the check has a result.
     private func liveRead(of profile: ConnectionProfile) -> Binding<Bool> {
         let model = model
         return Binding(
             get: { draft.access[profile.id]?.liveRead ?? false },
             set: { isOn in
-                draft.access[profile.id, default: .init()].liveRead = isOn
-                if isOn, MCPProjectsSettingsModel.needsPrivilegeCheck(profile) {
+                var updated = draft
+                updated.access[profile.id, default: .init()].liveRead = isOn
+                draft = updated
+                if isOn, MCPProjectsSettingsModel.startsPrivilegeCheck(for: profile, in: updated) {
                     Task { await model.checkPrivileges(of: profile.id) }
                 }
             }
