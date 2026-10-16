@@ -126,6 +126,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     private let keyStore: MCPAccessKeyStore
     private let helperLocation: MCPHelperLocation
     private let privilegeChecker: @Sendable (ConnectionProfile) async throws -> [String]
+    private let privilegeCheckLimit: Duration
     private var helperURL: URL? {
         guard case let .bundled(url) = helperLocation else { return nil }
         return url
@@ -145,6 +146,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// A model whose helper is at `helperURL`, or that has none when it is nil.
     convenience init(
         store: BerryStore, keyStore: MCPAccessKeyStore, helperURL: URL?,
+        privilegeCheckLimit: Duration = defaultPrivilegeCheckLimit,
         privilegeChecker: @escaping @Sendable (ConnectionProfile) async throws -> [String] = { _ in
             throw PrivilegeCheckUnavailable()
         }
@@ -152,42 +154,105 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         self.init(
             store: store, keyStore: keyStore,
             helperLocation: helperURL.map(MCPHelperLocation.bundled) ?? .notBundled,
-            privilegeChecker: privilegeChecker
+            privilegeChecker: privilegeChecker,
+            privilegeCheckLimit: privilegeCheckLimit
         )
     }
 
     init(
         store: BerryStore, keyStore: MCPAccessKeyStore, helperLocation: MCPHelperLocation,
-        privilegeChecker: @escaping @Sendable (ConnectionProfile) async throws -> [String]
+        privilegeChecker: @escaping @Sendable (ConnectionProfile) async throws -> [String],
+        privilegeCheckLimit: Duration = defaultPrivilegeCheckLimit
     ) {
         self.store = store
         self.keyStore = keyStore
         self.helperLocation = helperLocation
         self.privilegeChecker = privilegeChecker
+        self.privilegeCheckLimit = privilegeCheckLimit
         reload()
     }
 
+    /// How long a privilege check may take before it is reported as failed:
+    /// the default request limit of a live read, so a server that answers
+    /// the helper in time also answers the check in time.
+    nonisolated static let defaultPrivilegeCheckLimit: Duration = .seconds(30)
+
     /// Runs the privilege check of `profileID` on the profile as stored now,
     /// publishing `.checking` and then the result: `.readOnlyRole` without
-    /// findings, `.writableRole` with them, `.failed` when the check throws.
-    /// A check that another check of the same profile, or `reload()`, has
-    /// superseded by the time it finishes sets nothing. A profile that is no
-    /// longer stored, or a store that cannot be read, is left alone.
+    /// findings, `.writableRole` with them, `.failed` when the check throws
+    /// or is still running once `privilegeCheckLimit` has passed. A check
+    /// past its limit is cancelled and left to unwind, which closes its
+    /// connection. A check that another check of the same profile, or
+    /// `reload()`, has superseded by the time it finishes sets nothing. A
+    /// profile that is no longer stored, or a store that cannot be read, is
+    /// left alone.
     public func checkPrivileges(of profileID: UUID) async {
         guard let profile = (try? store.allProfiles())?.first(where: { $0.id == profileID }) else { return }
         privilegeCheckSerial += 1
         let serial = privilegeCheckSerial
         privilegeChecks[profileID] = PrivilegeCheck(serial: serial, endpoint: Self.endpoint(of: profile))
         privilegeStates[profileID] = .checking
+        let checker = privilegeChecker
         let state: PrivilegeState
-        do {
-            let findings = try await privilegeChecker(profile)
+        switch await Self.result(within: privilegeCheckLimit, of: { try await checker(profile) }) {
+        case let .success(findings)?:
             state = findings.isEmpty ? .readOnlyRole : .writableRole(findings)
-        } catch {
+        case let .failure(error)?:
             state = .failed(error.localizedDescription)
+        case nil:
+            state = .failed(L("The check did not finish in time."))
         }
         guard privilegeChecks[profileID]?.serial == serial else { return }
         privilegeStates[profileID] = state
+    }
+
+    /// The result of `operation`, or nil once `limit` has passed or the
+    /// caller is cancelled; the operation is then cancelled and not awaited.
+    /// A task group cannot give this bound: it waits for every child, so an
+    /// operation that ignores cancellation would hold it past the limit.
+    nonisolated static func result<T: Sendable>(
+        within limit: Duration, of operation: @escaping @Sendable () async throws -> T
+    ) async -> Result<T, Error>? {
+        let (outcomes, sink) = AsyncStream<Result<T, Error>?>.makeStream()
+        let work = Task {
+            do {
+                sink.yield(.success(try await operation()))
+            } catch {
+                sink.yield(.failure(error))
+            }
+        }
+        let timer = Task {
+            try? await Task.sleep(for: limit)
+            sink.yield(nil)
+        }
+        var iterator = outcomes.makeAsyncIterator()
+        let first = await iterator.next() ?? nil
+        sink.finish()
+        timer.cancel()
+        work.cancel()
+        return first
+    }
+
+    /// Runs `check` on a connection from `open` and passes the connection to
+    /// `close` on every path: after `check` returns or throws, and without
+    /// running `check` when the task was cancelled while the connection
+    /// opened. A check past its limit is cancelled and left to unwind, so
+    /// this is what closes its connection then.
+    nonisolated static func withOwnConnection<Connection: Sendable>(
+        open: @Sendable () async throws -> Connection,
+        close: @Sendable (Connection) async -> Void,
+        _ check: @Sendable (Connection) async throws -> [String]
+    ) async throws -> [String] {
+        let connection = try await open()
+        do {
+            try Task.checkCancellation()
+            let findings = try await check(connection)
+            await close(connection)
+            return findings
+        } catch {
+            await close(connection)
+            throw error
+        }
     }
 
     /// `profile` with the fields blanked that only label it: the ones the
@@ -236,8 +301,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     }
 
     /// Runs `MCPPrivilegeCheck` on a connection opened for it alone and
-    /// closed on every path, a thrown error or cancellation included: the
-    /// MySQL check runs `SET ROLE ALL`, which changes the privileges of the
+    /// closed on every path (`withOwnConnection`): the MySQL check runs `SET ROLE ALL`, which changes the privileges of the
     /// session it runs in (https://dev.mysql.com/doc/refman/8.4/en/set-role.html).
     /// Secrets are read off the main actor, as the workspace reads them
     /// before connecting: `SecItemCopyMatching` blocks its calling thread
@@ -255,18 +319,15 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             )
         }.value
         let config = profile.makeConfig(password: password, sshPassword: sshPassword, sshPassphrase: sshPassphrase)
+        let isProduction = profile.envColor == "production"
         let manager = ConnectionManager()
-        let session = try await manager.open(
-            config, profileID: profileID, isProduction: profile.envColor == "production", recordHistory: false
+        return try await withOwnConnection(
+            open: {
+                try await manager.open(config, profileID: profileID, isProduction: isProduction, recordHistory: false)
+            },
+            close: { await manager.close($0.id) },
+            { try await MCPPrivilegeCheck.findings(on: $0.connection, driver: driver) }
         )
-        do {
-            let findings = try await MCPPrivilegeCheck.findings(on: session.connection, driver: driver)
-            await manager.close(session.id)
-            return findings
-        } catch {
-            await manager.close(session.id)
-            throw error
-        }
     }
 
     /// Why the pane offers no setup commands, ready to show; nil when

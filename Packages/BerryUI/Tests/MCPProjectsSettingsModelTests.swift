@@ -57,14 +57,18 @@ struct MCPProjectsSettingsModelTests {
     /// check, so no test opens a real connection.
     private func makeModel(
         _ store: BerryStore, _ box: KeyBox, helperURL: URL? = nil,
+        privilegeCheckLimit: Duration = MCPProjectsSettingsModel.defaultPrivilegeCheckLimit,
         privilegeChecker: (@Sendable (ConnectionProfile) async throws -> [String])? = nil
     ) -> MCPProjectsSettingsModel {
         if let privilegeChecker {
             return MCPProjectsSettingsModel(
-                store: store, keyStore: box.keyStore, helperURL: helperURL, privilegeChecker: privilegeChecker
+                store: store, keyStore: box.keyStore, helperURL: helperURL,
+                privilegeCheckLimit: privilegeCheckLimit, privilegeChecker: privilegeChecker
             )
         }
-        return MCPProjectsSettingsModel(store: store, keyStore: box.keyStore, helperURL: helperURL)
+        return MCPProjectsSettingsModel(
+            store: store, keyStore: box.keyStore, helperURL: helperURL, privilegeCheckLimit: privilegeCheckLimit
+        )
     }
 
     @Test func newProjectIsSealedAndVerifies() throws {
@@ -830,6 +834,36 @@ struct MCPProjectsSettingsModelTests {
         }
     }
 
+    /// A wait that ignores cancellation, as a driver call that never answers
+    /// does, until `release()`.
+    final class Hold: Sendable {
+        private struct State {
+            var released = false
+            var waiting: CheckedContinuation<Void, Never>?
+        }
+
+        private let state = Mutex(State())
+
+        func wait() async {
+            await withCheckedContinuation { continuation in
+                let released = state.withLock { state in
+                    if !state.released { state.waiting = continuation }
+                    return state.released
+                }
+                if released { continuation.resume() }
+            }
+        }
+
+        func release() {
+            let waiting = state.withLock { state in
+                state.released = true
+                defer { state.waiting = nil }
+                return state.waiting
+            }
+            waiting?.resume()
+        }
+    }
+
     /// Polls `condition` for up to about two seconds; the expectations that
     /// follow report a condition that never came true.
     private func waitUntil(_ condition: () -> Bool) async throws {
@@ -1091,6 +1125,82 @@ struct MCPProjectsSettingsModelTests {
 
         #expect(model.privilegeStates[orders.id] == .readOnlyRole)
         #expect(model.save(liveReadDraft(model, orders)))
+    }
+
+    /// A check that does not finish is reported as failed once its limit has
+    /// passed, without waiting for it; its connection is closed when the
+    /// check finally unwinds, and its late result sets nothing.
+    @Test func aCheckThatDoesNotFinishFailsAtTheLimitAndClosesItsConnectionLater() async throws {
+        let (store, orders, _) = try makeStore()
+        let hold = Hold()
+        let closes = CallCounter()
+        let model = makeModel(store, KeyBox(), privilegeCheckLimit: .milliseconds(50), privilegeChecker: { _ in
+            try await MCPProjectsSettingsModel.withOwnConnection(
+                open: { "connection" },
+                close: { _ in _ = closes.next() },
+                { _ in
+                    await hold.wait()
+                    return []
+                }
+            )
+        })
+        // Releases the check if the limit is not applied, so that regression
+        // fails the expectations below instead of hanging the suite.
+        let safety = Task {
+            try await Task.sleep(for: .seconds(2))
+            hold.release()
+        }
+        defer { safety.cancel() }
+        let timedOut = MCPProjectsSettingsModel.PrivilegeState.failed(L("The check did not finish in time."))
+
+        await model.checkPrivileges(of: orders.id)
+
+        #expect(model.privilegeStates[orders.id] == timedOut)
+        #expect(closes.count == 0)
+        hold.release()
+        try await waitUntil { closes.count == 1 }
+        #expect(closes.count == 1)
+        #expect(model.privilegeStates[orders.id] == timedOut)
+    }
+
+    /// The connection a check opens is closed whether the check returns or
+    /// throws, and a check cancelled while its connection opened does not
+    /// run on it once it is open.
+    @Test func theCheckConnectionIsClosedOnEveryPath() async throws {
+        let closes = CallCounter()
+        let findings = try await MCPProjectsSettingsModel.withOwnConnection(
+            open: { "connection" }, close: { _ in _ = closes.next() }, { _ in ["table_write"] }
+        )
+        #expect(findings == ["table_write"])
+        #expect(closes.count == 1)
+
+        await #expect(throws: InjectedCheckFailure.self) {
+            try await MCPProjectsSettingsModel.withOwnConnection(
+                open: { "connection" }, close: { _ in _ = closes.next() }, { _ in throw InjectedCheckFailure() }
+            )
+        }
+        #expect(closes.count == 2)
+
+        let opening = Hold()
+        let checks = CallCounter()
+        let cancelled = Task {
+            try await MCPProjectsSettingsModel.withOwnConnection(
+                open: {
+                    await opening.wait()
+                    return "connection"
+                },
+                close: { _ in _ = closes.next() },
+                { _ in
+                    _ = checks.next()
+                    return []
+                }
+            )
+        }
+        cancelled.cancel()
+        opening.release()
+        await #expect(throws: CancellationError.self) { try await cancelled.value }
+        #expect(checks.count == 0)
+        #expect(closes.count == 3)
     }
 
     /// A result describes the profile as it was when checked, and the

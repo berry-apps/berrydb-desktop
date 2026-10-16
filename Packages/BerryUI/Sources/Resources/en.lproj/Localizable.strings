@@ -780,6 +780,7 @@
 "This database user can change data (%@). BerryDB runs every agent query in a read-only transaction, but a read-only database user is the safer setup." = "This database user can change data (%@). BerryDB runs every agent query in a read-only transaction, but a read-only database user is the safer setup.";
 "Use this connection for live reads anyway" = "Use this connection for live reads anyway";
 "BerryDB could not check this user’s privileges: %@" = "BerryDB could not check this user’s privileges: %@";
+"The check did not finish in time." = "The check did not finish in time.";
 "Schema and graph metadata of these connections, and the rows of live reads, become visible to coding agents you configure and to their model providers." = "Schema and graph metadata of these connections, and the rows of live reads, become visible to coding agents you configure and to their model providers.";
 "Agent Setup" = "Agent Setup";
 "Each user-level command adds an entry named berrydb to the agent’s user configuration; run one of them once per agent. The shared entry works in every repository and selects the project from the agent’s folder." = "Each user-level command adds an entry named berrydb to the agent’s user configuration; run one of them once per agent. The shared entry works in every repository and selects the project from the agent’s folder.";
