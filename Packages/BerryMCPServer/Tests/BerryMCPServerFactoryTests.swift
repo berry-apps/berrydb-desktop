@@ -554,9 +554,50 @@ struct BerryMCPServerFactoryTests {
             try await client.cancelRequest(call.requestID, reason: "stopped")
             try await withDeadline(.seconds(10)) { await log.waitForCancellations(1) }
             try await withDeadline(.seconds(10)) { await tracker.waitForCloses(1) }
+            // `cancelRequest` resumes the client's own pending request with
+            // `CancellationError` before it sends the notification, so this
+            // shows only that the client stopped waiting, not that the
+            // server sent no response. The server stays silent because the
+            // tool throws `CancellationError`, which
+            // `aCancelledToolCallThrowsCancellation` pins.
             await #expect(throws: CancellationError.self) { try await call.value }
         }
         #expect(log.snapshot().statements.count == 1)
+    }
+
+    /// The SDK sends no response to a handler that throws
+    /// `CancellationError` (`handleRequest` in Server.swift of swift-sdk
+    /// 0.12.1), so a cancelled live read must end that way, not as a tool
+    /// result.
+    @Test func aCancelledToolCallThrowsCancellation() async throws {
+        let connection = ScriptedReadOnlyConnection(
+            events: [.columns([ColumnMeta(name: "n", declaredType: "INTEGER")])], finishes: false
+        )
+        let live = LiveReadHarness(connection: connection)
+        let context = MCPProjectContext.selected(
+            MCPVerifiedProject(project: projectB, liveReadProfileIDs: [billing.id]), source: .explicit, workspace: nil
+        )
+        live.liveReads.projectSource.bind { context }
+        let tool = MCPLiveReadTool(service: live.liveReads.service)
+        let metadata = try metadata()
+        let arguments: [String: Value] = ["connection_id": .string(billing.id.uuidString), "sql": "SELECT n FROM numbers"]
+        let task = Task { try await tool.call(arguments, context: context, metadata: metadata) }
+        let log = connection.log
+        try await withDeadline(.seconds(10)) { await log.waitForStatement() }
+        task.cancel()
+        let outcome = try await withDeadline(.seconds(10)) { () -> String in
+            do {
+                let result = try await task.value
+                return "returned \(result)"
+            } catch is CancellationError {
+                return "cancelled"
+            } catch {
+                return "threw \(error)"
+            }
+        }
+        #expect(outcome == "cancelled")
+        let tracker = live.tracker
+        try await withDeadline(.seconds(10)) { await tracker.waitForCloses(1) }
     }
 }
 

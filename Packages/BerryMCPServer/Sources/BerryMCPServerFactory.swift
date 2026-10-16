@@ -17,6 +17,7 @@ public enum BerryMCPServerFactory {
         /// `projectSource` must be the source the service's resolver loads
         /// its project from; `makeServer` binds it to the session it
         /// creates, so the service resolves against that session's project.
+        /// A source can be bound once, so one value serves one server.
         public init(service: MCPLiveReadService, projectSource: MCPSessionProjectSource) {
             self.service = service
             self.projectSource = projectSource

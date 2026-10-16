@@ -482,6 +482,18 @@ struct MCPToolCatalogTests {
         #expect(await read(.array(Array(repeating: .int(1), count: 100))) == nil)
     }
 
+    /// Arguments reach the tool as the SDK's `Value` decoder reads the
+    /// request's JSON, and that decoder decides whether a number binds as
+    /// an integer or a double.
+    @Test func numbersBindAsTheSDKDecodesThem() throws {
+        let json = #"{"parameters":[2,2.5,2.0,1e3,9223372036854775808]}"#
+        let arguments = try JSONDecoder().decode([String: Value].self, from: Data(json.utf8))
+        let bound = try MCPToolArguments(
+            arguments, allowing: MCPToolArguments.allowedKeys(for: .executeReadQuery)
+        ).parameters()
+        #expect(bound == [.int(2), .double(2.5), .int(2), .int(1_000), .double(9.223372036854775808e18)])
+    }
+
     @Test func sqlIsRequiredAndBounded() async throws {
         let id = connectionID
         func read(_ arguments: [String: Value]) async -> String? {
