@@ -249,7 +249,7 @@ UNION ALL SELECT 'setrole_writer' WHERE EXISTS (SELECT 1 FROM pg_auth_members m 
 ) x;
 ```
 
-MySQL: after `SET ROLE ALL`, for every `SHOW GRANTS FOR CURRENT_USER()` line matching `GRANT <privileges> ON `, split `<privileges>` on commas outside parentheses, drop any column list, uppercase, and reject if any name is outside the allowlist or the line ends with `WITH GRANT OPTION`. Role-membership lines (`GRANT <role> TO`) are skipped because `SET ROLE ALL` has already folded their privileges into the output.
+MySQL: after `SET ROLE ALL`, for every `SHOW GRANTS FOR CURRENT_USER()` line matching `GRANT <privileges> ON `, split `<privileges>` on commas outside parentheses, drop any column list, uppercase, and reject if any name is outside the allowlist or the line contains `WITH GRANT OPTION` anywhere, since MariaDB 11.8.9 can follow it with resource limits (`... WITH GRANT OPTION MAX_QUERIES_PER_HOUR 10`). Role-membership lines (`GRANT <role> TO`) are skipped because `SET ROLE ALL` has already folded their privileges into the output.
 
 MariaDB has no `SET ROLE ALL`; verified against MariaDB 11.8.9, where it fails
 with a syntax error near `ALL`. The check then runs `SHOW GRANTS` alone, applies

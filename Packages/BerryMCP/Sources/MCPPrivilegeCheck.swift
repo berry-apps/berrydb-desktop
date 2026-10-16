@@ -86,8 +86,11 @@ UNION ALL SELECT 'setrole_writer' WHERE EXISTS (SELECT 1 FROM pg_auth_members m 
                 let privilege = withoutColumnList(name).uppercased()
                 if !privilege.isEmpty, !readOnlyPrivileges.contains(privilege) { found.insert(privilege) }
             }
-            // MySQL 5.7 can append resource limits after the option, so it is
-            // not necessarily the end of the line.
+            // The option is matched anywhere in the line, not only at its end:
+            // MariaDB 11.8.9 follows it with the account's resource limits on
+            // a global grant line (SHOW GRANTS printed `GRANT SELECT ON *.* TO
+            // ... WITH GRANT OPTION MAX_QUERIES_PER_HOUR 10`), while MySQL
+            // 8.4.11 ended the same line with the option.
             if line.uppercased().contains(" WITH GRANT OPTION") {
                 found.insert("GRANT OPTION")
             }
