@@ -64,11 +64,71 @@ struct SessionStateTrackerTests {
 
         tracker.recordSucceeded(sql, sessionID: session)
 
-        #expect(tracker.state(for: session) == State(hasSessionLocalState: false, hasOpenTransaction: true))
+        #expect(tracker.state(for: session) == State(hasOpenTransaction: true, isAutocommitOff: true))
     }
 
-    @Test(arguments: ["SET autocommit = 1", "SET autocommit=ON", "set @@autocommit = true", "COMMIT", "ROLLBACK"])
-    func turningAutocommitBackOnOrEndingTheTransactionClearsIt(_ sql: String) {
+    /// With autocommit still off, the server opens the next transaction as
+    /// soon as one ends, so the session stays hidden whatever COMMIT or
+    /// ROLLBACK do in between
+    /// (https://dev.mysql.com/doc/refman/8.4/en/commit.html).
+    @Test(arguments: [
+        "COMMIT", "ROLLBACK", "SELECT 1; COMMIT", "COMMIT; COMMIT", "ROLLBACK; SELECT 1; COMMIT",
+    ])
+    func autocommitOffStaysHiddenAfterATransactionEnds(_ end: String) {
+        let tracker = SessionStateTracker()
+        let session = UUID()
+        tracker.recordSucceeded("SET autocommit = 0", sessionID: session)
+
+        tracker.recordSucceeded(end, sessionID: session)
+
+        #expect(tracker.state(for: session).isHiddenFromOtherConnections)
+    }
+
+    @Test func autocommitOffInTheSameTextAsTheCommitStaysHidden() {
+        let tracker = SessionStateTracker()
+        let session = UUID()
+
+        tracker.recordSucceeded("SET autocommit = 0; SELECT 1; COMMIT", sessionID: session)
+
+        #expect(tracker.state(for: session).isHiddenFromOtherConnections)
+    }
+
+    @Test func turningAutocommitBackOnAfterACommitReleasesTheSession() {
+        let tracker = SessionStateTracker()
+        let session = UUID()
+        tracker.recordSucceeded("SET autocommit = 0", sessionID: session)
+        tracker.recordSucceeded("COMMIT", sessionID: session)
+
+        tracker.recordSucceeded("SET autocommit = 1", sessionID: session)
+
+        #expect(!tracker.state(for: session).isHiddenFromOtherConnections)
+    }
+
+    @Test(arguments: ["SET SESSION autocommit = OFF", "SET @@autocommit=0", "set autocommit=false"])
+    func autocommitOffSpellingsStayHiddenAfterACommit(_ off: String) {
+        let tracker = SessionStateTracker()
+        let session = UUID()
+        tracker.recordSucceeded(off, sessionID: session)
+
+        tracker.recordSucceeded("COMMIT", sessionID: session)
+
+        #expect(tracker.state(for: session).isHiddenFromOtherConnections)
+    }
+
+    /// Autocommit never touched: a plain transaction is visible to others
+    /// again once it ends.
+    @Test func aPlainTransactionWithAutocommitUntouchedEndsVisible() {
+        let tracker = SessionStateTracker()
+        let session = UUID()
+
+        tracker.recordSucceeded("BEGIN", sessionID: session)
+        tracker.recordSucceeded("COMMIT", sessionID: session)
+
+        #expect(!tracker.state(for: session).isHiddenFromOtherConnections)
+    }
+
+    @Test(arguments: ["SET autocommit = 1", "SET autocommit=ON", "set @@autocommit = true"])
+    func turningAutocommitBackOnClearsIt(_ sql: String) {
         let tracker = SessionStateTracker()
         let session = UUID()
         tracker.recordSucceeded("SET autocommit = 0", sessionID: session)

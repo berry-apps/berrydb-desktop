@@ -16,21 +16,32 @@ public final class SessionStateTracker: @unchecked Sendable {
         /// Lasts until the session closes.
         public var hasSessionLocalState: Bool
         public var hasOpenTransaction: Bool
+        /// MySQL's `autocommit` is off: the server opens the next transaction
+        /// as soon as one ends, so this holds from `SET autocommit = 0` until
+        /// `SET autocommit = 1`, whatever COMMIT or ROLLBACK do in between.
+        public var isAutocommitOff: Bool
 
-        public init(hasSessionLocalState: Bool = false, hasOpenTransaction: Bool = false) {
+        public init(
+            hasSessionLocalState: Bool = false,
+            hasOpenTransaction: Bool = false,
+            isAutocommitOff: Bool = false
+        ) {
             self.hasSessionLocalState = hasSessionLocalState
             self.hasOpenTransaction = hasOpenTransaction
+            self.isAutocommitOff = isAutocommitOff
         }
 
         /// Whether another connection would read the database differently
         /// from the session's own.
-        public var isHiddenFromOtherConnections: Bool { hasSessionLocalState || hasOpenTransaction }
+        public var isHiddenFromOtherConnections: Bool { hasSessionLocalState || hasOpenTransaction || isAutocommitOff }
     }
 
     enum Effect: Equatable {
         case sessionLocal
         case beginsTransaction
         case endsTransaction
+        case turnsAutocommitOff
+        case turnsAutocommitOn
     }
 
     public static let shared = SessionStateTracker()
@@ -59,6 +70,12 @@ public final class SessionStateTracker: @unchecked Sendable {
             case .sessionLocal: state.hasSessionLocalState = true
             case .beginsTransaction: state.hasOpenTransaction = true
             case .endsTransaction: state.hasOpenTransaction = false
+            case .turnsAutocommitOff:
+                state.isAutocommitOff = true
+                state.hasOpenTransaction = true
+            case .turnsAutocommitOn:
+                state.isAutocommitOff = false
+                state.hasOpenTransaction = false
             }
         }
         states[sessionID] = state
@@ -131,16 +148,15 @@ public final class SessionStateTracker: @unchecked Sendable {
     }
 
     /// MySQL's `SET autocommit`. Turned off, it keeps a transaction open from
-    /// the next statement on (https://dev.mysql.com/doc/refman/8.4/en/commit.html);
-    /// turned back on, it commits that transaction
-    /// (https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html). A
-    /// COMMIT or ROLLBACK clears the flag as for any transaction, although
-    /// with autocommit still off the server opens the next one at once; a
-    /// write in it goes unseen, like any other state this tracker misses.
+    /// the next statement on (https://dev.mysql.com/doc/refman/8.4/en/commit.html),
+    /// and a COMMIT or ROLLBACK does not end that: the server opens the next
+    /// transaction at once, holding rows another connection cannot see. So the
+    /// session stays hidden until autocommit is turned back on, which commits
+    /// the open transaction (https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html).
     private static func autocommitEffect(_ value: String?) -> Effect? {
         switch value {
-        case "0", "OFF", "FALSE": .beginsTransaction
-        case "1", "ON", "TRUE": .endsTransaction
+        case "0", "OFF", "FALSE": .turnsAutocommitOff
+        case "1", "ON", "TRUE": .turnsAutocommitOn
         default: nil
         }
     }
