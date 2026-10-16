@@ -39,7 +39,7 @@ public struct MCPLiveReadResult: Encodable, Equatable, Sendable {
 
 public enum MCPLiveReadError: Error, Equatable, Sendable, CustomStringConvertible {
     case unknownConnection, liveReadNotEnabled, noProject, unsupportedDatabase
-    case policy(String), readOnlyUnavailable, connectionFailed
+    case policy(String), readOnlyUnavailable, connectionFailed, openTimedOut(seconds: Int)
     case timedOut(seconds: Int), queryFailed(String), resultTooLarge
 
     public var description: String {
@@ -51,6 +51,7 @@ public enum MCPLiveReadError: Error, Equatable, Sendable, CustomStringConvertibl
         case .policy(let reason): "The query was refused before it ran: \(reason)"
         case .readOnlyUnavailable: "BerryDB could not open a read-only session on this database, so the query did not run."
         case .connectionFailed: "BerryDB could not connect to this database."
+        case .openTimedOut(let seconds): "BerryDB could not open a connection to this database within \(seconds) seconds."
         case .timedOut(let seconds): "The query did not finish within \(seconds) seconds."
         case .queryFailed(let message): "The database refused the query: \(message)"
         case .resultTooLarge: "Result too large; narrow the request"

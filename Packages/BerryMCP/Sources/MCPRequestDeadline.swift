@@ -32,10 +32,12 @@ enum MCPRequestDeadline {
         try await run(limit, opening: limit) { _ in try await operation() }
     }
 
-    /// As `run(_:_:)`, and also throws `timedOut` once `openLimit` has passed
-    /// unless the operation called `Opening.opened(statementLimit:)` by
-    /// then. A connection that never opens therefore fails after the open
-    /// budget, not after the whole request's limit.
+    /// As `run(_:_:)`, and also throws `openTimedOut` once `openLimit` has
+    /// passed unless the operation called `Opening.opened(statementLimit:)`
+    /// by then. A connection that never opens therefore fails after the open
+    /// budget, not after the whole request's limit, and is reported as a
+    /// connection that did not open rather than as a statement that ran too
+    /// long, so an agent does not rewrite its SQL to fix a network problem.
     static func run<T: Sendable>(
         _ limit: Duration, opening openLimit: Duration,
         _ operation: @escaping @Sendable (Opening) async throws -> T
@@ -48,8 +50,8 @@ enum MCPRequestDeadline {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
                 guard once.install(continuation) else { return }
-                let expire: @Sendable (Duration) -> Void = { reported in
-                    if once.resume(with: .failure(MCPLiveReadError.timedOut(seconds: wholeSeconds(reported)))) {
+                let expire: @Sendable (MCPLiveReadError) -> Void = { error in
+                    if once.resume(with: .failure(error)) {
                         work.cancel()
                     }
                 }
@@ -58,14 +60,14 @@ enum MCPRequestDeadline {
                         if openLimit < limit {
                             try await Task.sleep(for: openLimit)
                             guard let statementLimit = opening.statementLimit else {
-                                expire(openLimit)
+                                expire(.openTimedOut(seconds: wholeSeconds(openLimit)))
                                 return
                             }
                             try await Task.sleep(for: limit - openLimit)
-                            expire(statementLimit)
+                            expire(.timedOut(seconds: wholeSeconds(statementLimit)))
                         } else {
                             try await Task.sleep(for: limit)
-                            expire(limit)
+                            expire(.timedOut(seconds: wholeSeconds(limit)))
                         }
                     } catch {
                         return

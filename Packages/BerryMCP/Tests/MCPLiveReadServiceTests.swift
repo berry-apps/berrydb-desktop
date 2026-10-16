@@ -134,8 +134,10 @@ struct MCPLiveReadServiceTests {
         let started = clock.now
         let error = await harness.failure("SELECT 1")
         let waited = clock.now - started
-        #expect(error == .timedOut(seconds: 1))
-        #expect(error?.description == "The query did not finish within 1 seconds.")
+        // The statement never ran, so the text names the connection, not the
+        // query: an agent must not shorten its SQL to fix a network problem.
+        #expect(error == .openTimedOut(seconds: 1))
+        #expect(error?.description == "BerryDB could not open a connection to this database within 1 seconds.")
         // Without the open budget the 30 s request limit would apply. A fully
         // loaded parallel run of the whole suite has delayed this 200 ms
         // deadline by 8 s, so the bound only separates the two; the reported
@@ -329,6 +331,23 @@ struct MCPRequestDeadlineTests {
             }
         }
         #expect(outcome == .timedOut(seconds: 7))
+        await gate.open()
+    }
+
+    @Test func anExpiryBeforeTheOpenReportsTheOpenLimit() async throws {
+        let gate = AsyncGate()
+        let outcome = try await withDeadline(.seconds(60)) { () -> MCPLiveReadError? in
+            do {
+                _ = try await MCPRequestDeadline.run(.seconds(30), opening: .milliseconds(100)) { _ in
+                    await gate.wait()
+                    return 0
+                }
+                return nil
+            } catch {
+                return error as? MCPLiveReadError
+            }
+        }
+        #expect(outcome == .openTimedOut(seconds: 1))
         await gate.open()
     }
 
