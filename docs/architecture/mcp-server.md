@@ -630,7 +630,7 @@ which is packaging work (see
 MySQL/MariaDB or SQLite connection whose live reads the user turned on in the
 **AI Agents** pane. It is listed only when the selected project has such a
 connection with settings that verify; with none, `tools/list` omits it.
-Input: `connection_id`, `sql` (at most 65,536 characters), optional `parameters` (at most
+Input: `connection_id`, `sql` (at most 65,536 bytes of UTF-8), optional `parameters` (at most
 100 scalars: `$1`, `$2`, … on PostgreSQL, `?` on MySQL/MariaDB and SQLite) and
 `row_limit` (1–100). Output: `columns`, `rows` (arrays), `row_count`,
 `truncated`, `has_more_rows`, `truncated_cells`, `byte_limit_reached`,
@@ -651,9 +651,9 @@ reaches the server:
    in the normal mode, not `SQLITE_OPEN_READONLY`, so `query_only` is what
    refuses a write. A driver that cannot enforce this does not advertise the
    tool.
-2. **Privilege check, a warning before live reads turn on.** When a save
-   turns live reads on for a PostgreSQL or MySQL/MariaDB connection,
-   Settings first checks whether its database user could write, including
+2. **Privilege check, a warning before live reads turn on.** When live
+   reads are switched on for a PostgreSQL or MySQL/MariaDB connection,
+   Settings checks whether its database user could write, including
    through inherited roles, `rds_superuser` membership, ownership, or
    column-level write privileges (the queries and how they were verified are
    in [Privilege checks](../mcp-server-compatibility.md#g3-privilege-checks)).
@@ -693,6 +693,23 @@ privilege, only the read policy, which refuses `INTO`, `OUTFILE` and
 `DUMPFILE`, and the server's `secure_file_priv` stop it. The privilege
 check lists `FILE` among its findings.
 
+Once the arguments are valid, every failure is a one-line tool result. A
+failure while resolving the connection or opening it (reading its secrets,
+the SSH tunnel, the connection, the read-only session) is reported as fixed
+text and the driver's error is never forwarded, because a connect error can
+name a host, a user or a file path: `BerryDB could not connect to this
+database.`, `BerryDB could not open a read-only session on this database,
+so the query did not run.`, or `BerryDB could not open a connection to this
+database within 15 seconds.` once the open budget in [Limits](#limits) has
+passed. A connection the driver reports as lost gets the first of those
+texts at any time. A query error raised once the statement runs is
+forwarded in the driver's own words, prefixed `The database refused the
+query:`, on one line, with every MySQL/MariaDB `'user'@'host'` account
+masked, and cut at 500 characters. That covers the server's refusal and
+also a client-side driver error during the read: the PostgreSQL driver
+reports a connection dropped mid-read as a failed query, so it arrives in
+the PostgreSQL client library's own text.
+
 Returned rows leave BerryDB: they go to the calling MCP host and from there
 potentially to that host's model provider; the server running locally does
 not keep returned schema, graph, or row data on the Mac. Redaction hides
@@ -711,9 +728,18 @@ the settings pane requires reviewing the redacted-column list and
 acknowledging that reads use database resources and take shared locks, which
 can delay DDL or migrations. Once enabled, the profile is subject to the
 stricter production-labeled limits below. The pane's per-connection **Live
-reads** switch exists for PostgreSQL, MySQL/MariaDB and SQLite connections;
-a save carries each profile's `liveRead` over from the verified editing
-copy, so a save never turns one on by itself.
+reads** switch exists for PostgreSQL, MySQL/MariaDB and SQLite connections.
+A save applies the draft's live-read switches and redacted columns to the
+verified editing copy of the project, in which a switch whose row does not
+verify is already off. For each connection whose live reads the save turns
+on (off in that copy, on in the draft) it requires the production consent
+when the connection is production-labeled, and, on PostgreSQL and
+MySQL/MariaDB, a finished privilege check run against the server and
+account the stored connection still points at; a check that found a user
+that can write, or could not run, also needs the confirmation to use the
+connection anyway. A save that lacks any of these changes nothing. Live
+reads that stay on are not checked again, and turning them off needs
+nothing.
 
 The production label is the connection's environment label, a display
 field stored outside the sealed fields (see the fingerprint above). Whether
@@ -724,13 +750,29 @@ can edit the store file and remove the label.
 
 | Limit | Default | Production-labeled profile |
 |---|---|---|
-| Request timeout | 30 s | 5 s |
+| Opening the connection | 15 s | 15 s |
+| Statement time limit | 30 s | 5 s |
 | Rows / items per response | 100 | 50 |
 | Serialized result | 1 MiB | 256 KiB |
 | Encoded cell | 64 KiB | 64 KiB |
 | Schema objects per response | 200 | 200 |
 | Estimated size of a full-detail schema page | 512 KiB | 512 KiB |
 | Graph nodes / edges | 500 / 1,000 | 500 / 1,000 |
+
+A live read first has 15 s to resolve the connection, read its secrets
+from Keychain, open any SSH tunnel and the connection, and make the session
+read-only; past that it fails with `BerryDB could not open a connection to
+this database within 15 seconds.` The statement then has the time limit
+above, which the server enforces where it can: PostgreSQL through
+`statement_timeout` (with a 5 s `lock_timeout`) on every statement, MySQL
+through a `MAX_EXECUTION_TIME` hint and MariaDB through `SET STATEMENT
+max_statement_time` on a statement that starts with `SELECT`. If the
+server has not ended the statement one second after the limit, the helper
+ends it; that is the only bound on SQLite, and on a MySQL or MariaDB
+statement that does not start with `SELECT`. Either way the result is `The
+query did not finish within 30 seconds.` (5 for a production-labeled
+connection). A last bound of 47 s (15 + 30 + 2) covers the whole request,
+including building the result and closing the session.
 
 A schema page ends at 200 objects or, at `full` detail, at an estimated
 512 KiB, whichever comes first, and `next_offset` continues it; the
@@ -739,9 +781,9 @@ an estimate that runs short still fit. Graph queries share a per-process
 cache of table-level graphs, at most 4 entries and 32 MB, each dropped
 after 60 s unused.
 
-Projects may configure stricter values only. Truncation is explicit
-(`truncated`, omitted counts, an opaque continuation cursor where supported);
-the limiter's cost is linear in the rows it keeps, not in the rows scanned.
+Truncation is explicit (`truncated`, omitted counts, an opaque continuation
+cursor where supported); the limiter's cost is linear in the rows it keeps,
+not in the rows scanned.
 A live read stops reading once it has the row limit: `has_more_rows` says the
 server had more, `byte_limit_reached` that the serialized-result ceiling
 ended the page, and `truncated_cells` counts cells cut at 64 KiB.

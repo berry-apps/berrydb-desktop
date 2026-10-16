@@ -205,7 +205,7 @@ make run
    ```
 4. Start a new agent session in one of those folders and ask the agent to call `berrydb_status`. If macOS asks whether `berrydb-mcp` may use a key in your login keychain, choose **Always Allow**.
 
-5. To let the agent run read queries, open the project, turn on **Live reads** for a connection, review its redacted columns, acknowledge any privilege warning (and, for a production-labeled connection, the production notice), and click **Save**. The agent's next session lists `berrydb_execute_read_query`.
+5. To let the agent run read queries, open the project, turn on **Live reads** for a connection, review its redacted columns, acknowledge any privilege warning (and, for a production-labeled connection, the production notice), and click **Save**. The agent's next session lists `berrydb_execute_read_query`. Its first read on a connection reads that connection's secrets from your Keychain, so macOS may ask once for each of them whether `berrydb-mcp` may use it; choose **Always Allow**. The read waits for your answer and fails if you have not answered within 15 seconds.
 
 Only add connections whose schema and data you are willing to share: what the tools return, including query rows, goes to the agent's model provider. Per-repository entries, status reasons, and current limits are in the [Coding Agents (MCP) guide](https://db.berryhub.app/docs#coding-agents).
 
