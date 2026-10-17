@@ -350,15 +350,23 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
         return .null
     }
 
+    /// Server errors that end a statement because it was stopped, not
+    /// because it failed: 1317 ER_QUERY_INTERRUPTED, raised by KILL QUERY on
+    /// both servers; 3024 ER_QUERY_TIMEOUT, MySQL's `MAX_EXECUTION_TIME`;
+    /// 1969 ER_STATEMENT_TIMEOUT, MariaDB's `max_statement_time`. Verified
+    /// against MySQL 8.4.11 and MariaDB 11.8.9, where MySQLNIO 1.9.1 delivers
+    /// each as `MySQLError.server`. MySQL has no error 1969 and MariaDB lists
+    /// 3024 as ER_UNUSED_1, so one list serves both.
+    static let cancelErrorCodes: [MySQLProtocol.ErrorCode] = [.QUERY_INTERRUPTED, .QUERY_TIMEOUT, 1969]
+
+    /// A cancel is decided by the server's error number. The text cannot
+    /// decide it: a syntax error quotes the statement, so `SELECT 1317 1317`
+    /// fails with "near '1317'", and a literal 'interrupted' reaches the
+    /// message the same way.
     static func mapError(_ error: Error) -> DriverError {
         if let driverError = error as? DriverError { return driverError }
-        if let mysqlError = error as? MySQLError {
-            // ER_QUERY_INTERRUPTED (1317) — hit by KILL QUERY.
-            let text = String(reflecting: mysqlError)
-            if text.contains("1317") || text.lowercased().contains("interrupted") {
-                return .cancelled
-            }
-            return .queryFailed(message: describe(mysqlError), code: nil)
+        if case MySQLError.server(let packet) = error, cancelErrorCodes.contains(packet.errorCode) {
+            return .cancelled
         }
         return .queryFailed(message: describe(error), code: nil)
     }
