@@ -412,7 +412,10 @@ let package = Package(
         ),
         .testTarget(
             name: "BerryDriverPostgresTests",
-            dependencies: ["BerryDriverPostgres", "BerryDriverKit", "BerryDriverTestKit"],
+            dependencies: [
+                "BerryDriverPostgres", "BerryDriverKit", "BerryDriverTestKit",
+                .product(name: "PostgresNIO", package: "postgres-nio"),
+            ],
             path: "Packages/BerryDriverPostgres/Tests"
         ),
         .testTarget(

@@ -369,12 +369,42 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
     static func mapError(_ error: Error) -> DriverError {
         if let driverError = error as? DriverError { return driverError }
         if let psql = error as? PSQLError {
-            let state = psql.serverInfo?[.sqlState]
+            guard let serverInfo = psql.serverInfo else { return clientError(psql.code) }
+            let state = serverInfo[.sqlState]
             if state == "57014" { return .cancelled }   // query_canceled
-            let message = psql.serverInfo?[.message] ?? describe(psql)
+            // The server sends the message (M) and SQLSTATE (C) fields in
+            // every error (https://www.postgresql.org/docs/16/protocol-error-fields.html);
+            // the fixed fallback keeps PostgresNIO's debug text out of a
+            // statement's error even from a server that does not.
+            let message = serverInfo[.message] ?? "PostgreSQL server error \(state ?? "with no SQLSTATE")"
             return .queryFailed(message: message, code: nil)
         }
         return .queryFailed(message: describe(error), code: nil)
+    }
+
+    /// A `PSQLError` without server information is PostgresNIO's own, and
+    /// `String(reflecting:)` of it is its `debugDescription`, which carries
+    /// the underlying error, the file and line of the call and the query with
+    /// its binds (PostgresNIO 1.33.0), so only the code is shown.
+    ///
+    /// The connection-level codes say the connection is gone. Verified
+    /// against PostgreSQL 16.15: a connection whose socket ended while a
+    /// statement ran failed the statement with `serverClosedConnection` on a
+    /// FIN and `connectionError` on a reset. `clientClosedConnection` fails a
+    /// statement sent after the connection began closing, and
+    /// `uncleanShutdown` reads "Unexpected connection close" in PostgresNIO's
+    /// own mapping (`toPostgresError()`). `queryCancelled` is raised when the
+    /// reader of a statement's rows goes away, and the connection stays open
+    /// (`ConnectionStateMachine.shouldCloseConnection`).
+    static func clientError(_ code: PSQLError.Code) -> DriverError {
+        switch code {
+        case .serverClosedConnection, .clientClosedConnection, .connectionError, .uncleanShutdown:
+            .connectionLost("PostgreSQL client error: \(code)")
+        case .queryCancelled:
+            .cancelled
+        default:
+            .queryFailed(message: "PostgreSQL client error: \(code)", code: nil)
+        }
     }
 
     private static func describe(_ error: Error) -> String {
