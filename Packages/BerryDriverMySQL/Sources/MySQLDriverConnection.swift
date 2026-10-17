@@ -273,12 +273,24 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
 
  // MARK: - Value mapping
 
+    /// Reads each cell by its position. MySQLNIO 1.9.1's
+    /// `MySQLRow.column(_:table:)` returns the first column with a matching
+    /// name and table, so two result columns that share a name, as in
+    /// `SELECT 1 AS n, 2 AS n`, both read the first one's value (observed on
+    /// MySQL 8.4.11 and MariaDB 11.8.9). The `MySQLData` is built as that
+    /// method builds it, including the UNSIGNED flag, which decides how a
+    /// binary-protocol integer is read.
     static func berryValues(from row: MySQLRow) -> [BerryValue] {
-        row.columnDefinitions.map { definition in
-            guard let data = row.column(definition.name, table: definition.table) else {
-                return .null
-            }
-            return berryValue(from: data, definition: definition)
+        zip(row.columnDefinitions, row.values).map { definition, buffer in
+            berryValue(
+                from: MySQLData(
+                    type: definition.columnType,
+                    format: row.format,
+                    buffer: buffer,
+                    isUnsigned: definition.flags.contains(.COLUMN_UNSIGNED)
+                ),
+                definition: definition
+            )
         }
     }
 
@@ -338,15 +350,23 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
         return .null
     }
 
+    /// Server errors that end a statement because it was stopped, not
+    /// because it failed: 1317 ER_QUERY_INTERRUPTED, raised by KILL QUERY on
+    /// both servers; 3024 ER_QUERY_TIMEOUT, MySQL's `MAX_EXECUTION_TIME`;
+    /// 1969 ER_STATEMENT_TIMEOUT, MariaDB's `max_statement_time`. Verified
+    /// against MySQL 8.4.11 and MariaDB 11.8.9, where MySQLNIO 1.9.1 delivers
+    /// each as `MySQLError.server`. MySQL has no error 1969 and MariaDB lists
+    /// 3024 as ER_UNUSED_1, so one list serves both.
+    static let cancelErrorCodes: [MySQLProtocol.ErrorCode] = [.QUERY_INTERRUPTED, .QUERY_TIMEOUT, 1969]
+
+    /// A cancel is decided by the server's error number. The text cannot
+    /// decide it: a syntax error quotes the statement, so `SELECT 1317 1317`
+    /// fails with "near '1317'", and a literal 'interrupted' reaches the
+    /// message the same way.
     static func mapError(_ error: Error) -> DriverError {
         if let driverError = error as? DriverError { return driverError }
-        if let mysqlError = error as? MySQLError {
-            // ER_QUERY_INTERRUPTED (1317) — hit by KILL QUERY.
-            let text = String(reflecting: mysqlError)
-            if text.contains("1317") || text.lowercased().contains("interrupted") {
-                return .cancelled
-            }
-            return .queryFailed(message: describe(mysqlError), code: nil)
+        if case MySQLError.server(let packet) = error, cancelErrorCodes.contains(packet.errorCode) {
+            return .cancelled
         }
         return .queryFailed(message: describe(error), code: nil)
     }
