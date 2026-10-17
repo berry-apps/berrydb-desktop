@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Synchronization
 import Testing
 
 @testable import BerryCredentials
@@ -52,8 +53,22 @@ struct MCPProjectsSettingsModelTests {
         return (store, orders, events)
     }
 
-    private func makeModel(_ store: BerryStore, _ box: KeyBox, helperURL: URL? = nil) -> MCPProjectsSettingsModel {
-        MCPProjectsSettingsModel(store: store, keyStore: box.keyStore, helperURL: helperURL)
+    /// Without a `privilegeChecker`, the model's own default fails every
+    /// check, so no test opens a real connection.
+    private func makeModel(
+        _ store: BerryStore, _ box: KeyBox, helperURL: URL? = nil,
+        privilegeCheckLimit: Duration = MCPProjectsSettingsModel.defaultPrivilegeCheckLimit,
+        privilegeChecker: (@Sendable (ConnectionProfile) async throws -> [String])? = nil
+    ) -> MCPProjectsSettingsModel {
+        if let privilegeChecker {
+            return MCPProjectsSettingsModel(
+                store: store, keyStore: box.keyStore, helperURL: helperURL,
+                privilegeCheckLimit: privilegeCheckLimit, privilegeChecker: privilegeChecker
+            )
+        }
+        return MCPProjectsSettingsModel(
+            store: store, keyStore: box.keyStore, helperURL: helperURL, privilegeCheckLimit: privilegeCheckLimit
+        )
     }
 
     @Test func newProjectIsSealedAndVerifies() throws {
@@ -780,6 +795,576 @@ struct MCPProjectsSettingsModelTests {
         var unsaved = model.draftForNewProject()
         unsaved.name = "Ledger"
         #expect(model.renameNotice(for: unsaved) == nil)
+    }
+
+    // MARK: Live reads
+
+    /// Stands in for the privilege check, which would otherwise open a
+    /// connection to a real server.
+    final class PrivilegeCheckStub: @unchecked Sendable {
+        var result: Result<[String], Error>
+        var callCount = 0
+        var checkedProfiles: [ConnectionProfile] = []
+
+        init(_ result: Result<[String], Error>) {
+            self.result = result
+        }
+
+        var checker: @Sendable (ConnectionProfile) async throws -> [String] {
+            { profile in
+                self.callCount += 1
+                self.checkedProfiles.append(profile)
+                return try self.result.get()
+            }
+        }
+    }
+
+    /// Counts calls made from concurrently running checks.
+    final class CallCounter: Sendable {
+        private let calls = Mutex(0)
+
+        var count: Int { calls.withLock { $0 } }
+
+        /// The number of calls before this one.
+        func next() -> Int {
+            calls.withLock { count in
+                defer { count += 1 }
+                return count
+            }
+        }
+    }
+
+    /// A wait that ignores cancellation, as a driver call that never answers
+    /// does, until `release()`.
+    final class Hold: Sendable {
+        private struct State {
+            var released = false
+            var waiting: CheckedContinuation<Void, Never>?
+        }
+
+        private let state = Mutex(State())
+
+        func wait() async {
+            await withCheckedContinuation { continuation in
+                let released = state.withLock { state in
+                    if !state.released { state.waiting = continuation }
+                    return state.released
+                }
+                if released { continuation.resume() }
+            }
+        }
+
+        func release() {
+            let waiting = state.withLock { state in
+                state.released = true
+                defer { state.waiting = nil }
+                return state.waiting
+            }
+            waiting?.resume()
+        }
+    }
+
+    /// Polls `condition` for up to about two seconds; the expectations that
+    /// follow report a condition that never came true.
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        for _ in 0 ..< 2000 where !condition() {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+    }
+
+    private struct InjectedCheckFailure: LocalizedError {
+        var errorDescription: String? { "role lookup failed" }
+    }
+
+    private static let productionConsentMissing = { (name: String) in
+        L("Live reads on \(name) need your confirmation that you reviewed its redacted columns and accept reads on this production database.")
+    }
+
+    private static let writableRoleNotAcknowledged = { (name: String) in
+        L("Live reads on \(name) need your confirmation to use this connection anyway, since its privileges were not found read-only.")
+    }
+
+    private static let privilegeCheckNotFinished = { (name: String) in
+        L("Live reads on \(name) need a finished privilege check. Save again once it is done.")
+    }
+
+    /// A new enabled project that assigns `profile` with live reads on.
+    private func liveReadDraft(
+        _ model: MCPProjectsSettingsModel, _ profile: ConnectionProfile, redacted: [String] = []
+    ) -> MCPProjectsSettingsModel.Draft {
+        var draft = model.draftForNewProject()
+        draft.name = "Billing"
+        draft.isEnabled = true
+        draft.profileIDs = [profile.id]
+        draft.access[profile.id] = .init(liveRead: true, redactedColumns: redacted)
+        return draft
+    }
+
+    private func seedKey(_ box: KeyBox) {
+        box.data = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
+    }
+
+    @Test func turningLiveReadsOnSealsThemWithTheRedactions() throws {
+        let (store, _, _) = try makeStore()
+        let local = ConnectionProfile(driverID: "sqlite", name: "Local", filePath: "/data/local.sqlite")
+        try store.save(local)
+        let box = KeyBox()
+        let model = makeModel(store, box)
+
+        let draft = liveReadDraft(model, local, redacted: ["Email"])
+        #expect(model.save(draft))
+
+        #expect(model.errorMessage == nil)
+        let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
+        #expect(verified.liveReadProfileIDs == [local.id])
+        #expect(verified.project.profiles == [MCPProfileAccess(profileID: local.id, liveRead: true, redactedColumns: ["email"])])
+        let reopened = try #require(model.draft(for: draft.id))
+        #expect(reopened.access[local.id] == .init(liveRead: true, redactedColumns: ["email"]))
+    }
+
+    @Test func aProductionProfileNeedsTheConsentToTurnLiveReadsOn() throws {
+        let (store, _, _) = try makeStore()
+        let ledger = ConnectionProfile(
+            driverID: "sqlite", name: "Ledger", envColor: "production", filePath: "/data/ledger.sqlite"
+        )
+        try store.save(ledger)
+        let box = KeyBox()
+        seedKey(box)
+        let model = makeModel(store, box)
+        let keyBefore = box.data
+
+        var draft = liveReadDraft(model, ledger)
+        for acknowledged: Set<MCPProjectsSettingsModel.Acknowledgment> in [
+            [], [.writableRole(ledger.id)], [.production(UUID())],
+        ] {
+            draft.acknowledged = acknowledged
+            #expect(model.save(draft) == false)
+            #expect(model.errorMessage == Self.productionConsentMissing("Ledger"))
+            #expect(try store.mcpProject(id: draft.id) == nil)
+            #expect(box.writeCount == 0)
+            #expect(box.data == keyBefore)
+        }
+
+        draft.acknowledged = [.production(ledger.id)]
+        #expect(model.save(draft))
+        let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
+        #expect(verified.liveReadProfileIDs == [ledger.id])
+    }
+
+    @Test func aWritableRoleNeedsTheAcknowledgment() async throws {
+        let (store, orders, _) = try makeStore()
+        let box = KeyBox()
+        let stub = PrivilegeCheckStub(.success(["table_write"]))
+        let model = makeModel(store, box, privilegeChecker: stub.checker)
+
+        await model.checkPrivileges(of: orders.id)
+        #expect(model.privilegeStates[orders.id] == .writableRole(["table_write"]))
+
+        var draft = liveReadDraft(model, orders)
+        for acknowledged: Set<MCPProjectsSettingsModel.Acknowledgment> in [
+            [], [.production(orders.id)], [.writableRole(UUID())],
+        ] {
+            draft.acknowledged = acknowledged
+            #expect(model.save(draft) == false)
+            #expect(model.errorMessage == Self.writableRoleNotAcknowledged("Orders"))
+            #expect(try store.mcpProject(id: draft.id) == nil)
+            #expect(box.writeCount == 0)
+        }
+
+        draft.acknowledged = [.writableRole(orders.id)]
+        #expect(model.save(draft))
+        let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
+        #expect(verified.liveReadProfileIDs == [orders.id])
+    }
+
+    @Test func aReadOnlyRoleNeedsNoAcknowledgment() async throws {
+        let (store, orders, _) = try makeStore()
+        let box = KeyBox()
+        let stub = PrivilegeCheckStub(.success([]))
+        let model = makeModel(store, box, privilegeChecker: stub.checker)
+        let draft = liveReadDraft(model, orders)
+
+        #expect(model.save(draft) == false)
+        #expect(model.errorMessage == Self.privilegeCheckNotFinished("Orders"))
+        #expect(box.writeCount == 0)
+
+        await model.checkPrivileges(of: orders.id)
+        #expect(model.privilegeStates[orders.id] == .readOnlyRole)
+        #expect(model.save(draft))
+        #expect(stub.callCount == 1)
+        let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
+        #expect(verified.liveReadProfileIDs == [orders.id])
+    }
+
+    @Test func aFailedCheckCanBeAcknowledged() async throws {
+        let (store, orders, _) = try makeStore()
+        let box = KeyBox()
+        let stub = PrivilegeCheckStub(.failure(InjectedCheckFailure()))
+        let model = makeModel(store, box, privilegeChecker: stub.checker)
+
+        await model.checkPrivileges(of: orders.id)
+        #expect(model.privilegeStates[orders.id] == .failed("role lookup failed"))
+
+        var draft = liveReadDraft(model, orders)
+        #expect(model.save(draft) == false)
+        #expect(model.errorMessage == Self.writableRoleNotAcknowledged("Orders"))
+        #expect(box.writeCount == 0)
+
+        draft.acknowledged = [.writableRole(orders.id)]
+        #expect(model.save(draft))
+        let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
+        #expect(verified.liveReadProfileIDs == [orders.id])
+    }
+
+    /// A check still running has not shown the role read-only, so a save
+    /// started meanwhile is refused like one before any check.
+    @Test func aRunningCheckIsShownAndBlocksTheSave() async throws {
+        let (store, orders, _) = try makeStore()
+        let box = KeyBox()
+        let (release, releaser) = AsyncStream<Void>.makeStream()
+        let model = makeModel(store, box, privilegeChecker: { _ in
+            for await _ in release { break }
+            return []
+        })
+        let draft = liveReadDraft(model, orders)
+
+        let check = Task { await model.checkPrivileges(of: orders.id) }
+        for _ in 0 ..< 100 where model.privilegeStates[orders.id] != .checking {
+            await Task.yield()
+        }
+        #expect(model.privilegeStates[orders.id] == .checking)
+        #expect(model.save(draft) == false)
+        #expect(model.errorMessage == Self.privilegeCheckNotFinished("Orders"))
+        #expect(box.writeCount == 0)
+
+        releaser.yield()
+        await check.value
+        #expect(model.privilegeStates[orders.id] == .readOnlyRole)
+        #expect(model.save(draft))
+    }
+
+    /// A result describes the account the check reached. Pointing the
+    /// profile at another account afterwards leaves it unchecked for the save.
+    @Test func aCheckNoLongerCountsOnceItsConnectionChanges() async throws {
+        let (store, _, _) = try makeStore()
+        var ledger = ConnectionProfile(driverID: "postgres", name: "Ledger", host: "db.example", username: "reader")
+        try store.save(ledger)
+        let box = KeyBox()
+        let model = makeModel(store, box, privilegeChecker: PrivilegeCheckStub(.success([])).checker)
+        await model.checkPrivileges(of: ledger.id)
+        #expect(model.privilegeStates[ledger.id] == .readOnlyRole)
+
+        ledger.username = "writer"
+        try store.save(ledger)
+        #expect(model.save(liveReadDraft(model, ledger)) == false)
+
+        #expect(model.errorMessage == Self.privilegeCheckNotFinished("Ledger"))
+        #expect(box.writeCount == 0)
+    }
+
+    /// Fields that only label a profile do not decide which account a
+    /// check reached, so changing them keeps its result.
+    @Test func aCheckStillCountsAfterItsConnectionIsRelabeled() async throws {
+        let (store, _, _) = try makeStore()
+        var ledger = ConnectionProfile(driverID: "postgres", name: "Ledger", host: "db.example", username: "reader")
+        try store.save(ledger)
+        let model = makeModel(store, KeyBox(), privilegeChecker: PrivilegeCheckStub(.success([])).checker)
+        await model.checkPrivileges(of: ledger.id)
+
+        ledger.name = "Ledger Reporting"
+        ledger.groupName = "Finance"
+        ledger.sortOrder = 7
+        ledger.historyEnabled = false
+        try store.save(ledger)
+
+        #expect(model.save(liveReadDraft(model, ledger)))
+        #expect(model.errorMessage == nil)
+    }
+
+    /// The pane's list of profiles can predate an edit made in the main
+    /// window, so a check reads the profile as stored when it starts.
+    @Test func aCheckRunsOnTheConnectionAsStoredNow() async throws {
+        let (store, _, _) = try makeStore()
+        var ledger = ConnectionProfile(driverID: "postgres", name: "Ledger", host: "db.example", username: "reader")
+        try store.save(ledger)
+        let stub = PrivilegeCheckStub(.success([]))
+        let model = makeModel(store, KeyBox(), privilegeChecker: stub.checker)
+        ledger.username = "writer"
+        try store.save(ledger)
+
+        await model.checkPrivileges(of: ledger.id)
+
+        #expect(stub.checkedProfiles.map(\.username) == ["writer"])
+        #expect(model.save(liveReadDraft(model, ledger)))
+    }
+
+    /// Only the latest check of a profile sets its state, so an older check
+    /// that finishes last cannot replace the newer result.
+    @Test func anOlderCheckFinishingLastDoesNotReplaceTheNewerResult() async throws {
+        let (store, orders, _) = try makeStore()
+        let older = AsyncStream<[String]>.makeStream()
+        let newer = AsyncStream<[String]>.makeStream()
+        let answers = [older.stream, newer.stream]
+        let calls = CallCounter()
+        let model = makeModel(store, KeyBox(), privilegeChecker: { _ in
+            for await findings in answers[calls.next()] {
+                return findings
+            }
+            throw CancellationError()
+        })
+
+        let first = Task { await model.checkPrivileges(of: orders.id) }
+        try await waitUntil { calls.count == 1 }
+        let second = Task { await model.checkPrivileges(of: orders.id) }
+        try await waitUntil { calls.count == 2 }
+        newer.continuation.yield([])
+        await second.value
+        #expect(model.privilegeStates[orders.id] == .readOnlyRole)
+        older.continuation.yield(["table_write"])
+        await first.value
+
+        #expect(model.privilegeStates[orders.id] == .readOnlyRole)
+        #expect(model.save(liveReadDraft(model, orders)))
+    }
+
+    /// A check that does not finish is reported as failed once its limit has
+    /// passed, without waiting for it; its connection is closed when the
+    /// check finally unwinds, and its late result sets nothing.
+    @Test func aCheckThatDoesNotFinishFailsAtTheLimitAndClosesItsConnectionLater() async throws {
+        let (store, orders, _) = try makeStore()
+        let hold = Hold()
+        let closes = CallCounter()
+        let model = makeModel(store, KeyBox(), privilegeCheckLimit: .milliseconds(50), privilegeChecker: { _ in
+            try await MCPProjectsSettingsModel.withOwnConnection(
+                open: { "connection" },
+                close: { _ in _ = closes.next() },
+                { _ in
+                    await hold.wait()
+                    return []
+                }
+            )
+        })
+        // Releases the check if the limit is not applied, so that regression
+        // fails the expectations below instead of hanging the suite.
+        let safety = Task {
+            try await Task.sleep(for: .seconds(2))
+            hold.release()
+        }
+        defer { safety.cancel() }
+        let timedOut = MCPProjectsSettingsModel.PrivilegeState.failed(L("The check did not finish in time."))
+
+        await model.checkPrivileges(of: orders.id)
+
+        #expect(model.privilegeStates[orders.id] == timedOut)
+        #expect(closes.count == 0)
+        hold.release()
+        try await waitUntil { closes.count == 1 }
+        #expect(closes.count == 1)
+        #expect(model.privilegeStates[orders.id] == timedOut)
+    }
+
+    /// The connection a check opens is closed whether the check returns or
+    /// throws, and a check cancelled while its connection opened does not
+    /// run on it once it is open.
+    @Test func theCheckConnectionIsClosedOnEveryPath() async throws {
+        let closes = CallCounter()
+        let findings = try await MCPProjectsSettingsModel.withOwnConnection(
+            open: { "connection" }, close: { _ in _ = closes.next() }, { _ in ["table_write"] }
+        )
+        #expect(findings == ["table_write"])
+        #expect(closes.count == 1)
+
+        await #expect(throws: InjectedCheckFailure.self) {
+            try await MCPProjectsSettingsModel.withOwnConnection(
+                open: { "connection" }, close: { _ in _ = closes.next() }, { _ in throw InjectedCheckFailure() }
+            )
+        }
+        #expect(closes.count == 2)
+
+        let opening = Hold()
+        let checks = CallCounter()
+        let cancelled = Task {
+            try await MCPProjectsSettingsModel.withOwnConnection(
+                open: {
+                    await opening.wait()
+                    return "connection"
+                },
+                close: { _ in _ = closes.next() },
+                { _ in
+                    _ = checks.next()
+                    return []
+                }
+            )
+        }
+        cancelled.cancel()
+        opening.release()
+        await #expect(throws: CancellationError.self) { try await cancelled.value }
+        #expect(checks.count == 0)
+        #expect(closes.count == 3)
+    }
+
+    /// A result describes the profile as it was when checked, and the
+    /// profile can change in the main window before the next editor opens.
+    @Test func reloadForgetsPrivilegeChecks() async throws {
+        let (store, orders, _) = try makeStore()
+        let model = makeModel(store, KeyBox(), privilegeChecker: PrivilegeCheckStub(.success([])).checker)
+        await model.checkPrivileges(of: orders.id)
+        #expect(model.privilegeStates[orders.id] == .readOnlyRole)
+
+        model.reload()
+
+        #expect(model.privilegeStates.isEmpty)
+    }
+
+    /// The rules apply when a save turns live reads on. A profile whose
+    /// verified row already has them on keeps them without a new check or
+    /// consent, and its redactions can still change.
+    @Test func liveReadsStayingOnAreNotRechecked() throws {
+        let (store, orders, _) = try makeStore()
+        let ledger = ConnectionProfile(driverID: "postgres", name: "Ledger", envColor: "production")
+        try store.save(ledger)
+        let box = KeyBox()
+        let sealedKey = SymmetricKey(size: .bits256)
+        box.data = sealedKey.withUnsafeBytes { Data($0) }
+        let seeded = MCPProject(name: "Billing", isEnabled: true, workspaceRoots: ["/work/billing"], profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: true),
+            MCPProfileAccess(profileID: ledger.id, liveRead: true, redactedColumns: ["email"]),
+        ])
+        try store.saveMCPProject(seeded, sealingKey: sealedKey, previousKey: nil)
+        let stub = PrivilegeCheckStub(.success(["table_write"]))
+        let model = makeModel(store, box, privilegeChecker: stub.checker)
+
+        var draft = try #require(model.draft(for: seeded.id))
+        #expect(draft.access[orders.id] == .init(liveRead: true, redactedColumns: []))
+        #expect(draft.access[ledger.id] == .init(liveRead: true, redactedColumns: ["email"]))
+        draft.name = "Billing API"
+        draft.access[ledger.id]?.redactedColumns = ["email", "SSN"]
+        #expect(model.save(draft))
+
+        #expect(model.errorMessage == nil)
+        #expect(stub.callCount == 0)
+        let verified = try #require(try store.verifiedMCPProject(id: seeded.id, key: box.key))
+        #expect(verified.liveReadProfileIDs == [orders.id, ledger.id])
+        let saved = Dictionary(uniqueKeysWithValues: verified.project.profiles.map { ($0.profileID, $0) })
+        #expect(saved[ledger.id] == MCPProfileAccess(profileID: ledger.id, liveRead: true, redactedColumns: ["email", "ssn"]))
+    }
+
+    /// Only a row that verifies counts as already on. A row another process
+    /// flipped on in the store file opens off in the editor, and turning it
+    /// on goes through the rules like any other.
+    @Test func aLiveReadFlippedOnInTheStoreFileIsTurnedOnThroughTheRules() throws {
+        let (store, orders, _) = try makeStore()
+        let box = KeyBox()
+        let sealedKey = SymmetricKey(size: .bits256)
+        box.data = sealedKey.withUnsafeBytes { Data($0) }
+        let seeded = MCPProject(name: "Billing", isEnabled: true, workspaceRoots: ["/work/billing"], profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: false),
+        ])
+        try store.saveMCPProject(seeded, sealingKey: sealedKey, previousKey: nil)
+        try store.executeForTesting(
+            "UPDATE mcp_project_profile SET liveRead = 1 WHERE profileID = ?",
+            arguments: [orders.id]
+        )
+        let model = makeModel(store, box)
+
+        var draft = try #require(model.draft(for: seeded.id))
+        #expect(draft.access[orders.id]?.liveRead == false)
+        draft.access[orders.id]?.liveRead = true
+        #expect(model.save(draft) == false)
+
+        #expect(model.errorMessage == Self.privilegeCheckNotFinished("Orders"))
+        #expect(box.writeCount == 0)
+        #expect(box.key == sealedKey)
+
+        // The draft's record of what was on is for the editor only.
+        draft.verifiedLiveReads = [orders.id]
+        #expect(model.save(draft) == false)
+        #expect(model.errorMessage == Self.privilegeCheckNotFinished("Orders"))
+        #expect(box.writeCount == 0)
+    }
+
+    /// The editor asks for the production consent and a privilege check only
+    /// for live reads a save would turn on, so the draft records which were
+    /// already on, and verified, when the editor opened.
+    @Test func theDraftMarksTheLiveReadsAlreadyOn() throws {
+        let (store, orders, _) = try makeStore()
+        let reporting = ConnectionProfile(driverID: "mysql", name: "Reporting")
+        let local = ConnectionProfile(driverID: "sqlite", name: "Local", filePath: "/data/local.sqlite")
+        try store.save(reporting)
+        try store.save(local)
+        let box = KeyBox()
+        let sealedKey = SymmetricKey(size: .bits256)
+        box.data = sealedKey.withUnsafeBytes { Data($0) }
+        let seeded = MCPProject(name: "Billing", isEnabled: true, workspaceRoots: ["/work/billing"], profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: true),
+            MCPProfileAccess(profileID: reporting.id),
+            MCPProfileAccess(profileID: local.id),
+        ])
+        try store.saveMCPProject(seeded, sealingKey: sealedKey, previousKey: nil)
+        try store.executeForTesting(
+            "UPDATE mcp_project_profile SET liveRead = 1 WHERE profileID = ?",
+            arguments: [reporting.id]
+        )
+        let model = makeModel(store, box)
+
+        var draft = try #require(model.draft(for: seeded.id))
+
+        #expect(draft.verifiedLiveReads == [orders.id])
+        #expect(!MCPProjectsSettingsModel.turnsLiveReadsOn(orders.id, in: draft))
+        draft.access[orders.id]?.liveRead = false
+        draft.access[orders.id]?.liveRead = true
+        #expect(!MCPProjectsSettingsModel.turnsLiveReadsOn(orders.id, in: draft))
+        #expect(!MCPProjectsSettingsModel.startsPrivilegeCheck(for: orders, in: draft))
+        draft.access[reporting.id]?.liveRead = true
+        #expect(MCPProjectsSettingsModel.turnsLiveReadsOn(reporting.id, in: draft))
+        #expect(MCPProjectsSettingsModel.startsPrivilegeCheck(for: reporting, in: draft))
+        draft.access[local.id]?.liveRead = true
+        #expect(MCPProjectsSettingsModel.turnsLiveReadsOn(local.id, in: draft))
+        #expect(!MCPProjectsSettingsModel.startsPrivilegeCheck(for: local, in: draft))
+        #expect(model.draftForNewProject().verifiedLiveReads.isEmpty)
+    }
+
+    @Test func aDriverWithoutLiveReadsCannotTurnThemOn() throws {
+        let (store, _, events) = try makeStore()
+        let box = KeyBox()
+        let model = makeModel(store, box)
+
+        var draft = liveReadDraft(model, events)
+        draft.acknowledged = [.production(events.id), .writableRole(events.id)]
+        #expect(model.save(draft) == false)
+
+        #expect(model.errorMessage == L("Live reads are not available for \("Events")."))
+        #expect(try store.mcpProject(id: draft.id) == nil)
+        #expect(box.writeCount == 0)
+        for driverID in ["postgres", "mysql", "sqlite"] {
+            #expect(MCPProjectsSettingsModel.supportsLiveRead(ConnectionProfile(driverID: driverID, name: "x")))
+        }
+        for driverID in ["dynamodb", "redis", "sqlserver", "mongodb", "qdrant", "elasticsearch", "unknown"] {
+            #expect(!MCPProjectsSettingsModel.supportsLiveRead(ConnectionProfile(driverID: driverID, name: "x")))
+        }
+    }
+
+    /// The editor keeps the live-read settings of a connection taken out of
+    /// the project, so they come back if it is added again; until then they
+    /// are neither checked nor saved.
+    @Test func liveReadsOfAConnectionOutsideTheProjectAreIgnored() throws {
+        let (store, orders, events) = try makeStore()
+        let box = KeyBox()
+        let model = makeModel(store, box)
+
+        var draft = model.draftForNewProject()
+        draft.name = "Billing"
+        draft.profileIDs = [orders.id]
+        draft.access[events.id] = .init(liveRead: true, redactedColumns: ["email"])
+        #expect(model.save(draft))
+
+        let saved = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
+        #expect(saved.project.profiles == [MCPProfileAccess(profileID: orders.id)])
+    }
+
+    @Test func redactedColumnsAreReadFromACommaSeparatedList() {
+        #expect(MCPProjectsSettingsModel.redactedColumns(from: " Email, ssn ,,card_number , ") == ["Email", "ssn", "card_number"])
+        #expect(MCPProjectsSettingsModel.redactedColumns(from: "  ").isEmpty)
     }
 
     /// A saved project called `name`, as the editor opens it.

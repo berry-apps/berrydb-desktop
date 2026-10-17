@@ -1,8 +1,9 @@
 # Local MCP Server Architecture
 
-Status: **metadata tools**. `berrydb-mcp` runs as a stdio MCP server over
-the app's store opened read-only and serves seven metadata tools and two
-kinds of resources for one selected project (see
+Status: **metadata tools and live reads**. `berrydb-mcp` runs as a stdio MCP
+server over the app's store opened read-only. It serves seven metadata tools
+and two kinds of resources for one selected project, and, when the project has
+a connection with live reads turned on, `berrydb_execute_read_query` (see
 [Tools and resources](#tools-and-resources)). The project is selected by
 an explicit `--project`, which takes a project ID or name, or else from
 the host's workspace roots or the working directory, matched against the
@@ -12,8 +13,8 @@ helper bundled in the app (see [Packaging and signing](#packaging-and-signing)).
 Underneath sit key storage, the `MCPProject` persistence model, HMAC-SHA256
 row integrity and key rotation, a SQL-only connection coordinator with
 bounded shutdown, the SQL read policy parser and a byte-exact result
-limiter. No tool reads live data yet (see
-[Implemented and planned](#implemented-and-planned)). See
+limiter carry the live read (see
+[Read-only enforcement layers](#read-only-enforcement-layers)). See
 [`../mcp-server-compatibility.md`](../mcp-server-compatibility.md) for the
 protocol gate, the host checks and
 [design gates G1–G4](../mcp-server-compatibility.md#design-gates); none of
@@ -30,12 +31,12 @@ BerryDB has two independent MCP roles:
   `berrydb-mcp` helper, bundled in and signed with the app, as a
   subprocess and calls a bounded,
   BerryDB-owned capability surface: schema/graph inspection and, where a
-  profile allows it, bounded read-only queries (not implemented yet).
+  profile allows it, bounded read-only SQL queries (see [Live reads](#read-only-enforcement-layers)).
 
 The server does not replace, relax, or share state with the client's
 allowlist, approval flow, or trust model. `berrydb-mcp` is a second, headless
-composition root: it registers its own drivers (and, once live reads exist,
-constructs its own connection coordinator), and cannot inherit live registry
+composition root: it registers its own drivers (and constructs its own
+connection coordinator for live reads), and cannot inherit live registry
 state, an active profile, or user approval from the BerryDB app process.
 Stdout carries only MCP JSON-RPC; diagnostics go to stderr (and, once it
 exists, the audit log).
@@ -57,9 +58,14 @@ this user's files or Keychain), a compromised BerryDB binary.
 | Mechanism | Boundary against the primary adversary? | Reason |
 |---|---|---|
 | Keychain ACL on connection secrets | Yes | Only BerryDB-signed binaries can read items; the helper never emits secrets. |
-| Helper-side capability policy (read-only, limits, no `Scan`) | Yes | Enforced in signed code the agent cannot modify. |
-| Database session read-only + least-privilege DB user | Yes | Enforced by the database itself. |
-| Per-profile live-read setting and project settings | Yes, via integrity check | Stored in a user-writable file; an HMAC keyed from Keychain is what stops the agent from enabling itself. |
+| Helper-side tool surface (read-only tools, no `Scan`) | Yes | Enforced in signed code the agent cannot modify. |
+| Database read-only session for live reads | Yes | Enforced by the database itself, and the only boundary on what a live read can change (see [Read-only enforcement layers](#read-only-enforcement-layers)). |
+| SQL read policy | No (defense in depth) | Refuses a statement before it reaches the server, but it is lexical: it cannot see a function behind a view, an operator or a cast. |
+| Privilege check when live reads are turned on | No (warning) | Settings warns when the connection's database user can write; the owner can confirm and turn live reads on anyway. |
+| SELECT-only database user | Yes, where configured | Enforced by the database. Recommended, not required: nothing checks for it except the warning above. |
+| Default result limits (rows, size, time) | Yes | Enforced in signed code. |
+| Stricter limits of a production-labeled connection | No | The label is stored outside the sealed fields, so these limits guard against mistakes, not against a same-user process that edits the store file (see [Limits](#limits)). |
+| Per-profile live-read setting, redacted columns and project settings | Yes, via integrity check | Stored in a user-writable file; an HMAC keyed from Keychain is what stops the agent from enabling itself. |
 | Project selection (which project a process serves) | No | A process can pass `--project` with any project ID or name it can read from the store, and a repository's own agent configuration can name any project. An interactive Claude Code session asks before it uses a repository's `.mcp.json` and Codex reads a repository's `.codex/config.toml` only for a trusted project, but `claude -p` runs, Agent SDK sessions and cloud sessions load a repository's `.mcp.json` without asking ([Project scope](https://code.claude.com/docs/en/mcp#project-scope)). Selection prevents mistakes and limits exposure; it does not stop a hostile agent or repository from reaching another project's already-enabled capabilities. |
 | Audit log | No (visibility only) | The agent can edit it. |
 
@@ -71,7 +77,7 @@ returned data on the Mac.
 
 ## Tools and resources
 
-Every tool is read-only and reads only the store: the schema and dependency
+Every tool is read-only. All but `berrydb_execute_read_query` read only the store: the schema and dependency
 graph the app last harvested for a connection, never the database itself.
 Every answer that reads the stored schema carries `checked_at` (when a pass
 last confirmed that schema against the database, or null if none has) and
@@ -450,7 +456,7 @@ the settings pane says so.
 | `project` | `{"id", "name"}` of the selected project, else null |
 | `selected_by` | `explicit`, `roots` or `working_directory`, else null |
 | `workspace` | the location that decided the selection: the host root or working directory that a workspace folder matched for `roots` or `working_directory`, null for `explicit`; the same location when that project is now `project_disabled` or `no_matching_project`. Otherwise, when unconfigured: the working directory when it was the input that failed, null for the rest |
-| `live_reads` | always `not_available` in this version |
+| `live_reads` | `available` when the project has a connection with live reads turned on whose driver supports them and whose settings verify (the connections `berrydb_execute_read_query` accepts), else `not_available` |
 | `integrity` | when selected: `verified` if the project row's tag verifies under the stored key, `unavailable` if it does not or no key could be read; when unconfigured: `unavailable` for `integrity_unavailable` (the store could not be read), null for every other reason |
 | `connections` | when selected: one entry per connection of the project, `{"id", "name", "checked_at", "stale", "stale_reason", "hint"}` as `berrydb_list_connections` reports them, so an agent learns how fresh each stored schema is, why a stale one is, and which needs its schemas selected in the app; null when unconfigured or when the store could not be read |
 
@@ -557,7 +563,7 @@ profile leaves the others' tags valid. The helper verifies tags on every
 request: a bad project tag or a missing key disables live reads for the
 whole project, and `berrydb_status` reports it as `integrity:
 "unavailable"`; a bad row tag disables live reads for that profile only,
-which has nothing to report until live reads exist. Schema and graph access
+which makes that connection unavailable to the live-read tool. Schema and graph access
 continue regardless, since they expose nothing the same-user adversary
 cannot already read from the store file directly.
 
@@ -620,46 +626,95 @@ which is packaging work (see
 
 ## Read-only enforcement layers
 
-These layers are the design for live reads, which no tool offers yet. What
-exists today: the SQL policy parser (layer 3), and a connection coordinator
-that no tool uses, which admits only SQLite sessions, sets `PRAGMA
-query_only` on them, and rejects every other driver because its read-only
-session is not implemented. The PostgreSQL and MySQL read-only sessions and
-the least-privilege check (layers 1 and 2, whose queries
-[gate G3](../mcp-server-compatibility.md#g3-privilege-checks) verified) and
-DynamoDB access (layer 4) are not implemented.
+`berrydb_execute_read_query` runs one read-only SQL statement on a PostgreSQL,
+MySQL/MariaDB or SQLite connection whose live reads the user turned on in the
+**AI Agents** pane. It is listed only when the selected project has such a
+connection with settings that verify; with none, `tools/list` omits it.
+Input: `connection_id`, `sql` (at most 65,536 bytes of UTF-8), optional `parameters` (at most
+100 scalars: `$1`, `$2`, … on PostgreSQL, `?` on MySQL/MariaDB and SQLite) and
+`row_limit` (1–100). Output: `columns`, `rows` (arrays), `row_count`,
+`truncated`, `has_more_rows`, `truncated_cells`, `byte_limit_reached`,
+`elapsed_ms` and `redacted_columns`. Unlike the metadata tools it reads the
+database, so it declares `openWorldHint: true` and no `idempotentHint`.
 
 `DangerGuard`, `QueryToolExecutor.isReadOnly`, and `dangerPreconfirmed: true`
-are never used in MCP code. Enforcement is layered; the database session and
-the least-privilege check are the boundary, the SQL policy parser is defense
-in depth:
+are never used in MCP code. Enforcement is layered. The database's own
+read-only mode is the boundary. The privilege check is a warning shown
+before live reads turn on, which the owner can confirm and go past, and the
+SQL read policy is defense in depth that refuses a statement before it
+reaches the server:
 
-1. **Database session read-only.** PostgreSQL: read-only transaction plus
-   `statement_timeout`. MySQL: `START TRANSACTION READ ONLY` plus
-   `max_execution_time`. SQLite: session opened with `SQLITE_OPEN_READONLY`
-   plus `PRAGMA query_only`. A driver that cannot enforce this does not
-   advertise a live-read tool.
-2. **Least-privilege check, on every connect.** Rejects a session whose role
-   could write, including through inherited roles, `rds_superuser`
-   membership, ownership, or column-level write privileges. SQLite has no
-   equivalent step (read-only open already applies).
-3. **SQL policy parser, defense in depth.** Exactly one statement, an
-   enumerated read grammar, a function allowlist, deny-by-default for
-   anything not understood. It cannot see function invocation written
-   without `name(` syntax — attribute notation, operators, casts,
-   `search_path` shadowing, views, or defaults — so it stops side-effecting
-   calls the session-level guard misses (e.g. `dblink`, file-reading
-   functions, `pg_sleep`, advisory locks) rather than substituting for
-   layers 1–2. Live reads are not enabled for a SQL dialect until layers 1–2
-   exist for it, and the MCP role must lack `CREATE` on its `search_path`
-   schemas.
-4. **DynamoDB** is read-only by construction: only the `Query` API is
-   called; `Scan` and PartiQL are never issued from MCP code.
+1. **Database session read-only, per statement.** PostgreSQL: `BEGIN READ
+   ONLY` with a statement timeout and a lock timeout. MySQL/MariaDB: a
+   read-only session plus `START TRANSACTION READ ONLY`. SQLite: `PRAGMA
+   query_only` set again before every statement. The SQLite file is opened
+   in the normal mode, not `SQLITE_OPEN_READONLY`, so `query_only` is what
+   refuses a write. A driver that cannot enforce this does not advertise the
+   tool.
+2. **Privilege check, a warning before live reads turn on.** When live
+   reads are switched on for a PostgreSQL or MySQL/MariaDB connection,
+   Settings checks whether its database user could write, including
+   through inherited roles, `rds_superuser` membership, ownership, or
+   column-level write privileges (the queries and how they were verified are
+   in [Privilege checks](../mcp-server-compatibility.md#g3-privilege-checks)).
+   A user that can write, or a check that cannot run or cannot read the
+   server's answer, produces a warning; the owner can confirm it and turn
+   live reads on anyway, and the helper never refuses such a user. A
+   SELECT-only database user is recommended, not required, and for a
+   production database a read replica. SQLite has no equivalent step.
+3. **Statement allowlist and SQL policy parser, defense in depth before
+   the server sees the text.** Exactly one statement, an enumerated read
+   grammar, a function allowlist, deny-by-default for anything not
+   understood. It cannot see function invocation written without `name(`
+   syntax — attribute notation, operators, casts, `search_path` shadowing,
+   views, or defaults — so it stops side-effecting calls the session-level
+   guard misses (e.g. `dblink`, file-reading functions, `pg_sleep`, advisory
+   locks) rather than substituting for layer 1. Nothing requires the
+   PostgreSQL user to lack `CREATE` on the schemas in its `search_path`;
+   the privilege check reports it as `schema_create`. A user that has it
+   can create a function that shadows an allowlisted name, and only the
+   read-only session then refuses that function's writes.
+4. **Bound parameters.** Values go to the driver as parameters, never into the
+   SQL text, and the helper checks the placeholder count against
+   `parameters`. On MySQL/MariaDB the count cannot always be made reliable, so
+   the helper refuses parameters when a text value contains NUL, when a
+   MariaDB session is in `MSSQL` or `ORACLE` mode, and when the client
+   character set is not `utf8mb4`, `utf8mb3`, `utf8`, `latin1`, `ascii` or
+   `binary`.
 
-Data returned by any tool call leaves the process boundary of BerryDB and is
-visible to the calling MCP host, and from there potentially to that host's
-model provider; the server running locally does not keep returned schema,
-graph, or row data on the Mac.
+DynamoDB `Query` is not available: `berrydb_execute_read_query` refuses a
+DynamoDB connection, and `Scan` and PartiQL are never issued from MCP code.
+
+Known limitation: on MySQL and MariaDB, `SELECT … INTO OUTFILE` and `INTO
+DUMPFILE` write a file on the database server from inside `START
+TRANSACTION READ ONLY` (verified against MySQL 8.4.11 and MariaDB 11.8.9
+with the read policy bypassed). For a database user with the `FILE`
+privilege, only the read policy, which refuses `INTO`, `OUTFILE` and
+`DUMPFILE`, and the server's `secure_file_priv` stop it. The privilege
+check lists `FILE` among its findings.
+
+Once the arguments are valid, every failure is a one-line tool result. A
+failure while resolving the connection or opening it (reading its secrets,
+the SSH tunnel, the connection, the read-only session) is reported as fixed
+text and the driver's error is never forwarded, because a connect error can
+name a host, a user or a file path: `BerryDB could not connect to this
+database.`, `BerryDB could not open a read-only session on this database,
+so the query did not run.`, or `BerryDB could not open a connection to this
+database within 15 seconds.` once the open budget in [Limits](#limits) has
+passed. A connection the driver reports as lost gets the first of those
+texts at any time. A query error raised once the statement runs is
+forwarded in the driver's own words, prefixed `The database refused the
+query:`, on one line, with every MySQL/MariaDB `'user'@'host'` account
+masked, and cut at 500 characters. That covers the server's refusal and
+also a client-side driver error during the read: the PostgreSQL driver
+reports a connection dropped mid-read as a failed query, so it arrives in
+the PostgreSQL client library's own text.
+
+Returned rows leave BerryDB: they go to the calling MCP host and from there
+potentially to that host's model provider; the server running locally does
+not keep returned schema, graph, or row data on the Mac. Redaction hides
+columns by name and is best effort, so only column privileges keep a column
+from being returned.
 
 ## Limits
 
@@ -669,22 +724,55 @@ decision is the per-profile `liveRead` switch alone, so an untagged
 production database is never readable without `liveRead` either. A
 production-labeled profile may be read live only after an explicit
 per-profile opt-in: before `liveRead` can be turned on for such a profile,
-the settings UI is to require reviewing the redacted-column list and
+the settings pane requires reviewing the redacted-column list and
 acknowledging that reads use database resources and take shared locks, which
 can delay DDL or migrations. Once enabled, the profile is subject to the
-stricter production-labeled limits below. The settings pane does not show
-the live-read switch yet; saving a project carries each profile's `liveRead`
-over from the verified editing copy, so a save never turns one on.
+stricter production-labeled limits below. The pane's per-connection **Live
+reads** switch exists for PostgreSQL, MySQL/MariaDB and SQLite connections.
+A save applies the draft's live-read switches and redacted columns to the
+verified editing copy of the project, in which a switch whose row does not
+verify is already off. For each connection whose live reads the save turns
+on (off in that copy, on in the draft) it requires the production consent
+when the connection is production-labeled, and, on PostgreSQL and
+MySQL/MariaDB, a finished privilege check run against the server and
+account the stored connection still points at; a check that found a user
+that can write, or could not run, also needs the confirmation to use the
+connection anyway. A save that lacks any of these changes nothing. Live
+reads that stay on are not checked again, and turning them off needs
+nothing.
+
+The production label is the connection's environment label, a display
+field stored outside the sealed fields (see the fingerprint above). Whether
+live reads are on, and which columns are redacted, are sealed; which row of
+the table applies is not. The stricter production limits therefore guard
+against mistakes, not against a process running as the same macOS user that
+can edit the store file and remove the label.
 
 | Limit | Default | Production-labeled profile |
 |---|---|---|
-| Request timeout | 30 s | 5 s |
+| Opening the connection | 15 s | 15 s |
+| Statement time limit | 30 s | 5 s |
 | Rows / items per response | 100 | 50 |
 | Serialized result | 1 MiB | 256 KiB |
 | Encoded cell | 64 KiB | 64 KiB |
 | Schema objects per response | 200 | 200 |
 | Estimated size of a full-detail schema page | 512 KiB | 512 KiB |
 | Graph nodes / edges | 500 / 1,000 | 500 / 1,000 |
+
+A live read first has 15 s to resolve the connection, read its secrets
+from Keychain, open any SSH tunnel and the connection, and make the session
+read-only; past that it fails with `BerryDB could not open a connection to
+this database within 15 seconds.` The statement then has the time limit
+above, which the server enforces where it can: PostgreSQL through
+`statement_timeout` (with a 5 s `lock_timeout`) on every statement, MySQL
+through a `MAX_EXECUTION_TIME` hint and MariaDB through `SET STATEMENT
+max_statement_time` on a statement that starts with `SELECT`. If the
+server has not ended the statement one second after the limit, the helper
+ends it; that is the only bound on SQLite, and on a MySQL or MariaDB
+statement that does not start with `SELECT`. Either way the result is `The
+query did not finish within 30 seconds.` (5 for a production-labeled
+connection). A last bound of 47 s (15 + 30 + 2) covers the whole request,
+including building the result and closing the session.
 
 A schema page ends at 200 objects or, at `full` detail, at an estimated
 512 KiB, whichever comes first, and `next_offset` continues it; the
@@ -693,9 +781,12 @@ an estimate that runs short still fit. Graph queries share a per-process
 cache of table-level graphs, at most 4 entries and 32 MB, each dropped
 after 60 s unused.
 
-Projects may configure stricter values only. Truncation is explicit
-(`truncated`, omitted counts, an opaque continuation cursor where supported);
-the limiter's cost is linear in the rows it keeps, not in the rows scanned.
+Truncation is explicit (`truncated`, omitted counts, an opaque continuation
+cursor where supported); the limiter's cost is linear in the rows it keeps,
+not in the rows scanned.
+A live read stops reading once it has the row limit: `has_more_rows` says the
+server had more, `byte_limit_reached` that the serialized-result ceiling
+ended the page, and `truncated_cells` counts cells cut at 64 KiB.
 
 ## Implemented and planned
 
@@ -725,21 +816,19 @@ Implemented:
   its signature made by the bundle's deep sign, checked by the release
   pipeline and guarded by `scripts/check-size.sh` and
   `scripts/check-minos.sh` (see [Packaging and signing](#packaging-and-signing)).
-- Groundwork no tool uses yet: a SQL-only connection coordinator with
-  bounded shutdown, the SQL read policy parser and the byte-exact result
-  limiter.
+- Live reads: `berrydb_execute_read_query` for PostgreSQL, MySQL/MariaDB and
+  SQLite, with the per-statement database read-only mode, the SQL read
+  policy, the privilege check and warning, the production-labeled limits,
+  and, in **AI Agents**, the per-connection **Live reads** switch, redacted
+  columns and the production consent.
 
 Not implemented:
 
 - A freshness channel from the app to the helper, so the helper can tell a
   stale answer from a current one by more than the age of the last check, and
   lazy connection and refresh timers in the app.
-- Live reads: `berrydb_execute_read_query` for PostgreSQL and MySQL
-  (session read-only plus the least-privilege check,
-  [gate G3](../mcp-server-compatibility.md#g3-privilege-checks)) and SQLite
-  (sessions opened with `SQLITE_OPEN_READONLY`), and `berrydb_dynamodb_query`
-  (`Query` only, never `Scan`); the live-read switch and the production
-  consent in the settings pane; the production-labeled limits.
+- Live reads on DynamoDB: `berrydb_dynamodb_query` (`Query` only, never
+  `Scan`).
 - The audit log.
 - A read of the integrity key that never shows a Keychain dialog: the
   app adding the helper's designated requirement to the item's access

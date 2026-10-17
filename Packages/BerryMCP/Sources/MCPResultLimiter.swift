@@ -33,6 +33,13 @@ public struct MCPResultLimits: Sendable, Equatable {
     }
 }
 
+public extension MCPResultLimits {
+    /// Limits for one live read: 30 s, 100 rows, 1 MiB, 64 KiB cells.
+    static let liveRead = MCPResultLimits(maximumRows: 100, maximumCellBytes: 65_536, maximumSerializedBytes: 1_048_576, maximumElapsed: .seconds(30))
+    /// Stricter limits for a profile labeled production: 5 s, 50 rows, 256 KiB.
+    static let productionLiveRead = MCPResultLimits(maximumRows: 50, maximumCellBytes: 65_536, maximumSerializedBytes: 262_144, maximumElapsed: .seconds(5))
+}
+
 /// Counts and flags describing what `MCPResultLimiter.limit(...)` removed or
 /// changed to satisfy `MCPResultLimits`. An agent reading a bounded result
 /// can tell, from these fields alone, whether more data exists beyond what

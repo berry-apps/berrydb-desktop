@@ -20,7 +20,8 @@ public struct MCPConnectionDescriptor: Codable, Equatable, Sendable {
     /// "production" or "unlabeled": only a production label is reported, so a
     /// free-form environment name never reaches the agent.
     public let environment: String
-    /// What the connection can serve without opening it: "schema" and "graph".
+    /// What the connection serves: "schema" and "graph" from the store, and
+    /// "execute_read_query" when its live reads are on.
     public let capabilities: [String]
     /// The time of the last pass that changed the stored schema, the schema
     /// the graph tools read; nil when there is none or the stored schema
@@ -226,6 +227,9 @@ public struct MCPMetadataService: Sendable {
     static let maximumGraphNames = 500
     /// Most entries a centrality query returns.
     static let maximumCentralityEntries = 50
+    /// The saved driver IDs a live read runs on, with the dialect the read
+    /// policy checks their statements in. MariaDB profiles use `mysql`.
+    static let liveReadDialects: [String: MCPSQLDialect] = ["postgres": .postgresql, "mysql": .mysql, "sqlite": .sqlite]
 
     private let profiles: @Sendable () throws -> [ConnectionProfile]
     private let reader: GraphReader
@@ -282,7 +286,8 @@ public struct MCPMetadataService: Sendable {
     /// view, because the graph tools then answer that no graph was
     /// harvested: a pass that found none must not be reported as one.
     public func listConnections(in project: MCPVerifiedProject) throws -> [MCPConnectionDescriptor] {
-        let saved = Dictionary(try profiles().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let saved = try savedProfiles()
+        let live = Self.liveReadConnectionIDs(in: project, saved: saved)
         return try project.project.profiles.compactMap { access in
             guard let profile = saved[access.profileID] else { return nil }
             let state = try reader.state(profileID: profile.id)
@@ -291,7 +296,7 @@ public struct MCPMetadataService: Sendable {
                 name: profile.name,
                 driver: profile.driverID,
                 environment: profile.envColor == "production" ? "production" : "unlabeled",
-                capabilities: ["schema", "graph"],
+                capabilities: live.contains(profile.id) ? ["schema", "graph", "execute_read_query"] : ["schema", "graph"],
                 graphHarvestedAt: state.objectCount > 0 ? state.changedAt : nil,
                 checkedAt: state.checkedAt,
                 stale: state.stale,
@@ -301,6 +306,36 @@ public struct MCPMetadataService: Sendable {
                 hint: state.hint
             )
         }
+    }
+
+    /// The project's connections a live read can run on: the switch
+    /// verified on (`liveReadProfileIDs`), the profile assigned to the
+    /// project and still saved, and its driver one with a SQL dialect.
+    public func liveReadConnectionIDs(in project: MCPVerifiedProject) throws -> Set<UUID> {
+        Self.liveReadConnectionIDs(in: project, saved: try savedProfiles())
+    }
+
+    /// The SQL dialect of a saved profile's driver, nil for a driver
+    /// without one. Throws `unknownConnection` when no such profile is
+    /// saved; callers check that the profile is assigned first.
+    public func dialect(of profileID: UUID) throws -> MCPSQLDialect? {
+        guard let profile = try profiles().first(where: { $0.id == profileID }) else {
+            throw MCPMetadataError.unknownConnection
+        }
+        return Self.liveReadDialects[profile.driverID]
+    }
+
+    private func savedProfiles() throws -> [UUID: ConnectionProfile] {
+        Dictionary(try profiles().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    private static func liveReadConnectionIDs(
+        in project: MCPVerifiedProject, saved: [UUID: ConnectionProfile]
+    ) -> Set<UUID> {
+        Set(project.project.profiles.map(\.profileID).filter { id in
+            guard project.liveReadProfileIDs.contains(id), let profile = saved[id] else { return false }
+            return liveReadDialects[profile.driverID] != nil
+        })
     }
 
     /// One page of a connection's tables and views from `offset` on: at most

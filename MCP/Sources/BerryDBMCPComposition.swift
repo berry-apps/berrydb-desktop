@@ -10,10 +10,11 @@ import GRDB
 ///
 /// Registers exactly the same built-in drivers as the desktop app, and wires
 /// the protocol server to the app's store opened read-only. Nothing composed
-/// here connects to a user's database or reads connection credentials; the
-/// only Keychain item read is the integrity key, on every tool or resource
-/// request once selection has chosen a project, whether or not that project
-/// is enabled.
+/// here connects until a live read is called. The integrity key is read from
+/// the Keychain on every tool or resource request once selection has chosen
+/// a project, whether or not that project is enabled. Connection secrets are
+/// read from the Keychain only for a live-read profile, and only after the
+/// project's integrity and the profile's verified switch have passed.
 public enum BerryDBMCPComposition {
     @discardableResult
     public static func registerDrivers(
@@ -99,22 +100,36 @@ public enum BerryDBMCPComposition {
     /// before the project row. A key rotated in the app therefore applies to
     /// the next request, and a session whose selection chose no project never
     /// touches the Keychain.
+    ///
+    /// Also returns the connection coordinator, which owns every connection a
+    /// live read opened, so the caller can close them before the process exits.
     static func dependencies(
         store: BerryStore, metadata: MCPMetadataService, explicitProject: MCPProjectReference?,
         workingDirectory: String, onRequest: @escaping @Sendable () -> Void
-    ) -> BerryMCPServerFactory.Dependencies {
+    ) -> (BerryMCPServerFactory.Dependencies, MCPConnectionCoordinator) {
         let resolver = MCPProjectContextResolver(
             loadProjects: { try store.mcpProjects() },
             verify: { try store.verifiedMCPProject(id: $0, key: MCPAccessKeyStore.keychain.load()) }
         )
-        return BerryMCPServerFactory.Dependencies(
+        let source = MCPSessionProjectSource()
+        let liveResolver = MCPProjectResolver(
+            loadProject: { await source.project() },
+            profile: MCPProjectResolver.storeProfileLoader(store: store, credentialResolver: .keychain)
+        )
+        let coordinator = MCPConnectionCoordinator(resolver: liveResolver)
+        let dependencies = BerryMCPServerFactory.Dependencies(
             resolver: resolver,
             metadata: metadata,
             explicitProject: explicitProject,
             workingDirectory: workingDirectory,
             version: serverVersion,
+            liveReads: BerryMCPServerFactory.LiveReads(
+                service: MCPLiveReadService(coordinator: coordinator),
+                projectSource: source
+            ),
             onRequest: onRequest
         )
+        return (dependencies, coordinator)
     }
 
     /// Writes one line to standard error. Standard output carries only

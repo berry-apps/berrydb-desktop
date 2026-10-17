@@ -80,7 +80,9 @@ Connect to SQL, NoSQL, Key-Value, and Vector databases all in a unified native w
 
 ### 🔌 Schema for Coding Agents (MCP)
 - **Local MCP helper**: Claude Code, Codex, and Antigravity can start `berrydb-mcp`, a helper inside BerryDB.app, to read the schema BerryDB has cached for the connections you choose: tables, columns, keys, indexes, relationships, and the schema graph.
-- **Metadata only**: The helper opens BerryDB's local store read-only, never connects to your databases, and never reads connection passwords. Whatever it returns goes to the agent and from there to that agent's model provider.
+- **Schema without a connection**: The helper opens BerryDB's local store read-only; the schema tools never connect to your databases or read connection passwords.
+- **Live reads, off by default**: For PostgreSQL, MySQL/MariaDB, and SQLite connections you can turn on **Live reads** per connection in Settings → AI Agents. The agent then gets `berrydb_execute_read_query`, which runs one SQL statement in a read-only transaction (SQLite: `query_only`), so the database itself refuses a write; a read policy also turns away risky statements before they reach the server. Each read has a row, size, and time limit (production-labeled connections get stricter ones). You can hide columns by name, which is best effort: only database column privileges keep a column from being returned. A read-only database user is recommended, and a read replica for production: if the user can write, BerryDB warns you before live reads turn on, and you can still go ahead. On MySQL/MariaDB a user with the `FILE` privilege can write files on the server even inside a read-only transaction; only the read policy and the server's `secure_file_priv` stop that. DynamoDB and the audit log are not available yet.
+- **Where the data goes**: Whatever the tools return, schema or rows, goes to the agent and from there to that agent's model provider.
 
 ### 📊 Database Intelligence & ER Diagrams
 - **Mermaid Diagrams**: The AI assistant can draw Mermaid diagrams, such as an ER diagram of your schema, and open them in a tab.
@@ -203,7 +205,9 @@ make run
    ```
 4. Start a new agent session in one of those folders and ask the agent to call `berrydb_status`. If macOS asks whether `berrydb-mcp` may use a key in your login keychain, choose **Always Allow**.
 
-Only add connections whose schema you are willing to share: what the tools return goes to the agent's model provider. Per-repository entries, status reasons, and current limits are in the [Coding Agents (MCP) guide](https://db.berryhub.app/docs#coding-agents).
+5. To let the agent run read queries, open the project, turn on **Live reads** for a connection, review its redacted columns, acknowledge any privilege warning (and, for a production-labeled connection, the production notice), and click **Save**. The agent's next session lists `berrydb_execute_read_query`. Its first read on a connection reads that connection's secrets from your Keychain, so macOS may ask once for each of them whether `berrydb-mcp` may use it; choose **Always Allow**. The read waits for your answer and fails if you have not answered within 15 seconds.
+
+Only add connections whose schema and data you are willing to share: what the tools return, including query rows, goes to the agent's model provider. Per-repository entries, status reasons, and current limits are in the [Coding Agents (MCP) guide](https://db.berryhub.app/docs#coding-agents).
 
 ---
 

@@ -32,11 +32,30 @@ public struct MCPConnectionProfile: Sendable {
     public let id: UUID
     public let driverID: DriverID
     public let config: ConnectionConfig
+    /// True when the saved profile carries the production label. It selects
+    /// tighter result limits only; it never decides authorization.
+    public let isProduction: Bool
+    /// Column names whose values never leave the helper, as verified for the
+    /// project's access row (lowercased, deduplicated, sorted).
+    public let redactedColumns: [String]
 
-    public init(id: UUID, driverID: DriverID, config: ConnectionConfig) {
+    public init(
+        id: UUID, driverID: DriverID, config: ConnectionConfig,
+        isProduction: Bool = false, redactedColumns: [String] = []
+    ) {
         self.id = id
         self.driverID = driverID
         self.config = config
+        self.isProduction = isProduction
+        self.redactedColumns = redactedColumns
+    }
+
+    /// The same profile with `columns` as its redactions.
+    public func redacting(_ columns: [String]) -> MCPConnectionProfile {
+        MCPConnectionProfile(
+            id: id, driverID: driverID, config: config,
+            isProduction: isProduction, redactedColumns: columns
+        )
     }
 }
 
@@ -94,9 +113,26 @@ public struct MCPProjectResolver: Sendable {
         credentialResolver: MCPCredentialResolver = .keychain
     ) {
         self.loadProject = { try store.verifiedMCPProject(id: projectID, key: keyStore.load()) }
-        self.loadProfile = { profileID in
+        self.loadProfile = Self.storeProfileLoader(store: store, credentialResolver: credentialResolver)
+    }
+
+    /// The drivers `MCPConnectionFactories.enforceSQLReadOnly` opens a
+    /// read-only session for; the helper reads secrets for no other.
+    private static let liveReadDrivers: Set<DriverID> = [.postgres, .mysql, .sqlite]
+
+    /// Loads a saved profile and its secrets from `store`; nil when no such
+    /// profile exists. `isProduction` follows the profile's environment label.
+    /// A profile whose driver has no read-only session the helper can open
+    /// throws `unsupportedDriver` before its secrets are read, so its
+    /// Keychain items are never asked for and no connection is attempted,
+    /// whatever check a caller made before.
+    public static func storeProfileLoader(
+        store: BerryStore,
+        credentialResolver: MCPCredentialResolver
+    ) -> @Sendable (UUID) async throws -> MCPConnectionProfile? {
+        { profileID in
             guard let profile = try store.allProfiles().first(where: { $0.id == profileID }) else { return nil }
-            guard let driverID = DriverID(rawValue: profile.driverID) else {
+            guard let driverID = DriverID(rawValue: profile.driverID), liveReadDrivers.contains(driverID) else {
                 throw MCPProjectResolutionError.unsupportedDriver(profile.driverID)
             }
             let secrets = try await credentialResolver.resolve(profileID)
@@ -108,7 +144,8 @@ public struct MCPProjectResolver: Sendable {
                     sshPassword: secrets.sshPassword,
                     sshPassphrase: secrets.sshPassphrase,
                     elasticsearchAPIKey: secrets.elasticsearchAPIKey
-                )
+                ),
+                isProduction: profile.envColor == "production"
             )
         }
     }
@@ -129,6 +166,7 @@ public struct MCPProjectResolver: Sendable {
         guard let profile = try await loadProfile(profileID) else {
             throw MCPProjectResolutionError.missingProfile(profileID)
         }
-        return profile
+        let redactions = verified.project.profiles.first(where: { $0.profileID == profileID })?.redactedColumns ?? []
+        return profile.redacting(redactions)
     }
 }

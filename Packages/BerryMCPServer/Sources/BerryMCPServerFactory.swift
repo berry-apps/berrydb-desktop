@@ -9,6 +9,21 @@ import Synchronization
 /// Invariant: every handler obtains its context from the session, so no
 /// request is served from a project that was not verified for that request.
 public enum BerryMCPServerFactory {
+    /// What a server needs to run live reads.
+    public struct LiveReads: Sendable {
+        let service: MCPLiveReadService
+        let projectSource: MCPSessionProjectSource
+
+        /// `projectSource` must be the source the service's resolver loads
+        /// its project from; `makeServer` binds it to the session it
+        /// creates, so the service resolves against that session's project.
+        /// A source can be bound once, so one value serves one server.
+        public init(service: MCPLiveReadService, projectSource: MCPSessionProjectSource) {
+            self.service = service
+            self.projectSource = projectSource
+        }
+    }
+
     /// Everything a server needs; no value here is a secret.
     public struct Dependencies: Sendable {
         let resolver: MCPProjectContextResolver
@@ -16,11 +31,14 @@ public enum BerryMCPServerFactory {
         let explicitProject: MCPProjectReference?
         let workingDirectory: String
         let version: String
+        let liveReads: LiveReads?
         let diagnostics: @Sendable (String) -> Void
         let onRequest: @Sendable () -> Void
 
         /// - Parameters:
         ///   - version: Reported to the host as the server version.
+        ///   - liveReads: Serves `berrydb_execute_read_query`; without it the
+        ///     server answers that tool with a fixed refusal.
         ///   - diagnostics: Receives diagnostic lines; standard error unless
         ///     replaced, never standard output.
         ///   - onRequest: Called once for every tool or resource request the
@@ -32,6 +50,7 @@ public enum BerryMCPServerFactory {
             explicitProject: MCPProjectReference?,
             workingDirectory: String,
             version: String,
+            liveReads: LiveReads? = nil,
             diagnostics: @escaping @Sendable (String) -> Void = MCPSessionContext.standardError,
             onRequest: @escaping @Sendable () -> Void = {}
         ) {
@@ -40,6 +59,7 @@ public enum BerryMCPServerFactory {
             self.explicitProject = explicitProject
             self.workingDirectory = workingDirectory
             self.version = version
+            self.liveReads = liveReads
             self.diagnostics = diagnostics
             self.onRequest = onRequest
         }
@@ -90,16 +110,33 @@ public enum BerryMCPServerFactory {
         let router = MCPToolRouter(metadata: dependencies.metadata)
         let metadata = dependencies.metadata
         let onRequest = dependencies.onRequest
+        let liveTool = dependencies.liveReads.map { liveReads in
+            liveReads.projectSource.bind { await session.context() }
+            return MCPLiveReadTool(service: liveReads.service)
+        }
 
         // Each handler resolves the session's project, which reads the store,
         // so each counts as store activity before it starts.
         await server.withMethodHandler(ListTools.self) { _ in
             onRequest()
-            return ListTools.Result(tools: MCPToolCatalog.tools(for: await session.context()))
+            let context = await session.context()
+            // A store that cannot be read lists no live read tool.
+            var liveReadConnectionIDs: Set<UUID> = []
+            if case let .selected(project, _, _) = context {
+                liveReadConnectionIDs = (try? metadata.liveReadConnectionIDs(in: project)) ?? []
+            }
+            return ListTools.Result(
+                tools: MCPToolCatalog.tools(for: context, liveReadConnectionIDs: liveReadConnectionIDs)
+            )
         }
+        // A live read is the one call that awaits a database, so it runs on
+        // its own path and the metadata router stays synchronous.
         await server.withMethodHandler(CallTool.self) { params in
             onRequest()
             let context = await session.context()
+            if params.name == MCPToolName.executeReadQuery.rawValue, let liveTool {
+                return try await liveTool.call(params.arguments, context: context, metadata: metadata)
+            }
             return try router.call(params.name, arguments: params.arguments, context: context)
         }
         await server.withMethodHandler(ListResources.self) { _ in

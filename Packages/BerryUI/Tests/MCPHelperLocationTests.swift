@@ -26,7 +26,10 @@ struct MCPHelperLocationTests {
 
     private func makeModel(_ location: MCPHelperLocation) throws -> MCPProjectsSettingsModel {
         let keyStore = MCPAccessKeyStore(read: { nil }, write: { _ in false })
-        return MCPProjectsSettingsModel(store: try BerryStore(path: ":memory:"), keyStore: keyStore, helperLocation: location)
+        return MCPProjectsSettingsModel(
+            store: try BerryStore(path: ":memory:"), keyStore: keyStore, helperLocation: location,
+            privilegeChecker: { _ in throw MCPProjectsSettingsModel.PrivilegeCheckUnavailable() }
+        )
     }
 
     @Test func aHelperOnAWritableVolumeIsOffered() throws {

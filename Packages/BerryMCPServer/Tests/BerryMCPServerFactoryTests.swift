@@ -1,3 +1,4 @@
+import BerryDriverKit
 import BerryGraph
 import BerryMCP
 import BerryStore
@@ -58,10 +59,12 @@ struct BerryMCPServerFactoryTests {
         )
     }
 
-    /// The projects the resolver reads, and whether reading them fails.
+    /// The projects the resolver reads, whether reading them fails, and the
+    /// profiles whose live-read switch verifies.
     struct Store: Sendable {
         var projects: [MCPProject]
         var unreadable = false
+        var liveReads: Set<UUID> = []
     }
 
     fileprivate func resolver(_ store: Locked<Store>) -> MCPProjectContextResolver {
@@ -74,8 +77,11 @@ struct BerryMCPServerFactoryTests {
             verify: { id in
                 let current = store.value
                 if current.unreadable { throw StoreUnreadable() }
-                return current.projects.first { $0.id == id }.map {
-                    MCPVerifiedProject(project: $0, liveReadProfileIDs: [])
+                return current.projects.first { $0.id == id }.map { project in
+                    MCPVerifiedProject(
+                        project: project,
+                        liveReadProfileIDs: current.liveReads.intersection(project.profiles.map(\.profileID))
+                    )
                 }
             },
             selector: MCPProjectSelector(canonicalize: { $0 })
@@ -101,11 +107,13 @@ struct BerryMCPServerFactoryTests {
         rootsRequests: Locked<Int> = Locked(0),
         diagnostics: Locked<[String]> = Locked([]),
         requests: Locked<Int> = Locked(0),
+        liveReads: BerryMCPServerFactory.LiveReads? = nil,
         _ body: @escaping @Sendable (Client) async throws -> Void
     ) async throws {
         let dependencies = BerryMCPServerFactory.Dependencies(
             resolver: resolver(store), metadata: try metadata(),
             explicitProject: explicitProject, workingDirectory: workingDirectory, version: "test",
+            liveReads: liveReads,
             diagnostics: { line in diagnostics.update { $0.append(line) } },
             onRequest: { requests.update { $0 += 1 } }
         )
@@ -150,6 +158,9 @@ struct BerryMCPServerFactoryTests {
         await server.stop()
     }
 
+    /// Every tool but the live one, which needs a live-read connection.
+    static let metadataToolCount = MCPToolName.allCases.count - 1
+
     static func call(_ client: Client, _ tool: MCPToolName) async throws -> CallTool.Result {
         try await client.send(CallTool.request(.init(name: tool.rawValue))).value
     }
@@ -169,7 +180,7 @@ struct BerryMCPServerFactoryTests {
         let expectedB = projectB.id.uuidString
         try await withSession(store: store, roots: .declared(["file:///work/b"])) { client in
             let tools = try await client.listTools().tools
-            #expect(tools.count == MCPToolName.allCases.count)
+            #expect(tools.count == Self.metadataToolCount)
             let status = try await Self.status(client)
             #expect(status["selected_by"] == "roots")
             #expect(Self.projectID(status) == expectedB)
@@ -264,7 +275,7 @@ struct BerryMCPServerFactoryTests {
             let first = try await Self.status(client)
             #expect(first["selected_by"] == "explicit")
             #expect(Self.projectID(first) == named.uuidString)
-            #expect(try await client.listTools().tools.count == MCPToolName.allCases.count)
+            #expect(try await client.listTools().tools.count == Self.metadataToolCount)
 
             store.update { state in
                 state.projects = state.projects.map { project in
@@ -421,7 +432,7 @@ struct BerryMCPServerFactoryTests {
             #expect(second["state"] == "selected")
             #expect(second["selected_by"] == "roots")
             #expect(Self.projectID(second) == enabled.uuidString)
-            #expect(try await client.listTools().tools.count == MCPToolName.allCases.count)
+            #expect(try await client.listTools().tools.count == Self.metadataToolCount)
         }
         #expect(requests.value == 1)
     }
@@ -465,4 +476,248 @@ struct BerryMCPServerFactoryTests {
         #expect(diagnostics.value == [Self.storeUnavailableLine, Self.storeUnavailableLine])
         #expect(requests.value == 1)
     }
+
+    // MARK: Live reads
+
+    /// Project B with live reads on for `billing`, a SQLite profile, as the
+    /// session's roots select it.
+    fileprivate func liveStore() -> Locked<Store> {
+        Locked(Store(projects: [projectA, projectB], liveReads: [billing.id]))
+    }
+
+    static func readCall(_ connectionID: UUID, sql: String, parameters: [Value] = []) -> Request<CallTool> {
+        CallTool.request(.init(
+            name: MCPToolName.executeReadQuery.rawValue,
+            arguments: [
+                "connection_id": .string(connectionID.uuidString), "sql": .string(sql),
+                "parameters": .array(parameters), "row_limit": .int(10),
+            ]
+        ))
+    }
+
+    @Test func aLiveReadOverTheWireReturnsRows() async throws {
+        let connection = ScriptedReadOnlyConnection(events: [
+            .columns([ColumnMeta(name: "id", declaredType: "INTEGER"), ColumnMeta(name: "createdAt", declaredType: "TEXT")]),
+            .rows([[.int(1), .text("a/b")], [.int(2), .null]]),
+            .complete(QueryStats(rowsAffected: nil, duration: .zero)),
+        ])
+        let live = LiveReadHarness(connection: connection)
+        let billingID = billing.id
+        try await withSession(store: liveStore(), roots: .declared(["file:///work/b"]), liveReads: live.liveReads) { client in
+            let tools = try await client.listTools().tools.map(\.name)
+            #expect(tools.contains(MCPToolName.executeReadQuery.rawValue))
+
+            let result = try await client.send(Self.readCall(
+                billingID, sql: "SELECT id, createdAt FROM events WHERE id > ?", parameters: [.int(0)]
+            )).value
+            #expect(result.isError != true)
+            let structured = try #require(result.structuredContent?.objectValue)
+            #expect(structured["columns"] == ["id", "createdAt"])
+            #expect(structured["rows"] == [["1", "a/b"], ["2", .null]])
+            #expect(structured["row_count"] == 2)
+            #expect(structured["has_more_rows"] == .bool(false))
+            #expect(Set(structured.keys) == [
+                "columns", "rows", "row_count", "truncated", "has_more_rows", "truncated_cells",
+                "byte_limit_reached", "elapsed_ms", "redacted_columns",
+            ])
+            guard case let .text(text, _, _)? = result.content.first else {
+                Issue.record("expected a text item")
+                return
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            let reencoded = try encoder.encode(try #require(result.structuredContent))
+            #expect(String(decoding: reencoded, as: UTF8.self) == text)
+            #expect(text.contains(#""a/b""#))
+        }
+        #expect(connection.log.snapshot().statements == [
+            ScriptedReadOnlyConnection.Statement(sql: "SELECT id, createdAt FROM events WHERE id > ?", parameters: [.int(0)]),
+        ])
+        #expect(await live.tracker.closes == 1)
+    }
+
+    /// The host's cancel notification cancels the server's handler task,
+    /// which ends the statement's stream and closes the connection. The
+    /// statement has no end of its own and a 30 s limit, and the whole
+    /// session is bounded by 30 s, so only the cancel can end it in time.
+    @Test func cancellingTheCallCancelsTheRequest() async throws {
+        let connection = ScriptedReadOnlyConnection(
+            events: [.columns([ColumnMeta(name: "n", declaredType: "INTEGER")])], finishes: false
+        )
+        let live = LiveReadHarness(connection: connection)
+        let billingID = billing.id
+        let log = connection.log
+        let tracker = live.tracker
+        try await withSession(store: liveStore(), roots: .declared(["file:///work/b"]), liveReads: live.liveReads) { client in
+            let call = try await client.send(Self.readCall(billingID, sql: "SELECT n FROM numbers"))
+            try await withDeadline(.seconds(10)) { await log.waitForStatement() }
+            try await client.cancelRequest(call.requestID, reason: "stopped")
+            try await withDeadline(.seconds(10)) { await log.waitForCancellations(1) }
+            try await withDeadline(.seconds(10)) { await tracker.waitForCloses(1) }
+            // `cancelRequest` resumes the client's own pending request with
+            // `CancellationError` before it sends the notification, so this
+            // shows only that the client stopped waiting, not that the
+            // server sent no response. The server stays silent because the
+            // tool throws `CancellationError`, which
+            // `aCancelledToolCallThrowsCancellation` pins.
+            await #expect(throws: CancellationError.self) { try await call.value }
+        }
+        #expect(log.snapshot().statements.count == 1)
+    }
+
+    /// The SDK sends no response to a handler that throws
+    /// `CancellationError` (`handleRequest` in Server.swift of swift-sdk
+    /// 0.12.1), so a cancelled live read must end that way, not as a tool
+    /// result.
+    @Test func aCancelledToolCallThrowsCancellation() async throws {
+        let connection = ScriptedReadOnlyConnection(
+            events: [.columns([ColumnMeta(name: "n", declaredType: "INTEGER")])], finishes: false
+        )
+        let live = LiveReadHarness(connection: connection)
+        let context = MCPProjectContext.selected(
+            MCPVerifiedProject(project: projectB, liveReadProfileIDs: [billing.id]), source: .explicit, workspace: nil
+        )
+        live.liveReads.projectSource.bind { context }
+        let tool = MCPLiveReadTool(service: live.liveReads.service)
+        let metadata = try metadata()
+        let arguments: [String: Value] = ["connection_id": .string(billing.id.uuidString), "sql": "SELECT n FROM numbers"]
+        let task = Task { try await tool.call(arguments, context: context, metadata: metadata) }
+        let log = connection.log
+        try await withDeadline(.seconds(10)) { await log.waitForStatement() }
+        task.cancel()
+        let outcome = try await withDeadline(.seconds(10)) { () -> String in
+            do {
+                let result = try await task.value
+                return "returned \(result)"
+            } catch is CancellationError {
+                return "cancelled"
+            } catch {
+                return "threw \(error)"
+            }
+        }
+        #expect(outcome == "cancelled")
+        let tracker = live.tracker
+        try await withDeadline(.seconds(10)) { await tracker.waitForCloses(1) }
+    }
+}
+
+/// A live-read service over one coordinator whose sessions run on
+/// `connection`, resolving its project through the source the server binds.
+private struct LiveReadHarness {
+    let tracker = SessionTracker()
+    let liveReads: BerryMCPServerFactory.LiveReads
+
+    init(connection: ScriptedReadOnlyConnection) {
+        let source = MCPSessionProjectSource()
+        let resolver = MCPProjectResolver(
+            loadProject: { await source.project() },
+            profile: { id in MCPConnectionProfile(id: id, driverID: .sqlite, config: .sqlite(path: ":memory:")) }
+        )
+        let tracker = self.tracker
+        let coordinator = MCPConnectionCoordinator(resolver: resolver, sqlFactory: { profile in
+            let lifecycle = MCPConnectionLifecycle(cancel: {}, closeConnection: { await tracker.closed() })
+            return MCPSQLSession(connection: connection, lifecycle: lifecycle, profile: profile)
+        })
+        liveReads = BerryMCPServerFactory.LiveReads(
+            service: MCPLiveReadService(coordinator: coordinator), projectSource: source
+        )
+    }
+}
+
+private actor SessionTracker {
+    private(set) var closes = 0
+
+    func closed() {
+        closes += 1
+    }
+
+    func waitForCloses(_ count: Int) async {
+        while closes < count {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+}
+
+/// Answers every read-only statement with `events`, then finishes the
+/// stream, or leaves it open when `finishes` is false, as a statement still
+/// running on the server does.
+private actor ScriptedReadOnlyConnection: ReadOnlyExecuting {
+    struct Statement: Equatable, Sendable {
+        let sql: String
+        let parameters: [SQLParameter]
+    }
+
+    /// Locked rather than actor-held, so the stream's termination handler
+    /// records synchronously.
+    final class Log: Sendable {
+        struct Snapshot: Sendable {
+            var statements: [Statement] = []
+            var cancellations = 0
+        }
+
+        private let state = Mutex(Snapshot())
+
+        func snapshot() -> Snapshot {
+            state.withLock { $0 }
+        }
+
+        func received(_ statement: Statement) {
+            state.withLock { $0.statements.append(statement) }
+        }
+
+        func cancelled() {
+            state.withLock { $0.cancellations += 1 }
+        }
+
+        func waitForStatement() async {
+            while snapshot().statements.isEmpty {
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+        }
+
+        func waitForCancellations(_ count: Int) async {
+            while snapshot().cancellations < count {
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+        }
+    }
+
+    nonisolated let id = UUID()
+    nonisolated let log = Log()
+    private nonisolated let events: [ResultEvent]
+    private nonisolated let finishes: Bool
+
+    init(events: [ResultEvent], finishes: Bool = true) {
+        self.events = events
+        self.finishes = finishes
+    }
+
+    func prepareReadOnly() async throws {}
+
+    nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error> {
+        executeReadOnly(sql, parameters: [], timeout: timeout)
+    }
+
+    nonisolated func executeReadOnly(
+        _ sql: String, parameters: [SQLParameter], timeout: Duration
+    ) -> AsyncThrowingStream<ResultEvent, Error> {
+        log.received(Statement(sql: sql, parameters: parameters))
+        let (stream, continuation) = AsyncThrowingStream<ResultEvent, Error>.makeStream()
+        let log = self.log
+        continuation.onTermination = { termination in
+            if case .cancelled = termination { log.cancelled() }
+        }
+        for event in events {
+            continuation.yield(event)
+        }
+        if finishes { continuation.finish() }
+        return stream
+    }
+
+    nonisolated func execute(_ sql: String) -> AsyncThrowingStream<ResultEvent, Error> { .init { $0.finish() } }
+    nonisolated func cancelCurrentQuery() {}
+    func setDatabase(_ name: String) async throws {}
+    nonisolated var introspector: any Introspector { fatalError("unused") }
+    func ping() async -> Bool { true }
+    func close() async {}
 }

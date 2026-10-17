@@ -110,6 +110,29 @@ struct MCPConnectionCoordinatorTests {
         #expect(await tracker.tunnelCloses == 1)
     }
 
+    @Test func postgresAndMySQLSessionsArePreparedReadOnly() async throws {
+        for driver in [DriverID.postgres, .mysql] {
+            let connection = PreparingConnection()
+            let registries = MCPDriverRegistries(sql: { _ in PreparingDriver.self })
+            PreparingDriver.next.set(connection)
+            let factories = MCPConnectionFactories(registries: registries)
+            let profile = MCPConnectionProfile(id: UUID(), driverID: driver, config: .sqlite(path: ":memory:"))
+            let session = try await factories.sql(profile)
+            #expect(await connection.prepared == 1)
+            #expect(session.profile?.id == profile.id)
+            try await session.lifecycle.close()
+        }
+    }
+
+    @Test func aConnectionWithoutTheReadOnlyContractIsRefusedAndClosed() async throws {
+        let registries = MCPDriverRegistries(sql: { _ in FakeSQLDriver.self })
+        let factories = MCPConnectionFactories(registries: registries)
+        let profile = MCPConnectionProfile(id: UUID(), driverID: .postgres, config: .sqlite(path: ":memory:"))
+        await #expect(throws: MCPConnectionCoordinatorError.sqlReadOnlyEnforcementUnavailable(.postgres)) {
+            _ = try await factories.sql(profile)
+        }
+    }
+
     @Test func coordinatorFactoryEnforcesSQLiteQueryOnlyBeforeOperation() async throws {
         let path = FileManager.default.temporaryDirectory
             .appending(path: "berrydb-mcp-readonly-\(UUID().uuidString).sqlite").path
@@ -234,6 +257,48 @@ struct MCPConnectionCoordinatorTests {
             try await unassigned.coordinator.withSQLSession(requestID: "unassigned", profileID: unassigned.profile.id) { _ in () }
         }
         #expect(await unassigned.tracker.opens == 0)
+    }
+
+    /// A driver without a read-only session the helper can open is refused
+    /// from the stored profile alone: its secrets are never read, so no
+    /// Keychain prompt appears, and no connection or tunnel is attempted.
+    @Test(arguments: [DriverID.redis, .sqlserver, .dynamodb, .mongodb, .qdrant, .elasticsearch])
+    func aDriverWithoutLiveReadsIsRefusedBeforeItsSecretsAreRead(driver: DriverID) async throws {
+        let store = try BerryStore(path: ":memory:")
+        let profile = ConnectionProfile(driverID: driver.rawValue, name: "Other", host: "db.internal.example")
+        try store.save(profile)
+        let reads = CredentialReads()
+        let resolver = MCPProjectResolver(
+            loadProject: {
+                MCPVerifiedProject(
+                    project: MCPProject(
+                        name: "P", isEnabled: true,
+                        profiles: [MCPProfileAccess(profileID: profile.id, liveRead: true)]
+                    ),
+                    liveReadProfileIDs: [profile.id]
+                )
+            },
+            profile: MCPProjectResolver.storeProfileLoader(
+                store: store,
+                credentialResolver: MCPCredentialResolver { _ in
+                    await reads.record()
+                    return ConnectionSecrets()
+                }
+            )
+        )
+        let tracker = Tracker()
+        let coordinator = MCPConnectionCoordinator(
+            resolver: resolver,
+            sqlFactory: { _ in
+                _ = await tracker.opened()
+                return MCPSQLSession(connection: FakeSQLConnection(), lifecycle: MCPConnectionLifecycle(cancel: {}, closeConnection: {}))
+            }
+        )
+        await #expect(throws: MCPProjectResolutionError.unsupportedDriver(driver.rawValue)) {
+            try await coordinator.withSQLSession(requestID: "other", profileID: profile.id) { _ in () }
+        }
+        #expect(await reads.count == 0)
+        #expect(await tracker.opens == 0)
     }
 
     @Test func missingProfileIsRejectedBeforeOpening() async throws {
@@ -612,6 +677,11 @@ private actor Flag {
     func set() { value = true }
 }
 
+private actor CredentialReads {
+    var count = 0
+    func record() { count += 1 }
+}
+
 private actor AsyncGate {
     private var continuation: CheckedContinuation<Void, Never>?
     private var blockedContinuation: CheckedContinuation<Void, Never>?
@@ -718,6 +788,42 @@ private actor TrackingSQLConnection: DriverConnection {
     nonisolated var introspector: any Introspector { fatalError("unused") }
     func ping() async -> Bool { true }
     func close() async { try? await tracker.closed(number: number) }
+}
+
+private final class PreparingSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var connection: PreparingConnection?
+    func set(_ value: PreparingConnection) { lock.lock(); connection = value; lock.unlock() }
+    func take() -> PreparingConnection? { lock.lock(); defer { lock.unlock() }; return connection }
+}
+
+private struct PreparingDriver: DatabaseDriver {
+    static let id = DriverID.postgres
+    static let displayName = "Preparing"
+    static let capabilities = Capabilities()
+    static let dialect: any SQLDialect = SQLiteDialect()
+    static let next = PreparingSlot()
+    init() {}
+    func connect(_ config: ConnectionConfig) async throws -> any DriverConnection {
+        guard let connection = Self.next.take() else { throw DriverError.connectionFailed("No connection set") }
+        return connection
+    }
+}
+
+private actor PreparingConnection: ReadOnlyExecuting {
+    nonisolated let id = UUID()
+    private(set) var prepared = 0
+    func prepareReadOnly() async throws { prepared += 1 }
+    nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error> { .init { $0.finish() } }
+    nonisolated func executeReadOnly(
+        _ sql: String, parameters: [SQLParameter], timeout: Duration
+    ) -> AsyncThrowingStream<ResultEvent, Error> { .init { $0.finish() } }
+    nonisolated func execute(_ sql: String) -> AsyncThrowingStream<ResultEvent, Error> { .init { $0.finish() } }
+    nonisolated func cancelCurrentQuery() {}
+    func setDatabase(_ name: String) async throws {}
+    nonisolated var introspector: any Introspector { fatalError("unused") }
+    func ping() async -> Bool { true }
+    func close() async {}
 }
 
 private actor FakeSQLConnection: DriverConnection {
