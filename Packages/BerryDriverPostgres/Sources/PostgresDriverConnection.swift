@@ -175,7 +175,7 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
 
     private func refreshBackendPID() async {
         do {
-            let rows = try await connection.query("SELECT pg_backend_pid()", logger: Self.logger)
+            let rows = try await send("SELECT pg_backend_pid()")
             for try await pid in rows.decode(Int32.self) {
                 cancelBox.backendPID = pid
             }
@@ -192,6 +192,10 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
     nonisolated func pointCancelForTesting(at pid: Int32) {
         cancelBox.backendPID = pid
     }
+
+    /// Test hook: whether PostgresNIO has seen the connection close, so a
+    /// test can wait for that before it sends a statement.
+    var connectionClosedForTesting: Bool { connection.isClosed }
 
  // MARK: - Execute
 
@@ -236,9 +240,7 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
     ) async throws {
         let running = cancelBox.started(sql)
         defer { cancelBox.ended(running) }
-        let rows = try await connection.query(
-            PostgresQuery(unsafeSQL: sql, binds: Self.bindings(for: parameters)), logger: Self.logger
-        )
+        let rows = try await send(PostgresQuery(unsafeSQL: sql, binds: Self.bindings(for: parameters)))
         var sentColumns = false
         var batch: [[BerryValue]] = []
         batch.reserveCapacity(Self.batchSize)
@@ -396,6 +398,11 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
     /// own mapping (`toPostgresError()`). `queryCancelled` is raised when the
     /// reader of a statement's rows goes away, and the connection stays open
     /// (`ConnectionStateMachine.shouldCloseConnection`).
+    /// `messageDecodingFailure`, `unexpectedBackendMessage` and
+    /// `invalidCommandTag` stay a failed statement although PostgresNIO
+    /// closes the connection after them: the statement failed on a protocol
+    /// error, which its code names, and the next statement reports the lost
+    /// connection through the closed-connection check in `send(_:)`.
     static func clientError(_ code: PSQLError.Code) -> DriverError {
         switch code {
         case .serverClosedConnection, .clientClosedConnection, .connectionError, .uncleanShutdown:
@@ -481,7 +488,7 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
     public func ping() async -> Bool {
         guard !isClosed else { return false }
         do {
-            _ = try await connection.query("SELECT 1", logger: Self.logger)
+            _ = try await send("SELECT 1")
             return true
         } catch {
             return false
@@ -502,7 +509,7 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
             return try await inTurn {
                 let running = cancelBox.started(sql)
                 defer { cancelBox.ended(running) }
-                let rows = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger)
+                let rows = try await send(PostgresQuery(unsafeSQL: sql))
                 var result: [[BerryValue]] = []
                 for try await row in rows {
                     result.append(Array(row).map(Self.berryValue(from:)))
@@ -597,8 +604,22 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
         return try await body()
     }
 
+    /// Sends `query` on the connection, or fails with `.connectionLost` once
+    /// PostgresNIO has seen the connection close. PostgresNIO 1.33.0's
+    /// `PostgresConnection.query` writes the query to the channel without a
+    /// promise of its own; on a closed channel NIO drops that write and the
+    /// query's promise is never completed, so the statement would wait
+    /// forever. Observed against PostgreSQL 16.15: after
+    /// `pg_terminate_backend` of the connection's backend, every later
+    /// statement and `ping()` waited. A close that lands between this check
+    /// and the write is not covered: that statement still waits.
+    private func send(_ query: PostgresQuery) async throws -> PostgresRowSequence {
+        guard !connection.isClosed else { throw DriverError.connectionLost("PostgreSQL connection closed") }
+        return try await connection.query(query, logger: Self.logger)
+    }
+
     private func command(_ sql: String) async throws {
-        for try await _ in try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger) {}
+        for try await _ in try await send(PostgresQuery(unsafeSQL: sql)) {}
     }
 }
 
@@ -749,7 +770,7 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
     /// The last column of the first row of `sql`, read as a 32-bit integer.
     private func lastInt32(_ sql: String) async throws -> Int32? {
         var value: Int32?
-        for try await row in try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger) {
+        for try await row in try await send(PostgresQuery(unsafeSQL: sql)) {
             if value == nil, let cell = Array(row).last {
                 value = try cell.decode(Int32.self)
             }
@@ -759,7 +780,7 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
 
     private func firstText(_ sql: String) async throws -> String? {
         var first: String?
-        for try await row in try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger) {
+        for try await row in try await send(PostgresQuery(unsafeSQL: sql)) {
             if first == nil, case .text(let text)? = Array(row).first.map(Self.berryValue(from:)) {
                 first = text
             }

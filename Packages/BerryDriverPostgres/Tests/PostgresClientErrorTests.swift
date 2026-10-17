@@ -127,6 +127,67 @@ struct PostgresClientErrorLiveTests {
         #expect(debugText(in: detail).isEmpty, "\(detail)")
     }
 
+    /// Waits, at most 10 s, until PostgresNIO has seen `connection` close.
+    private func waitUntilClosed(_ connection: PostgresDriverConnection) async throws {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while await !connection.connectionClosedForTesting {
+            guard ContinuousClock.now < deadline else {
+                Issue.record("the connection never saw its backend go")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    /// The text of an error that reports the closed connection, through
+    /// whichever wrapper the path puts around it; nil for any other error.
+    private func lostConnection(_ error: DriverError?) -> String? {
+        switch error {
+        case .connectionLost(let detail)?: detail
+        case .readOnlyUnavailable(let detail)? where detail.contains("PostgreSQL connection closed"): detail
+        default: nil
+        }
+    }
+
+    /// `pg_terminate_backend` with a timeout returns once the backend has
+    /// exited (https://www.postgresql.org/docs/16/functions-admin.html#FUNCTIONS-ADMIN-SIGNAL),
+    /// and the driver's connection then sees its socket close. Every way the
+    /// driver sends a statement answers at once afterwards; each is bounded,
+    /// so a statement that waits forever fails the test.
+    @Test func aConnectionWhoseBackendWasTerminatedAnswersAtOnce() async throws {
+        let connection = try await PostgresDriverConnection(config: config())
+        let readOnly = try await PostgresDriverConnection(config: config())
+        let admin = try await PostgresDriverConnection(config: config())
+        defer { Task { await connection.close(); await readOnly.close(); await admin.close() } }
+        try await readOnly.prepareReadOnly()
+        for pid in [connection.debugBackendPID, readOnly.debugBackendPID] {
+            let pid = try #require(pid)
+            #expect(try await drain(admin.execute("SELECT pg_terminate_backend(\(pid), 10000)")) == [[.bool(true)]])
+        }
+        try await waitUntilClosed(connection)
+        try await waitUntilClosed(readOnly)
+
+        let executed = await #expect(throws: DriverError.self) {
+            try await within(.seconds(10)) { try await drain(connection.execute("SELECT '\(Self.probe)'")) }
+        }
+        let listed = await #expect(throws: DriverError.self) {
+            try await within(.seconds(10)) { try await connection.queryAll("SELECT '\(Self.probe)'") }
+        }
+        let read = await #expect(throws: DriverError.self) {
+            try await within(.seconds(10)) {
+                try await drain(readOnly.executeReadOnly("SELECT '\(Self.probe)'", timeout: .seconds(5)))
+            }
+        }
+        let answered = try await within(.seconds(10)) { await connection.ping() }
+
+        for (path, error) in [("execute", executed), ("queryAll", listed), ("read-only", read)] {
+            let detail = lostConnection(error)
+            #expect(detail != nil, "\(path): \(String(describing: error))")
+            #expect(debugText(in: detail ?? "").isEmpty, "\(path): \(detail ?? "")")
+        }
+        #expect(answered == false)
+    }
+
     /// The extended query protocol counts parameters in 16 bits
     /// (https://www.postgresql.org/docs/16/protocol-message-formats.html,
     /// Bind), and PostgresNIO 1.33.0 refuses a query with more than 65535
