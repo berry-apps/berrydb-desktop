@@ -109,6 +109,26 @@ struct PostgresCancelTargetTests {
         _ = await myRead.value
     }
 
+    /// A statement with parameters shows in `pg_stat_activity` with its
+    /// placeholders, as the text the cancel matches.
+    @Test func aReadOnlyStatementWithParametersIsCancelled() async throws {
+        let readOnly = try await PostgresDriverConnection(config: config())
+        try await readOnly.prepareReadOnly()
+        let watcher = try await PostgresDriverConnection(config: config())
+        defer { Task { await readOnly.close(); await watcher.close() } }
+        let myStatement = "SELECT pg_sleep($1)"
+
+        let myRead = Task {
+            try? await drain(readOnly.executeReadOnly(myStatement, parameters: [.int(30)], timeout: .seconds(60)))
+        }
+        try await waitUntilRunning([myStatement], on: watcher)
+
+        myRead.cancel()
+
+        #expect(try await waitUntilEnded(myStatement, on: watcher) < .seconds(10))
+        _ = await myRead.value
+    }
+
     /// A backend with `track_activities` off reports no statement to match
     /// (https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-ACTIVITY-VIEW),
     /// and Stop must still stop the connection's own statement there.

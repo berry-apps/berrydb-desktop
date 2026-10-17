@@ -233,6 +233,278 @@ struct MySQLReadOnlyTests {
         #expect(try await readOnly("SELECT 1", on: opened).first?.first?.displayString == "1")
     }
 
+    @Test func parametersBindInOrder() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+        try await drain(opened.main.execute("INSERT INTO \(opened.table) VALUES (2), (3)"))
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT id FROM \(opened.table) WHERE id = ? OR id = ?", parameters: [.text("3"), .int(2)], timeout: .seconds(30)
+        ))
+
+        #expect(Set(rows.compactMap { $0.first?.displayString }) == ["2", "3"])
+    }
+
+    @Test func everyParameterKindBinds() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT ? + 0, ? + 0.0, ? IS NULL, ?", parameters: [.int(9_000_000_000), .double(2.5), .null, .text("x")],
+            timeout: .seconds(30)
+        ))
+
+        #expect(rows.first?.map(\.displayString) == ["9000000000", "2.5", "1", "x"])
+    }
+
+    /// MySQLNIO 1.9.1 sends every bind it is given, and the server reads the
+    /// values by its own count of placeholders: unrefused, this statement
+    /// returned 65544 (verified against MySQL 8.4.11 and MariaDB 11.8.9).
+    @Test func tooManyParametersAreRefused() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let error = await #expect(throws: DriverError.self) {
+            try await drain(opened.readOnly.executeReadOnly("SELECT ?", parameters: [.int(1), .int(2)], timeout: .seconds(30)))
+        }
+
+        #expect(refusal(error) == "The statement has 1 placeholder and 2 parameters were given.", "\(String(describing: error))")
+        #expect(try await readOnly("SELECT 1", on: opened).first?.first?.displayString == "1")
+    }
+
+    @Test func tooFewParametersAreRefusedWithACount() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let error = await #expect(throws: DriverError.self) {
+            try await drain(opened.readOnly.executeReadOnly("SELECT ?, ?", parameters: [.int(1)], timeout: .seconds(30)))
+        }
+
+        #expect(refusal(error) == "The statement has 2 placeholders and 1 parameter was given.", "\(String(describing: error))")
+        #expect(try await readOnly("SELECT 1", on: opened).first?.first?.displayString == "1")
+    }
+
+    /// The columns are named apart because the driver reads a cell by its
+    /// column's name (MySQLNIO 1.9.1, `MySQLRow.column(_:table:)`), and
+    /// unnamed, `'?'` and `?` would both be named `?`.
+    @Test func aQuestionMarkInAStringOrCommentIsNotAPlaceholder() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT '?' AS literal, ? AS bound /* ? */ -- ?\n", parameters: [.int(7)], timeout: .seconds(30)
+        ))
+
+        #expect(rows.first?.map(\.displayString) == ["?", "7"])
+    }
+
+    /// A read-only connection whose session runs `setup` before
+    /// `prepareReadOnly()` reads its settings.
+    private func readOnlyConnection(after setup: String) async throws -> MySQLDriverConnection {
+        let connection = try await MySQLDriverConnection(config: config())
+        try await drain(connection.execute(setup))
+        try await connection.prepareReadOnly()
+        return connection
+    }
+
+    private func readOnlyConnection(addingMode mode: String) async throws -> MySQLDriverConnection {
+        try await readOnlyConnection(after: "SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',\(mode)')")
+    }
+
+    private static func isMariaDBServer() async -> Bool {
+        guard TestServer.mysql != nil, let connection = try? await MySQLDriverConnection(config: config()) else { return false }
+        let rows = try? await connection.queryAll("SELECT VERSION()")
+        await connection.close()
+        return rows?.first?.first?.displayString?.contains("MariaDB") == true
+    }
+
+    private func refusal(of sql: String, _ parameters: [SQLParameter], on connection: MySQLDriverConnection) async -> String? {
+        do {
+            let rows = try await drain(connection.executeReadOnly(sql, parameters: parameters, timeout: .seconds(30)))
+            return "ran: \(rows.map { $0.map { $0.displayString ?? "NULL" } })"
+        } catch {
+            return refusal(error as? DriverError) ?? "\(error)"
+        }
+    }
+
+    /// Under NO_BACKSLASH_ESCAPES `'a\'` is a whole string, so the `?` after
+    /// it in quotes is no placeholder; read with backslash escapes, the
+    /// first parameter was ignored, and with a placeholder before it the
+    /// statement returned 65544 (verified against MySQL 8.4.11 and MariaDB
+    /// 11.8.9).
+    @Test func underNoBackslashEscapesAMismatchIsRefused() async throws {
+        let connection = try await readOnlyConnection(addingMode: "NO_BACKSLASH_ESCAPES")
+        defer { Task { await connection.close() } }
+
+        let ignored = await refusal(of: #"SELECT 'a\' AS x, '?' AS y"#, [.int(1)], on: connection)
+        let misread = await refusal(of: #"SELECT ? AS p, 'a\' AS x, '?' AS y"#, [.int(1), .int(2)], on: connection)
+
+        #expect(ignored == "The statement has 0 placeholders and 1 parameter was given.")
+        #expect(misread == "The statement has 1 placeholder and 2 parameters were given.")
+    }
+
+    @Test func underNoBackslashEscapesACorrectCountBinds() async throws {
+        let connection = try await readOnlyConnection(addingMode: "NO_BACKSLASH_ESCAPES")
+        defer { Task { await connection.close() } }
+
+        let rows = try await drain(connection.executeReadOnly(
+            #"SELECT 'a\' AS x, ? AS y, "b\" AS z"#, parameters: [.int(7)], timeout: .seconds(30)
+        ))
+
+        #expect(rows.first?.map(\.displayString) == [#"a\"#, "7", #"b\"#])
+    }
+
+    /// Under ANSI_QUOTES `"a\"` is a whole identifier; read as a string with
+    /// backslash escapes, the parameter was ignored, and with a placeholder
+    /// before it the statement returned 65544 (verified against MySQL 8.4.11
+    /// and MariaDB 11.8.9).
+    @Test func underAnsiQuotesAMismatchIsRefused() async throws {
+        let connection = try await readOnlyConnection(addingMode: "ANSI_QUOTES")
+        defer { Task { await connection.close() } }
+
+        let ignored = await refusal(of: #"SELECT 1 AS "a\", 2 AS "?""#, [.int(1)], on: connection)
+        let misread = await refusal(of: #"SELECT ? AS p, 1 AS "a\", 2 AS "?""#, [.int(1), .int(2)], on: connection)
+
+        #expect(ignored == "The statement has 0 placeholders and 1 parameter was given.")
+        #expect(misread == "The statement has 1 placeholder and 2 parameters were given.")
+    }
+
+    /// A backslash still escapes in a single-quoted string under ANSI_QUOTES,
+    /// and `""` stands for `"` in a double-quoted identifier.
+    @Test func underAnsiQuotesACorrectCountBinds() async throws {
+        let connection = try await readOnlyConnection(addingMode: "ANSI_QUOTES")
+        defer { Task { await connection.close() } }
+
+        let identifier = try await drain(connection.executeReadOnly(
+            #"SELECT 1 AS "a\", ? AS b"#, parameters: [.int(7)], timeout: .seconds(30)
+        ))
+        let string = try await drain(connection.executeReadOnly(
+            #"SELECT ? AS a, 2 AS "c""?", 'd\'?' AS d"#, parameters: [.int(7)], timeout: .seconds(30)
+        ))
+
+        #expect(identifier.first?.map(\.displayString) == ["1", "7"])
+        #expect(string.first?.map(\.displayString) == ["7", "2", "d'?"])
+    }
+
+    @Test func underBothModesACorrectCountBinds() async throws {
+        let connection = try await readOnlyConnection(addingMode: "NO_BACKSLASH_ESCAPES,ANSI_QUOTES")
+        defer { Task { await connection.close() } }
+
+        let rows = try await drain(connection.executeReadOnly(
+            #"SELECT 'a\' AS x, ? AS "b\""#, parameters: [.int(7)], timeout: .seconds(30)
+        ))
+
+        #expect(rows.first?.map(\.displayString) == [#"a\"#, "7"])
+    }
+
+    /// The server ends the text at a NUL after `;`: unrefused, this ran as
+    /// `SELECT ?;` with two parameters and returned 65544 (verified against
+    /// MySQL 8.4.11 and MariaDB 11.8.9).
+    @Test func aTextWithANulIsRefused() async throws {
+        let connection = try await readOnlyConnection(after: "DO 0")
+        defer { Task { await connection.close() } }
+
+        let refused = await refusal(of: "SELECT ?;\u{0}?", [.int(1), .int(2)], on: connection)
+        let withoutTheNul = try await drain(connection.executeReadOnly("SELECT ?;", parameters: [.int(1)], timeout: .seconds(30)))
+
+        #expect(refused == "Parameters are not bound in a text that holds a NUL character; write the values into the statement instead.")
+        #expect(withoutTheNul.first?.map(\.displayString) == ["1"])
+    }
+
+    /// MariaDB's MSSQL mode quotes an identifier with `[…]`: unrefused, this
+    /// returned 65544 (verified against MariaDB 11.8.9).
+    @Test(.enabled("MSSQL is a MariaDB SQL mode; MySQL 8.4.11 refuses it") { await isMariaDBServer() })
+    func underMSSQLModeParametersAreRefused() async throws {
+        let connection = try await readOnlyConnection(after: "SET SESSION sql_mode = 'MSSQL'")
+        defer { Task { await connection.close() } }
+
+        let refused = await refusal(of: "SELECT ? AS p, 1 AS [a?]", [.int(1), .int(2)], on: connection)
+        let withoutParameters = try await drain(connection.executeReadOnly("SELECT 1 AS [a?]", timeout: .seconds(30)))
+
+        #expect(refused == "Parameters are not bound under the session's MSSQL SQL mode; write the values into the statement instead.")
+        #expect(withoutParameters.first?.map(\.displayString) == ["1"])
+    }
+
+    /// MariaDB's ORACLE mode adds placeholders this count does not see,
+    /// such as `:1`. No statement was found that it then accepts with a
+    /// mismatch, since one with more placeholders than parameters fails at
+    /// the server (verified against MariaDB 11.8.9), but parameters are
+    /// refused there rather than relying on that.
+    @Test(.enabled("ORACLE is a MariaDB SQL mode; MySQL 8.4.11 refuses it") { await isMariaDBServer() })
+    func underOracleModeParametersAreRefused() async throws {
+        let connection = try await readOnlyConnection(after: "SET SESSION sql_mode = 'ORACLE'")
+        defer { Task { await connection.close() } }
+
+        let refused = await refusal(of: "SELECT ? AS a FROM DUAL", [.int(1)], on: connection)
+        let withoutParameters = try await drain(connection.executeReadOnly("SELECT 1 AS a FROM DUAL", timeout: .seconds(30)))
+
+        #expect(refused == "Parameters are not bound under the session's ORACLE SQL mode; write the values into the statement instead.")
+        #expect(withoutParameters.first?.map(\.displayString) == ["1"])
+    }
+
+    /// In gbk and big5 the last of the UTF-8 bytes of U+4E2D and the
+    /// backslash after them read as one character, so the quote after the
+    /// backslash ends the string: unrefused, this returned 65544 (verified
+    /// against MySQL 8.4.11 and MariaDB 11.8.9).
+    @Test func withAMultiByteClientCharacterSetParametersAreRefused() async throws {
+        for characterSet in ["gbk", "big5"] {
+            let connection = try await readOnlyConnection(after: "SET SESSION character_set_client = '\(characterSet)'")
+            let refused = await refusal(of: #"SELECT ? AS p, '中\' AS x, '?' AS y"#, [.int(1), .int(2)], on: connection)
+            let withoutParameters = try await drain(connection.executeReadOnly("SELECT 1 AS x", timeout: .seconds(30)))
+            await connection.close()
+
+            #expect(
+                refused == "Parameters are not bound with the session's \(characterSet) client character set; "
+                    + "write the values into the statement instead."
+            )
+            #expect(withoutParameters.first?.map(\.displayString) == ["1"], "\(characterSet)")
+        }
+    }
+
+    @Test func withASingleByteClientCharacterSetParametersBind() async throws {
+        let connection = try await readOnlyConnection(after: "SET SESSION character_set_client = 'latin1'")
+        defer { Task { await connection.close() } }
+
+        let rows = try await drain(connection.executeReadOnly("SELECT ? AS p, 'x' AS q", parameters: [.int(1)], timeout: .seconds(30)))
+
+        #expect(rows.first?.map(\.displayString) == ["1", "x"])
+    }
+
+    @Test func aBoolBinds() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let rows = try await drain(opened.readOnly.executeReadOnly("SELECT ?", parameters: [.bool(true)], timeout: .seconds(30)))
+
+        #expect(rows.first?.map(\.displayString) == ["1"])
+    }
+
+    /// On MariaDB the statement is wrapped in SET STATEMENT ... FOR, which
+    /// must still prepare with its placeholders. An interrupted SLEEP returns
+    /// 1 on MySQL and fails on MariaDB, so the test times the statement and
+    /// accepts either outcome, but not a refusal of the parameters.
+    @Test func theServerBoundStillAppliesWithParameters() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let started = ContinuousClock.now
+        var outcome: [[BerryValue]]?
+        var failure: DriverError?
+        do {
+            outcome = try await drain(opened.readOnly.executeReadOnly(
+                "SELECT SLEEP(?)", parameters: [.int(5)], timeout: .milliseconds(300)
+            ))
+        } catch { failure = error as? DriverError }
+
+        #expect(ContinuousClock.now - started < .seconds(4))
+        // Interrupted: 1 on MySQL; on MariaDB the driver reports the aborted
+        // statement as cancelled (verified against MariaDB 11.8.9).
+        var interrupted = outcome?.first?.first?.displayString == "1"
+        if case .cancelled? = failure { interrupted = true }
+        #expect(interrupted, "\(String(describing: outcome)) \(String(describing: failure))")
+        #expect(try await readOnly("SELECT 1", on: opened).first?.first?.displayString == "1")
+    }
+
     /// Writes sent at once all fail, in whatever order their control
     /// statements reach the server. Whether two statements shared a
     /// transaction does not show here: the function's INSERT fails in a

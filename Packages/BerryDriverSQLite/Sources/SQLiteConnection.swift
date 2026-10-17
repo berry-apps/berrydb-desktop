@@ -233,9 +233,17 @@ extension SQLiteConnection: ReadOnlyExecuting {
     /// SQLite has no per-statement time limit; `timeout` is left to the
     /// caller, whose cancel interrupts this connection's own handle.
     public nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error> {
+        executeReadOnly(sql, parameters: [], timeout: timeout)
+    }
+
+    public nonisolated func executeReadOnly(
+        _ sql: String,
+        parameters: [SQLParameter],
+        timeout: Duration
+    ) -> AsyncThrowingStream<ResultEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                await self.runReadOnly(sql: sql, continuation: continuation)
+                await self.runReadOnly(sql: sql, parameters: parameters, continuation: continuation)
             }
             continuation.onTermination = { termination in
                 if case .cancelled = termination {
@@ -249,7 +257,7 @@ extension SQLiteConnection: ReadOnlyExecuting {
     /// A text the allowlist refuses (`ReadOnlyAllowlist.sqlite`) never
     /// reaches the database: `PRAGMA query_only = OFF` would turn the mode
     /// off, and ATTACH runs while the mode is on.
-    private func runReadOnly(sql: String, continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation) async {
+    private func runReadOnly(sql: String, parameters: [SQLParameter], continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation) async {
         if let refusal = ReadOnlyAllowlist.sqlite.refusal(of: sql) {
             continuation.finish(throwing: refusal)
             return
@@ -294,8 +302,71 @@ extension SQLiteConnection: ReadOnlyExecuting {
             continuation.finish()
             return
         }
+        if let refusal = Self.placeholderRefusal(stmt) {
+            continuation.finish(throwing: refusal)
+            return
+        }
+        // An unbound placeholder reads as NULL (https://www.sqlite.org/c3ref/bind_blob.html),
+        // so a count that does not match is refused instead of run.
+        let placeholders = Int(sqlite3_bind_parameter_count(stmt))
+        guard placeholders == parameters.count else {
+            continuation.finish(throwing: DriverError.placeholderCountMismatch(
+                placeholders: placeholders, parameters: parameters.count
+            ))
+            return
+        }
+        for (offset, parameter) in parameters.enumerated() {
+            let index = Int32(offset + 1)
+            // SQLite has no boolean type (https://www.sqlite.org/datatype3.html#boolean_datatype), hence 0/1.
+            let rc: Int32 = switch parameter {
+            case .null: sqlite3_bind_null(stmt, index)
+            case .bool(let value): sqlite3_bind_int64(stmt, index, value ? 1 : 0)
+            case .int(let value): sqlite3_bind_int64(stmt, index, value)
+            case .double(let value): sqlite3_bind_double(stmt, index, value)
+            // With its byte length, so a NUL inside the text does not end it.
+            case .text(let value):
+                sqlite3_bind_text64(stmt, index, value, sqlite3_uint64(value.utf8.count), SQLITE_TRANSIENT, UInt8(SQLITE_UTF8))
+            }
+            guard rc == SQLITE_OK else {
+                continuation.finish(throwing: currentError(db))
+                return
+            }
+        }
         guard await step(stmt, db: db, clock: clock, started: started, continuation: continuation) else { return }
         continuation.finish()
+    }
+
+    /// Nil when the parameters bind by position: every placeholder is a
+    /// bare `?`, or every number up to the highest is used as `?NNN`.
+    /// SQLite numbers `:name`, `@name` and `$name` by where each first
+    /// appears, so in `SELECT $2, $1` the first value would go to `$2`, and
+    /// `?2` alone makes two parameters, the first of which binds to nothing
+    /// (https://www.sqlite.org/c3ref/bind_blob.html). A bare `?` takes the
+    /// number after the largest one before it
+    /// (https://www.sqlite.org/lang_expr.html#parameters); when no `?NNN`
+    /// names that number it has no name, like an unused number
+    /// (https://www.sqlite.org/c3ref/bind_parameter_name.html), and is
+    /// refused with the gap it cannot be told from, while `SELECT ?, ?1`
+    /// binds its one value to both.
+    private static func placeholderRefusal(_ stmt: OpaquePointer) -> DriverError? {
+        let count = sqlite3_bind_parameter_count(stmt)
+        guard count > 0 else { return nil }
+        var numbered: Int32 = 0
+        for index in 1...count {
+            guard let name = sqlite3_bind_parameter_name(stmt, index) else { continue }
+            let bytes = String(cString: name).utf8
+            guard bytes.first == UInt8(ascii: "?"), bytes.dropFirst().allSatisfy({ (0x30...0x39).contains($0) }) else {
+                return .queryFailed(message: "The read-only connection binds only ? and ?NNN placeholders on SQLite.", code: nil)
+            }
+            numbered += 1
+        }
+        guard numbered == 0 || numbered == count else {
+            return .queryFailed(
+                message: "On SQLite, ?NNN placeholders must use every number from 1 to the highest, without a bare ?.",
+                code: nil
+            )
+        }
+        return nil
     }
 
     /// Whether `tail`, the text after the first statement, holds another

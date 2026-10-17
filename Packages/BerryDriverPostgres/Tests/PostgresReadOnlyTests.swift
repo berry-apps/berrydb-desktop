@@ -24,6 +24,19 @@ struct PostgresReadOnlyStatementTests {
         #expect(PostgresDriverConnection.readOnlyPreamble(timeout: .zero)[1].contains("'statement_timeout', '1ms', true"))
     }
 
+    /// A whole number goes as an integer only where that integer is the
+    /// number Swift's shortest form names; otherwise, and for negative zero,
+    /// Swift's own form keeps the value numeric and float8 read.
+    @Test func aDoubleGoesAsAnIntegerOnlyWhereThatKeepsItsValue() {
+        #expect(PostgresDriverConnection.text(of: 3.0) == "3")
+        #expect(PostgresDriverConnection.text(of: -3.0) == "-3")
+        #expect(PostgresDriverConnection.text(of: 9_007_199_254_740_992) == "9007199254740992")
+        #expect(PostgresDriverConnection.text(of: 18_014_398_509_481_984) == "18014398509481984")
+        #expect(PostgresDriverConnection.text(of: 1_152_921_504_606_846_977) == "1.152921504606847e+18")
+        #expect(PostgresDriverConnection.text(of: -0.0) == "-0.0")
+        #expect(PostgresDriverConnection.text(of: 2.5) == "2.5")
+    }
+
     @Test func theApplicationNameIsSentAtStartup() {
         let config = ConnectionConfig(driver: .postgres, name: "p", host: "db")
 
@@ -31,6 +44,28 @@ struct PostgresReadOnlyStatementTests {
 
         #expect(named.map { "\($0.0)=\($0.1)" } == ["application_name=BerryDB AI (read-only)"])
         #expect(PostgresDriverConnection.startupParameters(for: config).isEmpty)
+    }
+
+    @Test func everyParameterBecomesOneBinding() {
+        let bindings = PostgresDriverConnection.bindings(for: [.text("42"), .int(7), .double(1.5), .bool(true), .null])
+        #expect(bindings.count == 5)
+    }
+
+    /// A number or a boolean is bound exactly as its text would be, with
+    /// no type, so the server types it from where it stands.
+    @Test func everyValueIsBoundAsItsUntypedText() {
+        let bindings = PostgresDriverConnection.bindings(for:)
+        #expect(bindings([.int(9_000_000_000), .int(-1)]) == bindings([.text("9000000000"), .text("-1")]))
+        #expect(bindings([.double(2.5), .double(1e-5), .double(.infinity)]) == bindings([.text("2.5"), .text("1e-05"), .text("inf")]))
+        #expect(bindings([.bool(true), .bool(false)]) == bindings([.text("true"), .text("false")]))
+    }
+
+    /// An integer column reads `3` but refuses `3.0`, as Swift writes the
+    /// double; a double outside Int64 keeps its own text.
+    @Test func anIntegralDoubleIsBoundAsAnInteger() {
+        let bindings = PostgresDriverConnection.bindings(for:)
+        #expect(bindings([.double(3.0), .double(-2.0), .double(1e16)]) == bindings([.text("3"), .text("-2"), .text("10000000000000000")]))
+        #expect(bindings([.double(1e19), .double(-0.5)]) == bindings([.text("1e+19"), .text("-0.5")]))
     }
 }
 
@@ -98,6 +133,149 @@ struct PostgresReadOnlyLiveTests {
     private func refusal(_ error: DriverError?) -> String? {
         if case .queryFailed(let message, _)? = error { return message }
         return nil
+    }
+
+    @Test func aTextParameterComparesWithAnIntegerColumn() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+        try await drain(opened.main.execute("INSERT INTO \(opened.table) VALUES (2), (3)"))
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT id FROM \(opened.table) WHERE id = $1", parameters: [.text("3")], timeout: .seconds(30)
+        ))
+
+        #expect(rows == [[.int(3)]])
+    }
+
+    @Test func everyParameterKindBinds() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT $1::int8, $2::float8, $3::bool, $4::text IS NULL, $5",
+            parameters: [.int(9_000_000_000), .double(2.5), .bool(true), .null, .text("x")],
+            timeout: .seconds(30)
+        ))
+
+        #expect(rows == [[.int(9_000_000_000), .double(2.5), .bool(true), .bool(true), .text("x")]])
+    }
+
+    @Test func aParameterCountMismatchFails() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let error = await #expect(throws: DriverError.self) {
+            try await drain(opened.readOnly.executeReadOnly("SELECT $1, $2", parameters: [.int(1)], timeout: .seconds(30)))
+        }
+        #expect(refusal(error) != nil)
+    }
+
+    /// Sent with a type, a parameter the statement does not use was
+    /// accepted and ignored (verified against PostgreSQL 16.15).
+    @Test func tooManyParametersAreRefused() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let error = await #expect(throws: DriverError.self) {
+            try await drain(opened.readOnly.executeReadOnly("SELECT $1", parameters: [.int(1), .int(2)], timeout: .seconds(30)))
+        }
+
+        #expect(refusal(error)?.contains("could not determine data type of parameter $2") == true, "\(String(describing: error))")
+        #expect(try await readOnly("SELECT 1", on: opened) == [[.int(1)]])
+    }
+
+    /// Sent as `3.0`, the double failed with "invalid input syntax for type
+    /// integer" (verified against PostgreSQL 16.15).
+    @Test func anIntegralDoubleComparesWithAnIntegerColumn() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+        try await drain(opened.main.execute("INSERT INTO \(opened.table) VALUES (2), (3)"))
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT id FROM \(opened.table) WHERE id = $1", parameters: [.double(3.0)], timeout: .seconds(30)
+        ))
+        let asDouble = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT $1::float8, $2::numeric::text", parameters: [.double(3.0), .double(3.0)], timeout: .seconds(30)
+        ))
+
+        #expect(rows == [[.int(3)]])
+        #expect(asDouble == [[.double(3.0), .text("3")]])
+    }
+
+    /// Sent as bigint, the number failed with "operator does not exist:
+    /// character varying = bigint" (verified against PostgreSQL 16.15).
+    @Test func aNumberComparesWithAVarcharColumn() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "WITH v(name) AS (VALUES ('7'::varchar), ('8'::varchar)) SELECT name FROM v WHERE name = $1",
+            parameters: [.int(7)], timeout: .seconds(30)
+        ))
+
+        #expect(rows == [[.text("7")]])
+    }
+
+    /// Sent as float8, the number compared with each numeric rounded to a
+    /// double and matched both rows (verified against PostgreSQL 16.15).
+    @Test func aDoubleComparesWithANumericColumnExactly() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "WITH v(n) AS (VALUES (0.30000000000000001::numeric), (0.3::numeric)) SELECT n::text FROM v WHERE n = $1",
+            parameters: [.double(0.3)], timeout: .seconds(30)
+        ))
+
+        #expect(rows == [[.text("0.3")]])
+    }
+
+    /// Swift writes these as `inf`, `-inf` and `nan`, which the server reads
+    /// as float8 and as numeric alike.
+    @Test func aDoubleThatIsNotFiniteBinds() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT $1::float8, $2::numeric::text, $3::float8 = 'NaN'::float8, $4::numeric::text",
+            parameters: [.double(.infinity), .double(-.infinity), .double(.nan), .double(.nan)], timeout: .seconds(30)
+        ))
+
+        #expect(rows == [[.double(.infinity), .text("-Infinity"), .bool(true), .text("NaN")]])
+    }
+
+    /// The cost of untyped parameters: one with nothing around it to give
+    /// it a type is read as text, or fails where text does not fit, until a
+    /// cast gives it one.
+    @Test func aParameterWithNoContextNeedsACast() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+
+        let bare = try await drain(opened.readOnly.executeReadOnly("SELECT $1", parameters: [.int(1)], timeout: .seconds(30)))
+        let error = await #expect(throws: DriverError.self) {
+            try await drain(opened.readOnly.executeReadOnly("SELECT $1 + $2", parameters: [.int(1), .int(2)], timeout: .seconds(30)))
+        }
+        let cast = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT $1::int8 + $2", parameters: [.int(1), .int(2)], timeout: .seconds(30)
+        ))
+
+        #expect(bare == [[.text("1")]])
+        #expect(refusal(error)?.contains("operator is not unique") == true, "\(String(describing: error))")
+        #expect(cast == [[.int(3)]])
+    }
+
+    /// A parameter is a value: text that looks like SQL stays a value.
+    @Test func aParameterCannotWrite() async throws {
+        let opened = try await open()
+        defer { Task { await close(opened) } }
+        let payload = "1); INSERT INTO \(opened.table) VALUES (5); --"
+
+        let rows = try await drain(opened.readOnly.executeReadOnly(
+            "SELECT $1::text", parameters: [.text(payload)], timeout: .seconds(30)
+        ))
+
+        #expect(rows == [[.text(payload)]])
+        #expect(try await rowCount(opened) == [[.int(0)]])
     }
 
     @Test func theConnectionIsNamedForTheServerAndReads() async throws {

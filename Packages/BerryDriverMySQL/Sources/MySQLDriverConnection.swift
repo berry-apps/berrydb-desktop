@@ -33,10 +33,15 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
     private var perStatementForm: PerStatementForm?
     /// Set by `boundEachStatement(by:)`.
     private var statementTimeout: Duration?
+    /// What the read-only path's placeholder count knows of the session, as
+    /// `prepareReadOnly()` read it. A connection never prepared counts as
+    /// the server's default session reads.
+    private var placeholderSession = MySQLPlaceholders.Session.serverDefault
     /// Held by a read-only statement from its first control statement to its
     /// COMMIT, so two read-only statements never share one transaction: the
     /// COMMIT of one would leave the other running in none. Only
-    /// `prepareReadOnly()` and `executeReadOnly(_:timeout:)` take it.
+    /// `prepareReadOnly()` and `executeReadOnly(_:parameters:timeout:)`, which
+    /// `executeReadOnly(_:timeout:)` calls, take it.
     private let turn = ConnectionTurn()
     /// Awaited between a read-only statement's preamble and the statement.
     /// That window is a few round trips wide and nothing on the server can
@@ -180,6 +185,7 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
     /// statement's statistics, leaving the stream open for the caller.
     private func stream(
         _ sql: String,
+        binds: [MySQLData] = [],
         clock: ContinuousClock,
         started: ContinuousClock.Instant,
         into continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
@@ -190,6 +196,7 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
         do {
             try await connection.query(
                 sql,
+                binds,
                 onRow: { row in
                     if !state.sentColumns {
                         state.sentColumns = true
@@ -216,7 +223,9 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
             // 1295). Nothing has streamed yet, so retry once via the text
             // protocol, keeping every statement on the single SQL path.
             let untouched = !state.sentColumns && state.batch.isEmpty && state.affectedRows == nil
-            if untouched, Self.isUnsupportedPreparedStatement(error) {
+            // The text protocol cannot carry binds, so a statement with binds
+            // is not retried there: the error is the answer.
+            if untouched, binds.isEmpty, Self.isUnsupportedPreparedStatement(error) {
                 return try await streamViaTextProtocol(sql, state: state, clock: clock, started: started, into: continuation)
             }
             if !state.batch.isEmpty { continuation.yield(.rows(state.batch)) }
@@ -542,9 +551,10 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
 ///
 /// `execute(_:)`, `ping()`, `queryAll(_:)` and the introspector do not take
 /// the connection's turn, so a connection prepared with `prepareReadOnly()`
-/// runs its statements through `executeReadOnly(_:timeout:)` only: a
-/// statement sent another way while a read-only transaction is open runs
-/// inside it, and its own COMMIT would end that transaction.
+/// runs its statements through `executeReadOnly(_:timeout:)` or
+/// `executeReadOnly(_:parameters:timeout:)` only: a statement sent another
+/// way while a read-only transaction is open runs inside it, and its own
+/// COMMIT would end that transaction.
 extension MySQLDriverConnection: ReadOnlyExecuting {
     /// Seconds a statement waits for a metadata lock, such as one held by an
     /// uncommitted ALTER of the user's, before it fails
@@ -577,14 +587,26 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
     /// a transaction has no variable to read back: `transaction_read_only`
     /// holds the session's default
     /// (https://dev.mysql.com/doc/refman/8.4/en/set-transaction.html).
+    ///
+    /// The session's SQL mode and client character set are read with the
+    /// lock wait, for the placeholder count (`MySQLPlaceholders.Session`),
+    /// and hold for every statement after it: the connection then runs only
+    /// statements that start like a read, a SELECT cannot assign a system
+    /// variable, and a stored function's `SET SESSION sql_mode` or
+    /// `SET character_set_client` is gone once it returns (verified against
+    /// MySQL 8.4.11 and MariaDB 11.8.9). A SET_VAR hint does not change how
+    /// its own statement is read (verified against MySQL 8.4.11), and
+    /// MariaDB reads the hint as a comment.
     public func prepareReadOnly() async throws {
         guard !isClosed else { throw DriverError.notConnected }
         await turn.take()
         defer { turn.give() }
-        let lockWait: [[BerryValue]]
+        let settings: [[BerryValue]]
         do {
             _ = try await textQuery("SET SESSION lock_wait_timeout = \(Self.readOnlyLockWaitSeconds)")
-            lockWait = try await textQuery("SELECT @@SESSION.lock_wait_timeout")
+            settings = try await textQuery(
+                "SELECT @@SESSION.lock_wait_timeout, @@SESSION.sql_mode, @@SESSION.character_set_client"
+            )
             for control in Self.readOnlyPreamble {
                 _ = try await textQuery(control)
             }
@@ -593,19 +615,48 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
             _ = try? await textQuery("ROLLBACK")
             throw DriverError.readOnlyUnavailable(Self.mapError(error).detail)
         }
-        guard lockWait.first?.first?.displayString == String(Self.readOnlyLockWaitSeconds) else {
-            throw DriverError.readOnlyUnavailable("lock_wait_timeout did not read back as \(Self.readOnlyLockWaitSeconds)")
-        }
+        placeholderSession = try Self.readOnlySession(from: settings)
         if (try? await textQuery("DO 1; DO 1")) != nil {
             throw DriverError.readOnlyUnavailable("the server ran two statements sent as one")
         }
     }
 
+    /// The session `prepareReadOnly()` reads back, from its one row of the
+    /// lock wait, the SQL mode and the client character set.
+    static func readOnlySession(from settings: [[BerryValue]]) throws -> MySQLPlaceholders.Session {
+        guard settings.count == 1, let row = settings.first, row.count == 3 else {
+            throw DriverError.readOnlyUnavailable("the session settings did not read back as one row of three values")
+        }
+        guard row[0].displayString == String(Self.readOnlyLockWaitSeconds) else {
+            throw DriverError.readOnlyUnavailable("lock_wait_timeout did not read back as \(Self.readOnlyLockWaitSeconds)")
+        }
+        guard let sqlMode = text(of: row[1]), let characterSet = text(of: row[2]) else {
+            throw DriverError.readOnlyUnavailable("sql_mode and character_set_client did not read back as text")
+        }
+        return MySQLPlaceholders.Session(sqlMode: sqlMode, characterSetClient: characterSet)
+    }
+
+    private static func text(of value: BerryValue) -> String? {
+        switch value {
+        case .text(let text): text
+        case .bytes(let bytes): String(decoding: bytes, as: UTF8.self)
+        default: nil
+        }
+    }
+
     public nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error> {
+        executeReadOnly(sql, parameters: [], timeout: timeout)
+    }
+
+    /// MySQLNIO sends every statement as a prepared statement, so binds
+    /// change nothing in how rows decode (MySQLNIO 1.9.1, `MySQLQueryCommand`).
+    public nonisolated func executeReadOnly(
+        _ sql: String, parameters: [SQLParameter], timeout: Duration
+    ) -> AsyncThrowingStream<ResultEvent, Error> {
         AsyncThrowingStream { continuation in
             let readOnlyTurn = ReadOnlyTurn()
             let task = Task {
-                await self.runReadOnly(sql, timeout: timeout, readOnlyTurn: readOnlyTurn, continuation: continuation)
+                await self.runReadOnly(sql, parameters: parameters, timeout: timeout, readOnlyTurn: readOnlyTurn, continuation: continuation)
             }
             continuation.onTermination = { termination in
                 guard case .cancelled = termination else { return }
@@ -622,10 +673,19 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
     /// carries the server's own execution-time bound where the server has
     /// one (`statement(_:form:timeout:groupConcatMaxLength:)`).
     private func runReadOnly(
-        _ statement: String, timeout: Duration, readOnlyTurn: ReadOnlyTurn,
+        _ statement: String, parameters: [SQLParameter], timeout: Duration, readOnlyTurn: ReadOnlyTurn,
         continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
     ) async {
         if let refusal = ReadOnlyAllowlist.mysql.refusal(of: statement) {
+            continuation.finish(throwing: refusal)
+            return
+        }
+        // Without parameters the server refuses a placeholder that has
+        // nothing bound (verified against MySQL 8.4.11 and MariaDB 11.8.9),
+        // so only a statement with parameters is counted or refused, and a
+        // text that `MySQLPlaceholders` cannot count still runs without them.
+        if !parameters.isEmpty,
+           let refusal = MySQLPlaceholders.refusal(of: statement, parameters: parameters.count, in: placeholderSession) {
             continuation.finish(throwing: refusal)
             return
         }
@@ -670,13 +730,27 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
         }
         do {
             let sql = Self.statement(statement, form: form, timeout: timeout, groupConcatMaxLength: nil)
-            let stats = try await stream(sql, clock: clock, started: started, into: continuation)
+            let stats = try await stream(
+                sql, binds: Self.binds(for: parameters), clock: clock, started: started, into: continuation
+            )
             _ = try? await connection.simpleQuery("COMMIT").get()
             continuation.yield(.complete(stats))
             continuation.finish()
         } catch {
             _ = try? await connection.simpleQuery("ROLLBACK").get()
             continuation.finish(throwing: Self.mapError(error))
+        }
+    }
+
+    static func binds(for parameters: [SQLParameter]) -> [MySQLData] {
+        parameters.map { parameter in
+            switch parameter {
+            case .null: .null
+            case .bool(let value): MySQLData(bool: value)
+            case .int(let value): MySQLData(int: Int(value))
+            case .double(let value): MySQLData(double: value)
+            case .text(let value): MySQLData(string: value)
+            }
         }
     }
 

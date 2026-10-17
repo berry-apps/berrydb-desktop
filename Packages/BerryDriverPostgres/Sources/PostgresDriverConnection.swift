@@ -55,6 +55,22 @@ final class PostgresCancelBox: @unchecked Sendable {
     }
 }
 
+/// A parameter sent as text with no type (OID 0), which the server reads as
+/// the type its place in the statement gives it
+/// (`PostgresDriverConnection.bindings(for:)`).
+struct UntypedText: PostgresDynamicTypeEncodable {
+    let value: String
+
+    var psqlType: PostgresDataType { .null }
+    var psqlFormat: PostgresFormat { .text }
+
+    func encode<JSONEncoder: PostgresJSONEncoder>(
+        into byteBuffer: inout ByteBuffer, context: PostgresEncodingContext<JSONEncoder>
+    ) {
+        byteBuffer.writeString(value)
+    }
+}
+
 public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadScoping {
     public nonisolated let id = UUID()
 
@@ -214,10 +230,15 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
 
     /// Streams the rows of `sql` into `continuation` in batches, leaving the
     /// stream open for the caller to complete.
-    private func streamRows(_ sql: String, into continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation) async throws {
+    private func streamRows(
+        _ sql: String, parameters: [SQLParameter] = [],
+        into continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
+    ) async throws {
         let running = cancelBox.started(sql)
         defer { cancelBox.ended(running) }
-        let rows = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger)
+        let rows = try await connection.query(
+            PostgresQuery(unsafeSQL: sql, binds: Self.bindings(for: parameters)), logger: Self.logger
+        )
         var sentColumns = false
         var batch: [[BerryValue]] = []
         batch.reserveCapacity(Self.batchSize)
@@ -238,6 +259,60 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
             }
         }
         if !batch.isEmpty { continuation.yield(.rows(batch)) }
+    }
+
+    /// Every value is sent as text with no type (OID 0), and the server
+    /// gives each parameter the type its place in the statement asks for, as
+    /// for a client that sends no parameter types
+    /// (https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-PARSE).
+    /// A NULL already goes without a type (`appendNull()`, PostgresNIO
+    /// 1.33.0). Verified against PostgreSQL 16.15, where the server accepts
+    /// `inf` and `nan`, as Swift writes a Double, for float8 and numeric:
+    /// - A parameter the statement never uses is left without a type, which
+    ///   fails the statement with "could not determine data type of
+    ///   parameter". Sent with its type, it was accepted and ignored, so a
+    ///   statement given too many parameters ran.
+    /// - A number compares with a varchar column, which has no operator for
+    ///   bigint, and a double with a numeric column exactly, where float8
+    ///   compared each numeric rounded to a double.
+    /// - A double that is a whole number goes as an integer where that is
+    ///   the same number (`text(of:)`): an integer column refuses `3.0`, as
+    ///   Swift writes the double, with "invalid input syntax for type
+    ///   integer", and float8 and numeric read `3` as well.
+    /// - The cost: a parameter with nothing around it to give it a type is
+    ///   read as text (`SELECT $1` returns the text `1`), and where text
+    ///   does not fit, as in `$1 + $2`, the statement fails until a cast
+    ///   gives the parameter a type (`$1::int8 + $2`).
+    /// The text a double is sent as. A whole number that is the same number
+    /// as Swift's shortest form of the double goes as an integer, which an
+    /// integer column reads and which float8 and numeric read as the same
+    /// value. Any other double keeps Swift's shortest form: a whole number
+    /// past 2^53 whose exact value differs from that form (2^60 + 1 as a
+    /// double prints as `1.152921504606847e+18`, exactly
+    /// 1152921504606846976) then reaches numeric as the decimal it reads
+    /// today, and negative zero keeps its sign, which float8 keeps (verified
+    /// against PostgreSQL 16.15: `'-0.0'::float8` is `-0`, `'0'::float8` is
+    /// `0`).
+    static func text(of value: Double) -> String {
+        let shortest = String(value)
+        guard !(value == 0 && value.sign == .minus), let integer = Int64(exactly: value),
+              Decimal(string: shortest) == Decimal(integer)
+        else { return shortest }
+        return String(integer)
+    }
+
+    static func bindings(for parameters: [SQLParameter]) -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: parameters.count)
+        for parameter in parameters {
+            switch parameter {
+            case .null: bindings.appendNull()
+            case .bool(let value): bindings.append(UntypedText(value: value ? "true" : "false"))
+            case .int(let value): bindings.append(UntypedText(value: String(value)))
+            case .double(let value): bindings.append(UntypedText(value: text(of: value)))
+            case .text(let value): bindings.append(UntypedText(value: value))
+            }
+        }
+        return bindings
     }
 
  // MARK: - Value mapping (no information loss)
@@ -523,10 +598,16 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
     }
 
     public nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error> {
+        executeReadOnly(sql, parameters: [], timeout: timeout)
+    }
+
+    public nonisolated func executeReadOnly(
+        _ sql: String, parameters: [SQLParameter], timeout: Duration
+    ) -> AsyncThrowingStream<ResultEvent, Error> {
         AsyncThrowingStream { continuation in
             let readOnlyTurn = ReadOnlyTurn()
             let task = Task {
-                await self.runReadOnly(sql, timeout: timeout, readOnlyTurn: readOnlyTurn, continuation: continuation)
+                await self.runReadOnly(sql, parameters: parameters, timeout: timeout, readOnlyTurn: readOnlyTurn, continuation: continuation)
             }
             continuation.onTermination = { termination in
                 guard case .cancelled = termination else { return }
@@ -575,7 +656,7 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
     /// BEGIN or SET LOCAL, or a cancel during them, ends the call before the
     /// statement runs.
     private func runReadOnly(
-        _ sql: String, timeout: Duration, readOnlyTurn: ReadOnlyTurn,
+        _ sql: String, parameters: [SQLParameter], timeout: Duration, readOnlyTurn: ReadOnlyTurn,
         continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
     ) async {
         if let refusal = ReadOnlyAllowlist.postgres.refusal(of: sql) {
@@ -621,7 +702,7 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
             return
         }
         do {
-            try await streamRows(sql, into: continuation)
+            try await streamRows(sql, parameters: parameters, into: continuation)
             await finishTransaction(commit: true)
             continuation.yield(.complete(QueryStats(rowsAffected: nil, duration: clock.now - started)))
             continuation.finish()

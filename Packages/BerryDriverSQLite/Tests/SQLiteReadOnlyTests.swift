@@ -159,4 +159,80 @@ struct SQLiteReadOnlyTests {
             #expect(blockComment == [[.int(1)]])
         }
     }
+
+    @Test func parametersBindInOrder() async throws {
+        try await withOpened { _, readOnly in
+            let rows = try await drain(readOnly.executeReadOnly(
+                "SELECT ?, ?, ?, ?, ? IS NULL", parameters: [.int(9_000_000_000), .double(2.5), .bool(true), .text("x"), .null],
+                timeout: .seconds(5)
+            ))
+            #expect(rows == [[.int(9_000_000_000), .double(2.5), .int(1), .text("x"), .int(1)]])
+        }
+    }
+
+    @Test func aParameterCountMismatchFails() async throws {
+        try await withOpened { _, readOnly in
+            let tooFew = await #expect(throws: DriverError.self) {
+                try await drain(readOnly.executeReadOnly("SELECT ?, ?", parameters: [.int(1)], timeout: .seconds(5)))
+            }
+            let tooMany = await #expect(throws: DriverError.self) {
+                try await drain(readOnly.executeReadOnly("SELECT ?", parameters: [.int(1), .int(2)], timeout: .seconds(5)))
+            }
+
+            #expect(tooFew?.detail == "The statement has 2 placeholders and 1 parameter was given.")
+            #expect(tooMany?.detail == "The statement has 1 placeholder and 2 parameters were given.")
+        }
+    }
+
+    /// SQLite numbers a named placeholder by where it first appears
+    /// (https://www.sqlite.org/c3ref/bind_blob.html), so `$2` would take the
+    /// first value.
+    @Test func aNamedPlaceholderIsRefused() async throws {
+        try await withOpened { _, readOnly in
+            for sql in ["SELECT $2, $1", "SELECT :b, :a", "SELECT @b, @a"] {
+                let error = await #expect(throws: DriverError.self, "\(sql)") {
+                    try await drain(readOnly.executeReadOnly(sql, parameters: [.int(1), .int(2)], timeout: .seconds(5)))
+                }
+                #expect(error?.detail == "The read-only connection binds only ? and ?NNN placeholders on SQLite.", "\(sql)")
+            }
+        }
+    }
+
+    @Test func aNumberedPlaceholderTakesTheValueAtItsNumber() async throws {
+        try await withOpened { _, readOnly in
+            let rows = try await drain(readOnly.executeReadOnly("SELECT ?2, ?1, ?2", parameters: [.int(1), .int(2)], timeout: .seconds(5)))
+
+            #expect(rows == [[.int(2), .int(1), .int(2)]])
+        }
+    }
+
+    /// `?2` alone makes two parameters, and the first would bind to nothing;
+    /// a bare `?` among numbered ones cannot be told from such a gap.
+    @Test func aNumberingWithAGapIsRefused() async throws {
+        try await withOpened { _, readOnly in
+            for sql in ["SELECT ?2", "SELECT ?1, ?3, ?2, ?5", "SELECT ?1, ?"] {
+                let count = sql == "SELECT ?1, ?3, ?2, ?5" ? 5 : 2
+                let parameters = (1...count).map { SQLParameter.int(Int64($0)) }
+                let error = await #expect(throws: DriverError.self, "\(sql)") {
+                    try await drain(readOnly.executeReadOnly(sql, parameters: parameters, timeout: .seconds(5)))
+                }
+                #expect(
+                    error?.detail == "On SQLite, ?NNN placeholders must use every number from 1 to the highest, without a bare ?.",
+                    "\(sql)"
+                )
+            }
+        }
+    }
+
+    /// `hex` rather than `length`, which counts the characters of a text
+    /// before its first NUL (https://www.sqlite.org/lang_corefunc.html#length).
+    @Test func aTextKeepsAnEmbeddedNul() async throws {
+        try await withOpened { _, readOnly in
+            let rows = try await drain(readOnly.executeReadOnly(
+                "SELECT hex(?1), ?1 = 'a' || char(0) || 'b'", parameters: [.text("a\u{0}b")], timeout: .seconds(5)
+            ))
+
+            #expect(rows == [[.text("610062"), .int(1)]])
+        }
+    }
 }

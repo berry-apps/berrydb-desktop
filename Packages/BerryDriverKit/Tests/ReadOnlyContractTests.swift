@@ -68,3 +68,53 @@ struct ReadOnlyContractTests {
         #expect(named.elasticsearchAPIKey == "key")
     }
 }
+
+/// A connection with only the unparameterized read-only call, as several
+/// test doubles are.
+private actor UnparameterizedConnection: ReadOnlyExecuting {
+    nonisolated let id = UUID()
+    private(set) var ran: [String] = []
+
+    func prepareReadOnly() async throws {}
+
+    nonisolated func executeReadOnly(_ sql: String, timeout: Duration) -> AsyncThrowingStream<ResultEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                await self.record(sql)
+                continuation.yield(.complete(QueryStats(rowsAffected: nil, duration: .zero)))
+                continuation.finish()
+            }
+        }
+    }
+
+    private func record(_ sql: String) { ran.append(sql) }
+    nonisolated func execute(_ sql: String) -> AsyncThrowingStream<ResultEvent, Error> { .init { $0.finish() } }
+    nonisolated func cancelCurrentQuery() {}
+    func setDatabase(_ name: String) async throws {}
+    nonisolated var introspector: any Introspector { fatalError("unused") }
+    func ping() async -> Bool { true }
+    func close() async {}
+}
+
+extension ReadOnlyContractTests {
+    @Test func noParametersForwardToTheUnparameterizedRun() async throws {
+        let connection = UnparameterizedConnection()
+        for try await _ in connection.executeReadOnly("SELECT 1", parameters: [], timeout: .seconds(1)) {}
+        #expect(await connection.ran == ["SELECT 1"])
+    }
+
+    /// A connection that cannot bind must never run the text with its
+    /// placeholders unbound, which SQLite reads as NULL
+    /// (https://www.sqlite.org/c3ref/bind_blob.html).
+    @Test func parametersOnAConnectionThatCannotBindRunNothing() async {
+        let connection = UnparameterizedConnection()
+        let error = await #expect(throws: DriverError.self) {
+            for try await _ in connection.executeReadOnly("SELECT ?", parameters: [.int(1)], timeout: .seconds(1)) {}
+        }
+        guard case .unsupported? = error else {
+            Issue.record("expected unsupported, got \(String(describing: error))")
+            return
+        }
+        #expect(await connection.ran.isEmpty)
+    }
+}
