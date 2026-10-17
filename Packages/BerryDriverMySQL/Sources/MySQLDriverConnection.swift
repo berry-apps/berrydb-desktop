@@ -273,12 +273,24 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
 
  // MARK: - Value mapping
 
+    /// Reads each cell by its position. MySQLNIO 1.9.1's
+    /// `MySQLRow.column(_:table:)` returns the first column with a matching
+    /// name and table, so two result columns that share a name, as in
+    /// `SELECT 1 AS n, 2 AS n`, both read the first one's value (observed on
+    /// MySQL 8.4.11 and MariaDB 11.8.9). The `MySQLData` is built as that
+    /// method builds it, including the UNSIGNED flag, which decides how a
+    /// binary-protocol integer is read.
     static func berryValues(from row: MySQLRow) -> [BerryValue] {
-        row.columnDefinitions.map { definition in
-            guard let data = row.column(definition.name, table: definition.table) else {
-                return .null
-            }
-            return berryValue(from: data, definition: definition)
+        zip(row.columnDefinitions, row.values).map { definition, buffer in
+            berryValue(
+                from: MySQLData(
+                    type: definition.columnType,
+                    format: row.format,
+                    buffer: buffer,
+                    isUnsigned: definition.flags.contains(.COLUMN_UNSIGNED)
+                ),
+                definition: definition
+            )
         }
     }
 
