@@ -7,22 +7,21 @@ import Testing
 
 @Suite("Postgres read-only statements")
 struct PostgresReadOnlyStatementTests {
-    /// Each statement gets its own read-only transaction and its own bounds;
-    /// SET LOCAL ends with the transaction
-    /// (https://www.postgresql.org/docs/current/sql-set.html).
+    /// Each statement gets its own read-only transaction and its own bounds,
+    /// set for the transaction alone, and the backend it runs on is read in
+    /// the same round trip.
     @Test func eachStatementRunsInAReadOnlyTransactionWithItsOwnBounds() {
         #expect(PostgresDriverConnection.readOnlyPreamble(timeout: .seconds(90)) == [
             "BEGIN READ ONLY",
-            "SET LOCAL statement_timeout = '90000ms'",
-            "SET LOCAL lock_timeout = '5s'",
+            "SELECT set_config('statement_timeout', '90000ms', true), set_config('lock_timeout', '5s', true), pg_backend_pid()",
         ])
     }
 
     /// statement_timeout = 0 turns the bound off, so whatever is left of the
     /// assistant's deadline, the statement keeps a bound.
     @Test func aDeadlineUnderAMillisecondStillBoundsTheStatement() {
-        #expect(PostgresDriverConnection.readOnlyPreamble(timeout: .microseconds(300))[1] == "SET LOCAL statement_timeout = '1ms'")
-        #expect(PostgresDriverConnection.readOnlyPreamble(timeout: .zero)[1] == "SET LOCAL statement_timeout = '1ms'")
+        #expect(PostgresDriverConnection.readOnlyPreamble(timeout: .microseconds(300))[1].contains("'statement_timeout', '1ms', true"))
+        #expect(PostgresDriverConnection.readOnlyPreamble(timeout: .zero)[1].contains("'statement_timeout', '1ms', true"))
     }
 
     @Test func theApplicationNameIsSentAtStartup() {

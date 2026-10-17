@@ -4,18 +4,54 @@ import Logging
 import NIOSSL
 import PostgresNIO
 
-/// State needed to cancel from outside the actor:
-/// Postgres cancels a query via `pg_cancel_backend(pid)` on a SECONDARY CONNECTION.
+/// What a cancel needs from outside the actor: Postgres cancels a statement
+/// with `pg_cancel_backend(pid)` sent on a second connection, so the box
+/// keeps the backend to send it to and the statements that may be stopped
+/// there.
 final class PostgresCancelBox: @unchecked Sendable {
     private let lock = NSLock()
     private var _backendPID: Int32?
+    private var _transactionPID: Int32?
+    private var running: [UUID: String] = [:]
     let config: ConnectionConfig
 
     init(config: ConnectionConfig) { self.config = config }
 
+    /// The backend read once after connect.
     var backendPID: Int32? {
-        get { lock.lock(); defer { lock.unlock() }; return _backendPID }
-        set { lock.lock(); defer { lock.unlock() }; _backendPID = newValue }
+        get { lock.withLock { _backendPID } }
+        set { lock.withLock { _backendPID = newValue } }
+    }
+
+    /// The backend read inside the read-only transaction open now; nil
+    /// outside one. A pooler in transaction mode keeps a transaction on one
+    /// backend until it ends (https://www.pgbouncer.org/features.html), so
+    /// while it is set it is the backend the running statement is on.
+    var transactionPID: Int32? {
+        get { lock.withLock { _transactionPID } }
+        set { lock.withLock { _transactionPID = newValue } }
+    }
+
+    /// Records `sql` as running until `ended(_:)` is called with the result.
+    func started(_ sql: String) -> UUID {
+        lock.withLock {
+            let id = UUID()
+            running[id] = sql
+            return id
+        }
+    }
+
+    func ended(_ id: UUID) {
+        lock.withLock { running[id] = nil }
+    }
+
+    /// The backend a cancel sent now goes to and the statements it may stop
+    /// there; nil when nothing runs or no backend is known.
+    var cancelTarget: (pid: Int32, statements: [String])? {
+        lock.withLock {
+            guard !running.isEmpty, let pid = _transactionPID ?? _backendPID else { return nil }
+            return (pid, Array(running.values))
+        }
     }
 }
 
@@ -135,6 +171,12 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
  /// Test hook: exposes whether the cancel precondition holds.
     public nonisolated var debugBackendPID: Int32? { cancelBox.backendPID }
 
+    /// Test hook: makes the backend read at connect another session's, as a
+    /// pooler in transaction mode does once it hands that backend on.
+    nonisolated func pointCancelForTesting(at pid: Int32) {
+        cancelBox.backendPID = pid
+    }
+
  // MARK: - Execute
 
     public nonisolated func execute(_ sql: String) -> AsyncThrowingStream<ResultEvent, Error> {
@@ -173,6 +215,8 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
     /// Streams the rows of `sql` into `continuation` in batches, leaving the
     /// stream open for the caller to complete.
     private func streamRows(_ sql: String, into continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation) async throws {
+        let running = cancelBox.started(sql)
+        defer { cancelBox.ended(running) }
         let rows = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger)
         var sentColumns = false
         var batch: [[BerryValue]] = []
@@ -264,18 +308,50 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
 
     // MARK: - Control
 
- /// Cancel via a secondary connection: `SELECT pg_cancel_backend(pid)` (06).
+    /// Cancels through a second connection, and only a backend that is
+    /// running one of this connection's statements
+    /// (`cancelStatement(pid:statements:)`).
     public nonisolated func cancelCurrentQuery() {
-        guard let pid = cancelBox.backendPID else { return }
+        guard let target = cancelBox.cancelTarget else { return }
         let config = cancelBox.config
         Task {
             guard let companion = try? await Self.makeRawConnection(config) else { return }
             _ = try? await companion.query(
-                "SELECT pg_cancel_backend(\(pid))",
+                Self.cancelStatement(pid: target.pid, statements: target.statements),
                 logger: Self.logger
             )
             try? await companion.close()
         }
+    }
+
+    /// `pg_cancel_backend(pid)` for a backend whose running statement is one
+    /// of `statements`. Behind a pooler in transaction mode, a statement
+    /// outside a transaction can run on any server backend, and the one this
+    /// connection read at connect may be running another client's statement
+    /// by the time a cancel is sent (https://www.pgbouncer.org/features.html);
+    /// an unguarded cancel stops that client's statement (observed against
+    /// PostgreSQL 16.15 with the cancel pointed at another session's
+    /// backend). `pg_stat_activity.query` holds the text of the backend's
+    /// running statement, cut at `track_activity_query_size` bytes
+    /// (https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-ACTIVITY-VIEW),
+    /// so a statement matches when its text starts with that column. A
+    /// backend with `track_activities` off reports its state as `disabled`
+    /// and no statement, so it is cancelled by its process ID alone, as
+    /// before; otherwise Stop would never stop a statement there.
+    static func cancelStatement(pid: Int32, statements: [String]) -> PostgresQuery {
+        var binds = PostgresBindings(capacity: 2)
+        binds.append(pid)
+        binds.append(statements)
+        return PostgresQuery(
+            unsafeSQL: """
+                SELECT pg_cancel_backend(pid) FROM pg_stat_activity
+                WHERE pid = $1 AND (state = 'disabled' OR (
+                  state = 'active' AND length(query) > 0
+                  AND EXISTS (SELECT 1 FROM unnest($2::text[]) AS running(statement)
+                              WHERE left(running.statement, length(query)) = query)))
+                """,
+            binds: binds
+        )
     }
 
  /// Postgres cannot switch databases on the same connection → reconnect.
@@ -319,6 +395,8 @@ public actor PostgresDriverConnection: StatementBoundingConnection, CatalogReadS
         guard !isClosed else { throw DriverError.notConnected }
         do {
             return try await inTurn {
+                let running = cancelBox.started(sql)
+                defer { cancelBox.ended(running) }
                 let rows = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger)
                 var result: [[BerryValue]] = []
                 for try await row in rows {
@@ -458,21 +536,26 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
         }
     }
 
-    /// What runs before each read-only statement. SET LOCAL ends with the
-    /// transaction, so nothing stays on a server session a pooler hands on
-    /// (https://www.postgresql.org/docs/current/sql-set.html).
+    /// What runs before each read-only statement: BEGIN READ ONLY, then one
+    /// SELECT that sets the bounds for the transaction alone and reads the
+    /// backend it runs on. `set_config` with `is_local` true is SET LOCAL
+    /// (https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-SET),
+    /// which ends with the transaction, so nothing stays on a server session
+    /// a pooler hands on (https://www.postgresql.org/docs/current/sql-set.html).
     /// `statement_timeout` bounds the statement on the server as well as on
     /// the client, and a value of 0 would turn the bound off
     /// (https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-STATEMENT-TIMEOUT),
     /// so it never drops below 1 ms. `lock_timeout` keeps a read from
     /// queueing behind the user's uncommitted DDL, and other sessions behind
     /// the read (https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-LOCK-TIMEOUT).
+    /// The backend is read inside the transaction because a pooler in
+    /// transaction mode keeps it for this connection until the transaction
+    /// ends, so a cancel sent while the statement runs reaches the statement.
     static func readOnlyPreamble(timeout: Duration) -> [String] {
         let milliseconds = max(1, timeout.components.seconds * 1_000 + timeout.components.attoseconds / 1_000_000_000_000_000)
         return [
             "BEGIN READ ONLY",
-            "SET LOCAL statement_timeout = '\(milliseconds)ms'",
-            "SET LOCAL lock_timeout = '5s'",
+            "SELECT set_config('statement_timeout', '\(milliseconds)ms', true), set_config('lock_timeout', '5s', true), pg_backend_pid()",
         ]
     }
 
@@ -512,10 +595,11 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
             return
         }
         defer { readOnlyTurn.end() }
+        defer { cancelBox.transactionPID = nil }
         do {
-            for statement in Self.readOnlyPreamble(timeout: timeout) {
-                try await command(statement)
-            }
+            let preamble = Self.readOnlyPreamble(timeout: timeout)
+            try await command(preamble[0])
+            cancelBox.transactionPID = try await lastInt32(preamble[1])
         } catch {
             await finishTransaction(commit: false)
             let mapped = Self.mapError(error)
@@ -549,6 +633,17 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
 
     func holdAfterReadOnlyPreamble(_ hold: @escaping @Sendable () async -> Void) {
         afterReadOnlyPreamble = hold
+    }
+
+    /// The last column of the first row of `sql`, read as a 32-bit integer.
+    private func lastInt32(_ sql: String) async throws -> Int32? {
+        var value: Int32?
+        for try await row in try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger) {
+            if value == nil, let cell = Array(row).last {
+                value = try cell.decode(Int32.self)
+            }
+        }
+        return value
     }
 
     private func firstText(_ sql: String) async throws -> String? {
