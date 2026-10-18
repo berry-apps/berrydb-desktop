@@ -66,6 +66,41 @@ struct MySQLErrorMappingTests {
         }
     }
 
+    /// MySQLNIO sends every statement as a prepared statement, and both
+    /// servers refuse to prepare a PREPARE or a DEALLOCATE PREPARE with
+    /// error 1295, ER_UNSUPPORTED_PS
+    /// (https://dev.mysql.com/doc/mysql-errors/8.4/en/server-error-reference.html#error_er_unsupported_ps,
+    /// https://mariadb.com/kb/en/mariadb-error-code-reference/; verified
+    /// against MySQL 8.4.11 and MariaDB 11.8.9). Each runs over the text
+    /// protocol instead; the DEALLOCATE finds the statement only if the
+    /// PREPARE ran.
+    @Test func aStatementTheServerCannotPrepareRunsOverTheTextProtocol() async throws {
+        let connection = try await Self.open()
+        defer { Task { await connection.close() } }
+        let name = "berry_ps_probe_" + UUID().uuidString.prefix(8).lowercased()
+
+        try await drain(connection.execute("PREPARE \(name) FROM 'SELECT 1'"))
+        try await drain(connection.execute("DEALLOCATE PREPARE \(name)"))
+
+        let retries = await connection.textProtocolRetries
+        #expect(retries == 2)
+    }
+
+    /// A syntax error quotes the statement, so `SELECT 1295 1295` fails
+    /// with "near '1295'", error 1064 (verified against MySQL 8.4.11 and
+    /// MariaDB 11.8.9). That is the statement's answer; sent again, a
+    /// statement whose error quotes 1295 would run twice.
+    @Test func anErrorThatQuotes1295IsNotSentAgain() async throws {
+        let connection = try await Self.open()
+        defer { Task { await connection.close() } }
+
+        let error = await #expect(throws: DriverError.self) { try await drain(connection.execute("SELECT 1295 1295")) }
+
+        let retries = await connection.textProtocolRetries
+        #expect(isFailure(error), "\(String(describing: error))")
+        #expect(retries == 0)
+    }
+
     /// The statements on the server, other than the asking connection's own,
     /// whose text holds `marker`.
     private func statements(marked marker: String, on watcher: MySQLDriverConnection) async throws -> [Int64] {

@@ -47,6 +47,10 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
     /// That window is a few round trips wide and nothing on the server can
     /// hold it open, so this is how a test lands a cancel in it.
     private var afterReadOnlyPreamble: (@Sendable () async -> Void)?
+    /// Statements sent again over the text protocol after the server would
+    /// not prepare them. A retry that fails again ends with an error like
+    /// the first attempt's, so this is how a test tells the two apart.
+    private(set) var textProtocolRetries = 0
 
     static let batchSize = 500
     private static let logger: Logger = {
@@ -230,6 +234,7 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
             // The text protocol cannot carry binds, so a statement with binds
             // is not retried there: the error is the answer.
             if untouched, binds.isEmpty, Self.isUnsupportedPreparedStatement(error) {
+                textProtocolRetries += 1
                 return try await streamViaTextProtocol(sql, state: state, clock: clock, started: started, into: continuation)
             }
             if !state.batch.isEmpty { continuation.yield(.rows(state.batch)) }
@@ -269,10 +274,15 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
         return QueryStats(rowsAffected: state.sentColumns ? nil : 0, duration: clock.now - started)
     }
 
+    /// Error 1295, ER_UNSUPPORTED_PS, which both servers word "This command
+    /// is not supported in the prepared statement protocol yet" and MySQLNIO
+    /// 1.9.1 delivers as `MySQLError.server` (verified against MySQL 8.4.11
+    /// and MariaDB 11.8.9). The number decides, not the text: a syntax error
+    /// quotes the statement, so `SELECT 1295 1295` fails with "near '1295'"
+    /// and would be sent a second time.
     private static func isUnsupportedPreparedStatement(_ error: Error) -> Bool {
-        guard error is MySQLError else { return false }
-        let text = String(reflecting: error).lowercased()
-        return text.contains("1295") || text.contains("prepared statement protocol")
+        guard case MySQLError.server(let packet) = error else { return false }
+        return packet.errorCode == .UNSUPPORTED_PS
     }
 
  // MARK: - Value mapping
