@@ -76,4 +76,18 @@ extension DriverError {
         if case .queryFailed(let message, _) = self { return message }
         return localizedDescription
     }
+
+    /// What a read-only setup that failed with `mapped`, the driver's own
+    /// mapping of the failure, reports. A lost connection and a cancel stay
+    /// what they are: neither says the server cannot run read-only, and as
+    /// `readOnlyUnavailable` they would send the in-app assistant's statement
+    /// to an approval card and make the MCP helper report that no read-only
+    /// session could be opened. Every other failure is
+    /// `readOnlyUnavailable` with the failure's own words.
+    public static func readOnlySetupFailure(_ mapped: DriverError) -> DriverError {
+        switch mapped {
+        case .connectionLost, .cancelled: mapped
+        default: .readOnlyUnavailable(mapped.detail)
+        }
+    }
 }

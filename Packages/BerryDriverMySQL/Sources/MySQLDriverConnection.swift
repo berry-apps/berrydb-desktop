@@ -130,6 +130,10 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
         }
     }
 
+    /// Test hook: whether MySQLNIO has seen the connection close, so a test
+    /// can wait for that before it sends a statement.
+    var connectionClosedForTesting: Bool { connection.isClosed }
+
     private func refreshConnectionID() async {
         do {
             let rows = try await connection.simpleQuery("SELECT CONNECTION_ID() AS id").get()
@@ -363,10 +367,21 @@ public actor MySQLDriverConnection: StatementBoundingConnection {
     /// decide it: a syntax error quotes the statement, so `SELECT 1317 1317`
     /// fails with "near '1317'", and a literal 'interrupted' reaches the
     /// message the same way.
+    ///
+    /// `MySQLError.closed` is a lost connection. MySQLNIO 1.9.1 raises it for
+    /// a statement sent on a connection whose channel is no longer active,
+    /// and for each statement still queued when the channel goes
+    /// (`MySQLConnection.send`, `MySQLConnectionHandler.channelInactive`).
+    /// Verified against MySQL 8.4.11 and MariaDB 11.8.9: after `KILL` of the
+    /// connection from another session, every later statement, a read-only
+    /// one and the read-only setup included, failed with it.
     static func mapError(_ error: Error) -> DriverError {
         if let driverError = error as? DriverError { return driverError }
         if case MySQLError.server(let packet) = error, cancelErrorCodes.contains(packet.errorCode) {
             return .cancelled
+        }
+        if case MySQLError.closed = error {
+            return .connectionLost("MySQL connection closed")
         }
         return .queryFailed(message: describe(error), code: nil)
     }
@@ -633,7 +648,7 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
             _ = try await textQuery("ROLLBACK")
         } catch {
             _ = try? await textQuery("ROLLBACK")
-            throw DriverError.readOnlyUnavailable(Self.mapError(error).detail)
+            throw DriverError.readOnlySetupFailure(Self.mapError(error))
         }
         placeholderSession = try Self.readOnlySession(from: settings)
         if (try? await textQuery("DO 1; DO 1")) != nil {
@@ -729,12 +744,7 @@ extension MySQLDriverConnection: ReadOnlyExecuting {
             }
         } catch {
             _ = try? await connection.simpleQuery("ROLLBACK").get()
-            let mapped = Self.mapError(error)
-            if case .cancelled = mapped {
-                continuation.finish(throwing: mapped)
-            } else {
-                continuation.finish(throwing: DriverError.readOnlyUnavailable(mapped.detail))
-            }
+            continuation.finish(throwing: DriverError.readOnlySetupFailure(Self.mapError(error)))
             return
         }
         await afterReadOnlyPreamble?()

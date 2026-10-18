@@ -120,6 +120,78 @@ struct MySQLErrorMappingTests {
         if let failure { throw failure }
     }
 
+    /// Waits, at most 10 s, until MySQLNIO has seen `connection` close.
+    private func waitUntilClosed(_ connection: MySQLDriverConnection) async throws {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while await !connection.connectionClosedForTesting {
+            guard ContinuousClock.now < deadline else {
+                Issue.record("the connection never saw the server end it")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    private func connectionID(of connection: MySQLDriverConnection, readOnly: Bool = false) async throws -> Int64 {
+        let sql = "SELECT CONNECTION_ID()"
+        let rows = try await drain(readOnly ? connection.executeReadOnly(sql, timeout: .seconds(10)) : connection.execute(sql))
+        guard case .int(let id)? = rows.first?.first else {
+            Issue.record("no connection ID in \(rows)")
+            return -1
+        }
+        return id
+    }
+
+    /// KILL without QUERY ends the connection itself
+    /// (https://dev.mysql.com/doc/refman/8.4/en/kill.html,
+    /// https://mariadb.com/kb/en/kill/). Every way the driver sends a
+    /// statement then reports a lost connection, the read-only setup and a
+    /// read-only statement included: reported as `readOnlyUnavailable`, it
+    /// would make the in-app assistant ask for an approval card as if the
+    /// server could not run read-only. Each call is bounded, so one that
+    /// waits forever fails the test.
+    @Test func aKilledConnectionIsALostConnection() async throws {
+        let connection = try await Self.open()
+        let readOnly = try await Self.open()
+        let unprepared = try await Self.open()
+        let admin = try await Self.open()
+        defer { Task { await connection.close(); await readOnly.close(); await unprepared.close(); await admin.close() } }
+        try await readOnly.prepareReadOnly()
+        let ids = [
+            try await connectionID(of: connection),
+            try await connectionID(of: readOnly, readOnly: true),
+            try await connectionID(of: unprepared),
+        ]
+        for id in ids {
+            _ = try await admin.queryAll("KILL \(id)")
+        }
+        try await waitUntilClosed(connection)
+        try await waitUntilClosed(readOnly)
+        try await waitUntilClosed(unprepared)
+
+        let executed = await #expect(throws: DriverError.self) {
+            try await within(.seconds(10)) { try await drain(connection.execute("SELECT 1")) }
+        }
+        let listed = await #expect(throws: DriverError.self) {
+            try await within(.seconds(10)) { try await connection.queryAll("SELECT 1") }
+        }
+        let read = await #expect(throws: DriverError.self) {
+            try await within(.seconds(10)) { try await drain(readOnly.executeReadOnly("SELECT 1", timeout: .seconds(5))) }
+        }
+        let prepared = await #expect(throws: DriverError.self) {
+            try await within(.seconds(10)) { try await unprepared.prepareReadOnly() }
+        }
+        let answered = try await within(.seconds(10)) { await connection.ping() }
+
+        for (path, error) in [("execute", executed), ("queryAll", listed), ("read-only", read), ("read-only setup", prepared)] {
+            guard case .connectionLost? = error else {
+                Issue.record("\(path): not a lost connection: \(String(describing: error))")
+                continue
+            }
+        }
+        #expect(answered == false)
+    }
+
     /// The server's own bound ends the statement with error 3024 on MySQL
     /// (`MAX_EXECUTION_TIME`) and 1969 on MariaDB (`max_statement_time`),
     /// on a connection bounded statement by statement and on the read-only

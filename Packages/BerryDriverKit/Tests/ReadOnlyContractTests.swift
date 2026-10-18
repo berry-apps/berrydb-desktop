@@ -28,6 +28,40 @@ struct ReadOnlyContractTests {
         }
     }
 
+    /// A connection that dropped, or a statement that was cancelled, while
+    /// the read-only mode was being set up says nothing about whether the
+    /// server can run read-only. Reported as `readOnlyUnavailable`, it would
+    /// make the in-app assistant ask for an approval card and the MCP helper
+    /// say that it could not open a read-only session.
+    @Test func aLostConnectionOrACancelInTheSetupStaysWhatItIs() {
+        guard case .connectionLost("PostgreSQL connection closed") = DriverError.readOnlySetupFailure(
+            .connectionLost("PostgreSQL connection closed")
+        ) else {
+            Issue.record("\(DriverError.readOnlySetupFailure(.connectionLost("PostgreSQL connection closed")))")
+            return
+        }
+        guard case .cancelled = DriverError.readOnlySetupFailure(.cancelled) else {
+            Issue.record("\(DriverError.readOnlySetupFailure(.cancelled))")
+            return
+        }
+    }
+
+    /// Guard: every other failure of the setup is `readOnlyUnavailable`,
+    /// carrying the failure's own words.
+    @Test func anyOtherSetupFailureIsReadOnlyUnavailable() {
+        let failures: [(DriverError, String)] = [
+            (.queryFailed(message: "BEGIN refused in statement pooling mode", code: nil), "BEGIN refused in statement pooling mode"),
+            (.notConnected, DriverError.notConnected.localizedDescription),
+            (.connectionFailed("no route"), DriverError.connectionFailed("no route").localizedDescription),
+        ]
+        for (failure, detail) in failures {
+            guard case .readOnlyUnavailable(detail) = DriverError.readOnlySetupFailure(failure) else {
+                Issue.record("\(failure): \(DriverError.readOnlySetupFailure(failure))")
+                continue
+            }
+        }
+    }
+
     /// A connection opened through a session's SSH tunnel keeps the name it
     /// was given, so the server still lists it as the read-only connection.
     @Test func theApplicationNameSurvivesTheTunnelEndpoint() {

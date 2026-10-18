@@ -54,15 +54,18 @@ public protocol ReadOnlyExecuting: DriverConnection {
     /// Applies the connection's read-only settings once, after connect, and
     /// reads them back. Throws `DriverError.readOnlyUnavailable` when the
     /// server refuses a setting or it does not read back as set; the caller
-    /// then closes the connection without running anything on it.
+    /// then closes the connection without running anything on it. A lost
+    /// connection or a cancel is thrown as itself
+    /// (`DriverError.readOnlySetupFailure(_:)`).
     func prepareReadOnly() async throws
 
     /// Runs exactly one statement under the read-only mode, bounded by
     /// `timeout` where the server can bound a statement. Finishes with
     /// `DriverError.readOnlyUnavailable`, without running the statement, when
-    /// the mode cannot be established, and with the `ReadOnlyAllowlist`
-    /// refusal, before the server sees it, when the text does not start like
-    /// a read. There is deliberately no fallback to
+    /// the mode cannot be established, or with the lost connection or the
+    /// cancel that kept it from being established; and with the
+    /// `ReadOnlyAllowlist` refusal, before the server sees it, when the text
+    /// does not start like a read. There is deliberately no fallback to
     /// an unscoped run, unlike `CatalogReadScoping.beginCatalogReads`: these
     /// statements come from outside the app and are safe only because the
     /// server refuses their writes.
