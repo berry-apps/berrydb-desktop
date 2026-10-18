@@ -161,9 +161,12 @@ public struct MCPLiveReadService: Sendable {
             // Nothing in this process cancelled the statement, so the server
             // ended it at its time bound: the drivers report PostgreSQL's
             // query_canceled (SQLSTATE 57014,
-            // https://www.postgresql.org/docs/current/errcodes-appendix.html)
-            // and MySQL's interrupted statement (error 3024,
+            // https://www.postgresql.org/docs/current/errcodes-appendix.html),
+            // MySQL's interrupted statement (error 3024,
             // https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html)
+            // and MariaDB's statement past `max_statement_time` (error 1969,
+            // ER_STATEMENT_TIMEOUT,
+            // https://mariadb.com/kb/en/mariadb-error-code-reference/)
             // as `DriverError.cancelled`.
             throw MCPLiveReadError.timedOut(seconds: MCPRequestDeadline.wholeSeconds(limits.maximumElapsed))
         }
