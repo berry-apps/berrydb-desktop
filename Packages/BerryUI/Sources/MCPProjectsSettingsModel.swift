@@ -129,7 +129,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// can be read; a project without such a row has no entry. The editing
     /// copy turns such a row's live reads off but keeps its stored redacted
     /// columns, which any save of the project then seals, so the editor
-    /// marks these connections for review.
+    /// marks these connections and shows those columns (`showsRedactions`).
     @Published public private(set) var unverifiedProfileIDs: [UUID: Set<UUID>] = [:]
     /// The last failure of a load, save or delete, ready to show; cleared
     /// by the next `reload()`, which every successful save or delete runs.
@@ -562,6 +562,16 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         }
         reload()
         return true
+    }
+
+    /// True when the editor shows the redacted columns of `profileID` in
+    /// `draft`: while its live reads are on, and also while they are off
+    /// when its stored row is in `unverifiedProfileIDs`. Such a row opens
+    /// with live reads off, yet a save seals its stored columns, so they
+    /// are shown before a save rather than once live reads are turned on.
+    public func showsRedactions(for profileID: UUID, in draft: Draft) -> Bool {
+        draft.access[profileID]?.liveRead == true
+            || unverifiedProfileIDs[draft.id]?.contains(profileID) == true
     }
 
     /// True when `projectID` is a stored project as of the last `reload()`;
