@@ -308,6 +308,16 @@ private struct MCPProjectEditorSheet: View {
         let id = profile.id
         let turnsOn = MCPProjectsSettingsModel.turnsLiveReadsOn(id, in: draft)
         Group {
+            // A row that does not verify opens with live reads off, which
+            // hides the redacted-columns field, while the draft keeps the
+            // stored columns: turning live reads on shows them pre-filled,
+            // and any save seals them under the new key.
+            if model.unverifiedProfileIDs[draft.id]?.contains(id) == true {
+                Text(L("This connection’s saved settings could not be verified, and its live reads opened off. Review the redacted columns before turning live reads on."))
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Toggle(L("Live reads"), isOn: liveRead(of: profile))
             if draft.access[id]?.liveRead == true {
                 TextField(L("Redacted columns"), text: redactedColumns(of: id))

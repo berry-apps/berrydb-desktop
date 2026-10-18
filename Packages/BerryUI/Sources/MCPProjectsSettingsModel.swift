@@ -124,6 +124,13 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// the user turns it on again. The list marks these projects rather
     /// than showing the stored enabled flag unqualified.
     @Published public private(set) var unverifiedProjectIDs: Set<UUID> = []
+    /// By project ID, the assigned profiles whose own access row does not
+    /// verify under the stored key, or every assigned profile when no key
+    /// can be read; a project without such a row has no entry. The editing
+    /// copy turns such a row's live reads off but keeps its stored redacted
+    /// columns, which any save of the project then seals, so the editor
+    /// marks these connections for review.
+    @Published public private(set) var unverifiedProfileIDs: [UUID: Set<UUID>] = [:]
     /// The last failure of a load, save or delete, ready to show; cleared
     /// by the next `reload()`, which every successful save or delete runs.
     @Published public var errorMessage: String?
@@ -396,8 +403,14 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             let unverified = try stored.filter {
                 try store.verifiedMCPProject(id: $0.id, key: key)?.projectTagValid == false
             }
+            var unverifiedAccess: [UUID: Set<UUID>] = [:]
+            for project in stored {
+                let profileIDs = try store.unverifiedMCPProfileIDs(projectID: project.id, key: key)
+                if !profileIDs.isEmpty { unverifiedAccess[project.id] = profileIDs }
+            }
             projects = stored
             unverifiedProjectIDs = Set(unverified.map(\.id))
+            unverifiedProfileIDs = unverifiedAccess
             profiles = try store.allProfiles()
         } catch {
             errorMessage = L("MCP projects could not be loaded: \(error.localizedDescription)")

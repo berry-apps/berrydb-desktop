@@ -731,7 +731,10 @@ stricter production-labeled limits below. The pane's per-connection **Live
 reads** switch exists for PostgreSQL, MySQL/MariaDB and SQLite connections.
 A save applies the draft's live-read switches and redacted columns to the
 verified editing copy of the project, in which a switch whose row does not
-verify is already off. For each connection whose live reads the save turns
+verify is already off. Such a row keeps its stored redacted columns, so the
+pane marks its connection as not verified (every connection when no key can
+be read) for the columns to be reviewed before a save seals them. For each
+connection whose live reads the save turns
 on (off in that copy, on in the draft) it requires the production consent
 when the connection is production-labeled, and, on PostgreSQL and
 MySQL/MariaDB, a finished privilege check run against the server and
