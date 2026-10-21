@@ -32,6 +32,8 @@ venv/
 .claude/
 .superpowers/
 .mcp.json
+# Git worktrees kept inside the checkout during development.
+.worktrees/
 
 # Scratch and test files
 test_icon.swift
