@@ -221,6 +221,7 @@ struct TableTabView: View {
                 onOpenReference?(fk, target.value)
             }
         )
+        .inspectingRows()
     }
 
  /// Staged-changes bar: review before anything is written (06).

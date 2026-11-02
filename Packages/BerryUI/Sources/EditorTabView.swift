@@ -536,6 +536,8 @@ struct EditorTabView: View {
                         viewerTarget = CellTarget.from(buffer: result.buffer, row: row, column: column)
                     }
                 )
+                .inspectingRows()
+                .id(result.id)
                 .sheet(item: $viewerTarget) { target in
                     CellViewerSheet(
                         value: target.value, columnName: target.columnName,
