@@ -33,6 +33,25 @@ private func tempStorePath() -> String {
 struct WorkspaceKeyValueTests {
     private var server: RedisTestServer { RedisTestServer.redis! }
 
+    @Test func testConnectionUsesTheKeyValueDriverWithoutOpeningAWorkspaceSession() async throws {
+        KeyValueRegistry.register(RedisDriver.self)
+        let store = TemporaryStoreFile()
+        defer { store.remove() }
+        let vm = try WorkspaceViewModel(storePath: store.path)
+
+        let report = await vm.testConnection(ConnectionConfig(
+            driver: .redis, name: "test-redis", host: server.host, port: server.port,
+            tlsMode: .disable
+        ))
+
+        #expect(report.succeeded, "\(report.errorMessage ?? "")")
+        #expect(report.steps.map(\.step) == [.connect, .ping])
+        #expect(report.steps.allSatisfy(\.passed))
+        #expect(vm.keyValueSession == nil)
+        #expect(vm.session == nil)
+        #expect(vm.activeProfileID == nil)
+    }
+
     @Test func connectWriteScanGetDeleteRoundTrip() async throws {
         guard #available(macOS 15, *) else { return }
         KeyValueRegistry.register(RedisDriver.self)
