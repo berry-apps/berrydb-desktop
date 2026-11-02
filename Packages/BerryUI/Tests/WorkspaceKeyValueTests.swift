@@ -46,7 +46,7 @@ struct WorkspaceKeyValueTests {
 
         #expect(report.succeeded, "\(report.errorMessage ?? "")")
         #expect(report.steps.map(\.step) == [.connect, .ping])
-        #expect(report.steps.allSatisfy(\.passed))
+        #expect(report.steps.map(\.passed) == [true, true])
         #expect(vm.keyValueSession == nil)
         #expect(vm.session == nil)
         #expect(vm.activeProfileID == nil)
