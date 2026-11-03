@@ -78,8 +78,8 @@ public struct DataGridView: NSViewRepresentable {
         self.onJumpToReference = onJumpToReference
     }
 
-    func inspectingRows() -> some View {
-        RowDetailGrid(buffer: buffer, grid: self)
+    func inspectingRows(isOpen: Binding<Bool>) -> some View {
+        RowDetailGrid(buffer: buffer, grid: self, isOpen: isOpen)
     }
 
     public func makeCoordinator() -> Coordinator {

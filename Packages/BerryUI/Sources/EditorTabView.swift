@@ -33,6 +33,7 @@ struct EditorTabView: View {
     @State private var warmTask: Task<Void, Never>?
     @State private var persistTask: Task<Void, Never>?
     @State private var viewerTarget: CellTarget?
+    @State private var isRowInspectorOpen = false
  /// EXPLAIN results render as a tree; this switches to the raw grid.
     @State private var showPlanGrid = false
     /// Selected result tab (Message / Summary / Result N).
@@ -536,7 +537,7 @@ struct EditorTabView: View {
                         viewerTarget = CellTarget.from(buffer: result.buffer, row: row, column: column)
                     }
                 )
-                .inspectingRows()
+                .inspectingRows(isOpen: $isRowInspectorOpen)
                 .id(result.id)
                 .sheet(item: $viewerTarget) { target in
                     CellViewerSheet(
@@ -553,7 +554,8 @@ struct EditorTabView: View {
                     readOnlyReason: result.editing.readOnlyReason,
                     canEdit: result.editing.canEdit,
                     onDiscard: { result.editing.discard() },
-                    onApply: { applyResultEdits(result) }
+                    onApply: { applyResultEdits(result) },
+                    rowInspectorOpen: $isRowInspectorOpen
                 )
             }
         }

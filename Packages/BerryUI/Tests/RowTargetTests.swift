@@ -3,6 +3,7 @@ import BerryCore
 import BerryDriverKit
 import Foundation
 import Testing
+import SwiftUI
 
 @testable import BerryUI
 
@@ -91,24 +92,6 @@ struct RowDetailSelectionTests {
 
 @Suite("Row inspector controls and previews")
 struct RowInspectorTests {
-    @Test func closingStaysClosedAcrossSelectionChangesAndContextMenuReopens() {
-        var state = RowInspectorState()
-        state.select(0)
-        #expect(!state.isOpen)
-        state.toggle()
-        #expect(state.isOpen)
-        #expect(state.selectedRow == 0)
-        state.close()
-        state.select(1)
-        #expect(!state.isOpen)
-        state.open(row: 2)
-        #expect(state.isOpen)
-        #expect(state.selectedRow == 2)
-        state.select(nil)
-        #expect(state.isOpen)
-        #expect(state.selectedRow == nil)
-    }
-
     @Test func largeValuesHaveBoundedPreviewsWithoutChangingTheFullValue() {
         let text = String(repeating: "{\"value\":\"large\"}", count: 200_000)
         for value in [BerryValue.text(text), .json(text)] {
@@ -128,5 +111,43 @@ struct RowInspectorTests {
         #expect(RowInspectorState.usesOverlay(width: 320))
         #expect(RowInspectorState.usesOverlay(width: 420))
         #expect(!RowInspectorState.usesOverlay(width: 800))
+    }
+}
+
+@MainActor
+@Suite("Row inspector view identity", .serialized)
+struct RowInspectorIdentityTests {
+    @Test func resizingAcrossTheOverlayThresholdKeepsTheTableAndSelection() async throws {
+        let buffer = ResultBuffer()
+        buffer.consume(AsyncThrowingStream { c in
+            c.yield(.columns([ColumnMeta(name: "value", declaredType: "TEXT")]))
+            c.yield(.rows([[.text("first")], [.text("second")]]))
+            c.finish()
+        })
+        await buffer.waitUntilFinished()
+        let host = NSHostingView(rootView: RowDetailGrid(buffer: buffer, grid: DataGridView(buffer: buffer), isOpen: .constant(true)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        let table = try #require(findTable(in: host))
+        table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        for width in [320.0, 800, 420, 900] {
+            window.setContentSize(NSSize(width: width, height: 300))
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(findTable(in: host) === table)
+            #expect(table.selectedRow == 1)
+        }
+    }
+
+    private func findTable(in view: NSView) -> NSTableView? {
+        if let table = view as? NSTableView { return table }
+        for child in view.subviews {
+            if let table = findTable(in: child) { return table }
+        }
+        return nil
     }
 }
