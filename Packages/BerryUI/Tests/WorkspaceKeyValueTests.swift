@@ -4,10 +4,62 @@ import BerryDriverSQLite
 import BerryDriverTestKit
 import BerryKeyValueKit
 import BerryStore
+import Darwin
 import Foundation
 import Testing
 
 @testable import BerryUI
+
+@MainActor
+@Suite("Workspace Redis connection test without a server", .serialized)
+struct WorkspaceRedisConnectionTests {
+    // The connection pool retries refused connections for 60 seconds before
+    // its default circuit breaker trips; allow it to report the failure.
+    @Test(.timeLimit(.minutes(2)))
+    func refusedConnectionReportsAConnectFailureInsteadOfAnUnregisteredDriver() async throws {
+        KeyValueRegistry.register(RedisDriver.self)
+
+        // Reserve an ephemeral loopback port without listening, so no other
+        // process can claim it and a connection is refused without a server.
+        let socketFD = socket(AF_INET, SOCK_STREAM, 0)
+        try #require(socketFD >= 0)
+        defer { close(socketFD) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bindResult = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(socketFD, $0, length)
+            }
+        }
+        try #require(bindResult == 0)
+        let nameResult = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(socketFD, $0, &length)
+            }
+        }
+        try #require(nameResult == 0)
+
+        let store = TemporaryStoreFile()
+        defer { store.remove() }
+        let vm = try WorkspaceViewModel(storePath: store.path)
+        let report = await vm.testConnection(ConnectionConfig(
+            driver: .redis, name: "refused-redis", host: "127.0.0.1",
+            port: Int(UInt16(bigEndian: address.sin_port)), tlsMode: .disable
+        ))
+
+        #expect(!report.succeeded)
+        #expect(report.steps.map(\.step) == [.connect])
+        #expect(report.steps.map(\.passed) == [false])
+        let error = try #require(report.errorMessage)
+        #expect(!error.contains("is not registered"))
+        #expect(vm.keyValueSession == nil)
+        #expect(vm.session == nil)
+        #expect(vm.activeProfileID == nil)
+    }
+}
 
 /// End-to-end at the `WorkspaceViewModel` level: connect → write → scan →
 /// get → delete. Headless, mirrors
@@ -32,6 +84,25 @@ private func tempStorePath() -> String {
 @Suite("Workspace Redis key-value", .enabled(if: RedisTestServer.redis != nil), .serialized)
 struct WorkspaceKeyValueTests {
     private var server: RedisTestServer { RedisTestServer.redis! }
+
+    @Test func testConnectionUsesTheKeyValueDriverWithoutOpeningAWorkspaceSession() async throws {
+        KeyValueRegistry.register(RedisDriver.self)
+        let store = TemporaryStoreFile()
+        defer { store.remove() }
+        let vm = try WorkspaceViewModel(storePath: store.path)
+
+        let report = await vm.testConnection(ConnectionConfig(
+            driver: .redis, name: "test-redis", host: server.host, port: server.port,
+            tlsMode: .disable
+        ))
+
+        #expect(report.succeeded, "\(report.errorMessage ?? "")")
+        #expect(report.steps.map(\.step) == [.connect, .ping])
+        #expect(report.steps.map(\.passed) == [true, true])
+        #expect(vm.keyValueSession == nil)
+        #expect(vm.session == nil)
+        #expect(vm.activeProfileID == nil)
+    }
 
     @Test func connectWriteScanGetDeleteRoundTrip() async throws {
         guard #available(macOS 15, *) else { return }

@@ -1193,6 +1193,8 @@ public final class WorkspaceViewModel {
         switch config.driver {
         case .mongodb, .qdrant, .elasticsearch:
             return await testDataSourceConnection(config)
+        case .redis:
+            return await testKeyValueConnection(config)
         default:
             return await ConnectionManager.shared.testReport(config)
         }
@@ -1250,6 +1252,50 @@ public final class WorkspaceViewModel {
     private static func seconds(_ duration: Duration) -> Double {
         let components = duration.components
         return Double(components.seconds) + Double(components.attoseconds) / 1e18
+    }
+
+    private func testKeyValueConnection(_ config: ConnectionConfig) async -> ConnectionTestReport {
+        guard let driverType = KeyValueRegistry.driverType(for: config.driver) else {
+            return ConnectionTestReport(
+                steps: [], errorMessage: "Driver \(config.driver.rawValue) is not registered"
+            )
+        }
+        let clock = ContinuousClock()
+        var steps: [ConnectionTestReport.StepResult] = []
+        let effectiveConfig: ConnectionConfig
+        let tunnel: SSHTunnel?
+        if config.ssh != nil {
+            let started = clock.now
+            do {
+                (effectiveConfig, tunnel) = try await prepareKeyValueEndpoint(config)
+                steps.append(.init(step: .tunnel, passed: true, seconds: Self.seconds(clock.now - started)))
+            } catch {
+                steps.append(.init(step: .tunnel, passed: false, seconds: Self.seconds(clock.now - started)))
+                return ConnectionTestReport(steps: steps, errorMessage: error.localizedDescription)
+            }
+        } else {
+            (effectiveConfig, tunnel) = (config, nil)
+        }
+
+        let connection: any KeyValueConnection
+        let connectStarted = clock.now
+        do {
+            connection = try await driverType.init().connect(effectiveConfig)
+            steps.append(.init(step: .connect, passed: true, seconds: Self.seconds(clock.now - connectStarted)))
+        } catch {
+            steps.append(.init(step: .connect, passed: false, seconds: Self.seconds(clock.now - connectStarted)))
+            await tunnel?.close()
+            return ConnectionTestReport(steps: steps, errorMessage: error.localizedDescription)
+        }
+
+        let pingStarted = clock.now
+        let alive = await connection.ping()
+        steps.append(.init(step: .ping, passed: alive, seconds: Self.seconds(clock.now - pingStarted)))
+        await connection.close()
+        await tunnel?.close()
+        return ConnectionTestReport(
+            steps: steps, errorMessage: alive ? nil : "Connection opened but ping failed"
+        )
     }
 
     public func disconnect() {
