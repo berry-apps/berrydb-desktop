@@ -41,15 +41,56 @@ public actor RedisConnection: KeyValueConnection {
             logger: logger
         )
         self.client = client
-        self.runTask = Task { await client.run() }
+        let runTask = Task { await client.run() }
+        self.runTask = runTask
 
- // Fail fast on a bad host/port — same "Test connection"
-        // expectation every driver follows.
+        // The pool retries a failed connection in the background, so on its
+        // own this ping fails only once the pool's circuit breaker trips:
+        // 60 seconds after the first failure by default in valkey-swift
+        // 1.4.0, about 70 seconds in practice. Bounding the first ping
+        // reports an unreachable server within `connectTimeout` instead,
+        // without shortening the breaker that an open session relies on to
+        // ride out a brief outage.
         do {
-            _ = try await client.ping()
+            try await Self.ping(client, within: Self.connectTimeout, stopping: runTask)
         } catch {
             runTask.cancel()
             throw error
+        }
+    }
+
+    /// Matches the default per-attempt connect timeout of SwiftNIO's
+    /// `ClientBootstrap`, which valkey-swift uses for socket connections, so
+    /// one slow attempt still fits.
+    static let connectTimeout: Duration = .seconds(10)
+
+    private struct ConnectTimeout: LocalizedError {
+        let limit: Duration
+        var errorDescription: String? {
+            "No response from the Redis server within \(limit.components.seconds) seconds."
+        }
+    }
+
+    /// Stops the client before leaving the task group on a timeout: the group
+    /// waits for the ping child, and a lease request that is still queued in
+    /// the pool is failed when the client stops.
+    private static func ping(
+        _ client: ValkeyClient, within limit: Duration, stopping runTask: Task<Void, Never>
+    ) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { _ = try await client.ping() }
+            group.addTask {
+                try await Task.sleep(for: limit)
+                throw ConnectTimeout(limit: limit)
+            }
+            do {
+                try await group.next()
+                group.cancelAll()
+            } catch {
+                runTask.cancel()
+                group.cancelAll()
+                throw error
+            }
         }
     }
 
