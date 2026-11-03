@@ -187,6 +187,26 @@ struct MCPLiveReadServiceTests {
         #expect(await rejected.failure("SELECT 1") == .connectionFailed)
     }
 
+    /// Once the session is open, a connection the driver reports as lost
+    /// dropped during the read: the database was reached, so "could not
+    /// connect" would be wrong. The text is fixed, so the driver's words,
+    /// which can name the host, never reach the agent.
+    @Test func aConnectionLostDuringTheReadSaysSo() async throws {
+        let connection = ScriptedReadConnection(events: [], ending: .fail(.connectionLost("db.internal.example:5432 closed")))
+        let error = await Harness(connection: connection).failure("SELECT 1")
+        #expect(error == .connectionLost)
+        #expect(error?.description == "The connection to the database was lost during the read.")
+    }
+
+    /// Guard: a connection lost while the session opens, its read-only
+    /// setup included, is still a connection that could not be opened.
+    @Test func aConnectionLostWhileOpeningIsAFailedConnection() async throws {
+        let lost = Harness(open: { throw DriverError.connectionLost("db.internal.example:5432 closed") })
+        let error = await lost.failure("SELECT 1")
+        #expect(error == .connectionFailed)
+        #expect(error?.description == "BerryDB could not connect to this database.")
+    }
+
     @Test func cancellingTheCallerCancelsTheRequest() async throws {
         let connection = ScriptedReadConnection(events: [.columns([ColumnMeta(name: "n", declaredType: "")])], ending: .never)
         let harness = Harness(connection: connection)
