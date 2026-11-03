@@ -68,12 +68,13 @@ struct KeyValueBrowserView: View {
             Divider()
             HSplitView {
                 keyList
-                    .frame(minWidth: 240, idealWidth: 300)
+                    .frame(minWidth: 260, idealWidth: 360, maxHeight: .infinity)
                 valueDetail
-                    .frame(minWidth: 320, maxWidth: .infinity)
+                    .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .task { await runScan(reset: true) }
         .onChange(of: currentDatabase) { oldValue, newValue in
             Task { await switchDatabase(from: oldValue, to: newValue) }
@@ -115,6 +116,15 @@ struct KeyValueBrowserView: View {
     }
 
     private var header: some View {
+        KeyValueToolbarLayout {
+            databasePicker
+            scanControls
+            newKeyButton
+        }
+        .padding(10)
+    }
+
+    private var databasePicker: some View {
         HStack {
             Image(systemName: "memorychip")
             Text(L("Keys")).font(.headline)
@@ -124,28 +134,38 @@ struct KeyValueBrowserView: View {
                         Text("DB \(index)").tag(index)
                     }
                 }
+                .labelsHidden()
+                .accessibilityLabel(L("Database"))
                 .frame(width: 100)
                 .disabled(isLoading)
             }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var scanControls: some View {
+        HStack {
             TextField(L("Pattern (e.g. user:*)"), text: $pattern)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 220)
+                .frame(minWidth: 120, idealWidth: 220, maxWidth: 220)
                 .onSubmit { Task { await runScan(reset: true) } }
             Button {
                 Task { await runScan(reset: true) }
             } label: {
                 Label(L("Scan"), systemImage: "arrow.clockwise")
             }
-            Spacer()
-            if capabilities.write {
-                Button {
-                    showNewKeySheet = true
-                } label: {
-                    Label(L("New Key…"), systemImage: "plus")
-                }
-            }
+            .fixedSize()
         }
-        .padding(10)
+    }
+
+    @ViewBuilder
+    private var newKeyButton: some View {
+        if capabilities.write {
+            Button { showNewKeySheet = true } label: {
+                Label(L("New Key…"), systemImage: "plus")
+            }
+            .fixedSize()
+        }
     }
 
     @ViewBuilder
@@ -161,6 +181,7 @@ struct KeyValueBrowserView: View {
                 ForEach(entries, id: \.key) { entry in
                     HStack {
                         Text(entry.key).lineLimit(1).truncationMode(.middle)
+                            .help(entry.key)
                         Spacer()
                         Text(entry.type.rawValue)
                             .font(.caption2)
@@ -613,6 +634,40 @@ private struct FlowChips: View {
                         }
                     }
             }
+        }
+    }
+}
+
+/// Reflows one set of controls so resizing preserves the pattern field and its editor.
+private struct KeyValueToolbarLayout: Layout {
+    private let spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let width = proposal.width ?? sizes.reduce(0) { $0 + $1.width } + spacing * 2
+        let wraps = sizes.reduce(0) { $0 + $1.width } + spacing * CGFloat(max(0, sizes.count - 1)) > width
+        let firstHeight = max(sizes.first?.height ?? 0, sizes.count > 2 ? sizes[2].height : 0)
+        return CGSize(width: width, height: wraps
+            ? firstHeight + spacing + (sizes.count > 1 ? sizes[1].height : 0)
+            : sizes.map(\.height).max() ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count >= 2 else { return }
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let wraps = sizes.reduce(0) { $0 + $1.width } + spacing * CGFloat(sizes.count - 1) > bounds.width
+        let firstHeight = max(sizes[0].height, sizes.count > 2 ? sizes[2].height : 0)
+        let height = wraps ? firstHeight : sizes.map(\.height).max() ?? 0
+        subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.minY + height / 2),
+                          anchor: .leading, proposal: ProposedViewSize(sizes[0]))
+        subviews[1].place(at: CGPoint(
+            x: wraps ? bounds.minX : bounds.minX + sizes[0].width + spacing,
+            y: wraps ? bounds.minY + firstHeight + spacing : bounds.minY + height / 2
+        ), anchor: wraps ? .topLeading : .leading,
+           proposal: ProposedViewSize(width: min(sizes[1].width, bounds.width), height: sizes[1].height))
+        if subviews.count > 2 {
+            subviews[2].place(at: CGPoint(x: bounds.maxX, y: bounds.minY + height / 2),
+                              anchor: .trailing, proposal: ProposedViewSize(sizes[2]))
         }
     }
 }
