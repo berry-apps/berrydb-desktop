@@ -811,5 +811,3 @@
 "BerryDB could not open its data store." = "BerryDB could not open its data store.";
 "BerryDB could not open its data store. Upgrade step “%@” failed and changed no data." = "BerryDB could not open its data store. Upgrade step “%@” failed and changed no data.";
 "Details…" = "Details…";
-
-"Connection settings" = "Connection settings";

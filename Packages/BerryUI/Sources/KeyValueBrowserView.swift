@@ -116,21 +116,10 @@ struct KeyValueBrowserView: View {
     }
 
     private var header: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack {
-                databasePicker
-                scanControls
-                Spacer()
-                newKeyButton
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    databasePicker
-                    Spacer()
-                    newKeyButton
-                }
-                scanControls
-            }
+        KeyValueToolbarLayout {
+            databasePicker
+            scanControls
+            newKeyButton
         }
         .padding(10)
     }
@@ -645,6 +634,40 @@ private struct FlowChips: View {
                         }
                     }
             }
+        }
+    }
+}
+
+/// Reflows one set of controls so resizing preserves the pattern field and its editor.
+private struct KeyValueToolbarLayout: Layout {
+    private let spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let width = proposal.width ?? sizes.reduce(0) { $0 + $1.width } + spacing * 2
+        let wraps = sizes.reduce(0) { $0 + $1.width } + spacing * CGFloat(max(0, sizes.count - 1)) > width
+        let firstHeight = max(sizes.first?.height ?? 0, sizes.count > 2 ? sizes[2].height : 0)
+        return CGSize(width: width, height: wraps
+            ? firstHeight + spacing + (sizes.count > 1 ? sizes[1].height : 0)
+            : sizes.map(\.height).max() ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count >= 2 else { return }
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let wraps = sizes.reduce(0) { $0 + $1.width } + spacing * CGFloat(sizes.count - 1) > bounds.width
+        let firstHeight = max(sizes[0].height, sizes.count > 2 ? sizes[2].height : 0)
+        let height = wraps ? firstHeight : sizes.map(\.height).max() ?? 0
+        subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.minY + height / 2),
+                          anchor: .leading, proposal: ProposedViewSize(sizes[0]))
+        subviews[1].place(at: CGPoint(
+            x: wraps ? bounds.minX : bounds.minX + sizes[0].width + spacing,
+            y: wraps ? bounds.minY + firstHeight + spacing : bounds.minY + height / 2
+        ), anchor: wraps ? .topLeading : .leading,
+           proposal: ProposedViewSize(width: min(sizes[1].width, bounds.width), height: sizes[1].height))
+        if subviews.count > 2 {
+            subviews[2].place(at: CGPoint(x: bounds.maxX, y: bounds.minY + height / 2),
+                              anchor: .trailing, proposal: ProposedViewSize(sizes[2]))
         }
     }
 }
