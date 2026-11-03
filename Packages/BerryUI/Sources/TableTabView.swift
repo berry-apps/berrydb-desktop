@@ -17,6 +17,7 @@ struct TableTabView: View {
     @State private var showFilterBuilder = false
     @State private var exportMessage: String?
     @State private var viewerTarget: CellTarget?
+    @State private var isRowInspectorOpen = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,7 +40,8 @@ struct TableTabView: View {
                     if let session, state.beginApply() {
                         Task { await state.finishApply(session: session) }
                     }
-                }
+                },
+                rowInspectorOpen: $isRowInspectorOpen
             )
         }
         .sheet(item: $viewerTarget) { target in
@@ -221,6 +223,7 @@ struct TableTabView: View {
                 onOpenReference?(fk, target.value)
             }
         )
+        .inspectingRows(isOpen: $isRowInspectorOpen)
     }
 
  /// Staged-changes bar: review before anything is written (06).

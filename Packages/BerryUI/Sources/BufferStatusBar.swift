@@ -17,6 +17,7 @@ struct BufferStatusBar: View {
 
     var onDiscard: (() -> Void)? = nil
     var onApply: (() -> Void)? = nil
+    var rowInspectorOpen: Binding<Bool>? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -82,6 +83,17 @@ struct BufferStatusBar: View {
             }
 
             Spacer()
+
+            if let rowInspectorOpen {
+                Button { rowInspectorOpen.wrappedValue.toggle() } label: {
+                    Image(systemName: "sidebar.right")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(rowInspectorOpen.wrappedValue ? Color.accentColor : Color.secondary)
+                .help(L("Row Details"))
+                .accessibilityLabel(L("Row Details"))
+                .accessibilityValue(rowInspectorOpen.wrappedValue ? L("Shown") : L("Hidden"))
+            }
 
             // 4. Compact Actions for Pending Changes (Discard / Apply as icons)
             if pendingCount > 0 {

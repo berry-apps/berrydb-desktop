@@ -811,3 +811,17 @@
 "BerryDB could not open its data store." = "BerryDB không thể mở kho dữ liệu cục bộ.";
 "BerryDB could not open its data store. Upgrade step “%@” failed and changed no data." = "BerryDB không thể mở kho dữ liệu cục bộ. Bước nâng cấp “%@” bị lỗi và không thay đổi dữ liệu nào.";
 "Details…" = "Chi tiết…";
+
+"Row %lld" = "Dòng %lld";
+
+"View Row Details…" = "Xem chi tiết dòng…";
+
+"Row Details" = "Chi tiết dòng";
+
+"Select a single row to view details." = "Chọn một dòng để xem chi tiết.";
+
+"Preview truncated. Use View Cell… for the full value." = "Bản xem trước đã được rút gọn. Dùng Xem ô… để xem toàn bộ giá trị.";
+
+"Shown" = "Đang hiển thị";
+
+"Hidden" = "Đã ẩn";

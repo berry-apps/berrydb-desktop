@@ -32,6 +32,8 @@ public struct DataGridView: NSViewRepresentable {
     var onSort: ((String, Bool) -> Void)?
  /// Cell viewer, opened from the context menu.
     var onViewCell: ((Int, Int) -> Void)?
+    var onViewRow: ((Int) -> Void)?
+    var onSelectRow: ((Int?) -> Void)?
  /// FK jump: given a column index, returns the referenced table
     /// name when that column is a foreign key (for the menu title), else nil.
     var foreignKeyTarget: ((Int) -> String?)?
@@ -76,6 +78,10 @@ public struct DataGridView: NSViewRepresentable {
         self.onJumpToReference = onJumpToReference
     }
 
+    func inspectingRows(isOpen: Binding<Bool>) -> some View {
+        RowDetailGrid(buffer: buffer, grid: self, isOpen: isOpen)
+    }
+
     public func makeCoordinator() -> Coordinator {
         Coordinator()
     }
@@ -115,6 +121,21 @@ public struct DataGridView: NSViewRepresentable {
         private var columnCount = 0
         private var lastRowCount = 0
         private var pendingVersion = 0
+        private var selectionUpdateScheduled = false
+
+        public func tableViewSelectionDidChange(_ notification: Notification) {
+            guard !selectionUpdateScheduled else { return }
+            selectionUpdateScheduled = true
+            // Selection can change during reloadData; defer SwiftUI state updates
+            // until AppKit has finished its delegate callback.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.selectionUpdateScheduled = false
+                guard let tableView = self.tableView else { return }
+                let rows = tableView.selectedRowIndexes
+                self.parent?.onSelectRow?(rows.count == 1 ? rows.first : nil)
+            }
+        }
         /// Guards against SwiftUI re-invoking `updateNSView` (→ `sync` → `reloadData`)
         /// while a reload is already in flight — AppKit flags that as a "reentrant
         /// operation in its NSTableView delegate". The nested call is deferred to
@@ -294,6 +315,16 @@ extension DataGridView.Coordinator: NSMenuDelegate {
             menu.addItem(.separator())
         }
 
+        if parent.onViewRow != nil {
+            let view = NSMenuItem(
+                title: String(localized: "View Row Details…", bundle: berryModuleBundle),
+                action: #selector(viewRowAction), keyEquivalent: ""
+            )
+            view.target = self
+            menu.addItem(view)
+            menu.addItem(.separator())
+        }
+
  // FK jump — only when the clicked column is a foreign key.
         if tableView.clickedColumn >= 0,
            let referenced = parent.foreignKeyTarget?(tableView.clickedColumn) {
@@ -358,6 +389,11 @@ extension DataGridView.Coordinator: NSMenuDelegate {
     @objc private func copyAction(_ sender: NSMenuItem) {
         guard let parent, sender.tag < parent.copyFormats.count else { return }
         parent.onCopy?(targetRows(), parent.copyFormats[sender.tag])
+    }
+
+    @objc private func viewRowAction() {
+        guard let tableView, tableView.clickedRow >= 0 else { return }
+        parent?.onViewRow?(tableView.clickedRow)
     }
 
     @objc private func viewCellAction() {
