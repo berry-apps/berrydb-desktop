@@ -1145,9 +1145,12 @@ struct MCPProjectsSettingsModelTests {
             )
         })
         // Releases the check if the limit is not applied, so that regression
-        // fails the expectations below instead of hanging the suite.
+        // fails the expectations below instead of hanging the suite. Long
+        // enough not to fire before the first expectations even on a stalled
+        // runner: with a 2-second release, a CI run that spent 18 seconds on
+        // this test found the connection already closed.
         let safety = Task {
-            try await Task.sleep(for: .seconds(2))
+            try await Task.sleep(for: .seconds(60))
             hold.release()
         }
         defer { safety.cancel() }

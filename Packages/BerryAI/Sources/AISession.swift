@@ -309,6 +309,13 @@ public final class AISession {
     /// safe the way it can for actor-isolated storage.
     private var pendingProposeTask: Task<Void, Never>?
     private var latestPartialProposal: (name: String, sql: String)?
+    /// How long a partial `propose_sql`/`create_debug_tab` value waits before
+    /// it reaches the editor tab, so a burst of argument deltas becomes one
+    /// editor write. Every write restarts the editor tab's column-warming
+    /// task, and recreating that task once per delta crashed the Swift
+    /// Concurrency runtime. Settable so tests can hold the window open
+    /// instead of depending on how fast the runner delivers deltas.
+    var proposeThrottleInterval: Duration = .milliseconds(100)
 
     /// True while a turn failed because the network was down and BerryDB is
     /// watching for it to come back to retry automatically — otherwise a
@@ -1662,8 +1669,9 @@ public final class AISession {
                     ) {
                         latestPartialProposal = (name, partialSQL)
                         if pendingProposeTask == nil {
+                            let window = proposeThrottleInterval
                             pendingProposeTask = Task { [weak self] in
-                                try? await Task.sleep(nanoseconds: 100_000_000)
+                                try? await Task.sleep(for: window)
                                 guard let self else { return }
                                 pendingProposeTask = nil
                                 guard let pending = latestPartialProposal else { return }
