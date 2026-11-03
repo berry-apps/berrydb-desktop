@@ -760,7 +760,7 @@
 "Disabled" = "Đang tắt";
 "Not verified — save to confirm" = "Chưa xác minh — lưu để xác nhận";
 "This project opened disabled because its saved settings could not be verified. Turn Enabled on and save to confirm them." = "Dự án này được mở ở trạng thái tắt vì không thể xác minh các thiết lập đã lưu. Hãy bật “Đang bật” rồi lưu để xác nhận.";
-"This connection’s saved settings could not be verified, and its live reads opened off. Review its redacted columns before saving." = "Không thể xác minh các thiết lập đã lưu của kết nối này, và việc đọc dữ liệu thật được mở ở trạng thái tắt. Hãy xem lại các cột cần che trước khi lưu.";
+"This connection’s saved settings could not be verified, and its live reads opened off. Review its redacted columns before saving." = "Không thể xác minh các thiết lập đã lưu của kết nối này nên đọc dữ liệu thật đang tắt. Hãy xem lại các cột cần che trước khi lưu.";
 "Agent entries that name “%@” stop selecting this project until they use the new name." = "Các mục agent ghi tên “%@” sẽ không còn chọn dự án này cho đến khi chuyển sang tên mới.";
 "New MCP Project" = "Dự án MCP mới";
 "Edit MCP Project" = "Sửa dự án MCP";

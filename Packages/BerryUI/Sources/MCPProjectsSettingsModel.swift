@@ -427,9 +427,18 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// a project whose own tag does not verify under the stored key comes
     /// back disabled, and a profile's live reads come back off unless its
     /// own row verifies.
+    ///
+    /// It also refreshes the project's entry in `unverifiedProfileIDs` with
+    /// the same key: a connection edited in the main window since the last
+    /// `reload()` no longer verifies its row, and the draft turns its live
+    /// reads off, so its mark is read with the draft rather than left as of
+    /// that reload.
     public func draft(for id: UUID) -> Draft? {
         do {
-            guard let project = try store.mcpProjectForEditing(id: id, key: keyStore.load()) else { return nil }
+            let key = keyStore.load()
+            guard let project = try store.mcpProjectForEditing(id: id, key: key) else { return nil }
+            let unverified = try store.unverifiedMCPProfileIDs(projectID: id, key: key)
+            unverifiedProfileIDs[id] = unverified.isEmpty ? nil : unverified
             let access = project.profiles.map {
                 ($0.profileID, AccessDraft(liveRead: $0.liveRead, redactedColumns: $0.redactedColumns))
             }
