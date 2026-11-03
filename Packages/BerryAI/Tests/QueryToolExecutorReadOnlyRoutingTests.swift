@@ -262,6 +262,25 @@ struct QueryToolExecutorReadOnlyRoutingTests {
         #expect(await main.onSessionPath.isEmpty)
     }
 
+    /// Guard: the app's own sample falls back to the session's connection
+    /// when the read-only one is lost, but a model's statement does not. It
+    /// may already have run before the drop, so the model gets the lost
+    /// connection, with no card and no second run, and the dropped
+    /// connection goes back as failed for the pool to replace.
+    @Test func aModelStatementOnALostReadOnlyConnectionIsNeverRetried() async {
+        let main = RecordingConnection()
+        let gate = RoutingGate(approves: true)
+        let routing = Routing(.readOnly, readOnly: RecordingConnection(readOnlyFailure: .connectionLost("PostgreSQL connection closed")))
+
+        let outcome = await runSQL(executor(session(main: main), gate: gate, routing: routing), "SELECT 1")
+
+        #expect(outcome.status == "error")
+        #expect(gate.cards.isEmpty)
+        #expect(await main.onSessionPath.isEmpty)
+        await waitUntil { routing.handedBack.count == 1 }
+        #expect(routing.handedBack == [true])
+    }
+
     /// The read-only mode could not start, so the statement never ran; it
     /// gets the card, as when the connection could not open.
     @Test func aReadOnlyModeThatCannotStartFallsBackToTheCard() async {
