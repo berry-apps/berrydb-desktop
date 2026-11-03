@@ -10,20 +10,21 @@ import Testing
 
 @testable import BerryUI
 
-@MainActor
-@Suite("Workspace Redis connection test without a server", .serialized)
-struct WorkspaceRedisConnectionTests {
-    // The connection pool retries refused connections for 60 seconds before
-    // its default circuit breaker trips; allow it to report the failure.
-    @Test(.timeLimit(.minutes(2)))
-    func refusedConnectionReportsAConnectFailureInsteadOfAnUnregisteredDriver() async throws {
-        KeyValueRegistry.register(RedisDriver.self)
+/// An ephemeral loopback port bound without listening, so no other process
+/// can claim it while this is alive. On macOS a connection to it is not
+/// refused: each attempt times out with ETIMEDOUT after about 8 seconds
+/// (observed on macOS 26.6), the same as a server that never answers.
+private final class UnansweredLoopbackPort {
+    struct ReservationFailed: Error {
+        let errno: Int32
+    }
 
-        // Reserve an ephemeral loopback port without listening, so no other
-        // process can claim it and a connection is refused without a server.
+    let port: Int
+    private let socketFD: Int32
+
+    init() throws {
         let socketFD = socket(AF_INET, SOCK_STREAM, 0)
-        try #require(socketFD >= 0)
-        defer { close(socketFD) }
+        guard socketFD >= 0 else { throw ReservationFailed(errno: errno) }
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
@@ -34,20 +35,41 @@ struct WorkspaceRedisConnectionTests {
                 bind(socketFD, $0, length)
             }
         }
-        try #require(bindResult == 0)
-        let nameResult = withUnsafeMutablePointer(to: &address) {
+        let nameResult = bindResult != 0 ? bindResult : withUnsafeMutablePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 getsockname(socketFD, $0, &length)
             }
         }
-        try #require(nameResult == 0)
+        guard nameResult == 0 else {
+            let failure = ReservationFailed(errno: errno)
+            close(socketFD)
+            throw failure
+        }
+        self.socketFD = socketFD
+        port = Int(UInt16(bigEndian: address.sin_port))
+    }
+
+    deinit { close(socketFD) }
+}
+
+/// `RedisConnection` bounds its first ping by `connectTimeout`, so a server
+/// that never answers is reported within it; the time limits only stop a
+/// regression from stalling the whole run.
+@MainActor
+@Suite("Workspace Redis connection test without a server", .serialized)
+struct WorkspaceRedisConnectionTests {
+    @Test(.timeLimit(.minutes(1)))
+    func refusedConnectionReportsAConnectFailureInsteadOfAnUnregisteredDriver() async throws {
+        KeyValueRegistry.register(RedisDriver.self)
+        let unanswered = try UnansweredLoopbackPort()
+        defer { withExtendedLifetime(unanswered) {} }
 
         let store = TemporaryStoreFile()
         defer { store.remove() }
         let vm = try WorkspaceViewModel(storePath: store.path)
         let report = await vm.testConnection(ConnectionConfig(
             driver: .redis, name: "refused-redis", host: "127.0.0.1",
-            port: Int(UInt16(bigEndian: address.sin_port)), tlsMode: .disable
+            port: unanswered.port, tlsMode: .disable
         ))
 
         #expect(!report.succeeded)
@@ -58,6 +80,29 @@ struct WorkspaceRedisConnectionTests {
         #expect(vm.keyValueSession == nil)
         #expect(vm.session == nil)
         #expect(vm.activeProfileID == nil)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func unansweredConnectionIsReportedWithinTheConnectTimeout() async throws {
+        KeyValueRegistry.register(RedisDriver.self)
+        let unanswered = try UnansweredLoopbackPort()
+        defer { withExtendedLifetime(unanswered) {} }
+        let store = TemporaryStoreFile()
+        defer { store.remove() }
+        let vm = try WorkspaceViewModel(storePath: store.path)
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        let report = await vm.testConnection(ConnectionConfig(
+            driver: .redis, name: "refused-redis", host: "127.0.0.1",
+            port: unanswered.port, tlsMode: .disable
+        ))
+        let elapsed = clock.now - started
+
+        #expect(!report.succeeded)
+        // Five seconds over the 10-second `connectTimeout` covers a loaded CI
+        // runner; without that bound this took about 70 seconds.
+        #expect(elapsed < .seconds(15), "took \(elapsed) to report")
     }
 }
 
