@@ -611,11 +611,19 @@ private final class LegacyOnlyExecutor: AIToolExecutor {
         ],
         after: [.delta("Done."), .complete(totalTokens: 1)]
     )
+    // Wider gaps than the 100 ms throttle window: what a loaded CI runner did
+    // to the back-to-back deltas, which made this test fail intermittently.
+    transport.interEventDelay = .milliseconds(150)
     let executor = CapabilityExecutor(toolSpecs: [])
     let session = AISession(
         transport: transport, executor: executor,
         dialect: "postgres", schemaDigest: "abc", store: makeStore()
     )
+    // The production window: dispatching once per delta is what crashed.
+    #expect(session.proposeThrottleInterval == .milliseconds(100))
+    // Held open for the whole burst, so coalescing is checked without
+    // depending on how fast the runner delivers the deltas.
+    session.proposeThrottleInterval = .seconds(60)
 
     await session.send("propose a query")
 
@@ -794,6 +802,11 @@ private final class MockTransport: AITransport, @unchecked Sendable {
     var rankCallCount: Int { stateLock.withLock { _rankCallCount } }
     var summarizeGate: AsyncGate?
     var responseGate: AsyncGate?
+    /// When set, root events are yielded one at a time with this pause after
+    /// each, standing in for a runner too busy to deliver them back to back.
+    /// Only the plain root-event path honors it: no child events, scripted
+    /// errors or resume receipts.
+    var interEventDelay: Duration?
     var responseError: Error?
     var resumePreflightError: Error?
     var resumeError: Error?
@@ -876,6 +889,22 @@ private final class MockTransport: AITransport, @unchecked Sendable {
         let initialEvents = preparedEvents
         return AsyncThrowingStream { continuation in
             self.continuation = continuation
+            if let interEventDelay = self.interEventDelay {
+                Task {
+                    for event in initialEvents {
+                        continuation.yield(AIStreamEvent(
+                            threadID: threadID,
+                            event: normalizedMockInteractionEvent(
+                                event, rootThreadID: threadID, eventThreadID: threadID
+                            )
+                        ))
+                        try? await Task.sleep(for: interEventDelay)
+                    }
+                    let hasToolCall = initialEvents.contains { if case .toolCall = $0 { true } else { false } }
+                    if !hasToolCall { continuation.finish() }
+                }
+                return
+            }
             if let responseGate = self.responseGate {
                 Task {
                     await responseGate.enterAndWait()
