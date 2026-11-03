@@ -701,14 +701,17 @@ name a host, a user or a file path: `BerryDB could not connect to this
 database.`, `BerryDB could not open a read-only session on this database,
 so the query did not run.`, or `BerryDB could not open a connection to this
 database within 15 seconds.` once the open budget in [Limits](#limits) has
-passed. A connection the driver reports as lost gets the first of those
-texts at any time. A query error raised once the statement runs is
+passed. A connection the driver reports as lost while the connection or
+its read-only session opens gets the first of those texts; once the
+session is open it gets `The connection to the database was lost during
+the read.`, also fixed text, since the statement may already have run.
+Reported as lost are, on PostgreSQL, a network connection that closes or
+resets, and, on MySQL/MariaDB, a statement sent on a connection the server
+has already closed. A query error raised once the statement runs is
 forwarded in the driver's own words, prefixed `The database refused the
 query:`, on one line, with every MySQL/MariaDB `'user'@'host'` account
 masked, and cut at 500 characters. That covers the server's refusal and
-also a client-side driver error during the read: the PostgreSQL driver
-reports a connection dropped mid-read as a failed query, so it arrives in
-the PostgreSQL client library's own text.
+also a client-side driver error during the read.
 
 Returned rows leave BerryDB: they go to the calling MCP host and from there
 potentially to that host's model provider; the server running locally does

@@ -54,9 +54,11 @@ public protocol ReadOnlyExecuting: DriverConnection {
     /// Applies the connection's read-only settings once, after connect, and
     /// reads them back. Throws `DriverError.readOnlyUnavailable` when the
     /// server refuses a setting or it does not read back as set; the caller
-    /// then closes the connection without running anything on it. A lost
-    /// connection or a cancel is thrown as itself
-    /// (`DriverError.readOnlySetupFailure(_:)`).
+    /// then closes the connection without running anything on it. On
+    /// PostgreSQL and MySQL a lost connection or a cancel is thrown as
+    /// itself (`DriverError.readOnlySetupFailure(_:)`); SQLite opens a local
+    /// file, which is never lost, and reports every failure here as
+    /// `readOnlyUnavailable`.
     func prepareReadOnly() async throws
 
     /// Runs exactly one statement under the read-only mode, bounded by
