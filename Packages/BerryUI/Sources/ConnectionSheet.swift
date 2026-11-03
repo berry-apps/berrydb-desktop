@@ -49,6 +49,7 @@ public struct ConnectionSheet: View {
     @State private var username: String
     @State private var password: String
     @State private var database: String
+    @State private var settingsTab: ConnectionSettingsTab = .general
     @State private var tlsMode: TLSMode
     @State private var tlsCACertPath: String
     @State private var tlsClientCertPath: String
@@ -171,6 +172,7 @@ public struct ConnectionSheet: View {
                 ForEach(availableDrivers, id: \.self) { id in
                     Button {
                         driverID = id
+                        settingsTab = .general
                         // The Database field becomes a 0-15 Picker for
                         // Redis (below) — seed a valid selection so it
                         // doesn't render on an unmatched "" tag.
@@ -242,159 +244,163 @@ public struct ConnectionSheet: View {
         VStack(spacing: 0) {
             typeHeader
             Divider()
-            TabView {
-                Form {
-                    Section {
-                        TextField(L("Connection name"), text: $name, prompt: Text(placeholderName))
-                        TextField(L("Group (optional)"), text: $groupName, prompt: Text(L("e.g. Production, Staging")))
-                    }
-
-                if isFileBased {
-                    Section(L("File")) {
-                        HStack {
-                            TextField(L("File path"), text: $filePath)
-                                .truncationMode(.middle)
-                            Button(L("Choose…")) { pickFile(into: $filePath, updateName: true) }
+            ConnectionSettingsTabs(selection: $settingsTab, includesNetwork: !isFileBased)
+            Divider()
+            Group {
+                if settingsTab == .general {
+                    Form {
+                        Section {
+                            TextField(L("Connection name"), text: $name, prompt: Text(placeholderName))
+                            TextField(L("Group (optional)"), text: $groupName, prompt: Text(L("e.g. Production, Staging")))
                         }
-                    }
-                } else {
-                    Section(L("Server")) {
-                        // Paste a mongodb:// URI to fill the fields below in
-                        // one shot — unidirectional, not a live sync.
-                        if driverID == .mongodb {
+
+                    if isFileBased {
+                        Section(L("File")) {
                             HStack {
-                                TextField(
-                                    L("Connection URI"), text: $mongoURIInput,
-                                    prompt: Text(verbatim: "mongodb://user:pass@host:port/database")
+                                TextField(L("File path"), text: $filePath)
+                                    .truncationMode(.middle)
+                                Button(L("Choose…")) { pickFile(into: $filePath, updateName: true) }
+                            }
+                        }
+                    } else {
+                        Section(L("Server")) {
+                            // Paste a mongodb:// URI to fill the fields below in
+                            // one shot — unidirectional, not a live sync.
+                            if driverID == .mongodb {
+                                HStack {
+                                    TextField(
+                                        L("Connection URI"), text: $mongoURIInput,
+                                        prompt: Text(verbatim: "mongodb://user:pass@host:port/database")
+                                    )
+                                    Button(L("Parse")) { parseMongoURI() }
+                                        .disabled(mongoURIInput.trimmingCharacters(in: .whitespaces).isEmpty)
+                                }
+                                if let mongoURIError {
+                                    Label(mongoURIError, systemImage: "exclamationmark.triangle")
+                                        .font(.caption)
+                                        .foregroundStyle(.red)
+                                }
+                            }
+                            TextField(L("Host"), text: $host)
+                            TextField(L("Port"), text: $port, prompt: Text(verbatim: "\(defaultPort)"))
+                            // Elasticsearch genuinely needs a mode switch, not a
+                            // password-reuse hack: self-hosted defaults to Basic,
+                            // Elastic Cloud/Serverless pushes/requires API keys
+     //
+                            if driverID == .elasticsearch {
+                                Picker(L("Authentication"), selection: $elasticsearchAuthMode) {
+                                    Text(L("Username & Password")).tag(ElasticsearchAuthMode.basic)
+                                    Text(L("API Key")).tag(ElasticsearchAuthMode.apiKey)
+                                }
+                                .pickerStyle(.segmented)
+                            }
+                            if driverID == .elasticsearch && elasticsearchAuthMode == .apiKey {
+                                SecureField(
+                                    L("API Key"), text: $elasticsearchAPIKey,
+                                    prompt: existing == nil ? nil : Text(L("(keep saved API key)"))
                                 )
-                                Button(L("Parse")) { parseMongoURI() }
-                                    .disabled(mongoURIInput.trimmingCharacters(in: .whitespaces).isEmpty)
+                                Label(
+                                    L("An already-encoded key, e.g. the \"encoded\" field from Elastic's Create API key response — sent as \"Authorization: ApiKey <value>\"."),
+                                    systemImage: "info.circle"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            } else {
+                                // DynamoDB has no username/password/database — reuses these
+                                // same three fields (relabeled) for AWS SigV4 credentials
+                                // instead of adding a parallel set of Keychain/profile
+     // columns just for one driver
+                                // ConnectionProfile.makeConfig does the field mapping).
+                                TextField(driverID == .dynamodb ? L("Access Key ID") : L("Username"), text: $username)
+                                // Qdrant auth is a single API-key header, not a
+                                // user/password pair — reuses the Password field
+                                // (relabeled) rather than adding a parallel secret
+     // shape for one driver
+                                // `QdrantHTTPClient` reads `config.password` as the key).
+                                SecureField(
+                                    driverID == .dynamodb ? L("Secret Access Key")
+                                        : (driverID == .qdrant ? L("API Key") : L("Password")),
+                                    text: $password,
+                                    prompt: existing == nil ? nil : Text(L("(keep saved password)"))
+                                )
                             }
-                            if let mongoURIError {
-                                Label(mongoURIError, systemImage: "exclamationmark.triangle")
-                                    .font(.caption)
-                                    .foregroundStyle(.red)
-                            }
-                        }
-                        TextField(L("Host"), text: $host)
-                        TextField(L("Port"), text: $port, prompt: Text(verbatim: "\(defaultPort)"))
-                        // Elasticsearch genuinely needs a mode switch, not a
-                        // password-reuse hack: self-hosted defaults to Basic,
-                        // Elastic Cloud/Serverless pushes/requires API keys
- //
-                        if driverID == .elasticsearch {
-                            Picker(L("Authentication"), selection: $elasticsearchAuthMode) {
-                                Text(L("Username & Password")).tag(ElasticsearchAuthMode.basic)
-                                Text(L("API Key")).tag(ElasticsearchAuthMode.apiKey)
-                            }
-                            .pickerStyle(.segmented)
-                        }
-                        if driverID == .elasticsearch && elasticsearchAuthMode == .apiKey {
-                            SecureField(
-                                L("API Key"), text: $elasticsearchAPIKey,
-                                prompt: existing == nil ? nil : Text(L("(keep saved API key)"))
-                            )
-                            Label(
-                                L("An already-encoded key, e.g. the \"encoded\" field from Elastic's Create API key response — sent as \"Authorization: ApiKey <value>\"."),
-                                systemImage: "info.circle"
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        } else {
-                            // DynamoDB has no username/password/database — reuses these
-                            // same three fields (relabeled) for AWS SigV4 credentials
-                            // instead of adding a parallel set of Keychain/profile
- // columns just for one driver
-                            // ConnectionProfile.makeConfig does the field mapping).
-                            TextField(driverID == .dynamodb ? L("Access Key ID") : L("Username"), text: $username)
-                            // Qdrant auth is a single API-key header, not a
-                            // user/password pair — reuses the Password field
-                            // (relabeled) rather than adding a parallel secret
- // shape for one driver
-                            // `QdrantHTTPClient` reads `config.password` as the key).
-                            SecureField(
-                                driverID == .dynamodb ? L("Secret Access Key")
-                                    : (driverID == .qdrant ? L("API Key") : L("Password")),
-                                text: $password,
-                                prompt: existing == nil ? nil : Text(L("(keep saved password)"))
-                            )
-                        }
-                        // Redis has no free-text database name — a numbered
- // index 0-15. Still just the
-                        // `database` String field underneath (`RedisConnection`
-                        // already parses it as `Int`) — only the control
-                        // differs, matching the relabel-not-duplicate pattern
-                        // this file already uses for DynamoDB/Qdrant.
-                        if driverID == .redis {
-                            Picker(L("Database"), selection: $database) {
-                                ForEach(0..<16, id: \.self) { index in
-                                    Text(verbatim: "\(index)").tag(String(index))
+                            // Redis has no free-text database name — a numbered
+     // index 0-15. Still just the
+                            // `database` String field underneath (`RedisConnection`
+                            // already parses it as `Int`) — only the control
+                            // differs, matching the relabel-not-duplicate pattern
+                            // this file already uses for DynamoDB/Qdrant.
+                            if driverID == .redis {
+                                Picker(L("Database"), selection: $database) {
+                                    ForEach(0..<16, id: \.self) { index in
+                                        Text(verbatim: "\(index)").tag(String(index))
+                                    }
                                 }
+                            } else {
+                                TextField(driverID == .dynamodb ? L("Region (optional, default us-east-1)") : L("Database"), text: $database)
                             }
-                        } else {
-                            TextField(driverID == .dynamodb ? L("Region (optional, default us-east-1)") : L("Database"), text: $database)
+                            if driverID == .dynamodb {
+                                Label(
+                                    L("For dynamodb-local or a self-hosted endpoint, set Host/Port (any non-empty access key/secret works). For real AWS, leave Host empty and set Region."),
+                                    systemImage: "info.circle"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            }
+                            if driverID == .redis {
+                                Label(
+                                    L("Username/Password are optional ACL credentials (Redis 6+). Leave both empty for a server with no auth."),
+                                    systemImage: "info.circle"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            }
+     // Replica set v1: Host/Port
+                            // above stay the primary seed; these add seed members
+                            // 2+. All reads/writes still go to the primary the
+                            // driver finds at connect time — no secondary routing.
+                            if driverID == .mongodb {
+                                TextField(
+                                    L("Additional hosts (comma-separated host:port, optional)"),
+                                    text: $mongoAdditionalHosts,
+                                    prompt: Text(verbatim: "host2:27017, host3:27017")
+                                )
+                                TextField(L("Replica Set name (optional)"), text: $mongoReplicaSetName)
+                            }
                         }
-                        if driverID == .dynamodb {
-                            Label(
-                                L("For dynamodb-local or a self-hosted endpoint, set Host/Port (any non-empty access key/secret works). For real AWS, leave Host empty and set Region."),
-                                systemImage: "info.circle"
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                         }
-                        if driverID == .redis {
-                            Label(
-                                L("Username/Password are optional ACL credentials (Redis 6+). Leave both empty for a server with no auth."),
-                                systemImage: "info.circle"
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
- // Replica set v1: Host/Port
-                        // above stay the primary seed; these add seed members
-                        // 2+. All reads/writes still go to the primary the
-                        // driver finds at connect time — no secondary routing.
-                        if driverID == .mongodb {
-                            TextField(
-                                L("Additional hosts (comma-separated host:port, optional)"),
-                                text: $mongoAdditionalHosts,
-                                prompt: Text(verbatim: "host2:27017, host3:27017")
-                            )
-                            TextField(L("Replica Set name (optional)"), text: $mongoReplicaSetName)
-                        }
-                    }
-                    }
 
-                    Section {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 10) {
-                                Button(L("Test Connection")) {
-                                    guard testState != .testing else { return }
-                                    testState = .testing
-                                    Task { await runTest() }
+                        Section {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 10) {
+                                    Button(L("Test Connection")) {
+                                        guard testState != .testing else { return }
+                                        testState = .testing
+                                        Task { await runTest() }
+                                    }
+                                    .disabled(testState == .testing)
+                                    if testState == .testing {
+                                        ProgressView().controlSize(.small)
+                                    }
+                                    Spacer()
                                 }
-                                .disabled(testState == .testing)
-                                if testState == .testing {
-                                    ProgressView().controlSize(.small)
+                                if case .done(let report) = testState {
+                                    testBreakdown(report)
                                 }
-                                Spacer()
-                            }
-                            if case .done(let report) = testState {
-                                testBreakdown(report)
                             }
                         }
                     }
+                    .formStyle(.grouped)
                 }
-                .formStyle(.grouped)
-                .tabItem { Text(L("General")) }
-                Form {
-                    Section(L("Behavior")) {
-                        Toggle(L("Production environment (warn on writes)"), isOn: $isProduction)
-                        Toggle(L("Log queries to history"), isOn: $historyEnabled)
+                if settingsTab == .advanced {
+                    Form {
+                        Section(L("Behavior")) {
+                            Toggle(L("Production environment (warn on writes)"), isOn: $isProduction)
+                            Toggle(L("Log queries to history"), isOn: $historyEnabled)
+                        }
                     }
+                    .formStyle(.grouped)
                 }
-                .formStyle(.grouped)
-                .tabItem { Text(L("Advanced")) }
 
                 if !isFileBased {
  // Split out of General (sheets never scroll) — the
@@ -403,90 +409,93 @@ public struct ConnectionSheet: View {
                     // info + client cert row + client key row), which was
                     // pushing General past the fixed 600pt sheet height.
                     // Mirrors the existing SSH Tunnel tab's own split.
-                    Form {
-                        Section {
-                            Picker(L("TLS"), selection: $tlsMode) {
-                                Text(L("Off")).tag(TLSMode.disable)
-                                Text(L("Prefer (no verify)")).tag(TLSMode.prefer)
-                                Text(L("Require (no verify)")).tag(TLSMode.require)
-                                Text(L("Verify CA (skip hostname)")).tag(TLSMode.verifyCA)
-                                Text(L("Verify certificate")).tag(TLSMode.verifyFull)
-                            }
- // prefer/require encrypt but don't authenticate
-                            // the server — spell that out so it isn't mistaken
-                            // for "secure".
-                            if tlsMode == .prefer || tlsMode == .require {
-                                Label(
-                                    L("Encrypted, but the server's certificate isn't checked. Use “Verify certificate” for production."),
-                                    systemImage: "exclamationmark.shield"
-                                )
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            }
- // a custom CA is optional — empty means the
-                            // system trust store; a PEM file covers
-                            // self-signed/private CAs.
-                            if tlsMode.verifiesCertificate {
-                                HStack {
-                                    TextField(L("CA certificate (optional)"), text: $tlsCACertPath)
-                                        .truncationMode(.middle)
-                                    Button(L("Choose…")) { pickCACert() }
+                    if settingsTab == .tls {
+                        Form {
+                            Section {
+                                Picker(L("TLS"), selection: $tlsMode) {
+                                    Text(L("Off")).tag(TLSMode.disable)
+                                    Text(L("Prefer (no verify)")).tag(TLSMode.prefer)
+                                    Text(L("Require (no verify)")).tag(TLSMode.require)
+                                    Text(L("Verify CA (skip hostname)")).tag(TLSMode.verifyCA)
+                                    Text(L("Verify certificate")).tag(TLSMode.verifyFull)
                                 }
-                                Label(
-                                    L("Leave empty to use the system trust store, or pick a PEM file for a self-signed or private-CA server."),
-                                    systemImage: "info.circle"
-                                )
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            }
- // mutual TLS: optional client certificate + key
-                            // (PEM paths; both required to take effect).
-                            if tlsMode != .disable {
-                                HStack {
-                                    TextField(L("Client certificate (optional)"), text: $tlsClientCertPath)
-                                        .truncationMode(.middle)
-                                    Button(L("Choose…")) { pickPEM(into: $tlsClientCertPath) }
+     // prefer/require encrypt but don't authenticate
+                                // the server — spell that out so it isn't mistaken
+                                // for "secure".
+                                if tlsMode == .prefer || tlsMode == .require {
+                                    Label(
+                                        L("Encrypted, but the server's certificate isn't checked. Use “Verify certificate” for production."),
+                                        systemImage: "exclamationmark.shield"
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                                 }
-                                if !tlsClientCertPath.isEmpty {
+     // a custom CA is optional — empty means the
+                                // system trust store; a PEM file covers
+                                // self-signed/private CAs.
+                                if tlsMode.verifiesCertificate {
                                     HStack {
-                                        TextField(L("Client key"), text: $tlsClientKeyPath)
+                                        TextField(L("CA certificate (optional)"), text: $tlsCACertPath)
                                             .truncationMode(.middle)
-                                        Button(L("Choose…")) { pickPEM(into: $tlsClientKeyPath) }
+                                        Button(L("Choose…")) { pickCACert() }
+                                    }
+                                    Label(
+                                        L("Leave empty to use the system trust store, or pick a PEM file for a self-signed or private-CA server."),
+                                        systemImage: "info.circle"
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                }
+     // mutual TLS: optional client certificate + key
+                                // (PEM paths; both required to take effect).
+                                if tlsMode != .disable {
+                                    HStack {
+                                        TextField(L("Client certificate (optional)"), text: $tlsClientCertPath)
+                                            .truncationMode(.middle)
+                                        Button(L("Choose…")) { pickPEM(into: $tlsClientCertPath) }
+                                    }
+                                    if !tlsClientCertPath.isEmpty {
+                                        HStack {
+                                            TextField(L("Client key"), text: $tlsClientKeyPath)
+                                                .truncationMode(.middle)
+                                            Button(L("Choose…")) { pickPEM(into: $tlsClientKeyPath) }
+                                        }
                                     }
                                 }
                             }
                         }
+                        .formStyle(.grouped)
                     }
-                    .formStyle(.grouped)
-                    .tabItem { Text(L("TLS")) }
 
-                    Form {
-                        Section(L("SSH Configuration")) {
-                            Toggle(L("Connect through SSH tunnel"), isOn: $sshEnabled)
-                            TextField(L("SSH host"), text: $sshHost)
-                                .onChange(of: sshHost) { _, newValue in
-                                    if !newValue.isEmpty && !sshEnabled {
-                                        sshEnabled = true
+                    if settingsTab == .ssh {
+                        Form {
+                            Section(L("SSH Configuration")) {
+                                Toggle(L("Connect through SSH tunnel"), isOn: $sshEnabled)
+                                TextField(L("SSH host"), text: $sshHost)
+                                    .onChange(of: sshHost) { _, newValue in
+                                        if !newValue.isEmpty && !sshEnabled {
+                                            sshEnabled = true
+                                        }
                                     }
+                                TextField(L("SSH port"), text: $sshPort, prompt: Text(verbatim: "22"))
+                                TextField(L("SSH username"), text: $sshUsername)
+                                SecureField(L("SSH password"), text: $sshPassword,
+                                            prompt: existing == nil ? nil : Text(L("(keep saved password)")))
+                                HStack {
+                                    TextField(L("Private key (optional)"), text: $sshKeyPath)
+                                        .truncationMode(.middle)
+                                    Button(L("Choose…")) { pickKeyFile() }
                                 }
-                            TextField(L("SSH port"), text: $sshPort, prompt: Text(verbatim: "22"))
-                            TextField(L("SSH username"), text: $sshUsername)
-                            SecureField(L("SSH password"), text: $sshPassword,
-                                        prompt: existing == nil ? nil : Text(L("(keep saved password)")))
-                            HStack {
-                                TextField(L("Private key (optional)"), text: $sshKeyPath)
-                                    .truncationMode(.middle)
-                                Button(L("Choose…")) { pickKeyFile() }
-                            }
-                            if !sshKeyPath.isEmpty {
-                                SecureField(L("Key passphrase"), text: $sshPassphrase)
+                                if !sshKeyPath.isEmpty {
+                                    SecureField(L("Key passphrase"), text: $sshPassphrase)
+                                }
                             }
                         }
+                        .formStyle(.grouped)
                     }
-                    .formStyle(.grouped)
-                    .tabItem { Text(L("SSH Tunnel")) }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .focusable(false)
             .focusEffectDisabled()
  // bordered fields so it's obvious where to type

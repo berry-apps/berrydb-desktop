@@ -811,3 +811,5 @@
 "BerryDB could not open its data store." = "BerryDB không thể mở kho dữ liệu cục bộ.";
 "BerryDB could not open its data store. Upgrade step “%@” failed and changed no data." = "BerryDB không thể mở kho dữ liệu cục bộ. Bước nâng cấp “%@” bị lỗi và không thay đổi dữ liệu nào.";
 "Details…" = "Chi tiết…";
+
+"Connection settings" = "Cài đặt kết nối";

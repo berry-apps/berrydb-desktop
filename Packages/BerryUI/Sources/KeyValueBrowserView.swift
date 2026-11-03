@@ -68,12 +68,13 @@ struct KeyValueBrowserView: View {
             Divider()
             HSplitView {
                 keyList
-                    .frame(minWidth: 240, idealWidth: 300)
+                    .frame(minWidth: 260, idealWidth: 360, maxHeight: .infinity)
                 valueDetail
-                    .frame(minWidth: 320, maxWidth: .infinity)
+                    .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .task { await runScan(reset: true) }
         .onChange(of: currentDatabase) { oldValue, newValue in
             Task { await switchDatabase(from: oldValue, to: newValue) }
@@ -115,6 +116,26 @@ struct KeyValueBrowserView: View {
     }
 
     private var header: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                databasePicker
+                scanControls
+                Spacer()
+                newKeyButton
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    databasePicker
+                    Spacer()
+                    newKeyButton
+                }
+                scanControls
+            }
+        }
+        .padding(10)
+    }
+
+    private var databasePicker: some View {
         HStack {
             Image(systemName: "memorychip")
             Text(L("Keys")).font(.headline)
@@ -124,28 +145,38 @@ struct KeyValueBrowserView: View {
                         Text("DB \(index)").tag(index)
                     }
                 }
+                .labelsHidden()
+                .accessibilityLabel(L("Database"))
                 .frame(width: 100)
                 .disabled(isLoading)
             }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var scanControls: some View {
+        HStack {
             TextField(L("Pattern (e.g. user:*)"), text: $pattern)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 220)
+                .frame(minWidth: 120, idealWidth: 220, maxWidth: 220)
                 .onSubmit { Task { await runScan(reset: true) } }
             Button {
                 Task { await runScan(reset: true) }
             } label: {
                 Label(L("Scan"), systemImage: "arrow.clockwise")
             }
-            Spacer()
-            if capabilities.write {
-                Button {
-                    showNewKeySheet = true
-                } label: {
-                    Label(L("New Key…"), systemImage: "plus")
-                }
-            }
+            .fixedSize()
         }
-        .padding(10)
+    }
+
+    @ViewBuilder
+    private var newKeyButton: some View {
+        if capabilities.write {
+            Button { showNewKeySheet = true } label: {
+                Label(L("New Key…"), systemImage: "plus")
+            }
+            .fixedSize()
+        }
     }
 
     @ViewBuilder
@@ -161,6 +192,7 @@ struct KeyValueBrowserView: View {
                 ForEach(entries, id: \.key) { entry in
                     HStack {
                         Text(entry.key).lineLimit(1).truncationMode(.middle)
+                            .help(entry.key)
                         Spacer()
                         Text(entry.type.rawValue)
                             .font(.caption2)
