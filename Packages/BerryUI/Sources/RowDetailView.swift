@@ -14,7 +14,7 @@ struct RowDetailView: View {
                 Text(L("Row Details"))
                     .font(.headline)
                 Spacer()
-                Text(L("Row") + " \(target.row + 1)")
+                Text(L("Row \(target.row + 1)"))
                     .foregroundStyle(.secondary)
                 Button(action: onClose) {
                     Image(systemName: "xmark")
@@ -44,7 +44,13 @@ struct RowDetailView: View {
                                     )
                                 }
                             }
-                            Text(verbatim: displayText(field.value))
+                            let preview = RowValuePreview(field.value)
+                            if preview.isTruncated {
+                                Text(L("Preview truncated. Use View Cell… for the full value."))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(verbatim: preview.text)
                                 .font(.system(.body, design: .monospaced))
                                 .foregroundStyle(field.value == .null ? .secondary : .primary)
                                 .textSelection(.enabled)
@@ -66,14 +72,4 @@ struct RowDetailView: View {
         }
     }
 
-    private func displayText(_ value: BerryValue) -> String {
-        switch value {
-        case .null:
-            "NULL"
-        case .bytes(let data):
-            ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .binary)
-        default:
-            value.displayString ?? ""
-        }
-    }
 }

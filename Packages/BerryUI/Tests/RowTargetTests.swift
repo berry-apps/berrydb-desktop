@@ -88,3 +88,45 @@ struct RowDetailSelectionTests {
         #expect(selections.last! == nil)
     }
 }
+
+@Suite("Row inspector controls and previews")
+struct RowInspectorTests {
+    @Test func closingStaysClosedAcrossSelectionChangesAndContextMenuReopens() {
+        var state = RowInspectorState()
+        state.select(0)
+        #expect(!state.isOpen)
+        state.toggle()
+        #expect(state.isOpen)
+        #expect(state.selectedRow == 0)
+        state.close()
+        state.select(1)
+        #expect(!state.isOpen)
+        state.open(row: 2)
+        #expect(state.isOpen)
+        #expect(state.selectedRow == 2)
+        state.select(nil)
+        #expect(state.isOpen)
+        #expect(state.selectedRow == nil)
+    }
+
+    @Test func largeValuesHaveBoundedPreviewsWithoutChangingTheFullValue() {
+        let text = String(repeating: "{\"value\":\"large\"}", count: 200_000)
+        for value in [BerryValue.text(text), .json(text)] {
+            let preview = RowValuePreview(value)
+            #expect(preview.isTruncated)
+            #expect(preview.text.utf8.count <= RowValuePreview.byteLimit)
+            #expect(value.displayString == text)
+        }
+        let combining = BerryValue.text("a" + String(repeating: "\u{0301}", count: 2_000_000))
+        #expect(RowValuePreview(combining).isTruncated)
+        #expect(RowValuePreview(.null).text == "NULL")
+        #expect(RowValuePreview(.text("")).text == "")
+        #expect(!RowValuePreview(.text("small")).isTruncated)
+    }
+
+    @Test func narrowGroupsUseAnOverlayInsteadOfAddingMinimumWidths() {
+        #expect(RowInspectorState.usesOverlay(width: 320))
+        #expect(RowInspectorState.usesOverlay(width: 420))
+        #expect(!RowInspectorState.usesOverlay(width: 800))
+    }
+}
