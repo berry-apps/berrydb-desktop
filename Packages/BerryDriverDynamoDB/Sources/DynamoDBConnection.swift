@@ -39,6 +39,15 @@ public actor DynamoDBConnection: DriverConnection {
     /// Partition-key name per table, for native INSERT (one DescribeTable per table).
     private var partitionKeys: [String: String] = [:]
 
+    /// Key schema per table, read by one DescribeTable and reused by every
+    /// partition query on the connection. Safe without invalidation: DynamoDB
+    /// does not change a table's key attributes in place. Adding or removing a
+    /// global secondary index is a table update
+    /// (https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_UpdateTable.html),
+    /// so a connection opened before one sees the old index list until it
+    /// reconnects, as the partition-key cache above already does.
+    private var keySchemas: [String: DynamoDBKeySchema] = [:]
+
     /// Page-size hint for `ExecuteStatement`'s request-level `Limit` field —
     /// also bounds each `.rows` batch to N3's 500–1000 range. Verified
     /// against dynamodb-local: a page's `Items` count can never exceed this,
@@ -320,5 +329,56 @@ public actor DynamoDBConnection: DriverConnection {
     public func close() async {
         isClosed = true
         cancelBox.current?.cancel()
+    }
+}
+
+extension DynamoDBConnection: PartitionQuerying {
+    public func keySchema(of table: String) async throws -> DynamoDBKeySchema {
+        guard !isClosed else { throw DriverError.notConnected }
+        if let known = keySchemas[table] { return known }
+        let client = self.client
+        let schema = try await cancellable { try await client.keySchema(of: table) }
+        keySchemas[table] = schema
+        return schema
+    }
+
+    public func queryPartition(_ query: DynamoDBPartitionQuery) async throws -> DynamoDBQueryPage {
+        let schema = try await keySchema(of: query.table)
+        let request: DynamoDBQueryRequestBody
+        do {
+            request = try DynamoDBPartitionQueryRequest.body(for: query, schema: schema)
+        } catch {
+            throw Self.mapError(error)
+        }
+        let client = self.client
+        return try await cancellable { try await client.query(request) }
+    }
+
+    /// Runs `work` as a task registered in `cancelBox`, so `cancelCurrentQuery()`
+    /// aborts its in-flight HTTP request the way it aborts `execute`. `cancelBox`
+    /// holds a `Task<Void, Never>`, so the registered task forwards its
+    /// cancellation to the one doing the work. Cancelling the calling task is the
+    /// reliable way to stop a multi-leg call (it reaches every leg);
+    /// `cancelCurrentQuery()` reaches only the leg in flight, so one issued between
+    /// the `DescribeTable` and `Query` legs is lost.
+    private func cancellable<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) async throws -> T {
+        guard !isClosed else { throw DriverError.notConnected }
+        let task = Task { try await work() }
+        cancelBox.current = Task {
+            await withTaskCancellationHandler {
+                _ = await task.result
+            } onCancel: {
+                task.cancel()
+            }
+        }
+        do {
+            return try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        } catch {
+            throw Self.mapError(error)
+        }
     }
 }

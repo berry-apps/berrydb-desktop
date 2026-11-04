@@ -69,6 +69,11 @@ struct DynamoDBHTTPClient: Sendable {
             (data, response) = try await session.data(for: request)
         } catch let error as URLError where error.code == .cancelled {
             throw DriverError.cancelled
+        } catch is CancellationError {
+            // A task that was already cancelled when the request started fails with this
+            // instead of the URLError. That holds on every path through `send`, so a
+            // cancelled task that used to surface as `connectionFailed` is now `cancelled`.
+            throw DriverError.cancelled
         } catch {
             throw DriverError.connectionFailed(error.localizedDescription)
         }
@@ -179,6 +184,21 @@ struct DynamoDBHTTPClient: Sendable {
             throw DriverError.queryFailed(message: "DescribeTable returned no Table for \(name)", code: nil)
         }
         return table
+    }
+
+    // MARK: - Partition query
+
+    /// Returns `DynamoDBKeySchema` (Sendable) rather than the raw DescribeTable
+    /// JSON, for the same reason as `partitionKeyName(of:)`.
+    func keySchema(of table: String) async throws -> DynamoDBKeySchema {
+        try DynamoDBPartitionQueryRequest.keySchema(describedTable: try await describeTable(name: table), name: table)
+    }
+
+    /// One `Query` call and its one page; never follows `LastEvaluatedKey`.
+    /// https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html
+    func query(_ request: DynamoDBQueryRequestBody) async throws -> DynamoDBQueryPage {
+        let json = try await send(target: "DynamoDB_20120810.Query", body: request.body)
+        return try DynamoDBPartitionQueryRequest.page(json: json)
     }
 
  /// Fail-fast check for `connect()` ("Test connection" expectation,
