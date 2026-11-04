@@ -852,6 +852,9 @@ public final class MCPProjectsSettingsModel: ObservableObject {
                 return L("Live reads are not available for \(profile.name) through an SSH tunnel.")
             }
             if profile.envColor == "production", !draft.acknowledged.contains(.production(profile.id)) {
+                if profile.driver == .dynamodb {
+                    return L("Live reads on \(profile.name) need your confirmation that you reviewed its redacted attributes and accept reads on this production database.")
+                }
                 return L("Live reads on \(profile.name) need your confirmation that you reviewed its redacted columns and accept reads on this production database.")
             }
             guard Self.needsPrivilegeCheck(profile) else { continue }

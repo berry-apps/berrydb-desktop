@@ -313,7 +313,9 @@ private struct MCPProjectEditorSheet: View {
         let isDynamoDB = profile.driver == .dynamodb
         Group {
             if model.unverifiedProfileIDs[draft.id]?.contains(id) == true {
-                Text(L("This connection’s saved settings could not be verified, and its live reads opened off. Review its redacted columns before saving."))
+                Text(isDynamoDB
+                    ? L("This connection’s saved settings could not be verified, and its live reads opened off. Review its redacted attributes before saving.")
+                    : L("This connection’s saved settings could not be verified, and its live reads opened off. Review its redacted columns before saving."))
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)

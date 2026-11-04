@@ -1230,7 +1230,7 @@ struct MCPProjectsSettingsModelTests {
 
         var draft = liveReadDraft(model, table)
         #expect(model.save(draft) == false)
-        #expect(model.errorMessage == Self.productionConsentMissing("Sessions"))
+        #expect(model.errorMessage == L("Live reads on \(table.name) need your confirmation that you reviewed its redacted attributes and accept reads on this production database."))
         #expect(try store.mcpProject(id: draft.id) == nil)
 
         draft.acknowledged = [.production(table.id)]
