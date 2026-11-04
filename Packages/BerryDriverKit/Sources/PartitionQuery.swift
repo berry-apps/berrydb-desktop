@@ -151,8 +151,10 @@ public struct DynamoDBKeySchema: Sendable, Equatable {
     }
 
     /// The table's key names followed by the index's, each once. A query on an
-    /// index returns the table keys with every item, so a caller that checks
-    /// which attributes are keys needs both sets.
+    /// index returns the table keys with every item (table keys are always
+    /// projected into an index:
+    /// https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html#GSI.Projections),
+    /// so a caller that checks which attributes are keys needs both sets.
     public func keyAttributeNames(index: String?) -> [String] {
         var names = [partitionKey.name]
         if let sortKey { names.append(sortKey.name) }

@@ -108,6 +108,41 @@ struct DynamoDBPartitionQueryTests {
             == "Index missing does not exist on table orders")
     }
 
+    @Test func aSortConditionOnAnIndexWithoutASortKeyNamesTheIndex() throws {
+        var described = Self.describedOrders
+        described["GlobalSecondaryIndexes"] = [
+            ["IndexName": "by_status_only", "KeySchema": [["AttributeName": "status", "KeyType": "HASH"]]]
+        ]
+        let hashOnly = try DynamoDBPartitionQueryRequest.keySchema(describedTable: described, name: "orders")
+        do {
+            _ = try DynamoDBPartitionQueryRequest.body(
+                for: query(index: "by_status_only", partition: .string("open"), sort: .equal(.string("1"))), schema: hashOnly
+            )
+            Issue.record("a sort condition on a hash-only index must be refused")
+        } catch DriverError.unsupported(let text) {
+            #expect(text == "Index by_status_only on table orders has no sort key")
+        } catch {
+            Issue.record("expected unsupported, got \(error)")
+        }
+    }
+
+    /// Verified against dynamodb-local 3.3.0: begins_with on a Number key is a
+    /// ValidationException ("Incorrect operand type"), so it is refused up front.
+    @Test func beginsWithOnANumberSortKeyIsRefusedBeforeAnyRequest() {
+        let numeric = DynamoDBKeySchema(
+            table: "orders", partitionKey: .init(name: "pk", type: .string),
+            sortKey: .init(name: "n", type: .number), indexes: []
+        )
+        do {
+            _ = try DynamoDBPartitionQueryRequest.body(for: query(sort: .beginsWith(.number("1"))), schema: numeric)
+            Issue.record("begins_with on a Number sort key must be refused")
+        } catch DriverError.unsupported(let text) {
+            #expect(text == "begins_with needs a string or binary sort key")
+        } catch {
+            Issue.record("expected unsupported, got \(error)")
+        }
+    }
+
     @Test func pageKeepsNumbersAsTextAndReadsConsumedCapacity() throws {
         let json: [String: Any] = [
             "Items": [["pk": ["S": "a"], "n": ["N": "123456789012345678901234567890123456.78"]]],

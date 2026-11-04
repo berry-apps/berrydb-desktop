@@ -178,8 +178,9 @@ struct DynamoDBPartitionQueryConnectionTests {
     @Test func aClosedConnectionRefusesAQuery() async throws {
         let host = Self.newHost()
         let connection = try await makeConnection(host: host) { request, _ in
-            Self.ok(request, ["TableNames": []])
+            Self.target(request) == "DynamoDB_20120810.DescribeTable" ? Self.described(request) : Self.ok(request, ["TableNames": []])
         }
+        _ = try await connection.keySchema(of: "orders")
         await connection.close()
         do {
             _ = try await connection.queryPartition(Self.query)
@@ -195,6 +196,7 @@ struct DynamoDBPartitionQueryConnectionTests {
         } catch {
             Issue.record("expected DriverError.notConnected, got \(error)")
         }
-        #expect(DynamoDBStubURLProtocol.requests(for: host).map(Self.target) == ["DynamoDB_20120810.ListTables"])
+        #expect(DynamoDBStubURLProtocol.requests(for: host).map(Self.target)
+            == ["DynamoDB_20120810.ListTables", "DynamoDB_20120810.DescribeTable"])
     }
 }

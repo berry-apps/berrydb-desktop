@@ -40,6 +40,9 @@ enum DynamoDBPartitionQueryRequest {
 
         if let sort = query.sortKey {
             guard let sortKey else {
+                if let indexName = query.indexName {
+                    throw DriverError.unsupported("Index \(indexName) on table \(query.table) has no sort key")
+                }
                 throw DriverError.unsupported("Table \(query.table) has no sort key")
             }
             names["#k1"] = sortKey.name
@@ -50,12 +53,22 @@ enum DynamoDBPartitionQueryRequest {
             case .lessThanOrEqual(let value): operands = [value]; condition += " AND #k1 <= :v1"
             case .greaterThan(let value): operands = [value]; condition += " AND #k1 > :v1"
             case .greaterThanOrEqual(let value): operands = [value]; condition += " AND #k1 >= :v1"
-            // Reversed bounds are sent as given; DynamoDB rejects them itself.
+            // Reversed bounds are sent as given; DynamoDB rejects them itself
+            // (verified against dynamodb-local 3.3.0: a ValidationException saying the
+            // upper bound must be at least the lower bound):
+            // https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Query.KeyConditionExpressions.html
             case .between(let low, let high): operands = [low, high]; condition += " AND #k1 BETWEEN :v1 AND :v2"
             case .beginsWith(let prefix): operands = [prefix]; condition += " AND begins_with(#k1, :v1)"
             }
             for (offset, operand) in operands.enumerated() {
                 try check(operand, against: sortKey)
+                // Verified against dynamodb-local 3.3.0: begins_with on a Number key is a
+                // ValidationException ("Incorrect operand type"); only String and Binary
+                // keys take it:
+                // https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Query.KeyConditionExpressions.html
+                if case .beginsWith = sort, sortKey.type == .number {
+                    throw DriverError.unsupported("begins_with needs a string or binary sort key")
+                }
                 values[":v\(offset + 1)"] = operand.attributeValue.json
             }
         }
