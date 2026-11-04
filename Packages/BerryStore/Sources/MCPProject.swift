@@ -73,17 +73,24 @@ public struct MCPVerifiedProject: Equatable, Sendable {
     public let projectTagValid: Bool
     /// Profiles whose row claims liveRead but whose tag failed or whose ID is duplicated.
     public let rejectedLiveReadProfileIDs: Set<UUID>
+    /// Profiles in `liveReadProfileIDs` whose row was sealed while the
+    /// connection carried the production label, or by a build that did not
+    /// seal the label at all. The helper applies the production limits to
+    /// these whatever label the profile carries now.
+    public let productionSealedProfileIDs: Set<UUID>
 
     public init(
         project: MCPProject,
         liveReadProfileIDs: Set<UUID>,
         projectTagValid: Bool = true,
-        rejectedLiveReadProfileIDs: Set<UUID> = []
+        rejectedLiveReadProfileIDs: Set<UUID> = [],
+        productionSealedProfileIDs: Set<UUID> = []
     ) {
         self.project = project
         self.liveReadProfileIDs = liveReadProfileIDs
         self.projectTagValid = projectTagValid
         self.rejectedLiveReadProfileIDs = rejectedLiveReadProfileIDs
+        self.productionSealedProfileIDs = productionSealedProfileIDs
     }
 }
 

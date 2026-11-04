@@ -542,4 +542,117 @@ struct MCPAccessIntegrityTests {
         let tag: Data? = try #require(rows.first)["integrityTag"]
         #expect(tag == nil)
     }
+
+    // MARK: - Production label
+
+    /// The exact bytes rows were sealed over before the production label
+    /// joined the payload. Rows sealed by earlier builds carry a tag over
+    /// these bytes, so they have to stay reproducible for those rows to
+    /// keep verifying.
+    @Test func thePayloadSealedBeforeTheLabelKeepsItsBytes() throws {
+        let projectID = try #require(UUID(uuidString: "11111111-1111-1111-1111-111111111111"))
+        let profileID = try #require(UUID(uuidString: "22222222-2222-2222-2222-222222222222"))
+        let profile = ConnectionProfile(
+            id: profileID, driverID: "postgres", name: "A", envColor: "production",
+            host: "db.example", port: 5432, username: "reader", database: "shop"
+        )
+        let payload = try MCPAccessIntegrity.earlierProfilePayload(
+            projectID: projectID,
+            access: MCPProfileAccess(profileID: profileID, liveRead: true, redactedColumns: ["Email", "ssn"]),
+            profile: profile
+        )
+        #expect(String(decoding: payload, as: UTF8.self) == #"""
+        {"domain":"berrydb.mcp.profile-access.v2","endpoint":{"database":"shop","driverID":"postgres","elasticsearchAPIKeyEnabled":false,"host":"db.example","port":5432,"sshEnabled":false,"tlsMode":"prefer","username":"reader"},"liveRead":true,"profileID":"22222222-2222-2222-2222-222222222222","projectID":"11111111-1111-1111-1111-111111111111","redactedColumns":["email","ssn"]}
+        """#)
+    }
+
+    /// The production label is sealed into the access row when the project
+    /// is saved. A same-user process that then removes the label from the
+    /// profile row does not lift the connection out of the production
+    /// limits: the row still verifies, and still reports the sealed label.
+    @Test func theSealedProductionLabelOutlivesTheProfilesLabel() throws {
+        let store = try BerryStore(path: ":memory:")
+        let production = ConnectionProfile(driverID: "postgres", name: "Prod", envColor: "production")
+        try store.save(production)
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: production.id, liveRead: true),
+        ])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        try store.executeForTesting("UPDATE connection_profile SET envColor = NULL")
+        let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
+        #expect(verified.liveReadProfileIDs == [production.id])
+        #expect(verified.productionSealedProfileIDs == [production.id])
+    }
+
+    /// Guard: the label is sealed as a field of its own, not as part of the
+    /// endpoint fingerprint, so a row sealed without it keeps verifying when
+    /// the profile gains the label later; the helper applies the current
+    /// label by itself.
+    @Test func aRowSealedWithoutTheLabelStaysVerifiableWhenTheProfileGainsIt() throws {
+        let (store, a, _) = try makeStore()
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        try store.executeForTesting("UPDATE connection_profile SET envColor = 'production'")
+        let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
+        #expect(verified.liveReadProfileIDs == [a.id])
+        #expect(verified.productionSealedProfileIDs.isEmpty)
+    }
+
+    /// A row sealed by a build that did not cover the label keeps verifying
+    /// and counts as production until its project is saved again, since
+    /// which label it was sealed under is unknown. Saving the project seals
+    /// the label the profile carries then.
+    @Test func aRowSealedBeforeTheLabelWasCoveredCountsAsProductionUntilResaved() throws {
+        let (store, a, _) = try makeStore()
+        let access = MCPProfileAccess(profileID: a.id, liveRead: true)
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [access])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        let earlierTag = MCPAccessIntegrity.tag(
+            try MCPAccessIntegrity.earlierProfilePayload(projectID: project.id, access: access, profile: a), key: key
+        )
+        try store.executeForTesting("UPDATE mcp_project_profile SET integrityTag = ?", arguments: [earlierTag])
+        let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
+        #expect(verified.liveReadProfileIDs == [a.id])
+        #expect(verified.productionSealedProfileIDs == [a.id])
+
+        let key2 = SymmetricKey(size: .bits256)
+        try store.saveMCPProject(project, sealingKey: key2, previousKey: key)
+        let resaved = try #require(try store.verifiedMCPProject(id: project.id, key: key2))
+        #expect(resaved.liveReadProfileIDs == [a.id])
+        #expect(resaved.productionSealedProfileIDs.isEmpty)
+    }
+
+    /// Rotation re-seals a verifiable row over the bytes it verified
+    /// against, so the sealed label, and the absence of one on a row sealed
+    /// before the label was covered, carry forward unchanged.
+    @Test func rotationCarriesTheSealedLabelForward() throws {
+        let store = try BerryStore(path: ":memory:")
+        let production = ConnectionProfile(driverID: "postgres", name: "Prod", envColor: "production")
+        let earlier = ConnectionProfile(driverID: "mysql", name: "Earlier")
+        try store.save(production)
+        try store.save(earlier)
+        let key1 = SymmetricKey(size: .bits256)
+        let key2 = SymmetricKey(size: .bits256)
+        let earlierAccess = MCPProfileAccess(profileID: earlier.id, liveRead: true)
+        let projectA = MCPProject(name: "A", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: production.id, liveRead: true),
+            earlierAccess,
+        ])
+        try store.saveMCPProject(projectA, sealingKey: key1, previousKey: nil)
+        try store.executeForTesting("UPDATE connection_profile SET envColor = NULL")
+        let earlierTag = MCPAccessIntegrity.tag(
+            try MCPAccessIntegrity.earlierProfilePayload(projectID: projectA.id, access: earlierAccess, profile: earlier),
+            key: key1
+        )
+        try store.executeForTesting(
+            "UPDATE mcp_project_profile SET integrityTag = ? WHERE profileID = ?", arguments: [earlierTag, earlier.id]
+        )
+
+        let projectB = MCPProject(name: "B", isEnabled: true, profiles: [])
+        try store.saveMCPProject(projectB, sealingKey: key2, previousKey: key1)
+
+        let verified = try #require(try store.verifiedMCPProject(id: projectA.id, key: key2))
+        #expect(verified.liveReadProfileIDs == [production.id, earlier.id])
+        #expect(verified.productionSealedProfileIDs == [production.id, earlier.id])
+    }
 }

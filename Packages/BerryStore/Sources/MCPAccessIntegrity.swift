@@ -9,8 +9,9 @@ import Foundation
 /// row is tagged separately so a cascade delete of one profile leaves the
 /// other rows verifiable. Payloads carry a domain string and the project ID
 /// so a tag cannot be replayed onto another row kind or project, and a
-/// profile-access payload also carries the profile's endpoint fingerprint so
-/// the row stops verifying if the profile is pointed somewhere else.
+/// profile-access payload also carries the profile's endpoint fingerprint,
+/// so the row stops verifying if the profile is pointed somewhere else, and
+/// whether the profile carried the production label when the row was sealed.
 enum MCPAccessIntegrity {
     private struct ProjectPayload: Encodable {
         let domain = "berrydb.mcp.project.v1"
@@ -19,7 +20,26 @@ enum MCPAccessIntegrity {
         let workspaceRoots: [String]
     }
 
+    /// `production` seals the label that picks the stricter result limits.
+    /// It is a field of its own rather than part of the fingerprint so that
+    /// a label change never makes the row unverifiable: verification tries
+    /// both values and learns the sealed one, and the helper applies the
+    /// stricter of that and the profile's current label.
     private struct ProfilePayload: Encodable {
+        let domain = "berrydb.mcp.profile-access.v3"
+        let projectID: String
+        let profileID: String
+        let liveRead: Bool
+        let redactedColumns: [String]
+        let endpoint: EndpointFingerprint
+        let production: Bool
+    }
+
+    /// The payload of rows sealed before the label was covered. Such a row
+    /// keeps verifying against these bytes, and counts as production until
+    /// its project is saved again, since the label it was sealed under is
+    /// unknown.
+    private struct EarlierProfilePayload: Encodable {
         let domain = "berrydb.mcp.profile-access.v2"
         let projectID: String
         let profileID: String
@@ -44,8 +64,10 @@ enum MCPAccessIntegrity {
     /// row unverifiable — fail closed — until the app re-seals it, so a
     /// process that can write the store file cannot redirect a live-read
     /// profile to a server it controls and receive those credentials.
-    /// Display-only fields (`name`, `groupName`, `envColor`, `sortOrder`,
-    /// `createdAt`, `historyEnabled`) are deliberately left out.
+    /// Display-only fields (`name`, `groupName`, `sortOrder`, `createdAt`,
+    /// `historyEnabled`) are deliberately left out, as is `envColor`: the
+    /// production label it carries is sealed as `ProfilePayload.production`
+    /// instead.
     private struct EndpointFingerprint: Encodable {
         let driverID: String
         let filePath: String?
@@ -99,15 +121,49 @@ enum MCPAccessIntegrity {
 
     /// Canonical bytes of one profile's access row within one project,
     /// bound to the endpoint of `profile` — the stored connection profile
-    /// the row refers to (see `EndpointFingerprint`).
-    static func profilePayload(projectID: UUID, access: MCPProfileAccess, profile: ConnectionProfile) throws -> Data {
+    /// the row refers to (see `EndpointFingerprint`) — and to `production`,
+    /// whether the profile carries the production label.
+    static func profilePayload(
+        projectID: UUID, access: MCPProfileAccess, profile: ConnectionProfile, production: Bool
+    ) throws -> Data {
         try canonical(ProfilePayload(
+            projectID: projectID.uuidString.lowercased(),
+            profileID: access.profileID.uuidString.lowercased(),
+            liveRead: access.liveRead,
+            redactedColumns: MCPProfileAccess.normalizedColumns(access.redactedColumns),
+            endpoint: EndpointFingerprint(profile),
+            production: production
+        ))
+    }
+
+    /// Canonical bytes of the same row as sealed before the label was
+    /// covered (see `EarlierProfilePayload`).
+    static func earlierProfilePayload(projectID: UUID, access: MCPProfileAccess, profile: ConnectionProfile) throws -> Data {
+        try canonical(EarlierProfilePayload(
             projectID: projectID.uuidString.lowercased(),
             profileID: access.profileID.uuidString.lowercased(),
             liveRead: access.liveRead,
             redactedColumns: MCPProfileAccess.normalizedColumns(access.redactedColumns),
             endpoint: EndpointFingerprint(profile)
         ))
+    }
+
+    /// The bytes `tag` verifies against under `key`, and whether they mark
+    /// the profile production: the row's payload with the label, then
+    /// without it, then the payload of a row sealed before the label was
+    /// covered, which counts as production. Nil when none verifies. The
+    /// order does not matter for the answer, since one key never verifies
+    /// two different payloads with one tag.
+    static func verifiedProfilePayload(
+        tag: Data?, projectID: UUID, access: MCPProfileAccess, profile: ConnectionProfile, key: SymmetricKey
+    ) throws -> (payload: Data, production: Bool)? {
+        guard let tag else { return nil }
+        for production in [true, false] {
+            let payload = try profilePayload(projectID: projectID, access: access, profile: profile, production: production)
+            if isValid(tag, payload: payload, key: key) { return (payload, production) }
+        }
+        let earlier = try earlierProfilePayload(projectID: projectID, access: access, profile: profile)
+        return isValid(tag, payload: earlier, key: key) ? (earlier, true) : nil
     }
 
     static func tag(_ payload: Data, key: SymmetricKey) -> Data {
