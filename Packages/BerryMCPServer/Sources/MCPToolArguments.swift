@@ -26,7 +26,13 @@ struct MCPToolArguments {
     static let nameLengthRange = 3 ... 255
     static let maximumProjection = 50
     static let itemLimitRange = 1 ... 100
-    static let maximumCursorLength = 4096
+    /// A sealed cursor over an index query's last key, four keys at their
+    /// maximum sizes with 255-character names plus the scope, runs to about
+    /// 11,500 characters when the key text needs no JSON escaping; the bound
+    /// sits above that so paging does not dead-end on a cursor the service
+    /// issued. Keys made mostly of control characters, which JSON escapes
+    /// to six characters each, can still exceed it.
+    static let maximumCursorLength = 16_384
 
     private let values: [String: Value]
 

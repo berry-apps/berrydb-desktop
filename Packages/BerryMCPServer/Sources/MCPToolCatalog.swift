@@ -168,7 +168,7 @@ public enum MCPToolCatalog {
                     ),
                     "projection": ["type": "array", "items": ["type": "string"], "maxItems": 50],
                     "limit": ["type": "integer", "minimum": 1, "maximum": 100],
-                    "cursor": ["type": "string", "maxLength": 4096],
+                    "cursor": ["type": "string", "maxLength": .int(MCPToolArguments.maximumCursorLength)],
                 ],
                 required: ["connection_id", "table", "partition_key"]
             )

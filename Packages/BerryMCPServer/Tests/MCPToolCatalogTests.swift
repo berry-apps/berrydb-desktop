@@ -345,6 +345,28 @@ struct MCPToolCatalogTests {
         #expect(MCPToolCatalog.tools(for: selected(), liveReadConnectionIDs: [shop.id]).map(\.name) == sqlOnly)
     }
 
+    @Test func aCursorOverTheLargestKeysFitsTheToolsCursorBound() throws {
+        // An index query's last key holds the table's and the index's keys:
+        // a partition key is at most 2,048 bytes, a sort key at most 1,024,
+        // and a key attribute name at most 255 characters
+        // (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html#limits-partition-sort-keys).
+        let name = { (letter: Character) in String(repeating: letter, count: 255) }
+        let lastKey: [String: DynamoDBAttributeValue] = [
+            name("a"): .string(String(repeating: "p", count: 2_048)),
+            name("b"): .binary(Data(repeating: 0xFF, count: 1_024)),
+            name("c"): .string(String(repeating: "q", count: 2_048)),
+            name("d"): .binary(Data(repeating: 0xFE, count: 1_024)),
+        ]
+        let scope = MCPQueryCursor.Scope(
+            profileID: UUID(), table: String(repeating: "t", count: 255), indexName: String(repeating: "i", count: 255),
+            queryDigest: Data(repeating: 1, count: 32)
+        )
+        let token = try MCPQueryCursor.seal(lastKey: lastKey, scope: scope)
+        #expect(token.count > 4_096)
+        #expect(token.count <= MCPToolArguments.maximumCursorLength)
+        #expect(try MCPToolArguments(["cursor": .string(token)], allowing: ["cursor"]).cursor() == token)
+    }
+
     @Test func theDynamoDBToolSchemaIsClosedAndTypesTheKeyAsStringOrInteger() throws {
         let tools = MCPToolCatalog.tools(for: selected(), liveReadConnectionIDs: [], partitionQueryConnectionIDs: [UUID()])
         let tool = try #require(tools.first { $0.name == MCPToolName.dynamodbQuery.rawValue })
@@ -392,7 +414,7 @@ struct MCPToolCatalogTests {
         #expect(limit["maximum"]?.intValue == 100)
         let cursor = try #require(properties["cursor"]?.objectValue)
         #expect(cursor["type"]?.stringValue == "string")
-        #expect(cursor["maxLength"]?.intValue == 4096)
+        #expect(cursor["maxLength"]?.intValue == 16_384)
 
         let output = try #require(tool.outputSchema?.objectValue)
         #expect(output["type"]?.stringValue == "object")

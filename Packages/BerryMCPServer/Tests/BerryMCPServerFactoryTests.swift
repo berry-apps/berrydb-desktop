@@ -778,7 +778,7 @@ struct BerryMCPServerFactoryTests {
             (["sort_key": ["op": "between", "value": 1, "value2": .double(2.75)]], "sort_key.value2 must be a string or an integer", "2.75"),
             (["projection": .array((0 ..< 51).map { .string("secretName\($0)") })], "projection accepts at most 50 names", "secretName"),
             (["smuggled": "s3cr3t-value"], "Unexpected argument: smuggled", "s3cr3t-value"),
-            (["cursor": .string(String(repeating: "Q", count: 4097))], "cursor must be at most 4096 characters", "QQQQ"),
+            (["cursor": .string(String(repeating: "Q", count: 16_385))], "cursor must be at most 16384 characters", "QQQQ"),
             // One past `Int64.max`, which the SDK decodes as a double.
             (["partition_key": .double(9_223_372_036_854_775_808)], "partition_key must be a string or an integer", "9223372036854775808"),
             (["sort_key": "eq-7731"], "sort_key must be an object", "7731"),
