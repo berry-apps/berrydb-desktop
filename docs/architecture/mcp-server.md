@@ -926,7 +926,11 @@ result, items and metadata together, stays within 1 MiB (256 KiB on a
 production-labeled connection) exactly: the whole result is measured as
 the tool sends it, and items are dropped from the end of the page until it
 fits. An item that does not fit even an empty page is skipped and listed
-in `skipped_items` with its size, and the items after it are still read.
+in `skipped_items` with its size, and the items after it are still read;
+so is a first item that fits the page alone but not beside the cursor and
+the rest of the metadata, since a page starting at it would drop it again.
+Only a result that does not fit even without items fails, with `Result too
+large; narrow the request`.
 When the ceiling ends a page, `next_cursor` continues after the last item
 returned or skipped, so no item is returned twice and none is lost; a
 skipped item is not fetched again. DynamoDB itself returns at most 1 MB of

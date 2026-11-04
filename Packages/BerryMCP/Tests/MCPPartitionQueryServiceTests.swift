@@ -366,6 +366,42 @@ struct MCPPartitionQueryServiceTests {
         #expect(await connection.queries.last?.exclusiveStartKey == last.filter { ["p", "s"].contains($0.key) })
     }
 
+    @Test func aFirstItemTheMeasuredResultDropsIsSkippedAndTheCursorMovesPastIt() async throws {
+        // Key attributes at their largest, so the cursor alone outgrows the
+        // reserve: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html#limits-partition-sort-keys
+        let wide = DynamoDBKeySchema(
+            table: "wide", partitionKey: DynamoDBKeyAttribute(name: "p", type: .string),
+            sortKey: DynamoDBKeyAttribute(name: "s", type: .string), indexes: []
+        )
+        let partition = String(repeating: "p", count: 2_048)
+        let item: [String: DynamoDBAttributeValue] = [
+            "p": .string(partition), "s": .string(String(repeating: "s", count: 1_024)),
+            "body": .string(String(repeating: "x", count: 2_000)),
+        ]
+        let itemKey = item.filter { ["p", "s"].contains($0.key) }
+        let itemBytes = try size(item)
+        // The first pass keeps the item; with the cursor the result does not
+        // fit, and the item is the only one processed.
+        let ceiling = try MCPPartitionQueryService.reserve(for: MCPKeySchemaDescription(schema: wide, index: nil)) + itemBytes
+        let connection = ScriptedPartitionConnection(schema: wide, pages: [
+            .success(page([item], lastKey: itemKey)),
+            .success(page([])),
+        ])
+        let harness = Harness(connection: connection, limits: { _ in
+            MCPResultLimits(maximumRows: 100, maximumCellBytes: 65_536, maximumSerializedBytes: ceiling, maximumElapsed: .seconds(30))
+        })
+        let request = harness.request(table: "wide", partitionKey: .string(partition))
+        let result = try await harness.query(request)
+        #expect(result.items.isEmpty)
+        #expect(result.skippedItems == [MCPSkippedItem(index: 0, bytes: itemBytes)])
+        #expect(result.truncated)
+        #expect(try emittedSize(result) <= ceiling)
+        let cursor = try #require(result.nextCursor)
+
+        _ = try await harness.query(harness.request(table: "wide", partitionKey: .string(partition), cursor: cursor))
+        #expect(await connection.queries.last?.exclusiveStartKey == itemKey)
+    }
+
     @Test func aSQLProfileIsRefusedBeforeOpening() async throws {
         let connection = ScriptedPartitionConnection(schema: orders, pages: [.success(page([]))])
         let harness = Harness(connection: connection, driverID: .postgres)

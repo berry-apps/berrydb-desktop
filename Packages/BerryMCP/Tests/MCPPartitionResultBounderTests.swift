@@ -66,12 +66,15 @@ struct MCPPartitionResultBounderTests {
         #expect(bounded.cutByCeiling)
         #expect(bounded.redactedAttributes == ["email"])
 
+        // Item 0 is the first processed, so it is skipped rather than
+        // dropped and the next page starts after it.
         let droppedSecond = bounded.dropLastKept()
         #expect(droppedSecond)
         #expect(bounded.kept.isEmpty)
         #expect(bounded.omittedAttributes.isEmpty)
         #expect(bounded.redactedAttributes.isEmpty)
-        #expect(bounded.lastProcessedIndex == nil)
+        #expect(bounded.skippedItems == [MCPSkippedItem(index: 0, bytes: try size(item.filter { $0.key == "pk" }))])
+        #expect(bounded.lastProcessedIndex == 0)
         let droppedNothing = bounded.dropLastKept()
         #expect(droppedNothing == false)
     }

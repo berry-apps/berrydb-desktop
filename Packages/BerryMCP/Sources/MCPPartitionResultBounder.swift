@@ -47,15 +47,23 @@ struct MCPPartitionResultBounder {
         /// it, so the page ends before it; false when no item is kept.
         /// Used when the whole result, cursor and metadata included, does
         /// not fit the ceiling the first pass budgeted with.
+        ///
+        /// When the dropped item was the first one processed, it is skipped
+        /// and reported instead: a page starting at it would carry the same
+        /// metadata and drop it again, so paging would never advance.
         mutating func dropLastKept() -> Bool {
             guard let dropped = keptIndexes.popLast() else { return false }
             kept.removeLast()
-            keptBytes.removeLast()
+            let bytes = keptBytes.removeLast()
             keptRedactions.removeLast()
             omittedAttributes.removeAll { $0.item >= dropped }
             skippedItems.removeAll { $0.index > dropped }
             redactedAttributes = Set(keptRedactions.joined()).sorted()
             lastProcessedIndex = [keptIndexes.last, skippedItems.last?.index].compactMap { $0 }.max()
+            if lastProcessedIndex == nil {
+                skippedItems.append(MCPSkippedItem(index: dropped, bytes: bytes))
+                lastProcessedIndex = dropped
+            }
             cutByCeiling = true
             return true
         }

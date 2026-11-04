@@ -297,8 +297,8 @@ public struct MCPPartitionQueryService: Sendable {
         while true {
             let nextKey: [String: DynamoDBAttributeValue]?
             // A cut page always follows a returned or skipped item: the first
-            // item either fits an empty page or is skipped, and a page cut
-            // back to nothing is refused below.
+            // item either fits an empty page or is skipped, and the first item
+            // the measurement gives back is skipped too.
             if bounded.cutByCeiling, let last = bounded.lastProcessedIndex {
                 // The next page starts after the last item returned or
                 // skipped, so nothing returned repeats and a skipped item is
@@ -324,11 +324,9 @@ public struct MCPPartitionQueryService: Sendable {
             )
             let size = encodedSize(metadataBytes: try encoder.encode(result).count, itemBytes: bounded.keptBytes)
             if size <= limits.maximumSerializedBytes { return result }
-            // Without a processed item the next page could only start where
-            // this one did, so paging would never advance.
-            guard bounded.dropLastKept(), bounded.lastProcessedIndex != nil else {
-                throw MCPPartitionQueryError.resultTooLarge
-            }
+            // Nothing left to give back: even the result without items does
+            // not fit.
+            guard bounded.dropLastKept() else { throw MCPPartitionQueryError.resultTooLarge }
         }
     }
 
