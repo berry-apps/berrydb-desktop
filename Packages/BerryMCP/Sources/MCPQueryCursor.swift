@@ -27,7 +27,16 @@ enum MCPQueryCursor {
         let queryDigest: Data
     }
 
-    static let processKey = SymmetricKey(size: .bits256)
+    /// A static stored property must be `Sendable`, and an older CryptoKit
+    /// SDK may not mark `SymmetricKey` so; the box is immutable, so sharing
+    /// it across tasks is safe either way.
+    private struct KeyBox: @unchecked Sendable {
+        let key: SymmetricKey
+    }
+
+    private static let processKeyBox = KeyBox(key: SymmetricKey(size: .bits256))
+
+    static var processKey: SymmetricKey { processKeyBox.key }
 
     static func seal(lastKey: [String: DynamoDBAttributeValue], scope: Scope, key: SymmetricKey = processKey) throws -> String {
         let payload: [String: Any] = [
