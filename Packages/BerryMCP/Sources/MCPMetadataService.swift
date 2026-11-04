@@ -326,6 +326,17 @@ public struct MCPMetadataService: Sendable {
         Self.partitionQueryConnectionIDs(in: project, saved: try savedProfiles())
     }
 
+    /// Both sets above from one read of the saved profiles: the
+    /// connections the SQL live read runs on, then those a DynamoDB query
+    /// runs on.
+    public func liveConnectionIDs(in project: MCPVerifiedProject) throws -> (sql: Set<UUID>, partition: Set<UUID>) {
+        let saved = try savedProfiles()
+        return (
+            Self.liveReadConnectionIDs(in: project, saved: saved),
+            Self.partitionQueryConnectionIDs(in: project, saved: saved)
+        )
+    }
+
     /// Whether a saved profile's driver is the one a DynamoDB query runs
     /// on, whatever its live-read switch says. Throws `unknownConnection`
     /// when no such profile is saved; callers check that the profile is

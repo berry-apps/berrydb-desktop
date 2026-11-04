@@ -130,15 +130,12 @@ public enum BerryMCPServerFactory {
             onRequest()
             let context = await session.context()
             // A store that cannot be read lists neither live tool.
-            var liveReadConnectionIDs: Set<UUID> = []
-            var partitionQueryConnectionIDs: Set<UUID> = []
+            var live: (sql: Set<UUID>, partition: Set<UUID>) = ([], [])
             if case let .selected(project, _, _) = context {
-                liveReadConnectionIDs = (try? metadata.liveReadConnectionIDs(in: project)) ?? []
-                partitionQueryConnectionIDs = (try? metadata.partitionQueryConnectionIDs(in: project)) ?? []
+                live = (try? metadata.liveConnectionIDs(in: project)) ?? ([], [])
             }
             return ListTools.Result(tools: MCPToolCatalog.tools(
-                for: context, liveReadConnectionIDs: liveReadConnectionIDs,
-                partitionQueryConnectionIDs: partitionQueryConnectionIDs
+                for: context, liveReadConnectionIDs: live.sql, partitionQueryConnectionIDs: live.partition
             ))
         }
         // Live reads and DynamoDB queries are the calls that await a

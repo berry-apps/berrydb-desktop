@@ -510,13 +510,15 @@ public struct MCPToolRouter: Sendable {
         return result
     }
 
-    /// Whether the selected project has a connection the live read tool runs
-    /// on; false when the store cannot be read, so the status still answers.
+    /// Whether the selected project has a connection the SQL live read or
+    /// the DynamoDB query tool runs on, so the status agrees with the tools
+    /// listed; false when the store cannot be read, so the status still
+    /// answers.
     private func liveReadsAvailable(_ context: MCPProjectContext) -> Bool {
         guard case let .selected(project, _, _) = context,
-              let ids = try? metadata.liveReadConnectionIDs(in: project)
+              let ids = try? metadata.liveConnectionIDs(in: project)
         else { return false }
-        return !ids.isEmpty
+        return !ids.sql.isEmpty || !ids.partition.isEmpty
     }
 
     /// How current each connection's stored schema is, and why a stale one is,

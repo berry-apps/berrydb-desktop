@@ -618,8 +618,8 @@ struct BerryMCPServerFactoryTests {
 
     // MARK: DynamoDB queries
 
-    /// Project C with live reads on for `orders` and `billing`, as the
-    /// session's roots select it.
+    /// Project C with live reads on for `orders`, `billing` and the deleted
+    /// `removed`, as the session's roots select it.
     fileprivate func partitionStore() -> Locked<Store> {
         Locked(Store(projects: [projectA, projectB, projectC], liveReads: [orders.id, billing.id, removed]))
     }
@@ -709,6 +709,24 @@ struct BerryMCPServerFactoryTests {
         #expect(Self.text(response) == (try Self.reencoded(response)))
     }
 
+    /// A project whose only live connection is DynamoDB reports live reads
+    /// as available, in agreement with the tool it lists.
+    @Test func aDynamoDBOnlyProjectReportsLiveReadsAvailable() async throws {
+        let projectD = MCPProject(
+            id: UUID(uuidString: "00000000-0000-0000-0000-00000000000D")!, name: "D", isEnabled: true,
+            workspaceRoots: ["/work/d"], profiles: [MCPProfileAccess(profileID: orders.id, liveRead: true)]
+        )
+        let store = Locked(Store(projects: [projectA, projectD], liveReads: [orders.id]))
+        try await withSession(store: store, roots: .declared(["file:///work/d"])) { client in
+            let tools = try await client.listTools().tools.map(\.name)
+            #expect(tools.contains(MCPToolName.dynamodbQuery.rawValue))
+            #expect(!tools.contains(MCPToolName.executeReadQuery.rawValue))
+            let status = try await Self.status(client)
+            #expect(Self.projectID(status) == projectD.id.uuidString)
+            #expect(status["live_reads"] == "available")
+        }
+    }
+
     @Test func executeReadQueryOnADynamoDBConnectionPointsToTheDynamoDBTool() async throws {
         let connection = ScriptedPartitionConnection(pages: [])
         let live = PartitionHarness(connection: connection, dynamoID: orders.id)
@@ -761,6 +779,12 @@ struct BerryMCPServerFactoryTests {
             (["projection": .array((0 ..< 51).map { .string("secretName\($0)") })], "projection accepts at most 50 names", "secretName"),
             (["smuggled": "s3cr3t-value"], "Unexpected argument: smuggled", "s3cr3t-value"),
             (["cursor": .string(String(repeating: "Q", count: 4097))], "cursor must be at most 4096 characters", "QQQQ"),
+            // One past `Int64.max`, which the SDK decodes as a double.
+            (["partition_key": .double(9_223_372_036_854_775_808)], "partition_key must be a string or an integer", "9223372036854775808"),
+            (["sort_key": "eq-7731"], "sort_key must be an object", "7731"),
+            (["projection": ["name", 4242]], "projection must be an array of strings", "4242"),
+            (["partition_key": .data(mimeType: "text/plain", Data("k9z".utf8))], "partition_key cannot hold a data: URL string", "k9z"),
+            (["sort_key": ["op": "between"]], "sort_key.value is required", "between"),
         ]
         for (arguments, expected, value) in cases {
             do {
