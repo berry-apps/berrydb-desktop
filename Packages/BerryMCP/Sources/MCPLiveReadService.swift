@@ -41,7 +41,7 @@ public struct MCPLiveReadResult: Encodable, Equatable, Sendable {
 public enum MCPLiveReadError: Error, Equatable, Sendable, CustomStringConvertible {
     case unknownConnection, liveReadNotEnabled, noProject, unsupportedDatabase
     case policy(String), readOnlyUnavailable, connectionFailed, openTimedOut(seconds: Int)
-    case timedOut(seconds: Int), queryFailed(String), resultTooLarge, tooManyConcurrentReads(limit: Int), openStillPending
+    case timedOut(seconds: Int), queryFailed(String), resultTooLarge, tooManyConcurrentReads(limit: Int), openStillPending(retryAfterSeconds: Int)
 
     public var description: String {
         switch self {
@@ -58,8 +58,8 @@ public enum MCPLiveReadError: Error, Equatable, Sendable, CustomStringConvertibl
         case .resultTooLarge: "Result too large; narrow the request"
         case .tooManyConcurrentReads(let limit):
             "BerryDB is already running \(limit) live reads for this session; try again when one finishes."
-        case .openStillPending:
-            "An earlier connection to this database has not opened yet, so BerryDB did not open another; try again later."
+        case .openStillPending(let seconds):
+            "An earlier connection to this database has not opened yet, so BerryDB did not open another; try again in \(seconds) \(seconds == 1 ? "second" : "seconds")."
         }
     }
 }
@@ -126,31 +126,31 @@ public struct MCPLiveReadService: Sendable {
                             guard profile.driverID == Self.driverID(for: request.dialect) else {
                                 throw MCPLiveReadError.unsupportedDatabase
                             }
-                            try await slots.acquire(for: request.profileID, onQueued: { admission.queue() })
-                            guard admission.admit() else {
-                                await slots.release()
+                            let ticket = try await slots.acquire(for: request.profileID, onQueued: { admission.queue() })
+                            guard admission.admit(ticket) else {
+                                await slots.release(ticket)
                                 throw CancellationError()
                             }
                         }
                     ) { session in
-                        admission.opened()
+                        await admission.opened(with: slots)
                         do {
                             return try await Self.read(decision, request: request, session: session, opening: opening)
                         } catch {
                             throw ReadFailure(underlying: error)
                         }
                     }
-                    await admission.finish(with: slots, profileID: request.profileID)
+                    await admission.finish(with: slots)
                     return result
                 } catch {
-                    await admission.finish(with: slots, profileID: request.profileID)
+                    await admission.finish(with: slots)
                     throw error
                 }
             }
         } catch {
             // The caller stopped waiting, at the open budget or on a
             // cancellation, while its connection may still be opening.
-            await admission.abandonIfOpening(with: slots, profileID: request.profileID)
+            await admission.abandonIfOpening(with: slots)
             // The wait for a slot counts against the open budget, so a read
             // that waited and then ran out of it lost the budget to the cap,
             // not to the network; a retry that does not wait gets the open's
@@ -178,6 +178,7 @@ public struct MCPLiveReadService: Sendable {
         private struct Record {
             var state = State.idle
             var waited = false
+            var ticket: MCPLiveReadSlots.Ticket?
         }
         private let record = Mutex(Record())
 
@@ -194,16 +195,25 @@ public struct MCPLiveReadService: Sendable {
         /// False when the caller already left: a slot granted in the moment
         /// before the cancel reached the request is then handed back, since
         /// nobody would give it up if its open hung.
-        func admit() -> Bool {
+        func admit(_ ticket: MCPLiveReadSlots.Ticket) -> Bool {
             record.withLock {
                 guard $0.state != .left else { return false }
                 $0.state = .admitted
+                $0.ticket = ticket
                 return true
             }
         }
 
-        func opened() {
-            record.withLock { if $0.state == .admitted { $0.state = .opened } }
+        /// Records that the session opened and tells the slots, which stop
+        /// holding the connection back. A request already given up while
+        /// opening no longer holds the slot it would report for.
+        func opened(with slots: MCPLiveReadSlots) async {
+            let ticket = record.withLock { record -> MCPLiveReadSlots.Ticket? in
+                guard record.state == .admitted else { return nil }
+                record.state = .opened
+                return record.ticket
+            }
+            if let ticket { await slots.opened(ticket) }
         }
 
         /// Runs once the coordinator has closed the session or given up
@@ -211,27 +221,30 @@ public struct MCPLiveReadService: Sendable {
         /// gave up while its connection was opening. A settle waits for the
         /// abandon it answers, so a connection is never briefly free while
         /// an open of it is still in flight.
-        func finish(with slots: MCPLiveReadSlots, profileID: UUID) async {
+        func finish(with slots: MCPLiveReadSlots) async {
             enum Action { case release, settle, none }
-            let action = record.withLock { record -> Action in
+            let (action, ticket) = record.withLock { record -> (Action, MCPLiveReadSlots.Ticket?) in
                 switch record.state {
                 case .admitted, .opened:
                     record.state = .finished
-                    return .release
+                    return (.release, record.ticket)
                 case .abandoned:
                     record.state = .finished
-                    return .settle
+                    return (.settle, record.ticket)
                 case .abandoning:
                     record.state = .finishedWhileAbandoning
-                    return .none
-                case .idle, .waiting, .left, .finished, .finishedWhileAbandoning:
-                    if record.state != .finishedWhileAbandoning { record.state = .finished }
-                    return .none
+                    return (.none, nil)
+                case .finishedWhileAbandoning:
+                    return (.none, nil)
+                case .idle, .waiting, .left, .finished:
+                    record.state = .finished
+                    return (.none, nil)
                 }
             }
+            guard let ticket else { return }
             switch action {
-            case .release: await slots.release()
-            case .settle: await slots.settle(profileID)
+            case .release: await slots.release(ticket)
+            case .settle: await slots.settle(ticket.profileID)
             case .none: break
             }
         }
@@ -240,21 +253,21 @@ public struct MCPLiveReadService: Sendable {
         /// then gives its slot up and holds back further reads of its
         /// connection until `finish`; one already open keeps its slot until
         /// it is closed, since the statement's own cancel ends it.
-        func abandonIfOpening(with slots: MCPLiveReadSlots, profileID: UUID) async {
-            let opening = record.withLock { record -> Bool in
+        func abandonIfOpening(with slots: MCPLiveReadSlots) async {
+            let ticket = record.withLock { record -> MCPLiveReadSlots.Ticket? in
                 switch record.state {
                 case .idle, .waiting:
                     record.state = .left
-                    return false
+                    return nil
                 case .admitted:
                     record.state = .abandoning
-                    return true
+                    return record.ticket
                 default:
-                    return false
+                    return nil
                 }
             }
-            guard opening else { return }
-            await slots.abandon(profileID)
+            guard let ticket else { return }
+            await slots.abandon(ticket)
             let finished = record.withLock { record -> Bool in
                 guard record.state == .finishedWhileAbandoning else {
                     record.state = .abandoned
@@ -263,7 +276,7 @@ public struct MCPLiveReadService: Sendable {
                 record.state = .finished
                 return true
             }
-            if finished { await slots.settle(profileID) }
+            if finished { await slots.settle(ticket.profileID) }
         }
     }
 

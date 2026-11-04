@@ -523,8 +523,12 @@ struct MCPLiveReadConcurrencyTests {
         try await eventually { await slots.inUse == 0 }
 
         let error = await hung.failure("SELECT 1")
-        #expect(error == .openStillPending)
-        #expect(error?.description == "An earlier connection to this database has not opened yet, so BerryDB did not open another; try again later.")
+        guard case .openStillPending(let seconds)? = error else {
+            Issue.record("expected the held-back refusal, got \(String(describing: error))")
+            return
+        }
+        #expect((1...120).contains(seconds))
+        #expect(error?.description == "An earlier connection to this database has not opened yet, so BerryDB did not open another; try again in \(seconds) seconds.")
         #expect(await hung.tracker.factoryCalls == 1)
 
         await gate.open()
@@ -557,6 +561,35 @@ struct MCPLiveReadConcurrencyTests {
         try await finish([second], through: gate)
         let slots = harness.slots
         try await eventually { await slots.inUse == 0 }
+    }
+
+    /// Two minutes after an open was given up, one read may open the
+    /// connection again; once it opens, reads of that connection go on.
+    @Test func aConnectionThatOpensAgainIsNoLongerHeldBack() async throws {
+        let gate = AsyncGate()
+        let opens = OpenCounter()
+        let harness = Harness(open: { if await opens.next() == 1 { await gate.wait() } })
+        let clock = ServiceClock()
+        let service = MCPLiveReadService(
+            coordinator: harness.coordinator, openBudget: .seconds(3),
+            slots: MCPLiveReadSlots(capacity: 4, now: { clock.now })
+        )
+        let request = harness.request("SELECT 1")
+        let first = await refusal(of: request, by: service)
+        #expect(first == .openTimedOut(seconds: 3))
+        guard case .openStillPending? = await refusal(of: request, by: service) else {
+            Issue.record("expected the held-back refusal")
+            return
+        }
+
+        clock.advance(by: .seconds(120))
+        _ = try await withDeadline(.seconds(60)) { try await service.run(request) }
+        _ = try await withDeadline(.seconds(60)) { try await service.run(request) }
+        #expect(await service.slots.pendingOpens(of: harness.profileID) == 1)
+
+        await gate.open()
+        let tracker = harness.tracker
+        try await withDeadline(.seconds(60)) { await tracker.waitForCloses(3) }
     }
 
     /// Opens hanging on one connection must not hold every slot: reads of
@@ -700,6 +733,23 @@ private func refusal(_ request: MCPLiveReadRequest, by service: MCPLiveReadServi
             return error as? MCPLiveReadError
         }
     }
+}
+
+/// A clock a test moves by hand.
+private final class ServiceClock: Sendable {
+    private let instant = Mutex(ContinuousClock.now)
+
+    var now: ContinuousClock.Instant { instant.withLock { $0 } }
+
+    func advance(by duration: Duration) {
+        instant.withLock { $0 += duration }
+    }
+}
+
+/// The refusal `service` gave `request`, or nil when it returned or threw
+/// anything else; bounded so a regression fails instead of hanging.
+private func refusal(of request: MCPLiveReadRequest, by service: MCPLiveReadService) async -> MCPLiveReadError? {
+    try? await refusal(request, by: service)
 }
 
 /// Numbers calls in arrival order, from any task.

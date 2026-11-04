@@ -779,15 +779,15 @@ One helper process serves one agent session and runs at most 4 live reads
 at once. Each live read opens its own connection, and its own SSH tunnel
 where the profile has one, so the cap bounds the reads in progress, the
 connections and tunnels they hold, and with them the rows the helper keeps
-in memory: four covers an agent's parallel tool calls. A further read waits for a slot, in arrival
-order, once the read policy, the project and the connection's driver have
-accepted it; a statement any of them refuses fails at once and never
-waits. The wait counts against the 15 s open budget, and a read that waited
-and then ran out of it, still waiting or while opening, fails with
-`BerryDB is already running 4 live reads for this session; try again when
-one finishes.` rather than with the open's own timeout, since the wait
-took part of that budget. A read cancelled while it waits leaves the queue at once
-without taking a slot.
+in memory: four covers an agent's parallel tool calls. A further read
+waits for a slot, in arrival order, once the read policy, the project and
+the connection's driver have accepted it; a statement any of them refuses
+fails at once and never waits. The wait counts against the 15 s open
+budget, and a read that waited and then ran out of it, still waiting or
+while opening, fails with `BerryDB is already running 4 live reads for
+this session; try again when one finishes.` rather than with the open's
+own timeout, since the wait took part of that budget. A read cancelled
+while it waits leaves the queue at once without taking a slot.
 
 A read whose connection is open keeps its slot until the connection is
 closed, which can be after its caller already had a timeout or a
@@ -796,14 +796,24 @@ is still opening when its caller stops waiting, at the open budget or on a
 cancellation, gives its slot up then: an open that the driver or the SSH
 channel does not abandon when cancelled can hang for as long as the
 network lets it, and four such opens would otherwise hold every slot and
-stop reads of every other connection. Until that open returns, every
-read of the same connection, already waiting for a slot or new, fails at
-once with `An earlier connection to this database has not opened yet, so
-BerryDB did not open another; try again later.` and opens nothing, so
-retries against a server that never answers do not pile up connection
-attempts. Such opens are no longer counted by the cap: at most as many as
-the slots that connection held when they were given up stay in flight for
-it, until each returns.
+stop reads of every other connection. Every read of the same connection,
+already waiting for a slot or new, then fails at once with `An earlier
+connection to this database has not opened yet, so BerryDB did not open
+another; try again in N seconds.` and opens nothing, so retries against a
+server that never answers do not pile up connection attempts.
+
+The connection is held back until that open returns or for 2 minutes,
+whichever comes first, because an open need not return at all: a
+PostgreSQL connection opened over an SSH tunnel to a listener that accepts
+the connection and never answers had not returned 40 seconds after it was
+cancelled. After the 2 minutes one read may try the connection again, and
+other reads of it are refused until that read opens, hangs or ends. Once a
+read of the connection opens, it is no longer held back; a retry that hangs
+is given up in turn and holds the connection back for another 2 minutes,
+and one that ends without opening, cancelled or failed, lets the next read
+try at once. Opens given up are not counted by the cap, but a connection
+with 4 of them still in flight is refused whatever its other reads did, so
+no connection leaves more than 4 behind.
 
 Known limitation: a cell is read whole and cut to 64 KiB only when the
 result is built, so one large value, such as a multi-megabyte `text`,
