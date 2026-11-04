@@ -49,3 +49,15 @@ private final class ResumeOnce<T: Sendable>: Sendable {
         continuation?.resume(with: result)
     }
 }
+
+/// Returns once `condition` holds, polling it, or throws `DeadlineExceeded`
+/// after 60 s, so a regression fails the test instead of hanging it. The
+/// limit is checked in the loop itself, so a failed wait stops polling
+/// rather than running on for the rest of the test process.
+func eventually(_ condition: @escaping @Sendable () async -> Bool) async throws {
+    let deadline = ContinuousClock.now + .seconds(60)
+    while await !condition() {
+        guard ContinuousClock.now < deadline else { throw DeadlineExceeded() }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+}

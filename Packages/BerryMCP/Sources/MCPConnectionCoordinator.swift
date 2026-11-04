@@ -310,12 +310,18 @@ public actor MCPConnectionCoordinator {
 
     /// Runs `operation` on a fresh read-only session for a profile with live
     /// reads enabled, and closes that session before returning or throwing.
+    /// `beforeOpening` runs with the resolved profile before anything is
+    /// opened; an error it throws ends the request with nothing opened. It
+    /// runs in the request's own task, so `cancel(requestID:)` and
+    /// `closeAll()` interrupt a wait in it, as they do an open.
     public func withSQLSession<T: Sendable>(
         requestID: String, profileID: UUID,
+        beforeOpening: (@Sendable (MCPConnectionProfile) async throws -> Void)? = nil,
         operation: @escaping @Sendable (MCPSQLSession) async throws -> T
     ) async throws -> T {
         try await run(requestID: requestID) { [resolver, sqlFactory] in
             let profile = try await resolver.resolve(profileID: profileID, access: .liveRead)
+            try await beforeOpening?(profile)
             try Task.checkCancellation()
             let session = try await sqlFactory(profile)
             return (session.lifecycle, { try await operation(session) })
