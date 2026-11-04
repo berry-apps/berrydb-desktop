@@ -434,15 +434,32 @@ struct MCPPartitionQueryServiceTests {
         let gate = SQLGate()
         let sql = HeldSQLConnection(gate: gate)
         let connection = ScriptedPartitionConnection(schema: orders, pages: [.success(page([]))])
-        let harness = Harness(connection: connection, sqlConnection: sql)
+        // The SQL reads holding the slots get a 60 s open budget, far past
+        // the DynamoDB request's 3 s, so under load none of them can give
+        // its slot up first: the request can only end refused for the cap.
+        let harness = Harness(connection: connection, openBudget: .seconds(60), sqlConnection: sql)
         let liveReads = harness.liveReads
+        let impatient = MCPPartitionQueryService(
+            coordinator: liveReads.coordinator, openBudget: .seconds(3), slots: liveReads.slots
+        )
         let sqlRequest = MCPLiveReadRequest(profileID: harness.sqlProfileID, dialect: .sqlite, sql: "SELECT n FROM numbers")
         let held = (0..<4).map { _ in Task { try await liveReads.run(sqlRequest) } }
+        // Opening the gate on every exit, a failed expectation included,
+        // lets the held reads finish so the test cannot hang on them.
+        defer { Task { await gate.open() } }
         try await eventually { sql.statements == 4 }
         let slots = liveReads.slots
         #expect(await slots.inUse == 4)
 
-        let error = await harness.failure(harness.request(partitionKey: .string("c1")))
+        let request = harness.request(partitionKey: .string("c1"))
+        let error: MCPPartitionQueryError? = try await withDeadline(.seconds(60)) {
+            do {
+                _ = try await impatient.run(request)
+                return nil
+            } catch {
+                return error as? MCPPartitionQueryError
+            }
+        }
         #expect(error == .tooManyConcurrentReads(limit: 4))
         #expect(error?.description == "BerryDB is already running 4 live reads for this session; try again when one finishes.")
         #expect(await harness.tracker.factoryCalls == 0)
