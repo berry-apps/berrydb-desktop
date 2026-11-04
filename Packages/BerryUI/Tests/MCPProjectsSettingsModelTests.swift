@@ -572,6 +572,32 @@ struct MCPProjectsSettingsModelTests {
         #expect(!model.showsRedactions(for: orders.id, in: draft))
     }
 
+    /// A row that verifies again by the time its editor opens, here restored
+    /// in the store file, is no longer marked: a mark that outlived it would
+    /// show a notice for settings that check out.
+    @Test func aConnectionThatVerifiesAgainWhenItsDraftOpensIsNoLongerMarked() throws {
+        let (store, orders, _) = try makeStore()
+        let box = KeyBox()
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: true, redactedColumns: ["email", "ssn"]),
+        ])
+        try store.executeForTesting(
+            #"UPDATE mcp_project_profile SET redactedColumnsJSON = '["email"]' WHERE profileID = ?"#,
+            arguments: [orders.id]
+        )
+        let model = makeModel(store, box)
+        #expect(model.unverifiedProfileIDs == [seeded.id: [orders.id]])
+        try store.executeForTesting(
+            #"UPDATE mcp_project_profile SET redactedColumnsJSON = '["email","ssn"]' WHERE profileID = ?"#,
+            arguments: [orders.id]
+        )
+
+        let draft = try #require(model.draft(for: seeded.id))
+
+        #expect(draft.access[orders.id]?.liveRead == true)
+        #expect(model.unverifiedProfileIDs.isEmpty)
+    }
+
     /// The marks come from the last reload, while a draft reads the store
     /// when it opens. A connection edited in the main window while Settings
     /// stays open, here moved to another host, no longer verifies its row:

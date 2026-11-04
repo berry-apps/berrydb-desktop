@@ -429,10 +429,11 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// own row verifies.
     ///
     /// It also refreshes the project's entry in `unverifiedProfileIDs` with
-    /// the same key: a connection edited in the main window since the last
-    /// `reload()` no longer verifies its row, and the draft turns its live
-    /// reads off, so its mark is read with the draft rather than left as of
-    /// that reload.
+    /// the same key: a connection whose endpoint (host, port, user,
+    /// database, TLS or SSH settings) was edited in the main window since
+    /// the last `reload()` no longer verifies its row, and the draft turns
+    /// its live reads off, so its mark is read with the draft rather than
+    /// left as of that reload.
     public func draft(for id: UUID) -> Draft? {
         do {
             let key = keyStore.load()
