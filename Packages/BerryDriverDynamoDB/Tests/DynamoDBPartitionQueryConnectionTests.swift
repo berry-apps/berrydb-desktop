@@ -199,4 +199,15 @@ struct DynamoDBPartitionQueryConnectionTests {
         #expect(DynamoDBStubURLProtocol.requests(for: host).map(Self.target)
             == ["DynamoDB_20120810.ListTables", "DynamoDB_20120810.DescribeTable"])
     }
+
+    /// The partition query is the only new wire call, so its code must not name any target of its own;
+    /// the client's `query(_:)` is the single sender of `Query`.
+    @Test func partitionQueryCodeSendsOnlyTheQueryTarget() throws {
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Sources")
+        let queryCode = try String(contentsOf: sources.appendingPathComponent("DynamoDBPartitionQuery.swift"), encoding: .utf8)
+        let client = try String(contentsOf: sources.appendingPathComponent("DynamoDBHTTPClient.swift"), encoding: .utf8)
+        #expect(queryCode.components(separatedBy: "DynamoDB_20120810.").count == 1)
+        #expect(client.components(separatedBy: "DynamoDB_20120810.Query").count == 2)
+    }
 }
