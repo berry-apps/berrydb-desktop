@@ -50,6 +50,7 @@ enum DynamoDBPartitionQueryRequest {
             case .lessThanOrEqual(let value): operands = [value]; condition += " AND #k1 <= :v1"
             case .greaterThan(let value): operands = [value]; condition += " AND #k1 > :v1"
             case .greaterThanOrEqual(let value): operands = [value]; condition += " AND #k1 >= :v1"
+            // Reversed bounds are sent as given; DynamoDB rejects them itself.
             case .between(let low, let high): operands = [low, high]; condition += " AND #k1 BETWEEN :v1 AND :v2"
             case .beginsWith(let prefix): operands = [prefix]; condition += " AND begins_with(#k1, :v1)"
             }
@@ -106,36 +107,50 @@ enum DynamoDBPartitionQueryRequest {
                 $0[attribute] = type
             }
         }
-        func keys(_ entries: Any?) -> (partition: DynamoDBKeyAttribute?, sort: DynamoDBKeyAttribute?) {
+        // DescribeTable lists every key attribute in AttributeDefinitions, so an
+        // unresolved one means a malformed response. Failing here keeps the
+        // caller from being told an index or sort key does not exist when it does.
+        // https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_DescribeTable.html
+        func keys(_ entries: Any?, owner: String, noHash: String) throws -> (partition: DynamoDBKeyAttribute, sort: DynamoDBKeyAttribute?) {
             var partition: DynamoDBKeyAttribute?
             var sort: DynamoDBKeyAttribute?
             for entry in entries as? [[String: Any]] ?? [] {
-                guard let attribute = entry["AttributeName"] as? String, let type = definitions[attribute] else { continue }
-                switch entry["KeyType"] as? String {
+                guard let attribute = entry["AttributeName"] as? String else { continue }
+                let role = entry["KeyType"] as? String
+                guard let type = definitions[attribute] else {
+                    if role == "HASH" { throw DriverError.queryFailed(message: noHash, code: nil) }
+                    throw DriverError.queryFailed(
+                        message: "DescribeTable returned no type for key attribute \(attribute) of \(owner)", code: nil
+                    )
+                }
+                switch role {
                 case "HASH": partition = DynamoDBKeyAttribute(name: attribute, type: type)
                 case "RANGE": sort = DynamoDBKeyAttribute(name: attribute, type: type)
                 default: break
                 }
             }
+            guard let partition else { throw DriverError.queryFailed(message: noHash, code: nil) }
             return (partition, sort)
         }
 
-        guard let partitionKey = keys(table["KeySchema"]).partition else {
-            throw DriverError.queryFailed(message: "DescribeTable returned no HASH key for \(name)", code: nil)
-        }
+        let tableKeys = try keys(
+            table["KeySchema"], owner: name, noHash: "DescribeTable returned no HASH key for \(name)"
+        )
         var indexes: [DynamoDBIndexKeySchema] = []
         for list in ["GlobalSecondaryIndexes", "LocalSecondaryIndexes"] {
             for index in table[list] as? [[String: Any]] ?? [] {
-                guard let indexName = index["IndexName"] as? String, let partition = keys(index["KeySchema"]).partition else {
-                    continue
-                }
+                guard let indexName = index["IndexName"] as? String else { continue }
+                let indexKeys = try keys(
+                    index["KeySchema"], owner: "index \(indexName) of \(name)",
+                    noHash: "DescribeTable returned no HASH key for index \(indexName) of \(name)"
+                )
                 indexes.append(DynamoDBIndexKeySchema(
-                    name: indexName, partitionKey: partition, sortKey: keys(index["KeySchema"]).sort
+                    name: indexName, partitionKey: indexKeys.partition, sortKey: indexKeys.sort
                 ))
             }
         }
         return DynamoDBKeySchema(
-            table: name, partitionKey: partitionKey, sortKey: keys(table["KeySchema"]).sort, indexes: indexes
+            table: name, partitionKey: tableKeys.partition, sortKey: tableKeys.sort, indexes: indexes
         )
     }
 

@@ -120,4 +120,103 @@ struct DynamoDBPartitionQueryTests {
         #expect(page.consumedCapacityUnits == 0.5)
         #expect(page.scannedCount == 1)
     }
+
+    @Test func localSecondaryIndexesAreParsedWithTheirOwnSortKey() throws {
+        var described = Self.describedOrders
+        var definitions = described["AttributeDefinitions"] as? [[String: String]] ?? []
+        definitions.append(["AttributeName": "total", "AttributeType": "N"])
+        described["AttributeDefinitions"] = definitions
+        described["LocalSecondaryIndexes"] = [
+            [
+                "IndexName": "by_total",
+                "KeySchema": [
+                    ["AttributeName": "pk", "KeyType": "HASH"],
+                    ["AttributeName": "total", "KeyType": "RANGE"],
+                ],
+            ]
+        ]
+        let schema = try DynamoDBPartitionQueryRequest.keySchema(describedTable: described, name: "orders")
+        #expect(schema.index(named: "by_total")
+            == .init(name: "by_total", partitionKey: .init(name: "pk", type: .string), sortKey: .init(name: "total", type: .number)))
+        #expect(schema.indexes.count == 2)
+    }
+
+    private func described(
+        keySchema: [[String: String]]? = nil, definitions: [[String: String]]? = nil,
+        indexKeySchema: [[String: String]]? = nil
+    ) -> [String: Any] {
+        var table = Self.describedOrders
+        if let keySchema { table["KeySchema"] = keySchema }
+        if let definitions { table["AttributeDefinitions"] = definitions }
+        if let indexKeySchema {
+            table["GlobalSecondaryIndexes"] = [["IndexName": "by_status", "KeySchema": indexKeySchema]]
+        }
+        return table
+    }
+
+    private func queryFailedMessage(_ table: [String: Any]) -> String? {
+        do { _ = try DynamoDBPartitionQueryRequest.keySchema(describedTable: table, name: "orders") } catch DriverError.queryFailed(let message, _) {
+            return message
+        } catch { return "other: \(error)" }
+        return nil
+    }
+
+    @Test func aMalformedDescribeTableIsAnErrorNotAMissingKeyOrIndex() {
+        let sk = ["AttributeName": "sk", "KeyType": "RANGE"]
+        let defs = [["AttributeName": "pk", "AttributeType": "S"], ["AttributeName": "sk", "AttributeType": "S"],
+                    ["AttributeName": "status", "AttributeType": "S"]]
+        #expect(queryFailedMessage(described(keySchema: [sk])) == "DescribeTable returned no HASH key for orders")
+        #expect(queryFailedMessage(described(definitions: [defs[1], defs[2]])) == "DescribeTable returned no HASH key for orders")
+        #expect(queryFailedMessage(described(definitions: [defs[0], defs[2]]))
+            == "DescribeTable returned no type for key attribute sk of orders")
+        #expect(queryFailedMessage(described(indexKeySchema: [sk]))
+            == "DescribeTable returned no HASH key for index by_status of orders")
+        #expect(queryFailedMessage(described(definitions: [defs[0], defs[1]]))
+            == "DescribeTable returned no HASH key for index by_status of orders")
+    }
+
+    @Test func aSortKeyOfTheWrongTypeIsRefused() {
+        let q = query(sort: .greaterThan(.number("5")))
+        do {
+            _ = try DynamoDBPartitionQueryRequest.body(for: q, schema: schema)
+            Issue.record("expected a refusal")
+        } catch DriverError.unsupported(let text) {
+            #expect(text == "Key attribute sk is S, the value given is N")
+        } catch { Issue.record("unexpected \(error)") }
+    }
+
+    @Test(arguments: [
+        ("=", "#k1 = :v1"), ("<", "#k1 < :v1"), ("<=", "#k1 <= :v1"), (">", "#k1 > :v1"), (">=", "#k1 >= :v1"),
+        ("between", "#k1 BETWEEN :v1 AND :v2"), ("begins_with", "begins_with(#k1, :v1)"),
+    ])
+    func everySortOperatorBindsItsOperandsThroughPlaceholders(operatorName: String, clause: String) throws {
+        let a = DynamoDBKeyValue.string("a"), b = DynamoDBKeyValue.string("b")
+        let condition: DynamoDBSortKeyCondition
+        switch operatorName {
+        case "=": condition = .equal(a)
+        case "<": condition = .lessThan(a)
+        case "<=": condition = .lessThanOrEqual(a)
+        case ">": condition = .greaterThan(a)
+        case ">=": condition = .greaterThanOrEqual(a)
+        case "between": condition = .between(a, b)
+        default: condition = .beginsWith(a)
+        }
+        let body = try DynamoDBPartitionQueryRequest.body(for: query(sort: condition), schema: schema).body
+        #expect(body["KeyConditionExpression"] as? String == "#k0 = :v0 AND \(clause)")
+        let values = body["ExpressionAttributeValues"] as? [String: [String: String]]
+        let expected: [String: [String: String]] = operatorName == "between"
+            ? [":v0": ["S": "a"], ":v1": ["S": "a"], ":v2": ["S": "b"]]
+            : [":v0": ["S": "a"], ":v1": ["S": "a"]]
+        #expect(values == expected)
+    }
+
+    @Test func numberAndBinaryStartKeyValuesAreSentAsAttributeValues() throws {
+        let query = DynamoDBPartitionQuery(
+            table: "orders", indexName: nil, partitionKey: .string("a"), sortKey: nil, projection: nil, limit: 10,
+            exclusiveStartKey: ["n": .number("12.50"), "b": .binary(Data([1, 2, 3]))]
+        )
+        let body = try DynamoDBPartitionQueryRequest.body(for: query, schema: schema).body
+        #expect(body["ExclusiveStartKey"] as? [String: [String: String]]
+            == ["n": ["N": "12.50"], "b": ["B": Data([1, 2, 3]).base64EncodedString()]])
+    }
 }
