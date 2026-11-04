@@ -783,7 +783,8 @@ table's key schema (or the index's) before the `Query` is sent, so a key
 of the wrong type is refused with the attribute's name and type and never
 reaches DynamoDB. `next_cursor` is sealed with a key held only in the
 helper process's memory and bound to the connection, the table, the index
-and the query's key condition, projection and limit: a cursor from another
+and the query's key condition and projection (not its `limit`, which may
+change between pages), and to this helper process: a cursor from another
 helper process or another query is refused with `The cursor does not
 belong to this query or came from another session; start again without
 it.`
