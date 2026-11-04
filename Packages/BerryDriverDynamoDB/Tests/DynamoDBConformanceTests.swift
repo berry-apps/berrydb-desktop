@@ -24,60 +24,19 @@ struct DynamoDBConformanceTests {
         try await DynamoDBConnection(config: makeConfig())
     }
 
-    /// Table creation is out of scope for the driver itself — same posture
-    /// as Qdrant's "BerryDB only connects to a collection the user already
- /// has" — so conformance tests create/drop
-    /// tables directly via the raw DynamoDB API, not through the driver.
-    private func createTable(
-        name: String, partitionKey: String, sortKey: String? = nil
-    ) async throws {
-        var keySchema: [[String: Any]] = [["AttributeName": partitionKey, "KeyType": "HASH"]]
-        var attributeDefs: [[String: Any]] = [["AttributeName": partitionKey, "AttributeType": "S"]]
-        if let sortKey {
-            keySchema.append(["AttributeName": sortKey, "KeyType": "RANGE"])
-            attributeDefs.append(["AttributeName": sortKey, "AttributeType": "S"])
-        }
-        let body: [String: Any] = [
-            "TableName": name, "KeySchema": keySchema, "AttributeDefinitions": attributeDefs,
-            "BillingMode": "PAY_PER_REQUEST",
-        ]
-        _ = try await rawCall(target: "CreateTable", body: body)
-        // dynamodb-local creates synchronously, but poll briefly for ACTIVE to be safe.
-        for _ in 0..<20 {
-            let describe = try await rawCall(target: "DescribeTable", body: ["TableName": name])
-            let status = ((describe["Table"] as? [String: Any])?["TableStatus"] as? String) ?? ""
-            if status == "ACTIVE" { return }
-            try await Task.sleep(for: .milliseconds(100))
-        }
+    private var fixtures: DynamoDBLiveFixtures { DynamoDBLiveFixtures(server: server) }
+
+    private func createTable(name: String, partitionKey: String, sortKey: String? = nil) async throws {
+        try await fixtures.createTable(name: name, partitionKey: partitionKey, sortKey: sortKey)
     }
 
     private func deleteTable(name: String) async {
-        _ = try? await rawCall(target: "DeleteTable", body: ["TableName": name])
+        await fixtures.deleteTable(name: name)
     }
 
-    /// Minimal hand-signed request — deliberately reuses `SigV4Signer` (the
-    /// unit under test elsewhere) rather than a second signing path, since
-    /// this helper exists only to set up/tear down fixtures, not to
-    /// re-verify signing.
     @discardableResult
     private func rawCall(target: String, body: [String: Any]) async throws -> [String: Any] {
-        var request = URLRequest(url: URL(string: "http://\(server.host):\(server.port)/")!)
-        request.httpMethod = "POST"
-        request.setValue("application/x-amz-json-1.0", forHTTPHeaderField: "Content-Type")
-        request.setValue("DynamoDB_20120810.\(target)", forHTTPHeaderField: "X-Amz-Target")
-        let bodyData = try JSONSerialization.data(withJSONObject: body)
-        request.httpBody = bodyData
-        SigV4Signer.sign(
-            &request, body: bodyData,
-            credentials: .init(accessKeyID: "fakeAccessKeyId", secretAccessKey: "fakeSecretAccessKey"),
-            region: "us-east-1", service: "dynamodb"
-        )
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            let text = String(data: data, encoding: .utf8) ?? ""
-            throw ConformanceFailure("\(target) failed: \(text)")
-        }
-        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        try await fixtures.rawCall(target: target, body: body)
     }
 
     private func drain(
