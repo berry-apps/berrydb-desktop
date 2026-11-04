@@ -804,6 +804,12 @@
 "Another project already uses this name. Agent entries can select a project by its name." = "Another project already uses this name. Agent entries can select a project by its name.";
 "Another project already uses the workspace folder %@. Agents working there would get neither project." = "Another project already uses the workspace folder %@. Agents working there would get neither project.";
 "Live reads are not available for %@." = "Live reads are not available for %@.";
+"Redacted attributes" = "Redacted attributes";
+"Values of these top-level attributes are removed before an agent sees them. Nested values are not inspected; use IAM to keep sensitive attributes out of reach." = "Values of these top-level attributes are removed before an agent sees them. Nested values are not inspected; use IAM to keep sensitive attributes out of reach.";
+"BerryDB cannot check this connection’s IAM permissions. Use an access key limited to dynamodb:Query and dynamodb:DescribeTable on the tables the agent may read." = "BerryDB cannot check this connection’s IAM permissions. Use an access key limited to dynamodb:Query and dynamodb:DescribeTable on the tables the agent may read.";
+"Live reads on a production DynamoDB table consume its read capacity and can throttle your application. Point this connection at a replica or an on-demand table where you can." = "Live reads on a production DynamoDB table consume its read capacity and can throttle your application. Point this connection at a replica or an on-demand table where you can.";
+"I reviewed the redacted attributes and accept reads on this production database" = "I reviewed the redacted attributes and accept reads on this production database";
+"Live reads are not available for %@ through an SSH tunnel." = "Live reads are not available for %@ through an SSH tunnel.";
 "Live reads on %@ need your confirmation that you reviewed its redacted columns and accept reads on this production database." = "Live reads on %@ need your confirmation that you reviewed its redacted columns and accept reads on this production database.";
 "Live reads on %@ need your confirmation to use this connection anyway, since its privileges were not found read-only." = "Live reads on %@ need your confirmation to use this connection anyway, since its privileges were not found read-only.";
 "Live reads on %@ need a finished privilege check. Save again once it is done." = "Live reads on %@ need a finished privilege check. Save again once it is done.";
