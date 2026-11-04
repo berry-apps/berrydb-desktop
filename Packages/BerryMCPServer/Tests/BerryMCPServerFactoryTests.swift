@@ -855,7 +855,7 @@ private struct PartitionHarness {
                     cancel: { connection.cancelCurrentQuery() },
                     closeConnection: { await tracker.closed() }
                 )
-                return MCPPartitionSession(connection: connection, lifecycle: lifecycle, profile: profile)
+                return MCPPartitionSession(reader: MCPPartitionReader(connection), lifecycle: lifecycle, profile: profile)
             }
         )
         let service = MCPLiveReadService(coordinator: coordinator)

@@ -744,8 +744,13 @@ values against the table's key schema) and `Query`, after the `ListTables`
 request every DynamoDB connection sends when it opens to check that the
 endpoint and credentials work. `Scan`, PartiQL (`ExecuteStatement`,
 `BatchExecuteStatement`) and every write API are never issued from MCP
-code; a test scans the helper's sources for those targets, and for an
-import of the DynamoDB driver module, and fails when it finds one. A
+code. The partition session holds an `MCPPartitionReader`, two closures
+for `DescribeTable` and `Query`, never the connection, so code given a
+session cannot call the driver's `execute`, which sends PartiQL; only the
+partition factory and the session's cancel and close hold the
+connection. A test scans the sources of the two MCP packages and of the
+helper executable for the targets above and for an import of the DynamoDB
+driver module, and fails when it finds one. A
 `Query` carries a key condition only: no filter expression, and no
 `ConsistentRead`, so reads are eventually consistent
 ([Read consistency](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadConsistency.html)).

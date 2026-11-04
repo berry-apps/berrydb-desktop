@@ -235,9 +235,9 @@ public struct MCPPartitionQueryService: Sendable {
         // without it neither is known, so nothing runs.
         guard let profile = session.profile else { throw SessionFault.missingProfile }
         let limits = limitsFor(profile.isProduction)
-        // `DescribeTable` is the first request a DynamoDB connection sends,
-        // so it counts as part of opening.
-        let schema = try await session.connection.keySchema(of: request.table)
+        // `DescribeTable` is the first request this session sends after
+        // connecting, so it counts as part of opening.
+        let schema = try await session.reader.keySchema(request.table)
         opening.opened(statementLimit: limits.maximumElapsed)
 
         var index: DynamoDBIndexKeySchema?
@@ -267,7 +267,7 @@ public struct MCPPartitionQueryService: Sendable {
             exclusiveStartKey: startKey
         )
 
-        let connection = session.connection
+        let reader = session.reader
         let clock = ContinuousClock()
         let started = clock.now
         let page: DynamoDBQueryPage
@@ -275,7 +275,7 @@ public struct MCPPartitionQueryService: Sendable {
             // The extra second lets the connection's own request timeout,
             // when it has one, end the call first.
             page = try await MCPRequestDeadline.run(limits.maximumElapsed + .seconds(1)) {
-                try await connection.queryPartition(query)
+                try await reader.queryPartition(query)
             }
         } catch MCPLiveReadError.timedOut {
             throw MCPPartitionQueryError.timedOut(seconds: MCPRequestDeadline.wholeSeconds(limits.maximumElapsed))

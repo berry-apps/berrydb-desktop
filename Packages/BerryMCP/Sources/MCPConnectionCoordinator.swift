@@ -80,7 +80,7 @@ public struct MCPConnectionFactories: Sendable {
                 try? await lifecycle.close()
                 throw MCPConnectionCoordinatorError.partitionQueryUnavailable(profile.driverID)
             }
-            return MCPPartitionSession(connection: partitions, lifecycle: lifecycle, profile: profile)
+            return MCPPartitionSession(reader: MCPPartitionReader(partitions), lifecycle: lifecycle, profile: profile)
         }
         sql = { profile in
             guard let driver = registries.sql(profile.driverID) else {
@@ -243,16 +243,48 @@ public struct MCPSQLSession: Sendable {
     }
 }
 
-/// A DynamoDB connection lent to one request's operation, read through
-/// `PartitionQuerying` only. The coordinator owns its lifecycle; the
-/// operation must not close it.
+/// The two DynamoDB reads a partition session can make: `DescribeTable`, for
+/// a table's key schema, and `Query` on one partition.
+///
+/// It holds closures instead of the connection because `PartitionQuerying`
+/// refines `DriverConnection`: a session holding the connection could call
+/// `execute(_:)`, which the DynamoDB driver sends as PartiQL through
+/// `ExecuteStatement`, and PartiQL for DynamoDB includes `INSERT`, `UPDATE`
+/// and `DELETE`
+/// (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ql-reference.html).
+/// Only the lifecycle's cancel and close keep the connection itself.
+public struct MCPPartitionReader: Sendable {
+    public let keySchema: @Sendable (String) async throws -> DynamoDBKeySchema
+    public let queryPartition: @Sendable (DynamoDBPartitionQuery) async throws -> DynamoDBQueryPage
+
+    public init(
+        keySchema: @escaping @Sendable (String) async throws -> DynamoDBKeySchema,
+        queryPartition: @escaping @Sendable (DynamoDBPartitionQuery) async throws -> DynamoDBQueryPage
+    ) {
+        self.keySchema = keySchema
+        self.queryPartition = queryPartition
+    }
+
+    /// Reads through `connection`'s `keySchema(of:)` and `queryPartition(_:)`
+    /// and nothing else.
+    public init(_ connection: any PartitionQuerying) {
+        self.init(
+            keySchema: { try await connection.keySchema(of: $0) },
+            queryPartition: { try await connection.queryPartition($0) }
+        )
+    }
+}
+
+/// A DynamoDB connection lent to one request's operation, reachable only
+/// through its `reader`. The coordinator owns its lifecycle; the operation
+/// must not close it.
 public struct MCPPartitionSession: Sendable {
-    public let connection: any PartitionQuerying
+    public let reader: MCPPartitionReader
     public let lifecycle: MCPConnectionLifecycle
     public let profile: MCPConnectionProfile?
 
-    public init(connection: any PartitionQuerying, lifecycle: MCPConnectionLifecycle, profile: MCPConnectionProfile? = nil) {
-        self.connection = connection
+    public init(reader: MCPPartitionReader, lifecycle: MCPConnectionLifecycle, profile: MCPConnectionProfile? = nil) {
+        self.reader = reader
         self.lifecycle = lifecycle
         self.profile = profile
     }

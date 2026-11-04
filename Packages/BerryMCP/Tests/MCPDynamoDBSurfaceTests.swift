@@ -1,8 +1,10 @@
 import Foundation
 import Testing
 
-/// The helper's read-only promise rests on never naming a DynamoDB write, scan or PartiQL target,
-/// and never linking the driver module directly; it reaches DynamoDB through `PartitionQuerying` only.
+/// The helper's read-only promise rests on never naming a DynamoDB write, scan or PartiQL target
+/// and never importing the driver module, in the two MCP packages and the helper executable. The
+/// partition session's `MCPPartitionReader` exposes only `DescribeTable` and `Query`; this scan
+/// guards the source text around it, not the types.
 @Suite("MCP — DynamoDB surface")
 struct MCPDynamoDBSurfaceTests {
     private static let repoRoot = URL(fileURLWithPath: #filePath)
@@ -22,7 +24,7 @@ struct MCPDynamoDBSurfaceTests {
             "DynamoDB_20120810.BatchWriteItem", "DynamoDB_20120810.TransactWriteItems",
             "import BerryDriverDynamoDB",
         ]
-        for directory in ["Packages/BerryMCP/Sources", "Packages/BerryMCPServer/Sources"] {
+        for directory in ["Packages/BerryMCP/Sources", "Packages/BerryMCPServer/Sources", "MCP/Sources"] {
             let files = Self.swiftFiles(under: directory)
             #expect(!files.isEmpty, "no Swift files found under \(directory)")
             for file in files {

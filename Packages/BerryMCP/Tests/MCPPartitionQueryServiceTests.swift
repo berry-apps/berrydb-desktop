@@ -102,7 +102,8 @@ struct MCPPartitionQueryServiceTests {
     }
 
     @Test func anUnknownTableIsReported() async throws {
-        // DescribeTable is the first request, so a missing table is found there.
+        // DescribeTable is the first request this session sends after
+        // connecting, so a missing table is found there.
         let missing = DriverError.queryFailed(message: "ResourceNotFoundException: Requested resource not found", code: nil)
         let connection = ScriptedPartitionConnection(schema: orders, pages: [.success(page([]))], schemaError: missing)
         let harness = Harness(connection: connection)
@@ -602,7 +603,7 @@ private struct Harness {
                     cancel: { connection.cancelCurrentQuery() },
                     closeConnection: { await connection.close() }
                 )
-                return MCPPartitionSession(connection: connection, lifecycle: lifecycle, profile: profile)
+                return MCPPartitionSession(reader: MCPPartitionReader(connection), lifecycle: lifecycle, profile: profile)
             }
         )
         profileID = id

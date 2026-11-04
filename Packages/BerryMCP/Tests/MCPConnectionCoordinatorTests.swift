@@ -237,7 +237,7 @@ struct MCPConnectionCoordinatorTests {
         let table = try await coordinator.coordinator.withPartitionSession(
             requestID: "p1", profileID: coordinator.profileID
         ) { session in
-            try await session.connection.keySchema(of: "Orders").table
+            try await session.reader.keySchema("Orders").table
         }
         #expect(table == "Orders")
         #expect(await connection.closeCalls == 1)
@@ -277,7 +277,7 @@ struct MCPConnectionCoordinatorTests {
                     table: "Orders", indexName: nil, partitionKey: .string("a"), sortKey: nil,
                     projection: nil, limit: 1, exclusiveStartKey: nil
                 )
-                return try await session.connection.queryPartition(query)
+                return try await session.reader.queryPartition(query)
             }
         }
         for _ in 0..<2000 where await connection.queries.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
