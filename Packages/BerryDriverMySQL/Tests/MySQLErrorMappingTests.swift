@@ -66,6 +66,41 @@ struct MySQLErrorMappingTests {
         }
     }
 
+    /// MySQLNIO sends every statement as a prepared statement, and both
+    /// servers refuse to prepare a PREPARE or a DEALLOCATE PREPARE with
+    /// error 1295, ER_UNSUPPORTED_PS
+    /// (https://dev.mysql.com/doc/mysql-errors/8.4/en/server-error-reference.html#error_er_unsupported_ps,
+    /// https://mariadb.com/kb/en/mariadb-error-code-reference/; verified
+    /// against MySQL 8.4.11 and MariaDB 11.8.9). Each runs over the text
+    /// protocol instead; the DEALLOCATE finds the statement only if the
+    /// PREPARE ran.
+    @Test func aStatementTheServerCannotPrepareRunsOverTheTextProtocol() async throws {
+        let connection = try await Self.open()
+        defer { Task { await connection.close() } }
+        let name = "berry_ps_probe_" + UUID().uuidString.prefix(8).lowercased()
+
+        try await drain(connection.execute("PREPARE \(name) FROM 'SELECT 1'"))
+        try await drain(connection.execute("DEALLOCATE PREPARE \(name)"))
+
+        let retries = await connection.textProtocolRetries
+        #expect(retries == 2)
+    }
+
+    /// A syntax error quotes the statement, so `SELECT 1295 1295` fails
+    /// with "near '1295'", error 1064 (verified against MySQL 8.4.11 and
+    /// MariaDB 11.8.9). That is the statement's answer; sent again, a
+    /// statement whose error quotes 1295 would run twice.
+    @Test func anErrorThatQuotes1295IsNotSentAgain() async throws {
+        let connection = try await Self.open()
+        defer { Task { await connection.close() } }
+
+        let error = await #expect(throws: DriverError.self) { try await drain(connection.execute("SELECT 1295 1295")) }
+
+        let retries = await connection.textProtocolRetries
+        #expect(isFailure(error), "\(String(describing: error))")
+        #expect(retries == 0)
+    }
+
     /// The statements on the server, other than the asking connection's own,
     /// whose text holds `marker`.
     private func statements(marked marker: String, on watcher: MySQLDriverConnection) async throws -> [Int64] {
@@ -118,6 +153,78 @@ struct MySQLErrorMappingTests {
             _ = try? await watcher.queryAll("KILL QUERY \(id)")
         }
         if let failure { throw failure }
+    }
+
+    /// Waits, at most 10 s, until MySQLNIO has seen `connection` close.
+    private func waitUntilClosed(_ connection: MySQLDriverConnection) async throws {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while await !connection.connectionClosedForTesting {
+            guard ContinuousClock.now < deadline else {
+                Issue.record("the connection never saw the server end it")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    private func connectionID(of connection: MySQLDriverConnection, readOnly: Bool = false) async throws -> Int64 {
+        let sql = "SELECT CONNECTION_ID()"
+        let rows = try await drain(readOnly ? connection.executeReadOnly(sql, timeout: .seconds(10)) : connection.execute(sql))
+        guard case .int(let id)? = rows.first?.first else {
+            Issue.record("no connection ID in \(rows)")
+            return -1
+        }
+        return id
+    }
+
+    /// KILL without QUERY ends the connection itself
+    /// (https://dev.mysql.com/doc/refman/8.4/en/kill.html,
+    /// https://mariadb.com/kb/en/kill/). Every way the driver sends a
+    /// statement then reports a lost connection, the read-only setup and a
+    /// read-only statement included: reported as `readOnlyUnavailable`, it
+    /// would make the in-app assistant ask for an approval card as if the
+    /// server could not run read-only. Each call is bounded, so one that
+    /// waits forever fails the test.
+    @Test func aKilledConnectionIsALostConnection() async throws {
+        let connection = try await Self.open()
+        let readOnly = try await Self.open()
+        let unprepared = try await Self.open()
+        let admin = try await Self.open()
+        defer { Task { await connection.close(); await readOnly.close(); await unprepared.close(); await admin.close() } }
+        try await readOnly.prepareReadOnly()
+        let ids = [
+            try await connectionID(of: connection),
+            try await connectionID(of: readOnly, readOnly: true),
+            try await connectionID(of: unprepared),
+        ]
+        for id in ids {
+            _ = try await admin.queryAll("KILL \(id)")
+        }
+        try await waitUntilClosed(connection)
+        try await waitUntilClosed(readOnly)
+        try await waitUntilClosed(unprepared)
+
+        let executed = await #expect(throws: DriverError.self) {
+            try await within(.seconds(10)) { try await drain(connection.execute("SELECT 1")) }
+        }
+        let listed = await #expect(throws: DriverError.self) {
+            try await within(.seconds(10)) { try await connection.queryAll("SELECT 1") }
+        }
+        let read = await #expect(throws: DriverError.self) {
+            try await within(.seconds(10)) { try await drain(readOnly.executeReadOnly("SELECT 1", timeout: .seconds(5))) }
+        }
+        let prepared = await #expect(throws: DriverError.self) {
+            try await within(.seconds(10)) { try await unprepared.prepareReadOnly() }
+        }
+        let answered = try await within(.seconds(10)) { await connection.ping() }
+
+        for (path, error) in [("execute", executed), ("queryAll", listed), ("read-only", read), ("read-only setup", prepared)] {
+            guard case .connectionLost? = error else {
+                Issue.record("\(path): not a lost connection: \(String(describing: error))")
+                continue
+            }
+        }
+        #expect(answered == false)
     }
 
     /// The server's own bound ends the statement with error 3024 on MySQL

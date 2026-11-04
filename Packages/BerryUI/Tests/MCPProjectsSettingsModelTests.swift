@@ -370,6 +370,258 @@ struct MCPProjectsSettingsModelTests {
         #expect(model.unverifiedProjectIDs == [billing.id])
     }
 
+    /// Seeds `profiles` as one enabled project sealed under a key that `box`
+    /// then holds, the state a settings save leaves behind.
+    private func seedSealedProject(
+        _ store: BerryStore, _ box: KeyBox, name: String = "Billing", root: String = "/work/billing",
+        profiles: [MCPProfileAccess]
+    ) throws -> MCPProject {
+        let previousKey = box.key
+        let sealingKey = SymmetricKey(size: .bits256)
+        let project = MCPProject(name: name, isEnabled: true, workspaceRoots: [root], profiles: profiles)
+        try store.saveMCPProject(project, sealingKey: sealingKey, previousKey: previousKey)
+        box.data = sealingKey.withUnsafeBytes { Data($0) }
+        return project
+    }
+
+    /// Another process removes a redacted column from one row in the store
+    /// file. The draft keeps the stored columns with that row's live reads
+    /// off, so the model names that connection, and only that one, for the
+    /// editor to mark.
+    @Test func anAccessRowWhoseTagDoesNotVerifyIsMarkedUnverified() throws {
+        let (store, orders, _) = try makeStore()
+        let reporting = ConnectionProfile(driverID: "mysql", name: "Reporting")
+        try store.save(reporting)
+        let box = KeyBox()
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: true, redactedColumns: ["email", "ssn"]),
+            MCPProfileAccess(profileID: reporting.id, liveRead: true, redactedColumns: ["phone"]),
+        ])
+        try store.executeForTesting(
+            #"UPDATE mcp_project_profile SET redactedColumnsJSON = '["email"]' WHERE profileID = ?"#,
+            arguments: [orders.id]
+        )
+        let model = makeModel(store, box)
+
+        #expect(model.unverifiedProfileIDs == [seeded.id: [orders.id]])
+        #expect(model.unverifiedProjectIDs.isEmpty)
+        let draft = try #require(model.draft(for: seeded.id))
+        #expect(draft.access[orders.id] == .init(liveRead: false, redactedColumns: ["email"]))
+        #expect(draft.access[reporting.id] == .init(liveRead: true, redactedColumns: ["phone"]))
+    }
+
+    /// Redacted columns are sealed with live reads off too, and turning live
+    /// reads on later starts from the stored columns, so an edited row is
+    /// marked whatever its live-read switch says.
+    @Test func anAccessRowWithLiveReadsOffIsMarkedWhenItsRedactionsWereEdited() throws {
+        let (store, orders, _) = try makeStore()
+        let reporting = ConnectionProfile(driverID: "mysql", name: "Reporting")
+        try store.save(reporting)
+        let box = KeyBox()
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: false, redactedColumns: ["ssn"]),
+            MCPProfileAccess(profileID: reporting.id, liveRead: false),
+        ])
+        try store.executeForTesting(
+            "UPDATE mcp_project_profile SET redactedColumnsJSON = '[]' WHERE profileID = ?",
+            arguments: [orders.id]
+        )
+        let model = makeModel(store, box)
+
+        #expect(model.unverifiedProfileIDs == [seeded.id: [orders.id]])
+    }
+
+    /// Without the key that sealed the rows, missing or replaced, no row can
+    /// be verified: every assigned connection is marked, as every project is.
+    @Test(arguments: [false, true])
+    func everyAccessRowIsMarkedWithoutTheKeyThatSealedIt(keyReplaced: Bool) throws {
+        let (store, orders, events) = try makeStore()
+        let box = KeyBox()
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: true, redactedColumns: ["email"]),
+            MCPProfileAccess(profileID: events.id),
+        ])
+        box.data = keyReplaced ? SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) } : nil
+        let model = makeModel(store, box)
+
+        #expect(model.unverifiedProjectIDs == [seeded.id])
+        #expect(model.unverifiedProfileIDs == [seeded.id: [orders.id, events.id]])
+    }
+
+    /// Each row's tag binds the project ID itself, so a row that verifies
+    /// keeps its redacted columns trustworthy when only the project row was
+    /// edited; the project-level mark covers that case.
+    @Test func aProjectRowEditedInTheStoreFileLeavesItsVerifiedAccessRowsUnmarked() throws {
+        let (store, orders, _) = try makeStore()
+        let box = KeyBox()
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: true, redactedColumns: ["email"]),
+        ])
+        try store.executeForTesting(
+            #"UPDATE mcp_project SET workspaceRootsJSON = '["/work/elsewhere"]' WHERE id = ?"#,
+            arguments: [seeded.id]
+        )
+        let model = makeModel(store, box)
+
+        #expect(model.unverifiedProjectIDs == [seeded.id])
+        #expect(model.unverifiedProfileIDs.isEmpty)
+    }
+
+    /// A save seals the draft's settings under the new key, which clears the
+    /// mark of the saved project. The same save clears, rather than re-signs,
+    /// the tag of another project's row that did not verify, so that row
+    /// stays marked.
+    @Test func savingClearsTheMarkOfTheSavedProjectOnly() throws {
+        let (store, orders, _) = try makeStore()
+        let box = KeyBox()
+        let billing = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: true, redactedColumns: ["email", "ssn"]),
+        ])
+        let analytics = try seedSealedProject(
+            store, box, name: "Analytics", root: "/work/analytics",
+            profiles: [MCPProfileAccess(profileID: orders.id, redactedColumns: ["ssn"])]
+        )
+        try store.executeForTesting(
+            #"UPDATE mcp_project_profile SET redactedColumnsJSON = '["email"]' WHERE profileID = ?"#,
+            arguments: [orders.id]
+        )
+        let model = makeModel(store, box)
+        #expect(model.unverifiedProfileIDs == [billing.id: [orders.id], analytics.id: [orders.id]])
+
+        let draft = try #require(model.draft(for: billing.id))
+        #expect(model.save(draft))
+
+        #expect(model.errorMessage == nil)
+        #expect(model.unverifiedProfileIDs == [analytics.id: [orders.id]])
+    }
+
+    /// A row that does not verify opens with live reads off, and a save
+    /// seals its stored redacted columns all the same, so the editor shows
+    /// them without waiting for live reads to be turned on.
+    @Test func aMarkedConnectionShowsItsRedactionsWithLiveReadsOff() throws {
+        let (store, orders, _) = try makeStore()
+        let box = KeyBox()
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: true, redactedColumns: ["email", "ssn"]),
+        ])
+        try store.executeForTesting(
+            #"UPDATE mcp_project_profile SET redactedColumnsJSON = '["email"]' WHERE profileID = ?"#,
+            arguments: [orders.id]
+        )
+        let model = makeModel(store, box)
+
+        let draft = try #require(model.draft(for: seeded.id))
+        #expect(draft.access[orders.id]?.liveRead == false)
+        #expect(model.showsRedactions(for: orders.id, in: draft))
+    }
+
+    @Test func aVerifiedConnectionHidesItsRedactionsWithLiveReadsOff() throws {
+        let (store, orders, _) = try makeStore()
+        let reporting = ConnectionProfile(driverID: "mysql", name: "Reporting")
+        try store.save(reporting)
+        let box = KeyBox()
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: orders.id, redactedColumns: ["ssn"]),
+        ])
+        let model = makeModel(store, box)
+
+        var draft = try #require(model.draft(for: seeded.id))
+        draft.profileIDs.append(reporting.id)
+        #expect(!model.showsRedactions(for: orders.id, in: draft))
+        #expect(!model.showsRedactions(for: reporting.id, in: draft))
+    }
+
+    @Test func redactionsAreShownWhileLiveReadsAreOn() throws {
+        let (store, orders, _) = try makeStore()
+        let reporting = ConnectionProfile(driverID: "mysql", name: "Reporting")
+        try store.save(reporting)
+        let box = KeyBox()
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: true),
+            MCPProfileAccess(profileID: reporting.id, redactedColumns: ["ssn"]),
+        ])
+        let model = makeModel(store, box)
+        #expect(model.unverifiedProfileIDs.isEmpty)
+
+        var draft = try #require(model.draft(for: seeded.id))
+        draft.access[reporting.id]?.liveRead = true
+        #expect(model.showsRedactions(for: orders.id, in: draft))
+        #expect(model.showsRedactions(for: reporting.id, in: draft))
+    }
+
+    /// A row marked in one project says nothing about the same connection's
+    /// row in another project, which is sealed on its own.
+    @Test func aConnectionMarkedInAnotherProjectHidesItsRedactionsWithLiveReadsOff() throws {
+        let (store, orders, _) = try makeStore()
+        let box = KeyBox()
+        let billing = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: true, redactedColumns: ["email", "ssn"]),
+        ])
+        let analytics = try seedSealedProject(
+            store, box, name: "Analytics", root: "/work/analytics",
+            profiles: [MCPProfileAccess(profileID: orders.id, redactedColumns: ["ssn"])]
+        )
+        try store.executeForTesting(
+            #"UPDATE mcp_project_profile SET redactedColumnsJSON = '["email"]' WHERE projectID = ? AND profileID = ?"#,
+            arguments: [billing.id, orders.id]
+        )
+        let model = makeModel(store, box)
+        #expect(model.unverifiedProfileIDs == [billing.id: [orders.id]])
+
+        let draft = try #require(model.draft(for: analytics.id))
+        #expect(!model.showsRedactions(for: orders.id, in: draft))
+    }
+
+    /// A row that verifies again by the time its editor opens, here restored
+    /// in the store file, is no longer marked: a mark that outlived it would
+    /// show a notice for settings that check out.
+    @Test func aConnectionThatVerifiesAgainWhenItsDraftOpensIsNoLongerMarked() throws {
+        let (store, orders, _) = try makeStore()
+        let box = KeyBox()
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: true, redactedColumns: ["email", "ssn"]),
+        ])
+        try store.executeForTesting(
+            #"UPDATE mcp_project_profile SET redactedColumnsJSON = '["email"]' WHERE profileID = ?"#,
+            arguments: [orders.id]
+        )
+        let model = makeModel(store, box)
+        #expect(model.unverifiedProfileIDs == [seeded.id: [orders.id]])
+        try store.executeForTesting(
+            #"UPDATE mcp_project_profile SET redactedColumnsJSON = '["email","ssn"]' WHERE profileID = ?"#,
+            arguments: [orders.id]
+        )
+
+        let draft = try #require(model.draft(for: seeded.id))
+
+        #expect(draft.access[orders.id]?.liveRead == true)
+        #expect(model.unverifiedProfileIDs.isEmpty)
+    }
+
+    /// The marks come from the last reload, while a draft reads the store
+    /// when it opens. A connection edited in the main window while Settings
+    /// stays open, here moved to another host, no longer verifies its row:
+    /// the draft opens it with live reads off, so the mark is read with the
+    /// draft and the stored columns are shown before a save seals them.
+    @Test func aConnectionEditedAfterTheLastReloadIsMarkedWhenItsDraftOpens() throws {
+        let (store, orders, _) = try makeStore()
+        let box = KeyBox()
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: orders.id, liveRead: true, redactedColumns: ["email"]),
+        ])
+        let model = makeModel(store, box)
+        #expect(model.unverifiedProfileIDs.isEmpty)
+        var moved = orders
+        moved.host = "replica.example.test"
+        try store.save(moved)
+
+        let draft = try #require(model.draft(for: seeded.id))
+
+        #expect(draft.access[orders.id] == .init(liveRead: false, redactedColumns: ["email"]))
+        #expect(model.unverifiedProfileIDs == [seeded.id: [orders.id]])
+        #expect(model.showsRedactions(for: orders.id, in: draft))
+    }
+
     @Test func reloadClearsAStaleError() throws {
         let (store, _, _) = try makeStore()
         let box = KeyBox()

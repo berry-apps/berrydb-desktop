@@ -139,33 +139,36 @@ struct PostgresClientErrorLiveTests {
         }
     }
 
-    /// The text of an error that reports the closed connection, through
-    /// whichever wrapper the path puts around it; nil for any other error.
+    /// The text of a lost connection; nil for any other error. A lost
+    /// connection the read-only path reports as `readOnlyUnavailable` is
+    /// nil too: the in-app assistant would then ask for an approval card as
+    /// if the server could not run read-only, and the MCP helper would say
+    /// that it could not open a read-only session.
     private func lostConnection(_ error: DriverError?) -> String? {
-        switch error {
-        case .connectionLost(let detail)?: detail
-        case .readOnlyUnavailable(let detail)? where detail.contains("PostgreSQL connection closed"): detail
-        default: nil
-        }
+        if case .connectionLost(let detail)? = error { return detail }
+        return nil
     }
 
     /// `pg_terminate_backend` with a timeout returns once the backend has
     /// exited (https://www.postgresql.org/docs/16/functions-admin.html#FUNCTIONS-ADMIN-SIGNAL),
     /// and the driver's connection then sees its socket close. Every way the
-    /// driver sends a statement answers at once afterwards; each is bounded,
-    /// so a statement that waits forever fails the test.
+    /// driver sends a statement answers at once afterwards with a lost
+    /// connection, the read-only setup and a read-only statement included;
+    /// each is bounded, so a statement that waits forever fails the test.
     @Test func aConnectionWhoseBackendWasTerminatedAnswersAtOnce() async throws {
         let connection = try await PostgresDriverConnection(config: config())
         let readOnly = try await PostgresDriverConnection(config: config())
+        let unprepared = try await PostgresDriverConnection(config: config())
         let admin = try await PostgresDriverConnection(config: config())
-        defer { Task { await connection.close(); await readOnly.close(); await admin.close() } }
+        defer { Task { await connection.close(); await readOnly.close(); await unprepared.close(); await admin.close() } }
         try await readOnly.prepareReadOnly()
-        for pid in [connection.debugBackendPID, readOnly.debugBackendPID] {
+        for pid in [connection.debugBackendPID, readOnly.debugBackendPID, unprepared.debugBackendPID] {
             let pid = try #require(pid)
             #expect(try await drain(admin.execute("SELECT pg_terminate_backend(\(pid), 10000)")) == [[.bool(true)]])
         }
         try await waitUntilClosed(connection)
         try await waitUntilClosed(readOnly)
+        try await waitUntilClosed(unprepared)
 
         let executed = await #expect(throws: DriverError.self) {
             try await within(.seconds(10)) { try await drain(connection.execute("SELECT '\(Self.probe)'")) }
@@ -178,9 +181,12 @@ struct PostgresClientErrorLiveTests {
                 try await drain(readOnly.executeReadOnly("SELECT '\(Self.probe)'", timeout: .seconds(5)))
             }
         }
+        let prepared = await #expect(throws: DriverError.self) {
+            try await within(.seconds(10)) { try await unprepared.prepareReadOnly() }
+        }
         let answered = try await within(.seconds(10)) { await connection.ping() }
 
-        for (path, error) in [("execute", executed), ("queryAll", listed), ("read-only", read)] {
+        for (path, error) in [("execute", executed), ("queryAll", listed), ("read-only", read), ("read-only setup", prepared)] {
             let detail = lostConnection(error)
             #expect(detail != nil, "\(path): \(String(describing: error))")
             #expect(debugText(in: detail ?? "").isEmpty, "\(path): \(detail ?? "")")

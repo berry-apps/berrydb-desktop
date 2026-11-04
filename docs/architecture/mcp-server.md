@@ -701,14 +701,17 @@ name a host, a user or a file path: `BerryDB could not connect to this
 database.`, `BerryDB could not open a read-only session on this database,
 so the query did not run.`, or `BerryDB could not open a connection to this
 database within 15 seconds.` once the open budget in [Limits](#limits) has
-passed. A connection the driver reports as lost gets the first of those
-texts at any time. A query error raised once the statement runs is
+passed. A connection the driver reports as lost while the connection or
+its read-only session opens gets the first of those texts; once the
+session is open it gets `The connection to the database was lost during
+the read.`, also fixed text, since the statement may already have run.
+Reported as lost are, on PostgreSQL, a network connection that closes or
+resets, and, on MySQL/MariaDB, a statement sent on a connection the server
+has already closed. A query error raised once the statement runs is
 forwarded in the driver's own words, prefixed `The database refused the
 query:`, on one line, with every MySQL/MariaDB `'user'@'host'` account
 masked, and cut at 500 characters. That covers the server's refusal and
-also a client-side driver error during the read: the PostgreSQL driver
-reports a connection dropped mid-read as a failed query, so it arrives in
-the PostgreSQL client library's own text.
+also a client-side driver error during the read.
 
 Returned rows leave BerryDB: they go to the calling MCP host and from there
 potentially to that host's model provider; the server running locally does
@@ -731,9 +734,14 @@ stricter production-labeled limits below. The pane's per-connection **Live
 reads** switch exists for PostgreSQL, MySQL/MariaDB and SQLite connections.
 A save applies the draft's live-read switches and redacted columns to the
 verified editing copy of the project, in which a switch whose row does not
-verify is already off. For each connection whose live reads the save turns
-on (off in that copy, on in the draft) it requires the production consent
-when the connection is production-labeled, and, on PostgreSQL and
+verify is already off. A row that does not verify, whether its live reads
+were on or off, keeps its stored redacted columns, so the pane marks its
+connection as not verified and shows those columns even with live reads
+off, for them to be reviewed before a save seals them; when no key can be
+read, every connection is marked. The editor marks only connections that
+have the **Live reads** switch. For each connection whose live reads the
+save turns on (off in that copy, on in the draft) it requires the production
+consent when the connection is production-labeled, and, on PostgreSQL and
 MySQL/MariaDB, a finished privilege check run against the server and
 account the stored connection still points at; a check that found a user
 that can write, or could not run, also needs the confirmation to use the

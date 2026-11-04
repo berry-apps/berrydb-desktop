@@ -655,6 +655,11 @@ public final class QueryToolExecutor: AIToolExecutor {
                 } catch DriverError.readOnlyUnavailable {
                     // The read-only mode did not start, so the statement did
                     // not run; it runs on the session's own connection below.
+                } catch DriverError.connectionLost {
+                    // The read-only connection dropped. The sample is built
+                    // here, not by the model, so it runs on the session's
+                    // own connection below; the pool replaces the dropped
+                    // connection once its lease is handed back as failed.
                 }
             }
             return .ok(Self.json(try await drainSample(sql, lease: lease, timeoutOverrideSeconds: remaining())))

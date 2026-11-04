@@ -440,7 +440,10 @@ let package = Package(
         ),
         .testTarget(
             name: "BerryDriverMySQLTests",
-            dependencies: ["BerryDriverMySQL", "BerryDriverKit", "BerryDriverTestKit"],
+            dependencies: [
+                "BerryDriverMySQL", "BerryDriverKit", "BerryDriverTestKit",
+                .product(name: "MySQLNIO", package: "mysql-nio"),
+            ],
             path: "Packages/BerryDriverMySQL/Tests"
         ),
         .testTarget(

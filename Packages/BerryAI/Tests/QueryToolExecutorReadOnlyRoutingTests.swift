@@ -262,6 +262,25 @@ struct QueryToolExecutorReadOnlyRoutingTests {
         #expect(await main.onSessionPath.isEmpty)
     }
 
+    /// Guard: the app's own sample falls back to the session's connection
+    /// when the read-only one is lost, but a model's statement does not. It
+    /// may already have run before the drop, so the model gets the lost
+    /// connection, with no card and no second run, and the dropped
+    /// connection goes back as failed for the pool to replace.
+    @Test func aModelStatementOnALostReadOnlyConnectionIsNeverRetried() async {
+        let main = RecordingConnection()
+        let gate = RoutingGate(approves: true)
+        let routing = Routing(.readOnly, readOnly: RecordingConnection(readOnlyFailure: .connectionLost("PostgreSQL connection closed")))
+
+        let outcome = await runSQL(executor(session(main: main), gate: gate, routing: routing), "SELECT 1")
+
+        #expect(outcome.status == "error")
+        #expect(gate.cards.isEmpty)
+        #expect(await main.onSessionPath.isEmpty)
+        await waitUntil { routing.handedBack.count == 1 }
+        #expect(routing.handedBack == [true])
+    }
+
     /// The read-only mode could not start, so the statement never ran; it
     /// gets the card, as when the connection could not open.
     @Test func aReadOnlyModeThatCannotStartFallsBackToTheCard() async {
@@ -420,6 +439,28 @@ struct QueryToolExecutorReadOnlyRoutingTests {
         #expect(outcome.status == "ok")
         #expect(await main.onSessionPath == [#"SELECT * FROM "t" LIMIT 20"#])
         #expect(gate.cards.isEmpty)
+    }
+
+    /// A read-only connection that dropped says nothing about the sample,
+    /// which the app builds itself: it runs on the session's own connection,
+    /// as when the read-only mode could not start, and the dropped
+    /// connection goes back as failed, so the pool checks it and replaces it.
+    @Test func sampleRowsFallBackToTheSessionConnectionWhenTheReadOnlyConnectionIsLost() async throws {
+        let main = RecordingConnection()
+        let gate = RoutingGate(approves: false)
+        let routing = Routing(.readOnly, readOnly: RecordingConnection(readOnlyFailure: .connectionLost("PostgreSQL connection closed")))
+        let executor = executor(session(main: main), gate: gate, routing: routing, sampleRows: true)
+
+        let outcome = await executor.execute(AIToolCall(id: "c", name: "get_sample_rows", args: ["table": "t"]))
+
+        #expect(outcome.status == "ok", "\(String(describing: outcome.resultJSON))")
+        let payload = try JSONSerialization.jsonObject(with: Data((outcome.resultJSON ?? "{}").utf8)) as? [String: Any]
+        #expect(payload?["rows"] as? [[String]] == [["1"]])
+        #expect(await routing.readOnly.onReadOnlyPath == [#"SELECT * FROM "t" LIMIT 20"#])
+        #expect(await main.onSessionPath == [#"SELECT * FROM "t" LIMIT 20"#])
+        #expect(gate.cards.isEmpty)
+        await waitUntil { routing.handedBack.count == 1 }
+        #expect(routing.handedBack == [true])
     }
 
     @Test func eachTabStatementThatRunsAutomaticallyGoesToTheReadOnlyConnection() async {

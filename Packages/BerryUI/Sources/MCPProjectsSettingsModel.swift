@@ -124,6 +124,13 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// the user turns it on again. The list marks these projects rather
     /// than showing the stored enabled flag unqualified.
     @Published public private(set) var unverifiedProjectIDs: Set<UUID> = []
+    /// By project ID, the assigned profiles whose own access row does not
+    /// verify under the stored key, or every assigned profile when no key
+    /// can be read; a project without such a row has no entry. The editing
+    /// copy turns such a row's live reads off but keeps its stored redacted
+    /// columns, which any save of the project then seals, so the editor
+    /// marks these connections and shows those columns (`showsRedactions`).
+    @Published public private(set) var unverifiedProfileIDs: [UUID: Set<UUID>] = [:]
     /// The last failure of a load, save or delete, ready to show; cleared
     /// by the next `reload()`, which every successful save or delete runs.
     @Published public var errorMessage: String?
@@ -396,8 +403,14 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             let unverified = try stored.filter {
                 try store.verifiedMCPProject(id: $0.id, key: key)?.projectTagValid == false
             }
+            var unverifiedAccess: [UUID: Set<UUID>] = [:]
+            for project in stored {
+                let profileIDs = try store.unverifiedMCPProfileIDs(projectID: project.id, key: key)
+                if !profileIDs.isEmpty { unverifiedAccess[project.id] = profileIDs }
+            }
             projects = stored
             unverifiedProjectIDs = Set(unverified.map(\.id))
+            unverifiedProfileIDs = unverifiedAccess
             profiles = try store.allProfiles()
         } catch {
             errorMessage = L("MCP projects could not be loaded: \(error.localizedDescription)")
@@ -414,9 +427,19 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// a project whose own tag does not verify under the stored key comes
     /// back disabled, and a profile's live reads come back off unless its
     /// own row verifies.
+    ///
+    /// It also refreshes the project's entry in `unverifiedProfileIDs` with
+    /// the same key: a connection whose endpoint (host, port, user,
+    /// database, TLS or SSH settings) was edited in the main window since
+    /// the last `reload()` no longer verifies its row, and the draft turns
+    /// its live reads off, so its mark is read with the draft rather than
+    /// left as of that reload.
     public func draft(for id: UUID) -> Draft? {
         do {
-            guard let project = try store.mcpProjectForEditing(id: id, key: keyStore.load()) else { return nil }
+            let key = keyStore.load()
+            guard let project = try store.mcpProjectForEditing(id: id, key: key) else { return nil }
+            let unverified = try store.unverifiedMCPProfileIDs(projectID: id, key: key)
+            unverifiedProfileIDs[id] = unverified.isEmpty ? nil : unverified
             let access = project.profiles.map {
                 ($0.profileID, AccessDraft(liveRead: $0.liveRead, redactedColumns: $0.redactedColumns))
             }
@@ -549,6 +572,16 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         }
         reload()
         return true
+    }
+
+    /// True when the editor shows the redacted columns of `profileID` in
+    /// `draft`: while its live reads are on, and also while they are off
+    /// when its stored row is in `unverifiedProfileIDs`. Such a row opens
+    /// with live reads off, yet a save seals its stored columns, so they
+    /// are shown before a save rather than once live reads are turned on.
+    public func showsRedactions(for profileID: UUID, in draft: Draft) -> Bool {
+        draft.access[profileID]?.liveRead == true
+            || unverifiedProfileIDs[draft.id]?.contains(profileID) == true
     }
 
     /// True when `projectID` is a stored project as of the last `reload()`;
