@@ -269,6 +269,44 @@ struct MCPMetadataServiceTests {
         #expect(counter.count("profiles") == 1)
     }
 
+    /// A DynamoDB profile with its switch verified is offered the DynamoDB
+    /// query tool and never the SQL one; one without the switch, one not
+    /// assigned and one deleted since are offered neither.
+    @Test func aDynamoDBConnectionWithLiveReadsListsTheDynamoDBQueryCapability() throws {
+        let orders = ConnectionProfile(driverID: "dynamodb", name: "Orders", sortOrder: 4)
+        let archive = ConnectionProfile(driverID: "dynamodb", name: "Archive", sortOrder: 5)
+        let unassigned = ConnectionProfile(driverID: "dynamodb", name: "Unassigned", sortOrder: 6)
+        let deleted = UUID()
+        let store = try makeStore()
+        for profile in [orders, archive, unassigned] {
+            try store.save(profile)
+        }
+        let service = try makeService(store: store)
+        let project = MCPVerifiedProject(
+            project: MCPProject(
+                name: "P", isEnabled: true,
+                profiles: [
+                    MCPProfileAccess(profileID: staging.id, liveRead: true),
+                    MCPProfileAccess(profileID: orders.id, liveRead: true),
+                    MCPProfileAccess(profileID: archive.id),
+                    MCPProfileAccess(profileID: deleted, liveRead: true),
+                ]
+            ),
+            liveReadProfileIDs: [staging.id, orders.id, deleted, unassigned.id]
+        )
+        #expect(try service.partitionQueryConnectionIDs(in: project) == [orders.id])
+        #expect(try service.liveReadConnectionIDs(in: project) == [staging.id])
+        let descriptors = try service.listConnections(in: project)
+        #expect(descriptors.map(\.id) == [staging.id, orders.id, archive.id])
+        #expect(descriptors.map(\.capabilities) == [
+            ["schema", "graph", "execute_read_query"], ["schema", "graph", "dynamodb_query"], ["schema", "graph"],
+        ])
+        #expect(try service.isPartitionQueryable(orders.id))
+        #expect(try service.isPartitionQueryable(archive.id))
+        #expect(try !service.isPartitionQueryable(staging.id))
+        #expect(throws: MCPMetadataError.unknownConnection) { try service.isPartitionQueryable(deleted) }
+    }
+
     /// A pass that found no tables or views still records a change, and the
     /// graph tools then answer that no graph was harvested; the connection
     /// must not claim a harvest time the tools contradict.

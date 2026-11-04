@@ -191,7 +191,7 @@ struct MCPToolCatalogTests {
         #expect(MCPToolName.allCases.map(\.rawValue) == [
             "berrydb_status", "berrydb_list_connections", "berrydb_get_schema",
             "berrydb_search_schema", "berrydb_graph_query", "berrydb_get_graph_stats", "berrydb_get_schema_changes",
-            "berrydb_execute_read_query",
+            "berrydb_execute_read_query", "berrydb_dynamodb_query",
         ])
     }
 
@@ -200,10 +200,10 @@ struct MCPToolCatalogTests {
         #expect(tools.map(\.name) == ["berrydb_status"])
     }
 
-    /// Without a live-read connection every tool but the live one is listed.
+    /// Without a live-read connection every tool but the live ones is listed.
     @Test func selectedContextListsEveryToolWithStrictSchemas() throws {
         let tools = MCPToolCatalog.tools(for: selected())
-        #expect(tools.map(\.name) == MCPToolName.allCases.filter { $0 != .executeReadQuery }.map(\.rawValue))
+        #expect(tools.map(\.name) == MCPToolName.allCases.filter { ![.executeReadQuery, .dynamodbQuery].contains($0) }.map(\.rawValue))
         #expect(MCPToolCatalog.tools(for: selected(), liveReadConnectionIDs: []).map(\.name) == tools.map(\.name))
         for tool in tools {
             let input = try #require(tool.inputSchema.objectValue)
@@ -276,7 +276,7 @@ struct MCPToolCatalogTests {
         #expect(MCPToolCatalog.tools(for: unconfigured, liveReadConnectionIDs: [shop.id]).map(\.name) == ["berrydb_status"])
 
         let tools = MCPToolCatalog.tools(for: selected(liveRead: true), liveReadConnectionIDs: [shop.id])
-        #expect(tools.map(\.name) == MCPToolName.allCases.map(\.rawValue))
+        #expect(tools.map(\.name) == MCPToolName.allCases.filter { $0 != .dynamodbQuery }.map(\.rawValue))
         let tool = try #require(tools.first { $0.name == live })
         #expect(tool.description == "Runs one read-only SQL statement on a connection whose live reads the user turned on, and returns at most row_limit rows. Placeholders are $1, $2, … on PostgreSQL and ? on MySQL, MariaDB and SQLite; pass their values in parameters. The database refuses any write. Results go to this host and its model provider.")
         #expect(tool.annotations.readOnlyHint == true)
@@ -321,6 +321,135 @@ struct MCPToolCatalogTests {
         for metadataTool in tools where metadataTool.name != live {
             #expect(metadataTool.annotations.idempotentHint == true)
             #expect(metadataTool.annotations.openWorldHint == false)
+        }
+    }
+
+    @Test func theDynamoDBToolIsListedOnlyForAProjectWithADynamoDBLiveRead() {
+        let sql = MCPToolName.executeReadQuery.rawValue
+        let dynamo = MCPToolName.dynamodbQuery.rawValue
+        let table = UUID()
+        func names(_ sqlIDs: Set<UUID>, _ dynamoIDs: Set<UUID>, context: MCPProjectContext? = nil) -> [String] {
+            MCPToolCatalog.tools(
+                for: context ?? selected(liveRead: true), liveReadConnectionIDs: sqlIDs, partitionQueryConnectionIDs: dynamoIDs
+            ).map(\.name)
+        }
+        let sqlOnly = names([shop.id], [])
+        #expect(sqlOnly.contains(sql) && !sqlOnly.contains(dynamo))
+        let dynamoOnly = names([], [table])
+        #expect(dynamoOnly.contains(dynamo) && !dynamoOnly.contains(sql))
+        #expect(names([shop.id], [table]) == MCPToolName.allCases.map(\.rawValue))
+        let neither = names([], [])
+        #expect(!neither.contains(sql) && !neither.contains(dynamo))
+        let unconfigured = MCPProjectContext.unconfigured(.noMatchingProject, workspace: nil)
+        #expect(names([shop.id], [table], context: unconfigured) == ["berrydb_status"])
+        #expect(MCPToolCatalog.tools(for: selected(), liveReadConnectionIDs: [shop.id]).map(\.name) == sqlOnly)
+    }
+
+    @Test func aCursorOverTheLargestKeysFitsTheToolsCursorBound() throws {
+        // An index query's last key holds the table's and the index's keys:
+        // a partition key is at most 2,048 bytes, a sort key at most 1,024,
+        // and a key attribute name at most 255 characters
+        // (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html#limits-partition-sort-keys).
+        let name = { (letter: Character) in String(repeating: letter, count: 255) }
+        let lastKey: [String: DynamoDBAttributeValue] = [
+            name("a"): .string(String(repeating: "p", count: 2_048)),
+            name("b"): .binary(Data(repeating: 0xFF, count: 1_024)),
+            name("c"): .string(String(repeating: "q", count: 2_048)),
+            name("d"): .binary(Data(repeating: 0xFE, count: 1_024)),
+        ]
+        let scope = MCPQueryCursor.Scope(
+            profileID: UUID(), table: String(repeating: "t", count: 255), indexName: String(repeating: "i", count: 255),
+            queryDigest: Data(repeating: 1, count: 32)
+        )
+        let token = try MCPQueryCursor.seal(lastKey: lastKey, scope: scope)
+        #expect(token.count > 4_096)
+        #expect(token.count <= MCPToolArguments.maximumCursorLength)
+        #expect(try MCPToolArguments(["cursor": .string(token)], allowing: ["cursor"]).cursor() == token)
+    }
+
+    @Test func theDynamoDBToolSchemaIsClosedAndTypesTheKeyAsStringOrInteger() throws {
+        let tools = MCPToolCatalog.tools(for: selected(), liveReadConnectionIDs: [], partitionQueryConnectionIDs: [UUID()])
+        let tool = try #require(tools.first { $0.name == MCPToolName.dynamodbQuery.rawValue })
+        #expect(tool.description == "Runs one DynamoDB Query on a connection whose live reads the user turned on: the items of one partition key value, optionally narrowed by a sort key condition, on the table or one of its indexes, one page per call. Items are DynamoDB attribute-value JSON. Pass next_cursor back as cursor for the next page. No Scan, no filter expression, no write. Results go to this host and its model provider.")
+        #expect(tool.annotations.readOnlyHint == true)
+        #expect(tool.annotations.destructiveHint == false)
+        #expect(tool.annotations.idempotentHint == false)
+        #expect(tool.annotations.openWorldHint == true)
+
+        let input = try #require(tool.inputSchema.objectValue)
+        #expect(input["type"]?.stringValue == "object")
+        #expect(input["additionalProperties"] == .bool(false))
+        #expect(input["required"]?.arrayValue?.compactMap(\.stringValue) == ["connection_id", "table", "partition_key"])
+        let properties = try #require(input["properties"]?.objectValue)
+        #expect(Set(properties.keys) == [
+            "connection_id", "table", "index_name", "partition_key", "sort_key", "projection", "limit", "cursor",
+        ])
+        #expect(properties["connection_id"]?.objectValue?["format"]?.stringValue == "uuid")
+        for name in ["table", "index_name"] {
+            let field = try #require(properties[name]?.objectValue)
+            #expect(field["type"]?.stringValue == "string")
+            #expect(field["minLength"]?.intValue == 3)
+            #expect(field["maxLength"]?.intValue == 255)
+        }
+        let keyType: Value = ["string", "integer"]
+        #expect(properties["partition_key"]?.objectValue?["type"] == keyType)
+        let sortKey = try #require(properties["sort_key"]?.objectValue)
+        #expect(sortKey["type"]?.stringValue == "object")
+        #expect(sortKey["additionalProperties"] == .bool(false))
+        #expect(sortKey["required"]?.arrayValue?.compactMap(\.stringValue) == ["op", "value"])
+        let sortProperties = try #require(sortKey["properties"]?.objectValue)
+        #expect(Set(sortProperties.keys) == ["op", "value", "value2"])
+        #expect(sortProperties["op"]?.objectValue?["enum"]?.arrayValue?.compactMap(\.stringValue) == [
+            "eq", "lt", "le", "gt", "ge", "between", "begins_with",
+        ])
+        #expect(sortProperties["value"]?.objectValue?["type"] == keyType)
+        #expect(sortProperties["value2"]?.objectValue?["type"] == keyType)
+        let projection = try #require(properties["projection"]?.objectValue)
+        #expect(projection["type"]?.stringValue == "array")
+        #expect(projection["items"]?.objectValue?["type"]?.stringValue == "string")
+        #expect(projection["maxItems"]?.intValue == 50)
+        let limit = try #require(properties["limit"]?.objectValue)
+        #expect(limit["type"]?.stringValue == "integer")
+        #expect(limit["minimum"]?.intValue == 1)
+        #expect(limit["maximum"]?.intValue == 100)
+        let cursor = try #require(properties["cursor"]?.objectValue)
+        #expect(cursor["type"]?.stringValue == "string")
+        #expect(cursor["maxLength"]?.intValue == 16_384)
+
+        let output = try #require(tool.outputSchema?.objectValue)
+        #expect(output["type"]?.stringValue == "object")
+        #expect(output["additionalProperties"] == .bool(false))
+        let fields = try #require(output["properties"]?.objectValue)
+        #expect(Set(fields.keys) == [
+            "items", "item_count", "key_schema", "next_cursor", "consumed_capacity_units", "redacted_attributes",
+            "omitted_attributes", "skipped_items", "truncated", "elapsed_ms",
+        ])
+        #expect(fields["items"]?.objectValue?["items"]?.objectValue?["type"]?.stringValue == "object")
+
+        // A result with every optional part, and one with none, conform.
+        let schema = DynamoDBKeySchema(
+            table: "orders", partitionKey: DynamoDBKeyAttribute(name: "customer", type: .string),
+            sortKey: DynamoDBKeyAttribute(name: "placed", type: .string),
+            indexes: [DynamoDBIndexKeySchema(name: "by_rank", partitionKey: DynamoDBKeyAttribute(name: "rank", type: .number), sortKey: nil)]
+        )
+        let results = [
+            MCPPartitionQueryResult(
+                items: [["customer": .string("c1"), "flags": .list([.bool(true), .null])]], itemCount: 1,
+                keySchema: MCPKeySchemaDescription(schema: schema, index: schema.index(named: "by_rank")),
+                nextCursor: "abc", consumedCapacityUnits: 1.5, redactedAttributes: ["secret"],
+                omittedAttributes: [MCPOmittedAttribute(item: 0, name: "big", bytes: 70_000)],
+                skippedItems: [MCPSkippedItem(index: 1, bytes: 2_000_000)], truncated: true, elapsedMs: 4
+            ),
+            MCPPartitionQueryResult(
+                items: [], itemCount: 0, keySchema: MCPKeySchemaDescription(schema: schema, index: nil), nextCursor: nil,
+                consumedCapacityUnits: nil, redactedAttributes: [], omittedAttributes: [], skippedItems: [],
+                truncated: false, elapsedMs: 0
+            ),
+        ]
+        let outputSchema = try #require(tool.outputSchema)
+        for result in results {
+            let structured = try #require(try MCPDynamoDBQueryTool.respond(result).structuredContent)
+            #expect(violation(structured, against: outputSchema) == nil, "\(violation(structured, against: outputSchema) ?? "")")
         }
     }
 

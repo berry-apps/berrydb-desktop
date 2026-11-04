@@ -286,11 +286,12 @@ public final class MCPProjectsSettingsModel: ObservableObject {
 
     /// True for the drivers the helper serves live reads for, each opened in
     /// a read-only mode its server enforces: PostgreSQL, MySQL and MariaDB
-    /// (driver `mysql`), and SQLite. The editor offers live reads only for
+    /// (driver `mysql`), SQLite, and DynamoDB (reads through IAM, which has
+    /// no database user to check). The editor offers live reads only for
     /// these, and `save` refuses to turn them on for any other.
     nonisolated public static func supportsLiveRead(_ profile: ConnectionProfile) -> Bool {
         switch profile.driver {
-        case .postgres, .mysql, .sqlite: true
+        case .postgres, .mysql, .sqlite, .dynamodb: true
         default: false
         }
     }
@@ -312,7 +313,8 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     }
 
     /// True for the drivers whose database users can hold the write
-    /// privileges `MCPPrivilegeCheck` looks for; a SQLite file has no users.
+    /// privileges `MCPPrivilegeCheck` looks for; a SQLite file has no users,
+    /// and DynamoDB access is governed by IAM.
     nonisolated public static func needsPrivilegeCheck(_ profile: ConnectionProfile) -> Bool {
         switch profile.driver {
         case .postgres, .mysql: true
@@ -844,7 +846,15 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             guard Self.supportsLiveRead(profile) else {
                 return L("Live reads are not available for \(profile.name).")
             }
+            // The helper refuses a DynamoDB connection through an SSH tunnel, so
+            // the pane does not let it be turned on.
+            if profile.driver == .dynamodb, profile.sshEnabled {
+                return L("Live reads are not available for \(profile.name) through an SSH tunnel.")
+            }
             if profile.envColor == "production", !draft.acknowledged.contains(.production(profile.id)) {
+                if profile.driver == .dynamodb {
+                    return L("Live reads on \(profile.name) need your confirmation that you reviewed its redacted attributes and accept reads on this production database.")
+                }
                 return L("Live reads on \(profile.name) need your confirmation that you reviewed its redacted columns and accept reads on this production database.")
             }
             guard Self.needsPrivilegeCheck(profile) else { continue }

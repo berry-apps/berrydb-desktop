@@ -3,7 +3,8 @@
 Status: **metadata tools and live reads**. `berrydb-mcp` runs as a stdio MCP
 server over the app's store opened read-only. It serves seven metadata tools
 and two kinds of resources for one selected project, and, when the project has
-a connection with live reads turned on, `berrydb_execute_read_query` (see
+a connection with live reads turned on, `berrydb_execute_read_query` for a
+SQL connection and `berrydb_dynamodb_query` for a DynamoDB connection (see
 [Tools and resources](#tools-and-resources)). The project is selected by
 an explicit `--project`, which takes a project ID or name, or else from
 the host's workspace roots or the working directory, matched against the
@@ -11,9 +12,9 @@ workspace folders registered in the app. The app's **AI Agents** settings
 pane creates and edits projects; it shows the host setup commands for the
 helper bundled in the app (see [Packaging and signing](#packaging-and-signing)).
 Underneath sit key storage, the `MCPProject` persistence model, HMAC-SHA256
-row integrity and key rotation, a SQL-only connection coordinator with
-bounded shutdown, the SQL read policy parser and a byte-exact result
-limiter carry the live read (see
+row integrity and key rotation, a connection coordinator for SQL and
+DynamoDB sessions with bounded shutdown, the SQL read policy parser and a
+byte-exact result limiter carry the live read (see
 [Read-only enforcement layers](#read-only-enforcement-layers)). See
 [`../mcp-server-compatibility.md`](../mcp-server-compatibility.md) for the
 protocol gate, the host checks and
@@ -31,7 +32,8 @@ BerryDB has two independent MCP roles:
   `berrydb-mcp` helper, bundled in and signed with the app, as a
   subprocess and calls a bounded,
   BerryDB-owned capability surface: schema/graph inspection and, where a
-  profile allows it, bounded read-only SQL queries (see [Live reads](#read-only-enforcement-layers)).
+  profile allows it, bounded read-only SQL queries and DynamoDB `Query`
+  calls on one partition (see [Live reads](#read-only-enforcement-layers)).
 
 The server does not replace, relax, or share state with the client's
 allowlist, approval flow, or trust model. `berrydb-mcp` is a second, headless
@@ -63,6 +65,7 @@ this user's files or Keychain), a compromised BerryDB binary.
 | SQL read policy | No (defense in depth) | Refuses a statement before it reaches the server, but it is lexical: it cannot see a function behind a view, an operator or a cast. |
 | Privilege check when live reads are turned on | No (warning) | Settings warns when the connection's database user can write; the owner can confirm and turn live reads on anyway. |
 | SELECT-only database user | Yes, where configured | Enforced by the database. Recommended, not required: nothing checks for it except the warning above. |
+| IAM policy of a DynamoDB connection's access key | Yes, where configured | Enforced by AWS, and the only boundary on which tables and attributes a DynamoDB live read reaches. Recommended, not required: BerryDB cannot check it. |
 | Default result limits (rows, size, time) | Yes | Enforced in signed code. |
 | Stricter limits of a production-labeled connection | Yes, once sealed | The label is sealed into the connection's access row when **AI Agents** is saved, and the helper applies the stricter of the sealed label and the current one, so a label removed from the store file after the row was sealed does not lift these limits (see [Limits](#limits)). |
 | Per-profile live-read setting, redacted columns and project settings | Yes, via integrity check | Stored in a user-writable file; an HMAC keyed from Keychain is what stops the agent from enabling itself. |
@@ -77,8 +80,10 @@ returned data on the Mac.
 
 ## Tools and resources
 
-Every tool is read-only. All but `berrydb_execute_read_query` read only the store: the schema and dependency
-graph the app last harvested for a connection, never the database itself.
+Every tool is read-only. All but the two live-read tools,
+`berrydb_execute_read_query` and `berrydb_dynamodb_query`, read only the
+store: the schema and dependency graph the app last harvested for a
+connection, never the database itself.
 Every answer that reads the stored schema carries `checked_at` (when a pass
 last confirmed that schema against the database, or null if none has) and
 `stale` (true when it was never checked or was last checked more than 60 s
@@ -94,12 +99,13 @@ structured content
 | Tool | Arguments | Returns |
 |---|---|---|
 | `berrydb_status` | none | Which project the session serves, or why none (see [Status](#status)). Always listed. |
-| `berrydb_list_connections` | none | The project's connections: ID, name, driver, `environment` (`production` when the connection carries the production label or its live reads run under a sealed one, else `unlabeled`), capabilities and the state of the stored schema. `graph_harvested_at` is the time of the last pass that changed the schema (a pass that found it unchanged, or that only refreshed statistics, does not move it), or null when the connection was never harvested or its stored schema holds no table or view. `checked_at` and `stale` are as above. `stale_reason` is, for a stale schema, the code of the failure that stopped its last pass (`connection_failed`, `timeout`, `cancelled`, `store_write_failed` or `introspection_failed`), never text a server wrote, and null otherwise. `detail_coverage` is `{detailed, total}`: how many stored tables and views have had their columns read. `scope` lists the schemas the harvest is limited to, or is null for the default scope: every user schema, except on MySQL and MariaDB, where it is the connection's database when the profile names one. `hint` is `selectSchemas` when the catalog is too large to harvest whole and schemas should be selected in the app, else null. |
+| `berrydb_list_connections` | none | The project's connections: ID, name, driver, `environment` (`production` when the connection carries the production label or its live reads run under a sealed one, else `unlabeled`), capabilities and the state of the stored schema. `capabilities` holds `schema` and `graph`, plus `execute_read_query` or `dynamodb_query` for a connection that live-read tool runs on. `graph_harvested_at` is the time of the last pass that changed the schema (a pass that found it unchanged, or that only refreshed statistics, does not move it), or null when the connection was never harvested or its stored schema holds no table or view. `checked_at` and `stale` are as above. `stale_reason` is, for a stale schema, the code of the failure that stopped its last pass (`connection_failed`, `timeout`, `cancelled`, `store_write_failed` or `introspection_failed`), never text a server wrote, and null otherwise. `detail_coverage` is `{detailed, total}`: how many stored tables and views have had their columns read. `scope` lists the schemas the harvest is limited to, or is null for the default scope: every user schema, except on MySQL and MariaDB, where it is the connection's database when the profile names one. `hint` is `selectSchemas` when the catalog is too large to harvest whole and schemas should be selected in the app, else null. |
 | `berrydb_get_schema` | `connection_id`; optional `object_names` (at most 50), `detail` (`overview` or `full`, default `overview`), `offset` (0 or more, default 0) | One page of tables and views from `offset`: at most 200 objects, and at `full` detail as many as fit an estimated 512 KB, never fewer than one. The page reports `total` (all matching objects), `omitted_count` (those after the page), `next_offset` (pass it back as `offset`; null on the last page), `harvested_at` (when the schema last changed, as `graph_harvested_at`, omitted when none), `checked_at` and `stale`. `full` adds columns, indexes and foreign keys. An object with `detail_pending: true` is listed but its columns have not been read yet, so its `columns`, `indexes` and `foreign_keys` are empty: at `overview` the flag says whether a definition exists, at `full` it marks a definition still missing. |
 | `berrydb_search_schema` | `connection_id`, `query` (1–200 characters after trimming); optional `limit` (1–200, default 50) | Case-insensitive, literal substring matches over table, view, column and index names, each with `name`, `kind` and, where known, `database` and `table` (the owner of a column or index), ordered by kind (table, view, column, index), then database, owning table and name; plus `checked_at` and `stale`. |
 | `berrydb_graph_query` | `connection_id`, `operation`; `node` for `neighbors` and `blast_radius`, `from` and `to` for `path`, optional `limit` (1–50) for `top_centrality` | The dependency-graph answer. The name lists of `neighbors`, `blast_radius` and `circular_dependencies` are capped at 500; a `path` is returned whole, bounded only by the 1 MiB result ceiling. `circular_dependencies` takes no further argument. |
 | `berrydb_get_graph_stats` | `connection_id`; optional `object` | Harvested statistics (rows, size, scans) for every table, or for one table and its indexes. A summary lists the first 500 tables by name and the unused indexes of those tables, at most 500 names. |
 | `berrydb_get_schema_changes` | `connection_id`; optional `since` (at most 64 characters), `limit` (1–200, default 50) | The schema changes the app recorded, oldest first, with `next_since`, `checked_at` and `stale`. Each entry has `at`, `kind` (`added`, `changed`, `removed`, `relation_added` or `relation_removed`), `name`, `database` where it has one and `object_kind` (`table` or `view`). A `changed` entry carries `diff` (columns and indexes added, removed or changed, and whether the columns were reordered) when both versions have a readable definition; a relation entry carries `relation`, as `source.column -> target.column`, and is named after its source table. `since` left out lists every change, an ISO 8601 time for the changes written at or after it, or the `next_since` of an earlier page; `next_since` is opaque, is null once no entry remains, and resumes at the same entry however many changes are written later. A page can stop inside one change, since a first harvest records every object as one change. Only the changes of passes that completed are listed, those written at or before `checked_at`, so a pass still running is not listed until a later one completes; a connection never checked returns an empty page. |
+| `berrydb_dynamodb_query` | `connection_id`, `table`, `partition_key`; optional `index_name`, `sort_key` (`{op, value, value2}`, `op` one of `eq`, `lt`, `le`, `gt`, `ge`, `between` and `begins_with`, `value2` for `between` only), `projection` (at most 50 attribute names), `limit` (1–100), `cursor` | One page of one DynamoDB `Query` on the table or on `index_name`, read from the database. A key value is a string or an integer and takes the type of the key attribute it is for: a string for `S`, an integer or a decimal string for `N`, base64 for `B`. `items` are objects keyed by attribute name, each value DynamoDB attribute-value JSON such as `{"S": "…"}`, so a 38-digit number or a binary value comes back exactly. Also `item_count`, `key_schema` (the table's partition and sort key, and the index's when one was queried), `next_cursor` (absent on the last page), `consumed_capacity_units` (absent when DynamoDB reports none), `redacted_attributes`, `omitted_attributes` (`{item, name, bytes}` per attribute left out for size), `skipped_items` (`{index, bytes}` per item too large for the page), `truncated` and `elapsed_ms`. Pass `next_cursor` back as `cursor`, with the same other arguments, for the next page; the cursor is sealed to this helper process and this query, and any other use is refused. Listed only while the project has a DynamoDB connection with live reads on (see [Read-only enforcement layers](#read-only-enforcement-layers)). |
 
 With no project selected, `tools/list` returns only `berrydb_status` and
 every other tool answers that no project is selected; nothing about any
@@ -208,6 +214,10 @@ character removes the question.
    Folders** (every folder below one is included) or name the project in
    the repository's own agent configuration
    ([Per-repository agent configuration](#per-repository-agent-configuration)).
+   Live reads stay off until turned on per connection with its **Live
+   reads** switch, offered for PostgreSQL, MySQL/MariaDB, SQLite and
+   DynamoDB connections (see [Limits](#limits) for what turning it on
+   asks for).
 3. **Each host, once.** Run one command per host, each adding a
    user-level entry named `berrydb`. The pane's **Agent Setup** section
    shows these commands with the bundled helper's path filled in; for a
@@ -456,7 +466,7 @@ the settings pane says so.
 | `project` | `{"id", "name"}` of the selected project, else null |
 | `selected_by` | `explicit`, `roots` or `working_directory`, else null |
 | `workspace` | the location that decided the selection: the host root or working directory that a workspace folder matched for `roots` or `working_directory`, null for `explicit`; the same location when that project is now `project_disabled` or `no_matching_project`. Otherwise, when unconfigured: the working directory when it was the input that failed, null for the rest |
-| `live_reads` | `available` when the project has a connection with live reads turned on whose driver supports them and whose settings verify (the connections `berrydb_execute_read_query` accepts), else `not_available` |
+| `live_reads` | `available` when the project has a connection with live reads turned on whose driver supports them and whose settings verify (the connections `berrydb_execute_read_query` or `berrydb_dynamodb_query` accepts, DynamoDB included), else `not_available` |
 | `integrity` | when selected: `verified` if the project row's tag verifies under the stored key, `unavailable` if it does not or no key could be read; when unconfigured: `unavailable` for `integrity_unavailable` (the store could not be read), null for every other reason |
 | `connections` | when selected: one entry per connection of the project, `{"id", "name", "checked_at", "stale", "stale_reason", "hint"}` as `berrydb_list_connections` reports them, so an agent learns how fresh each stored schema is, why a stale one is, and which needs its schemas selected in the app; null when unconfigured or when the store could not be read |
 
@@ -698,9 +708,6 @@ reaches the server:
    character set is not `utf8mb4`, `utf8mb3`, `utf8`, `latin1`, `ascii` or
    `binary`.
 
-DynamoDB `Query` is not available: `berrydb_execute_read_query` refuses a
-DynamoDB connection, and `Scan` and PartiQL are never issued from MCP code.
-
 Known limitation: on MySQL and MariaDB, `SELECT … INTO OUTFILE` and `INTO
 DUMPFILE` write a file on the database server from inside `START
 TRANSACTION READ ONLY` (verified against MySQL 8.4.11 and MariaDB 11.8.9
@@ -735,6 +742,83 @@ not keep returned schema, graph, or row data on the Mac. Redaction hides
 columns by name and is best effort, so only column privileges keep a column
 from being returned.
 
+### DynamoDB
+
+`berrydb_dynamodb_query` runs one DynamoDB `Query` on one partition of a
+table or of one of its indexes, on a DynamoDB connection whose live reads
+the user turned on. It is listed only when the selected project has such a
+connection with settings that verify; with none, `tools/list` omits it.
+`berrydb_execute_read_query` called on a DynamoDB connection answers `This
+is a DynamoDB connection; use berrydb_dynamodb_query.`, and
+`berrydb_dynamodb_query` called on a SQL connection points back to
+`berrydb_execute_read_query`; neither opens a connection.
+
+DynamoDB has no read-only session, so this path is read-only by
+construction: the helper reaches DynamoDB only through the driver's
+partition-query contract, which sends `DescribeTable` (to type the key
+values against the table's key schema) and `Query`, after the `ListTables`
+request every DynamoDB connection sends when it opens to check that the
+endpoint and credentials work. `Scan`, PartiQL (`ExecuteStatement`,
+`BatchExecuteStatement`) and every write API are never issued from MCP
+code. The partition session holds an `MCPPartitionReader`, two closures
+for `DescribeTable` and `Query`, never the connection, so code given a
+session cannot call the driver's `execute`, which sends PartiQL; only the
+partition factory and the session's cancel and close hold the
+connection. A test scans the sources of the two MCP packages and of the
+helper executable for the targets above and for an import of the DynamoDB
+driver module, and fails when it finds one. A
+`Query` carries a key condition only: no filter expression, and no
+`ConsistentRead`, so reads are eventually consistent
+([Read consistency](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadConsistency.html)).
+
+The IAM policy of the connection's access key is the boundary on what a
+DynamoDB live read reaches; BerryDB cannot check it, and the **AI Agents**
+pane says so. Use an access key limited to `dynamodb:ListTables` (used by
+the check when the connection opens), `dynamodb:DescribeTable` and
+`dynamodb:Query` on the tables the agent may read
+([DynamoDB API permissions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/api-permissions-reference.html)).
+`ListTables` takes no table resource, so its statement needs `"Resource":
+"*"`
+([Actions, resources, and condition keys for Amazon DynamoDB](https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazondynamodb.html));
+what `ListTables` returns is never passed to the agent: the schema tools
+serve only the stored schema of the connections the project assigns.
+Such a policy has not been tried against AWS; dynamodb-local, which the
+live tests run on, does not enforce IAM. Redacted attributes remove
+top-level attributes by name from every item, nested values are not
+inspected, and a redacted key attribute is still used for the cursor;
+IAM, for example a `dynamodb:Attributes` condition, is what keeps an
+attribute out of reach
+([Using IAM policy conditions for fine-grained access control](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/specifying-conditions.html)).
+
+A DynamoDB connection over an SSH tunnel is refused: the pane does not
+turn its live reads on, and the helper answers `Live reads over an SSH
+tunnel are not available for DynamoDB connections.` before reading its
+secrets.
+
+Each call is one `Query` and one page. A key value is checked against the
+table's key schema (or the index's) before the `Query` is sent, so a key
+of the wrong type is refused with the attribute's name and type and never
+reaches DynamoDB. `next_cursor` is sealed with a key held only in the
+helper process's memory and bound to the connection, the table, the index
+and the query's key condition and projection (not its `limit`, which may
+change between pages), and to this helper process: a cursor from another
+helper process or another query is refused with `The cursor does not
+belong to this query or came from another session; start again without
+it.`
+
+Errors are one-line tool results, as for SQL. A table or index that does
+not exist gets fixed text; a throttled `Query`
+(`ProvisionedThroughputExceededException`, `ThrottlingException`,
+`RequestLimitExceeded`) is reported as `DynamoDB throttled this query; try
+again later, with a smaller limit or on a read replica.` and never
+retried, since a retry adds load to a table already over its capacity
+([Error handling](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html)).
+Any other error DynamoDB returns is forwarded as `DynamoDB refused the
+query:` and one line of at most 500 characters, with every ARN, access key
+ID and 12-digit number (an account ID) masked; `AccessDeniedException`,
+for one, quotes the caller's ARN. A failure while resolving or opening the
+connection gets the same fixed texts as SQL.
+
 ## Limits
 
 The production label on a profile only selects which row in the limits table
@@ -747,7 +831,14 @@ the settings pane requires reviewing the redacted-column list and
 acknowledging that reads use database resources and take shared locks, which
 can delay DDL or migrations. Once enabled, the profile is subject to the
 stricter production-labeled limits below. The pane's per-connection **Live
-reads** switch exists for PostgreSQL, MySQL/MariaDB and SQLite connections.
+reads** switch exists for PostgreSQL, MySQL/MariaDB, SQLite and DynamoDB
+connections. For a DynamoDB connection the pane says "attributes" where it
+otherwise says "columns" (redacted attributes, and the production consent
+reviews them), shows the note that BerryDB cannot check the connection's IAM
+permissions with the recommended access-key scope, warns for a
+production-labeled table that reads consume its read capacity and can
+throttle the application, runs no privilege check, and does not turn live
+reads on for a connection that uses an SSH tunnel.
 A save applies the draft's live-read switches and redacted columns to the
 verified editing copy of the project, in which a switch whose row does not
 verify is already off. A row that does not verify, whether its live reads
@@ -757,8 +848,8 @@ off, for them to be reviewed before a save seals them; when no key can be
 read, every connection is marked. The editor marks only connections that
 have the **Live reads** switch. For each connection whose live reads the
 save turns on (off in that copy, on in the draft) it requires the production
-consent when the connection is production-labeled, and, on PostgreSQL and
-MySQL/MariaDB, a finished privilege check run against the server and
+consent when the connection is production-labeled (DynamoDB included), and,
+on PostgreSQL and MySQL/MariaDB, a finished privilege check run against the server and
 account the stored connection still points at; a check that found a user
 that can write, or could not run, also needs the confirmation to use the
 connection anyway. A save that lacks any of these changes nothing. Live
@@ -784,7 +875,7 @@ it there.
 | Statement time limit | 30 s | 5 s |
 | Rows / items per response | 100 | 50 |
 | Serialized result | 1 MiB | 256 KiB |
-| Encoded cell | 64 KiB | 64 KiB |
+| Encoded cell / DynamoDB attribute | 64 KiB | 64 KiB |
 | Schema objects per response | 200 | 200 |
 | Estimated size of a full-detail schema page | 512 KiB | 512 KiB |
 | Graph nodes / edges | 500 / 1,000 | 500 / 1,000 |
@@ -844,6 +935,34 @@ try at once. Opens given up are not counted by the cap, but a connection
 with 4 of them still in flight is refused whatever its other reads did, so
 no connection leaves more than 4 behind.
 
+A DynamoDB query uses the same table, counting items: at most 100 items
+per call (50 on a production-labeled connection), and `limit` asks for
+fewer. It shares the cap of 4 live reads at once with SQL reads, and the
+same 15 s open budget, which covers resolving the connection, reading its
+secrets, opening it and the table's `DescribeTable`; the `Query` then has
+30 s (5 s on a production-labeled connection), past which the call fails
+with `The query did not finish within 30 seconds.` (or 5). An attribute
+whose encoding exceeds 64 KiB is left out of its item, which is still
+returned, and listed in `omitted_attributes` with its size. The serialized
+result, items and metadata together, stays within 1 MiB (256 KiB on a
+production-labeled connection) exactly: the whole result is measured as
+the tool sends it, and items are dropped from the end of the page until it
+fits. An item that does not fit even an empty page is skipped and listed
+in `skipped_items` with its size, and the items after it are still read;
+so is a first item that fits the page alone but not beside the cursor and
+the rest of the metadata, since a page starting at it would drop it again.
+Only a result that does not fit even without items fails, with `Result too
+large; narrow the request`.
+When the ceiling ends a page, `next_cursor` continues after the last item
+returned or skipped, so no item is returned twice and none is lost; a
+skipped item is not fetched again. DynamoDB itself returns at most 1 MB of
+data per `Query`
+([Query](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html)),
+which bounds what one call holds in memory. These bounds were exercised
+against dynamodb-local 3.3.0: a ceiling of about one and a half items paged
+a three-item partition one item at a time, and a 70,000-byte attribute was
+omitted with its item returned.
+
 Known limitation: a cell is read whole and cut to 64 KiB only when the
 result is built, so one large value, such as a multi-megabyte `text`,
 `bytea` or BLOB, is held in memory until its read ends. No bound applies
@@ -858,8 +977,8 @@ cache of table-level graphs, at most 4 entries and 32 MB, each dropped
 after 60 s unused.
 
 Truncation is explicit (`truncated`, omitted counts, an opaque continuation
-cursor where supported); the limiter's cost is linear in the rows it keeps,
-not in the rows scanned.
+cursor where supported, as `next_cursor` of a DynamoDB query); the
+limiter's cost is linear in the rows it keeps, not in the rows scanned.
 A live read stops reading once it has the row limit: `has_more_rows` says the
 server had more, `byte_limit_reached` that the serialized-result ceiling
 ended the page, and `truncated_cells` counts cells cut at 64 KiB.
@@ -898,14 +1017,20 @@ Implemented:
   with the label sealed into the access row, a cap of 4 live reads at once
   per helper process, and, in **AI Agents**, the per-connection **Live
   reads** switch, redacted columns and the production consent.
+- DynamoDB live reads: `berrydb_dynamodb_query`, one `Query` per call on
+  one partition of a table or index (never a `Scan`), with typed keys, a
+  continuation cursor sealed to the helper process and the query, the
+  attribute cap and the exact page ceiling, the same slots and budgets as
+  SQL reads, throttling reported without retry and masked errors; in **AI
+  Agents**, live reads, redacted attributes, the IAM note and the
+  production consent for DynamoDB connections, refused over an SSH tunnel.
 
 Not implemented:
 
 - A freshness channel from the app to the helper, so the helper can tell a
   stale answer from a current one by more than the age of the last check, and
   lazy connection and refresh timers in the app.
-- Live reads on DynamoDB: `berrydb_dynamodb_query` (`Query` only, never
-  `Scan`).
+- DynamoDB live reads over an SSH tunnel.
 - The audit log.
 - A read of the integrity key that never shows a Keychain dialog: the
   app adding the helper's designated requirement to the item's access

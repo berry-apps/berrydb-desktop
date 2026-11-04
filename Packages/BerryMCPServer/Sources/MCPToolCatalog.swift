@@ -17,6 +17,7 @@ public enum MCPToolName: String, CaseIterable, Sendable {
     case getGraphStats = "berrydb_get_graph_stats"
     case getSchemaChanges = "berrydb_get_schema_changes"
     case executeReadQuery = "berrydb_execute_read_query"
+    case dynamodbQuery = "berrydb_dynamodb_query"
 }
 
 /// Tool definitions, independent of any transport.
@@ -24,8 +25,8 @@ public enum MCPToolName: String, CaseIterable, Sendable {
 /// Invariant: every tool declares a closed input schema (`additionalProperties`
 /// false) and an output schema, and only `berrydb_status` is listed when no
 /// project is selected, so an unconfigured session exposes no metadata tool.
-/// `berrydb_execute_read_query` is listed only while the selected project
-/// has a connection it can run on.
+/// `berrydb_execute_read_query` and `berrydb_dynamodb_query` are each listed
+/// only while the selected project has a connection that tool can run on.
 public enum MCPToolCatalog {
     /// Largest serialized structured result a tool returns, in bytes.
     public static let maximumResultBytes = 1_048_576
@@ -35,14 +36,29 @@ public enum MCPToolCatalog {
         tools(for: context, liveReadConnectionIDs: [])
     }
 
-    /// Tools listed for a context: only `berrydb_status` unless a project is
-    /// selected, and the live read tool only when `liveReadConnectionIDs`,
-    /// the project's connections as `MCPMetadataService.liveReadConnectionIDs(in:)`
-    /// reports them, is not empty.
+    /// Tools listed for a context whose project has no DynamoDB connection
+    /// with live reads.
     public static func tools(for context: MCPProjectContext, liveReadConnectionIDs: Set<UUID>) -> [Tool] {
+        tools(for: context, liveReadConnectionIDs: liveReadConnectionIDs, partitionQueryConnectionIDs: [])
+    }
+
+    /// Tools listed for a context: only `berrydb_status` unless a project is
+    /// selected, the SQL live read tool only when `liveReadConnectionIDs`
+    /// (`MCPMetadataService.liveReadConnectionIDs(in:)`) is not empty, and
+    /// the DynamoDB query tool only when `partitionQueryConnectionIDs`
+    /// (`MCPMetadataService.partitionQueryConnectionIDs(in:)`) is not empty.
+    public static func tools(
+        for context: MCPProjectContext, liveReadConnectionIDs: Set<UUID>, partitionQueryConnectionIDs: Set<UUID>
+    ) -> [Tool] {
         guard case .selected = context else { return [definition(.status)] }
         return MCPToolName.allCases
-            .filter { $0 != .executeReadQuery || !liveReadConnectionIDs.isEmpty }
+            .filter { tool in
+                switch tool {
+                case .executeReadQuery: !liveReadConnectionIDs.isEmpty
+                case .dynamodbQuery: !partitionQueryConnectionIDs.isEmpty
+                default: true
+                }
+            }
             .map(definition)
     }
 
@@ -134,11 +150,34 @@ public enum MCPToolCatalog {
                 required: ["connection_id", "sql"]
             )
             output = liveReadOutput
+        case .dynamodbQuery:
+            description = "Runs one DynamoDB Query on a connection whose live reads the user turned on: the items of one partition key value, optionally narrowed by a sort key condition, on the table or one of its indexes, one page per call. Items are DynamoDB attribute-value JSON. Pass next_cursor back as cursor for the next page. No Scan, no filter expression, no write. Results go to this host and its model provider."
+            let name: Value = ["type": "string", "minLength": 3, "maxLength": 255]
+            input = object(
+                [
+                    "connection_id": connectionID,
+                    "table": name,
+                    "index_name": name,
+                    "partition_key": keyValue,
+                    "sort_key": object(
+                        [
+                            "op": ["type": "string", "enum": ["eq", "lt", "le", "gt", "ge", "between", "begins_with"]],
+                            "value": keyValue, "value2": keyValue,
+                        ],
+                        required: ["op", "value"]
+                    ),
+                    "projection": ["type": "array", "items": ["type": "string"], "maxItems": 50],
+                    "limit": ["type": "integer", "minimum": 1, "maximum": 100],
+                    "cursor": ["type": "string", "maxLength": .int(MCPToolArguments.maximumCursorLength)],
+                ],
+                required: ["connection_id", "table", "partition_key"]
+            )
+            output = partitionQueryOutput
         }
         // A live read leaves BerryDB's store for the user's database, an
         // open world in the terms of `Tool.Annotations` (swift-sdk 0.12.1),
         // and the same statement answers differently as that data changes.
-        let live = tool == .executeReadQuery
+        let live = tool == .executeReadQuery || tool == .dynamodbQuery
         return Tool(
             name: tool.rawValue,
             description: description,
@@ -237,6 +276,43 @@ public enum MCPToolCatalog {
         ]
     )
 
+    /// A key value: text, or a whole number; the table's key schema decides
+    /// which DynamoDB type it becomes.
+    private static let keyValue: Value = ["type": ["string", "integer"]]
+
+    /// Items are objects keyed by attribute name exactly as stored, each
+    /// value one DynamoDB attribute-value entry such as `{"S": "…"}`.
+    /// `next_cursor` and `consumed_capacity_units` are absent when there is
+    /// none.
+    private static let partitionQueryOutput: Value = {
+        let attribute = object(["name": text, "type": ["type": "string", "enum": ["S", "N", "B"]]], required: ["name", "type"])
+        let index = object(
+            ["name": text, "partition_key": attribute, "sort_key": attribute], required: ["name", "partition_key"]
+        )
+        return object(
+            [
+                "items": array(of: ["type": "object"]),
+                "item_count": integer,
+                "key_schema": object(
+                    ["partition_key": attribute, "sort_key": attribute, "index": index], required: ["partition_key"]
+                ),
+                "next_cursor": text,
+                "consumed_capacity_units": ["type": "number"],
+                "redacted_attributes": array(of: text),
+                "omitted_attributes": array(of: object(
+                    ["item": integer, "name": text, "bytes": integer], required: ["item", "name", "bytes"]
+                )),
+                "skipped_items": array(of: object(["index": integer, "bytes": integer], required: ["index", "bytes"])),
+                "truncated": boolean,
+                "elapsed_ms": integer,
+            ],
+            required: [
+                "items", "item_count", "key_schema", "redacted_attributes", "omitted_attributes", "skipped_items",
+                "truncated", "elapsed_ms",
+            ]
+        )
+    }()
+
     private static let schemaOutput: Value = {
         let column = object(
             ["name": text, "type": text, "nullable": ["type": "boolean"], "primary_key": ["type": "boolean"]],
@@ -331,8 +407,9 @@ public enum MCPToolCatalog {
 /// (`MCPError.invalidParams`); everything else is a tool result. Only
 /// `MCPMetadataError` texts, which are written for the agent, are ever shown;
 /// any other failure becomes a fixed text, because a store error can carry a
-/// file path. A live read is served by `MCPLiveReadTool`; the router answers
-/// one only in a server built without live reads.
+/// file path. A live read is served by `MCPLiveReadTool` and a DynamoDB query
+/// by `MCPDynamoDBQueryTool`; the router answers either only in a server
+/// built without that tool.
 public struct MCPToolRouter: Sendable {
     static let noProjectText = "No BerryDB project is selected for this workspace. Call berrydb_status for details."
     static let tooLargeText = "Result too large; narrow the request"
@@ -404,7 +481,7 @@ public struct MCPToolRouter: Sendable {
                 since: try arguments.since(), limit: try arguments.changesLimit()
             )
             return try Self.respond(changes)
-        case .executeReadQuery:
+        case .executeReadQuery, .dynamodbQuery:
             return Self.failure(Self.noLiveReadsText)
         }
     }
@@ -433,13 +510,15 @@ public struct MCPToolRouter: Sendable {
         return result
     }
 
-    /// Whether the selected project has a connection the live read tool runs
-    /// on; false when the store cannot be read, so the status still answers.
+    /// Whether the selected project has a connection the SQL live read or
+    /// the DynamoDB query tool runs on, so the status agrees with the tools
+    /// listed; false when the store cannot be read, so the status still
+    /// answers.
     private func liveReadsAvailable(_ context: MCPProjectContext) -> Bool {
         guard case let .selected(project, _, _) = context,
-              let ids = try? metadata.liveReadConnectionIDs(in: project)
+              let ids = try? metadata.liveConnectionIDs(in: project)
         else { return false }
-        return !ids.isEmpty
+        return !ids.sql.isEmpty || !ids.partition.isEmpty
     }
 
     /// How current each connection's stored schema is, and why a stale one is,
@@ -498,6 +577,23 @@ public struct MCPToolRouter: Sendable {
         return CallTool.Result(
             content: [.text(text: String(decoding: data, as: UTF8.self), annotations: nil, _meta: nil)],
             structuredContent: Optional.some(try MCPStructuredEncoding.value(from: data))
+        )
+    }
+
+    /// As `respond(_:)` for a payload already built as a `Value`, serialized
+    /// with sorted keys and unescaped slashes and no key conversion, so keys
+    /// the caller spelled, such as DynamoDB's `BOOL` and `SS` tags, reach
+    /// the host as written. The tree is the `structuredContent` itself, and
+    /// every case it holds encodes to the JSON it was built from: callers
+    /// never put `.data` in it.
+    static func respond(structured value: Value) throws -> CallTool.Result {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(value)
+        guard data.count <= MCPToolCatalog.maximumResultBytes else { return Self.failure(Self.tooLargeText) }
+        return CallTool.Result(
+            content: [.text(text: String(decoding: data, as: UTF8.self), annotations: nil, _meta: nil)],
+            structuredContent: Optional.some(value)
         )
     }
 

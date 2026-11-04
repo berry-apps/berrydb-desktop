@@ -1,6 +1,6 @@
 import BerryDriverKit
 import BerryGraph
-import BerryMCP
+@testable import BerryMCP
 import BerryStore
 import Foundation
 import MCP
@@ -43,6 +43,9 @@ struct BerryMCPServerFactoryTests {
 
     let shop = ConnectionProfile(driverID: "postgres", name: "Shop", envColor: "production")
     let billing = ConnectionProfile(driverID: "sqlite", name: "Billing", filePath: "/data/billing.db")
+    let orders = ConnectionProfile(driverID: "dynamodb", name: "Orders")
+    /// Assigned to project C but no longer saved.
+    let removed = UUID(uuidString: "00000000-0000-0000-0000-0000000000DE")!
 
     var projectA: MCPProject {
         MCPProject(
@@ -56,6 +59,19 @@ struct BerryMCPServerFactoryTests {
             id: UUID(uuidString: "00000000-0000-0000-0000-00000000000B")!, name: "B", isEnabled: true,
             workspaceRoots: ["/work/b"],
             profiles: [MCPProfileAccess(profileID: shop.id), MCPProfileAccess(profileID: billing.id)]
+        )
+    }
+
+    /// The DynamoDB `orders`, the SQLite `billing` and a profile deleted
+    /// since it was assigned.
+    var projectC: MCPProject {
+        MCPProject(
+            id: UUID(uuidString: "00000000-0000-0000-0000-00000000000C")!, name: "C", isEnabled: true,
+            workspaceRoots: ["/work/c"],
+            profiles: [
+                MCPProfileAccess(profileID: orders.id, liveRead: true), MCPProfileAccess(profileID: billing.id, liveRead: true),
+                MCPProfileAccess(profileID: removed, liveRead: true),
+            ]
         )
     }
 
@@ -90,7 +106,7 @@ struct BerryMCPServerFactoryTests {
 
     /// Both profiles over an empty schema store.
     func metadata() throws -> MCPMetadataService {
-        let profiles = [shop, billing]
+        let profiles = [shop, billing, orders]
         let reader = GraphReader(store: try BerryStore(path: ":memory:"))
         return MCPMetadataService(profiles: { profiles }, reader: reader, graph: BerryGraphQueryService(reader: reader))
     }
@@ -158,8 +174,8 @@ struct BerryMCPServerFactoryTests {
         await server.stop()
     }
 
-    /// Every tool but the live one, which needs a live-read connection.
-    static let metadataToolCount = MCPToolName.allCases.count - 1
+    /// Every tool but the two live ones, which need a live-read connection.
+    static let metadataToolCount = MCPToolName.allCases.count - 2
 
     static func call(_ client: Client, _ tool: MCPToolName) async throws -> CallTool.Result {
         try await client.send(CallTool.request(.init(name: tool.rawValue))).value
@@ -599,6 +615,310 @@ struct BerryMCPServerFactoryTests {
         let tracker = live.tracker
         try await withDeadline(.seconds(10)) { await tracker.waitForCloses(1) }
     }
+
+    // MARK: DynamoDB queries
+
+    /// Project C with live reads on for `orders`, `billing` and the deleted
+    /// `removed`, as the session's roots select it.
+    fileprivate func partitionStore() -> Locked<Store> {
+        Locked(Store(projects: [projectA, projectB, projectC], liveReads: [orders.id, billing.id, removed]))
+    }
+
+    static func dynamoCall(_ connectionID: UUID, _ arguments: [String: Value] = [:]) -> Request<CallTool> {
+        CallTool.request(.init(
+            name: MCPToolName.dynamodbQuery.rawValue,
+            arguments: ["connection_id": .string(connectionID.uuidString), "table": "orders", "partition_key": "c1"]
+                .merging(arguments) { $1 }
+        ))
+    }
+
+    static func text(_ result: CallTool.Result) -> String {
+        guard case let .text(text, _, _)? = result.content.first else { return "" }
+        return text
+    }
+
+    /// The JSON of `structuredContent` as the text block must carry it.
+    static func reencoded(_ result: CallTool.Result) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(try #require(result.structuredContent)), as: UTF8.self)
+    }
+
+    @Test func dynamodbQueryReturnsItemsWithVerbatimAttributeNamesAndACursor() async throws {
+        let first: [String: DynamoDBAttributeValue] = [
+            "customer": .string("c1"), "placed": .string("2026-11-01"), "createdAt": .string("2026/11/01"),
+            "total": .number("12345678901234567890.5"), "blob": .binary(Data([0, 255])), "gone": .null,
+            "flag": .bool(false), "tags": .stringSet(["a", "b"]), "sizes": .numberSet(["1", "2.5"]),
+            "chunks": .binarySet([Data([1])]), "lines": .list([.map(["skuCode": .string("x"), "qty": .number("2")])]),
+        ]
+        let second: [String: DynamoDBAttributeValue] = ["customer": .string("c1"), "placed": .string("2026-11-02")]
+        let lastKey: [String: DynamoDBAttributeValue] = ["customer": .string("c1"), "placed": .string("2026-11-01")]
+        let connection = ScriptedPartitionConnection(pages: [
+            DynamoDBQueryPage(items: [first], lastEvaluatedKey: lastKey, consumedCapacityUnits: 0.5, scannedCount: 1),
+            DynamoDBQueryPage(items: [second], lastEvaluatedKey: nil, consumedCapacityUnits: nil, scannedCount: 1),
+        ])
+        let live = PartitionHarness(connection: connection, dynamoID: orders.id)
+        let ordersID = orders.id
+        let expectedFirst = Value.object([
+            "customer": ["S": "c1"], "placed": ["S": "2026-11-01"], "createdAt": ["S": "2026/11/01"],
+            "total": ["N": "12345678901234567890.5"], "blob": ["B": "AP8="], "gone": ["NULL": true],
+            "flag": ["BOOL": false], "tags": ["SS": ["a", "b"]], "sizes": ["NS": ["1", "2.5"]],
+            "chunks": ["BS": ["AQ=="]], "lines": ["L": [["M": ["skuCode": ["S": "x"], "qty": ["N": "2"]]]]],
+        ])
+        try await withSession(store: partitionStore(), roots: .declared(["file:///work/c"]), liveReads: live.liveReads) { client in
+            let tools = try await client.listTools().tools.map(\.name)
+            #expect(tools.contains(MCPToolName.dynamodbQuery.rawValue))
+            #expect(tools.contains(MCPToolName.executeReadQuery.rawValue))
+
+            let result = try await client.send(Self.dynamoCall(ordersID, ["limit": 1])).value
+            #expect(result.isError != true, "\(Self.text(result))")
+            let structured = try #require(result.structuredContent?.objectValue)
+            #expect(structured["items"] == .array([expectedFirst]))
+            #expect(structured["item_count"] == 1)
+            #expect(structured["truncated"] == .bool(true))
+            #expect(structured["consumed_capacity_units"] == .double(0.5))
+            #expect(structured["key_schema"]?.objectValue?["partition_key"] == ["name": "customer", "type": "S"])
+            let cursor = try #require(structured["next_cursor"]?.stringValue)
+            let text = Self.text(result)
+            #expect(text == (try Self.reencoded(result)))
+            #expect(text.contains(#""createdAt":{"S":"2026/11/01"}"#))
+            #expect(text.contains(#""skuCode""#))
+            #expect(!text.contains("created_at") && !text.contains("sku_code"))
+
+            let next = try await client.send(Self.dynamoCall(ordersID, ["limit": 1, "cursor": .string(cursor)])).value
+            #expect(next.isError != true, "\(Self.text(next))")
+            #expect(next.structuredContent?.objectValue?["items"] == [["customer": ["S": "c1"], "placed": ["S": "2026-11-02"]]])
+            #expect(next.structuredContent?.objectValue?["next_cursor"] == nil)
+        }
+        let queries = await connection.queries
+        #expect(queries.map(\.partitionKey) == [.string("c1"), .string("c1")])
+        #expect(queries.map(\.limit) == [1, 1])
+        #expect(queries.map(\.exclusiveStartKey) == [nil, lastKey])
+
+        // The text block is exactly the object whose size the service held
+        // to the byte ceiling.
+        let result = MCPPartitionQueryResult(
+            items: [first, second], itemCount: 2,
+            keySchema: MCPKeySchemaDescription(schema: ScriptedPartitionConnection.orders, index: nil),
+            nextCursor: "abc/def+==", consumedCapacityUnits: 1.5, redactedAttributes: ["secretNote"],
+            omittedAttributes: [MCPOmittedAttribute(item: 0, name: "bigBlob", bytes: 70_000)],
+            skippedItems: [MCPSkippedItem(index: 3, bytes: 2_000_000)], truncated: true, elapsedMs: 12
+        )
+        let response = try MCPDynamoDBQueryTool.respond(result)
+        #expect(Self.text(response).utf8.count == (try MCPPartitionQueryService.encodedSize(of: result)))
+        #expect(Self.text(response) == (try Self.reencoded(response)))
+    }
+
+    /// A project whose only live connection is DynamoDB reports live reads
+    /// as available, in agreement with the tool it lists.
+    @Test func aDynamoDBOnlyProjectReportsLiveReadsAvailable() async throws {
+        let projectD = MCPProject(
+            id: UUID(uuidString: "00000000-0000-0000-0000-00000000000D")!, name: "D", isEnabled: true,
+            workspaceRoots: ["/work/d"], profiles: [MCPProfileAccess(profileID: orders.id, liveRead: true)]
+        )
+        let store = Locked(Store(projects: [projectA, projectD], liveReads: [orders.id]))
+        try await withSession(store: store, roots: .declared(["file:///work/d"])) { client in
+            let tools = try await client.listTools().tools.map(\.name)
+            #expect(tools.contains(MCPToolName.dynamodbQuery.rawValue))
+            #expect(!tools.contains(MCPToolName.executeReadQuery.rawValue))
+            let status = try await Self.status(client)
+            #expect(Self.projectID(status) == projectD.id.uuidString)
+            #expect(status["live_reads"] == "available")
+        }
+    }
+
+    @Test func executeReadQueryOnADynamoDBConnectionPointsToTheDynamoDBTool() async throws {
+        let connection = ScriptedPartitionConnection(pages: [])
+        let live = PartitionHarness(connection: connection, dynamoID: orders.id)
+        let ordersID = orders.id
+        try await withSession(store: partitionStore(), roots: .declared(["file:///work/c"]), liveReads: live.liveReads) { client in
+            let result = try await client.send(Self.readCall(ordersID, sql: "SELECT 1")).value
+            #expect(result.isError == true)
+            #expect(Self.text(result) == "This is a DynamoDB connection; use berrydb_dynamodb_query.")
+        }
+        #expect(await connection.queries.isEmpty)
+        #expect(await live.tracker.opens == 0)
+    }
+
+    @Test func dynamodbQueryOnASQLConnectionPointsToTheSQLTool() async throws {
+        let connection = ScriptedPartitionConnection(pages: [])
+        let live = PartitionHarness(connection: connection, dynamoID: orders.id)
+        let billingID = billing.id
+        let unassignedID = shop.id
+        let removedID = removed
+        try await withSession(store: partitionStore(), roots: .declared(["file:///work/c"]), liveReads: live.liveReads) { client in
+            let sql = try await client.send(Self.dynamoCall(billingID)).value
+            #expect(sql.isError == true)
+            #expect(Self.text(sql) == MCPPartitionQueryError.unsupportedDatabase.description)
+            // An unassigned and a deleted profile read the same.
+            for id in [unassignedID, removedID] {
+                let unknown = try await client.send(Self.dynamoCall(id)).value
+                #expect(unknown.isError == true)
+                #expect(Self.text(unknown) == "Unknown connection for this project")
+            }
+        }
+        #expect(await connection.queries.isEmpty)
+        #expect(await live.tracker.opens == 0)
+    }
+
+    @Test func malformedDynamoDBArgumentsAreInvalidParamsWithoutEchoingValues() async throws {
+        let connection = ScriptedPartitionConnection(pages: [])
+        let live = PartitionHarness(connection: connection, dynamoID: orders.id)
+        let context = MCPProjectContext.selected(
+            MCPVerifiedProject(project: projectC, liveReadProfileIDs: [orders.id]), source: .explicit, workspace: nil
+        )
+        live.liveReads.projectSource.bind { context }
+        let tool = MCPDynamoDBQueryTool(service: try #require(live.liveReads.partition))
+        let metadata = try metadata()
+        let base: [String: Value] = ["connection_id": .string(orders.id.uuidString), "table": "orders", "partition_key": "c1"]
+        let cases: [(arguments: [String: Value], message: String, value: String)] = [
+            (["partition_key": .double(1.5)], "partition_key must be a string or an integer", "1.5"),
+            (["partition_key": .double(1.25e21)], "partition_key must be a string or an integer", "1250000000000000000000"),
+            (["sort_key": ["op": "like", "value": "x"]], "sort_key.op must be one of eq, lt, le, gt, ge, between, begins_with", "like"),
+            (["sort_key": ["op": "between", "value": 1, "value2": .double(2.75)]], "sort_key.value2 must be a string or an integer", "2.75"),
+            (["projection": .array((0 ..< 51).map { .string("secretName\($0)") })], "projection accepts at most 50 names", "secretName"),
+            (["smuggled": "s3cr3t-value"], "Unexpected argument: smuggled", "s3cr3t-value"),
+            (["cursor": .string(String(repeating: "Q", count: 16_385))], "cursor must be at most 16384 characters", "QQQQ"),
+            // One past `Int64.max`, which the SDK decodes as a double.
+            (["partition_key": .double(9_223_372_036_854_775_808)], "partition_key must be a string or an integer", "9223372036854775808"),
+            (["sort_key": "eq-7731"], "sort_key must be an object", "7731"),
+            (["projection": ["name", 4242]], "projection must be an array of strings", "4242"),
+            (["partition_key": .data(mimeType: "text/plain", Data("k9z".utf8))], "partition_key cannot hold a data: URL string", "k9z"),
+            (["sort_key": ["op": "between"]], "sort_key.value is required", "between"),
+        ]
+        for (arguments, expected, value) in cases {
+            do {
+                let result = try await tool.call(base.merging(arguments) { $1 }, context: context, metadata: metadata)
+                Issue.record("expected invalid params for \(arguments.keys.sorted()), got \(result)")
+            } catch let MCPError.invalidParams(message) {
+                #expect(message == expected)
+                #expect(message?.contains(value) == false)
+            }
+        }
+        #expect(await connection.queries.isEmpty)
+        #expect(await live.tracker.opens == 0)
+    }
+
+    /// As `aCancelledToolCallThrowsCancellation`, for a DynamoDB query still
+    /// waiting on the database.
+    @Test func aCancelledDynamoDBCallGetsNoResponse() async throws {
+        let connection = ScriptedPartitionConnection(pages: [], delay: .seconds(60))
+        let live = PartitionHarness(connection: connection, dynamoID: orders.id)
+        let context = MCPProjectContext.selected(
+            MCPVerifiedProject(project: projectC, liveReadProfileIDs: [orders.id]), source: .explicit, workspace: nil
+        )
+        live.liveReads.projectSource.bind { context }
+        let tool = MCPDynamoDBQueryTool(service: try #require(live.liveReads.partition))
+        let metadata = try metadata()
+        let arguments: [String: Value] = ["connection_id": .string(orders.id.uuidString), "table": "orders", "partition_key": "c1"]
+        let task = Task { try await tool.call(arguments, context: context, metadata: metadata) }
+        try await withDeadline(.seconds(10)) { await connection.waitForQuery() }
+        task.cancel()
+        let outcome = try await withDeadline(.seconds(10)) { () -> String in
+            do {
+                let result = try await task.value
+                return "returned \(result)"
+            } catch is CancellationError {
+                return "cancelled"
+            } catch {
+                return "threw \(error)"
+            }
+        }
+        #expect(outcome == "cancelled")
+        let tracker = live.tracker
+        try await withDeadline(.seconds(10)) { await tracker.waitForCloses(1) }
+    }
+}
+
+/// A DynamoDB query service and a SQL live-read service over one
+/// coordinator: sessions for `dynamoID` run on `connection`, and every other
+/// profile is SQLite with no scripted SQL connection.
+private struct PartitionHarness {
+    let tracker = SessionTracker()
+    let liveReads: BerryMCPServerFactory.LiveReads
+
+    init(connection: ScriptedPartitionConnection, dynamoID: UUID) {
+        let source = MCPSessionProjectSource()
+        let resolver = MCPProjectResolver(
+            loadProject: { await source.project() },
+            profile: { id in
+                MCPConnectionProfile(id: id, driverID: id == dynamoID ? .dynamodb : .sqlite, config: .sqlite(path: ":memory:"))
+            }
+        )
+        let tracker = self.tracker
+        let coordinator = MCPConnectionCoordinator(
+            resolver: resolver,
+            sqlFactory: { _ in throw DriverError.connectionFailed("no SQL connection scripted") },
+            partitionFactory: { profile in
+                await tracker.opened()
+                let lifecycle = MCPConnectionLifecycle(
+                    cancel: { connection.cancelCurrentQuery() },
+                    closeConnection: { await tracker.closed() }
+                )
+                return MCPPartitionSession(reader: MCPPartitionReader(connection), lifecycle: lifecycle, profile: profile)
+            }
+        )
+        let service = MCPLiveReadService(coordinator: coordinator)
+        liveReads = BerryMCPServerFactory.LiveReads(
+            service: service, projectSource: source, partition: MCPPartitionQueryService(sharing: service)
+        )
+    }
+}
+
+/// Answers `orders` queries with scripted pages in order and records each
+/// query; with a `delay`, a query waits that long unless cancelled.
+private actor ScriptedPartitionConnection: PartitionQuerying {
+    /// `orders`: customer (S) and placed (S).
+    static let orders = DynamoDBKeySchema(
+        table: "orders",
+        partitionKey: DynamoDBKeyAttribute(name: "customer", type: .string),
+        sortKey: DynamoDBKeyAttribute(name: "placed", type: .string),
+        indexes: []
+    )
+
+    nonisolated let id = UUID()
+    private var pages: [DynamoDBQueryPage]
+    private let delay: Duration
+    private nonisolated let inFlight = Mutex<Task<Void, Error>?>(nil)
+    private(set) var queries: [DynamoDBPartitionQuery] = []
+
+    init(pages: [DynamoDBQueryPage], delay: Duration = .zero) {
+        self.pages = pages
+        self.delay = delay
+    }
+
+    func keySchema(of table: String) async throws -> DynamoDBKeySchema {
+        Self.orders
+    }
+
+    func queryPartition(_ query: DynamoDBPartitionQuery) async throws -> DynamoDBQueryPage {
+        queries.append(query)
+        if delay > .zero {
+            let delay = self.delay
+            let sleep = Task { try await Task.sleep(for: delay) }
+            inFlight.withLock { $0 = sleep }
+            do {
+                try await withTaskCancellationHandler { try await sleep.value } onCancel: { sleep.cancel() }
+            } catch {
+                throw DriverError.cancelled
+            }
+        }
+        guard !pages.isEmpty else { throw DriverError.queryFailed(message: "no scripted page", code: nil) }
+        return pages.removeFirst()
+    }
+
+    func waitForQuery() async {
+        while queries.isEmpty {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    nonisolated func execute(_ sql: String) -> AsyncThrowingStream<ResultEvent, Error> { .init { $0.finish() } }
+    nonisolated func cancelCurrentQuery() { inFlight.withLock { $0 }?.cancel() }
+    func setDatabase(_ name: String) async throws {}
+    nonisolated var introspector: any Introspector { fatalError("unused") }
+    func ping() async -> Bool { true }
+    func close() async {}
 }
 
 /// A live-read service over one coordinator whose sessions run on
@@ -626,6 +946,11 @@ private struct LiveReadHarness {
 
 private actor SessionTracker {
     private(set) var closes = 0
+    private(set) var opens = 0
+
+    func opened() {
+        opens += 1
+    }
 
     func closed() {
         closes += 1

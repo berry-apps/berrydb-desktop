@@ -1203,6 +1203,60 @@ struct MCPProjectsSettingsModelTests {
         #expect(verified.liveReadProfileIDs == [ledger.id])
     }
 
+    @Test func aDynamoDBConnectionCanTurnLiveReadsOnWithoutAPrivilegeCheck() throws {
+        let (store, _, _) = try makeStore()
+        let table = ConnectionProfile(driverID: "dynamodb", name: "Sessions")
+        try store.save(table)
+        let box = KeyBox()
+        let model = makeModel(store, box)
+
+        let draft = liveReadDraft(model, table, redacted: ["Email"])
+        #expect(MCPProjectsSettingsModel.supportsLiveRead(table))
+        #expect(MCPProjectsSettingsModel.needsPrivilegeCheck(table) == false)
+        #expect(MCPProjectsSettingsModel.startsPrivilegeCheck(for: table, in: draft) == false)
+
+        #expect(model.save(draft))
+        #expect(model.errorMessage == nil)
+        let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
+        #expect(verified.liveReadProfileIDs == [table.id])
+    }
+
+    @Test func aProductionDynamoDBConnectionNeedsTheConsent() throws {
+        let (store, _, _) = try makeStore()
+        let table = ConnectionProfile(driverID: "dynamodb", name: "Sessions", envColor: "production")
+        try store.save(table)
+        let box = KeyBox()
+        let model = makeModel(store, box)
+
+        var draft = liveReadDraft(model, table)
+        #expect(model.save(draft) == false)
+        #expect(model.errorMessage == L("Live reads on \(table.name) need your confirmation that you reviewed its redacted attributes and accept reads on this production database."))
+        #expect(try store.mcpProject(id: draft.id) == nil)
+
+        draft.acknowledged = [.production(table.id)]
+        #expect(model.save(draft))
+        #expect(model.errorMessage == nil)
+    }
+
+    @Test func aDynamoDBConnectionOverSSHCannotTurnLiveReadsOn() throws {
+        let (store, _, _) = try makeStore()
+        let table = ConnectionProfile(
+            driverID: "dynamodb", name: "Sessions", envColor: "production", sshEnabled: true
+        )
+        try store.save(table)
+        let box = KeyBox()
+        let model = makeModel(store, box)
+        let refusal = L("Live reads are not available for \(table.name) through an SSH tunnel.")
+
+        var draft = liveReadDraft(model, table)
+        for acknowledged: Set<MCPProjectsSettingsModel.Acknowledgment> in [[], [.production(table.id)]] {
+            draft.acknowledged = acknowledged
+            #expect(model.save(draft) == false)
+            #expect(model.errorMessage == refusal)
+            #expect(try store.mcpProject(id: draft.id) == nil)
+        }
+    }
+
     @Test func aWritableRoleNeedsTheAcknowledgment() async throws {
         let (store, orders, _) = try makeStore()
         let box = KeyBox()
@@ -1580,21 +1634,23 @@ struct MCPProjectsSettingsModelTests {
     }
 
     @Test func aDriverWithoutLiveReadsCannotTurnThemOn() throws {
-        let (store, _, events) = try makeStore()
+        let (store, _, _) = try makeStore()
+        let cache = ConnectionProfile(driverID: "redis", name: "Cache")
+        try store.save(cache)
         let box = KeyBox()
         let model = makeModel(store, box)
 
-        var draft = liveReadDraft(model, events)
-        draft.acknowledged = [.production(events.id), .writableRole(events.id)]
+        var draft = liveReadDraft(model, cache)
+        draft.acknowledged = [.production(cache.id), .writableRole(cache.id)]
         #expect(model.save(draft) == false)
 
-        #expect(model.errorMessage == L("Live reads are not available for \("Events")."))
+        #expect(model.errorMessage == L("Live reads are not available for \("Cache")."))
         #expect(try store.mcpProject(id: draft.id) == nil)
         #expect(box.writeCount == 0)
-        for driverID in ["postgres", "mysql", "sqlite"] {
+        for driverID in ["postgres", "mysql", "sqlite", "dynamodb"] {
             #expect(MCPProjectsSettingsModel.supportsLiveRead(ConnectionProfile(driverID: driverID, name: "x")))
         }
-        for driverID in ["dynamodb", "redis", "sqlserver", "mongodb", "qdrant", "elasticsearch", "unknown"] {
+        for driverID in ["redis", "sqlserver", "mongodb", "qdrant", "elasticsearch", "unknown"] {
             #expect(!MCPProjectsSettingsModel.supportsLiveRead(ConnectionProfile(driverID: driverID, name: "x")))
         }
     }

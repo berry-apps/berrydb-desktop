@@ -117,6 +117,9 @@ public enum BerryDBMCPComposition {
             profile: MCPProjectResolver.storeProfileLoader(store: store, credentialResolver: .keychain)
         )
         let coordinator = MCPConnectionCoordinator(resolver: liveResolver)
+        // Both services take their slots from the live-read service, so SQL
+        // reads and DynamoDB queries together stay within one cap.
+        let liveReads = MCPLiveReadService(coordinator: coordinator)
         let dependencies = BerryMCPServerFactory.Dependencies(
             resolver: resolver,
             metadata: metadata,
@@ -124,8 +127,7 @@ public enum BerryDBMCPComposition {
             workingDirectory: workingDirectory,
             version: serverVersion,
             liveReads: BerryMCPServerFactory.LiveReads(
-                service: MCPLiveReadService(coordinator: coordinator),
-                projectSource: source
+                service: liveReads, projectSource: source, partition: MCPPartitionQueryService(sharing: liveReads)
             ),
             onRequest: onRequest
         )

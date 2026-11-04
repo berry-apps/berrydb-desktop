@@ -21,6 +21,42 @@ struct MCPProjectResolverTests {
         #expect(try await resolver.resolve(profileID: id, access: .liveRead).redactedColumns == ["email"])
     }
 
+    /// A DynamoDB profile over an SSH tunnel is refused from the stored
+    /// profile alone, so its secrets are never read.
+    @Test func aDynamoDBProfileOverAnSSHTunnelIsRefusedBeforeItsSecretsAreRead() async throws {
+        let store = try BerryStore(path: ":memory:")
+        let profile = ConnectionProfile(
+            driverID: "dynamodb", name: "Tunnelled", host: "127.0.0.1", port: 8000, username: "key",
+            database: "us-east-1", sshEnabled: true, sshHost: "bastion.example"
+        )
+        try store.save(profile)
+        let reads = ResolverCredentialReads()
+        let loader = MCPProjectResolver.storeProfileLoader(
+            store: store,
+            credentialResolver: MCPCredentialResolver { _ in
+                await reads.record()
+                return ConnectionSecrets()
+            }
+        )
+        await #expect(throws: MCPProjectResolutionError.tunnelUnsupported(profile.id)) {
+            _ = try await loader(profile.id)
+        }
+        #expect(await reads.count == 0)
+    }
+
+    @Test func theStoreLoaderAdmitsADynamoDBProfile() async throws {
+        let store = try BerryStore(path: ":memory:")
+        let profile = ConnectionProfile(
+            driverID: "dynamodb", name: "Local", host: "127.0.0.1", port: 8000, username: "key",
+            database: "us-east-1"
+        )
+        try store.save(profile)
+        let loader = MCPProjectResolver.storeProfileLoader(
+            store: store, credentialResolver: MCPCredentialResolver { _ in ConnectionSecrets() }
+        )
+        #expect(try await loader(profile.id)?.driverID == .dynamodb)
+    }
+
     @Test func theStoreLoaderMarksAProductionProfile() async throws {
         let store = try BerryStore(path: ":memory:")
         let profile = ConnectionProfile(driverID: "sqlite", name: "Prod", envColor: "production", filePath: "/tmp/x.db")
@@ -116,4 +152,9 @@ struct MCPProjectResolverTests {
             try await resolver.resolve(profileID: a, access: .liveRead)
         }
     }
+}
+
+private actor ResolverCredentialReads {
+    private(set) var count = 0
+    func record() { count += 1 }
 }

@@ -571,9 +571,11 @@ let package = Package(
         .testTarget(
             name: "BerryMCPTests",
             // GRDB: a test breaks a store's tables to make every read fail.
+            // BerryDriverDynamoDB: the live suite drives the real DynamoDB
+            // driver through the helper's services.
             dependencies: [
                 "BerryMCP", "BerryCredentials", "BerryDriverKit", "BerryGraph", "BerryStore", "BerryDriverSQLite",
-                "BerryDriverTestKit", "BerryDriverPostgres", "BerryDriverMySQL",
+                "BerryDriverTestKit", "BerryDriverPostgres", "BerryDriverMySQL", "BerryDriverDynamoDB",
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Packages/BerryMCP/Tests"

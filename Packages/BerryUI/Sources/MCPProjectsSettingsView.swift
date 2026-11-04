@@ -310,31 +310,46 @@ private struct MCPProjectEditorSheet: View {
     private func liveReadSettings(for profile: ConnectionProfile, isProduction: Bool) -> some View {
         let id = profile.id
         let turnsOn = MCPProjectsSettingsModel.turnsLiveReadsOn(id, in: draft)
+        let isDynamoDB = profile.driver == .dynamodb
         Group {
             if model.unverifiedProfileIDs[draft.id]?.contains(id) == true {
-                Text(L("This connection’s saved settings could not be verified, and its live reads opened off. Review its redacted columns before saving."))
+                Text(isDynamoDB
+                    ? L("This connection’s saved settings could not be verified, and its live reads opened off. Review its redacted attributes before saving.")
+                    : L("This connection’s saved settings could not be verified, and its live reads opened off. Review its redacted columns before saving."))
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Toggle(L("Live reads"), isOn: liveRead(of: profile))
             if model.showsRedactions(for: id, in: draft) {
-                TextField(L("Redacted columns"), text: redactedColumns(of: id))
-                Text(L("Values in these result columns are replaced before an agent sees them. A column read under another name is not redacted; use database column privileges for sensitive columns."))
+                TextField(isDynamoDB ? L("Redacted attributes") : L("Redacted columns"), text: redactedColumns(of: id))
+                Text(isDynamoDB
+                    ? L("Values of these top-level attributes are removed before an agent sees them. Nested values are not inspected; use IAM to keep sensitive attributes out of reach.")
+                    : L("Values in these result columns are replaced before an agent sees them. A column read under another name is not redacted; use database column privileges for sensitive columns."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if draft.access[id]?.liveRead == true {
+                if isDynamoDB {
+                    Text(L("BerryDB cannot check this connection’s IAM permissions. Use an access key limited to dynamodb:ListTables (used by the connection check), dynamodb:DescribeTable and dynamodb:Query on the tables the agent may read."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if isProduction {
-                    Text(L("Live reads on a production database use its resources and take shared locks, which can delay migrations. Point this connection at a read replica where you can."))
+                    Text(isDynamoDB
+                        ? L("Live reads on a production DynamoDB table consume its read capacity and can throttle your application. Point this connection at a replica or an on-demand table where you can.")
+                        : L("Live reads on a production database use its resources and take shared locks, which can delay migrations. Point this connection at a read replica where you can."))
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if isProduction, turnsOn {
                     Toggle(
-                        L("I reviewed the redacted columns and accept reads on this production database"),
+                        isDynamoDB
+                            ? L("I reviewed the redacted attributes and accept reads on this production database")
+                            : L("I reviewed the redacted columns and accept reads on this production database"),
                         isOn: acknowledgment(.production(id))
                     )
                 }

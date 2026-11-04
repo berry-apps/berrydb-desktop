@@ -231,6 +231,93 @@ struct MCPConnectionCoordinatorTests {
         try await session.lifecycle.close()
     }
 
+    @Test func aPartitionSessionIsLentForADynamoDBProfileAndClosedAfter() async throws {
+        let connection = ScriptedPartitionConnection(schema: Self.schema, pages: [])
+        let coordinator = partitionCoordinator(driver: .dynamodb, connection: connection)
+        let table = try await coordinator.coordinator.withPartitionSession(
+            requestID: "p1", profileID: coordinator.profileID
+        ) { session in
+            try await session.reader.keySchema("Orders").table
+        }
+        #expect(table == "Orders")
+        #expect(await connection.closeCalls == 1)
+    }
+
+    @Test func aSQLProfileGetsNoPartitionSession() async throws {
+        let connection = ScriptedPartitionConnection(schema: Self.schema, pages: [])
+        let coordinator = partitionCoordinator(driver: .postgres, connection: connection)
+        await #expect(throws: MCPConnectionCoordinatorError.wrongDriverFamily(.postgres)) {
+            try await coordinator.coordinator.withPartitionSession(
+                requestID: "p2", profileID: coordinator.profileID
+            ) { _ in () }
+        }
+        #expect(await connection.closeCalls == 0)
+    }
+
+    @Test func aDriverWithoutPartitionQueriesIsClosedAndRefused() async throws {
+        let tracker = Tracker()
+        let token = UUID().uuidString
+        ConnectionSlots.shared.set(TrackingSQLConnection(tracker: tracker, number: 1), for: token)
+        let factories = MCPConnectionFactories(registries: MCPDriverRegistries(sql: { _ in SlotDriver.self }))
+        let profile = MCPConnectionProfile(id: UUID(), driverID: .dynamodb, config: ConnectionConfig(driver: .dynamodb, name: token))
+        await #expect(throws: MCPConnectionCoordinatorError.partitionQueryUnavailable(.dynamodb)) {
+            _ = try await factories.partition(profile)
+        }
+        #expect(await tracker.closes == 1)
+    }
+
+    @Test func cancellingAPartitionRequestClosesItsSession() async throws {
+        let connection = ScriptedPartitionConnection(schema: Self.schema, pages: [], delay: .seconds(30))
+        let coordinator = partitionCoordinator(driver: .dynamodb, connection: connection)
+        let task = Task {
+            try await coordinator.coordinator.withPartitionSession(
+                requestID: "slow", profileID: coordinator.profileID
+            ) { session in
+                let query = DynamoDBPartitionQuery(
+                    table: "Orders", indexName: nil, partitionKey: .string("a"), sortKey: nil,
+                    projection: nil, limit: 1, exclusiveStartKey: nil
+                )
+                return try await session.reader.queryPartition(query)
+            }
+        }
+        for _ in 0..<2000 where await connection.queries.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        await coordinator.coordinator.cancel(requestID: "slow")
+        #expect(await connection.queries.count == 1)
+        let started = ContinuousClock.now
+        do {
+            _ = try await task.value
+            Issue.record("the cancelled request returned a page")
+        } catch let error as DriverError {
+            guard case .cancelled = error else { throw error }
+        }
+        #expect(ContinuousClock.now - started < .seconds(10))
+        #expect(await connection.closeCalls == 1)
+    }
+
+    private static let schema = DynamoDBKeySchema(
+        table: "Orders", partitionKey: DynamoDBKeyAttribute(name: "pk", type: .string),
+        sortKey: nil, indexes: []
+    )
+
+    private func partitionCoordinator(
+        driver: DriverID, connection: ScriptedPartitionConnection
+    ) -> (coordinator: MCPConnectionCoordinator, profileID: UUID) {
+        let id = UUID()
+        let token = UUID().uuidString
+        ConnectionSlots.shared.set(connection, for: token)
+        let resolver = MCPProjectResolver(
+            loadProject: {
+                MCPVerifiedProject(
+                    project: MCPProject(name: "P", isEnabled: true, profiles: [MCPProfileAccess(profileID: id, liveRead: true)]),
+                    liveReadProfileIDs: [id]
+                )
+            },
+            profile: { _ in MCPConnectionProfile(id: id, driverID: driver, config: ConnectionConfig(driver: driver, name: token)) }
+        )
+        let factories = MCPConnectionFactories(registries: MCPDriverRegistries(sql: { _ in SlotDriver.self }))
+        return (MCPConnectionCoordinator(resolver: resolver, factories: factories), id)
+    }
+
     @Test func unauthorizedProfileIsRejectedBeforeOpening() async throws {
         let fixture = Fixture(profileIsAuthorized: false)
         await #expect(throws: MCPProjectResolutionError.self) {
@@ -262,7 +349,7 @@ struct MCPConnectionCoordinatorTests {
     /// A driver without a read-only session the helper can open is refused
     /// from the stored profile alone: its secrets are never read, so no
     /// Keychain prompt appears, and no connection or tunnel is attempted.
-    @Test(arguments: [DriverID.redis, .sqlserver, .dynamodb, .mongodb, .qdrant, .elasticsearch])
+    @Test(arguments: [DriverID.redis, .sqlserver, .mongodb, .qdrant, .elasticsearch])
     func aDriverWithoutLiveReadsIsRefusedBeforeItsSecretsAreRead(driver: DriverID) async throws {
         let store = try BerryStore(path: ":memory:")
         let profile = ConnectionProfile(driverID: driver.rawValue, name: "Other", host: "db.internal.example")
@@ -872,5 +959,34 @@ private struct Fixture {
             resolver: resolver,
             sqlFactory: { _ in MCPSQLSession(connection: FakeSQLConnection(), recordsHistory: false, lifecycle: await lifecycle()) }
         )
+    }
+}
+
+/// Connections keyed by the profile config's name, so tests running in
+/// parallel never share a slot.
+private final class ConnectionSlots: @unchecked Sendable {
+    static let shared = ConnectionSlots()
+    private let lock = NSLock()
+    private var connections: [String: any DriverConnection] = [:]
+    func set(_ connection: any DriverConnection, for token: String) {
+        lock.lock(); connections[token] = connection; lock.unlock()
+    }
+    func take(_ token: String) -> (any DriverConnection)? {
+        lock.lock(); defer { lock.unlock() }
+        return connections.removeValue(forKey: token)
+    }
+}
+
+private struct SlotDriver: DatabaseDriver {
+    static let id = DriverID.dynamodb
+    static let displayName = "Fake slot driver"
+    static let capabilities = Capabilities()
+    static let dialect: any SQLDialect = SQLiteDialect()
+    init() {}
+    func connect(_ config: ConnectionConfig) async throws -> any DriverConnection {
+        guard let connection = ConnectionSlots.shared.take(config.name) else {
+            throw DriverError.connectionFailed("no scripted connection")
+        }
+        return connection
     }
 }

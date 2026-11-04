@@ -22,6 +22,8 @@ public enum MCPProjectResolutionError: Error, Equatable, Sendable {
     case liveReadNotEnabled(UUID)
     case missingProfile(UUID)
     case unsupportedDriver(String)
+    /// A DynamoDB profile that connects over SSH; the helper opens no tunnel for it.
+    case tunnelUnsupported(UUID)
 }
 
 /// A resolved profile ready for the connection coordinator: its ID, driver,
@@ -121,9 +123,10 @@ public struct MCPProjectResolver: Sendable {
         self.loadProfile = Self.storeProfileLoader(store: store, credentialResolver: credentialResolver)
     }
 
-    /// The drivers `MCPConnectionFactories.enforceSQLReadOnly` opens a
-    /// read-only session for; the helper reads secrets for no other.
-    private static let liveReadDrivers: Set<DriverID> = [.postgres, .mysql, .sqlite]
+    /// The drivers the helper opens a read-only session for: SQL drivers
+    /// through `MCPConnectionFactories.enforceSQLReadOnly`, DynamoDB through
+    /// partition queries. The helper reads secrets for no other.
+    private static let liveReadDrivers: Set<DriverID> = [.postgres, .mysql, .sqlite, .dynamodb]
 
     /// Loads a saved profile and its secrets from `store`; nil when no such
     /// profile exists. `isProduction` follows the profile's environment
@@ -140,6 +143,12 @@ public struct MCPProjectResolver: Sendable {
             guard let profile = try store.allProfiles().first(where: { $0.id == profileID }) else { return nil }
             guard let driverID = DriverID(rawValue: profile.driverID), liveReadDrivers.contains(driverID) else {
                 throw MCPProjectResolutionError.unsupportedDriver(profile.driverID)
+            }
+            // The partition factory opens the profile's own endpoint and never
+            // a tunnel, so a tunnelled DynamoDB profile is refused here, before
+            // its secrets are read.
+            if driverID == .dynamodb, profile.sshEnabled {
+                throw MCPProjectResolutionError.tunnelUnsupported(profileID)
             }
             let secrets = try await credentialResolver.resolve(profileID)
             return MCPConnectionProfile(
