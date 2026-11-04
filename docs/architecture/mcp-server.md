@@ -757,10 +757,14 @@ driver module, and fails when it finds one. A
 
 The IAM policy of the connection's access key is the boundary on what a
 DynamoDB live read reaches; BerryDB cannot check it, and the **AI Agents**
-pane says so. Use an access key limited to `dynamodb:Query` and
-`dynamodb:DescribeTable` on the tables the agent may read, plus
-`dynamodb:ListTables`, which the check when the connection opens needs
+pane says so. Use an access key limited to `dynamodb:ListTables` (used by
+the check when the connection opens), `dynamodb:DescribeTable` and
+`dynamodb:Query` on the tables the agent may read
 ([DynamoDB API permissions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/api-permissions-reference.html)).
+`ListTables` takes no table resource, so its statement needs `"Resource":
+"*"`
+([Actions, resources, and condition keys for Amazon DynamoDB](https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazondynamodb.html));
+the helper never returns the table list to the agent.
 Such a policy has not been tried against AWS; dynamodb-local, which the
 live tests run on, does not enforce IAM. Redacted attributes remove
 top-level attributes by name from every item, nested values are not

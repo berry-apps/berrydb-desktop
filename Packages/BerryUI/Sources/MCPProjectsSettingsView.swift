@@ -332,7 +332,7 @@ private struct MCPProjectEditorSheet: View {
             }
             if draft.access[id]?.liveRead == true {
                 if isDynamoDB {
-                    Text(L("BerryDB cannot check this connection’s IAM permissions. Use an access key limited to dynamodb:Query and dynamodb:DescribeTable on the tables the agent may read."))
+                    Text(L("BerryDB cannot check this connection’s IAM permissions. Use an access key limited to dynamodb:ListTables (used by the connection check), dynamodb:DescribeTable and dynamodb:Query on the tables the agent may read."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
