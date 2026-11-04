@@ -425,12 +425,345 @@ struct MCPRequestDeadlineTests {
     }
 }
 
+@Suite("MCP live read concurrency")
+struct MCPLiveReadConcurrencyTests {
+    @Test func aFifthReadWaitsUntilOneOfFourFinishes() async throws {
+        let gate = AsyncGate()
+        let connection = heldConnection(gate)
+        let harness = Harness(connection: connection)
+        let held = try await holdFourReads(harness, on: connection)
+        let service = harness.service
+        let request = harness.request("SELECT n FROM numbers")
+        let fifth = Task { try await service.run(request) }
+        let slots = harness.slots
+        try await eventually { await slots.waiting == 1 }
+        #expect(connection.log.snapshot().statements.count == 4)
+        #expect(await harness.tracker.factoryCalls == 4)
+
+        await gate.letOneThrough()
+        let log = connection.log
+        try await eventually { log.snapshot().statements.count == 5 }
+        #expect(await slots.waiting == 0)
+        #expect(await slots.inUse == 4)
+
+        try await finish(held + [fifth], through: gate)
+        #expect(await slots.inUse == 0)
+    }
+
+    @Test func aReadStillWaitingAtTheOpenBudgetFailsNamingTheCap() async throws {
+        let gate = AsyncGate()
+        let connection = heldConnection(gate)
+        let harness = Harness(connection: connection)
+        let held = try await holdFourReads(harness, on: connection)
+        // Shares the coordinator and the slots; only its open budget is short.
+        let impatient = MCPLiveReadService(
+            coordinator: harness.coordinator, openBudget: .seconds(3), slots: harness.slots
+        )
+        let error = try await refusal(harness.request("SELECT n FROM numbers"), by: impatient)
+        #expect(error == .tooManyConcurrentReads(limit: 4))
+        #expect(error?.description == "BerryDB is already running 4 live reads for this session; try again when one finishes.")
+        // The expired request left the queue without taking a slot or opening anything.
+        let slots = harness.slots
+        try await eventually { await slots.waiting == 0 }
+        #expect(await slots.inUse == 4)
+        #expect(await harness.tracker.factoryCalls == 4)
+
+        try await finish(held, through: gate)
+        #expect(await slots.inUse == 0)
+    }
+
+    @Test func cancellingAWaitingReadReturnsAtOnceAndLeavesTheQueue() async throws {
+        let gate = AsyncGate()
+        let connection = heldConnection(gate)
+        let harness = Harness(connection: connection)
+        let held = try await holdFourReads(harness, on: connection)
+        let service = harness.service
+        let request = harness.request("SELECT n FROM numbers")
+        let slots = harness.slots
+        let fifth = Task { try await service.run(request) }
+        try await eventually { await slots.waiting == 1 }
+        fifth.cancel()
+        // Every slot is still taken, so the caller did not wait for one.
+        #expect(try await withDeadline(.seconds(60)) { await outcome(of: fifth) } == "cancelled")
+        try await eventually { await slots.waiting == 0 }
+        #expect(await slots.inUse == 4)
+
+        // The next slot to free goes to a later request.
+        let sixth = Task { try await service.run(request) }
+        try await eventually { await slots.waiting == 1 }
+        await gate.letOneThrough()
+        let log = connection.log
+        try await eventually { log.snapshot().statements.count == 5 }
+        try await finish(held + [sixth], through: gate)
+        #expect(await slots.inUse == 0)
+        #expect(await harness.tracker.factoryCalls == 5)
+    }
+
+    @Test func aReadThatFailsReleasesItsSlot() async throws {
+        let failing = Harness(connection: ScriptedReadConnection(
+            events: [], ending: .fail(.queryFailed(message: "no such table: t", code: nil))
+        ))
+        // One more read than there are slots: a slot kept by a failed read
+        // would leave the last one waiting.
+        for _ in 0...4 {
+            #expect(await failing.failure("SELECT a FROM t") == .queryFailed("no such table: t"))
+            #expect(await failing.slots.inUse == 0)
+        }
+    }
+
+    /// An open that the driver or the SSH channel does not abandon when
+    /// cancelled can hang for as long as the network lets it. It gives its
+    /// slot up once its caller stops waiting; until it returns, the same
+    /// connection opens nothing more and says why.
+    @Test func anOpenHangingPastTheBudgetGivesUpItsSlotAndHoldsBackItsConnection() async throws {
+        let gate = AsyncGate()
+        let hung = Harness(openBudget: .seconds(3), open: { await gate.wait() })
+        #expect(await hung.failure("SELECT 1") == .openTimedOut(seconds: 3))
+        let slots = hung.slots
+        try await eventually { await slots.inUse == 0 }
+
+        let error = await hung.failure("SELECT 1")
+        #expect(error == .openStillPending)
+        #expect(error?.description == "An earlier connection to this database has not opened yet, so BerryDB did not open another; try again later.")
+        #expect(await hung.tracker.factoryCalls == 1)
+
+        await gate.open()
+        let tracker = hung.tracker
+        try await withDeadline(.seconds(60)) { await tracker.waitForCloses(1) }
+        let profileID = hung.profileID
+        try await eventually { await slots.pendingOpens(of: profileID) == 0 }
+        _ = try await hung.read("SELECT 1")
+        #expect(await slots.inUse == 0)
+    }
+
+    /// Guard: only an open is left behind. A read whose connection is open
+    /// keeps its slot until it is closed, since the statement's own cancel
+    /// ends it, and leaves its connection free for the next read.
+    @Test func cancellingAnOpenReadHoldsNothingBack() async throws {
+        let gate = AsyncGate()
+        let connection = heldConnection(gate)
+        let harness = Harness(connection: connection)
+        let service = harness.service
+        let request = harness.request("SELECT n FROM numbers")
+        let first = Task { try await service.run(request) }
+        let log = connection.log
+        try await eventually { log.snapshot().statements.count == 1 }
+        first.cancel()
+        #expect(try await withDeadline(.seconds(60)) { await outcome(of: first) } == "cancelled")
+        #expect(await harness.slots.pendingOpens(of: harness.profileID) == 0)
+
+        let second = Task { try await service.run(request) }
+        try await eventually { log.snapshot().statements.count == 2 }
+        try await finish([second], through: gate)
+        let slots = harness.slots
+        try await eventually { await slots.inUse == 0 }
+    }
+
+    /// Opens hanging on one connection must not hold every slot: reads of
+    /// another connection would then wait out their budget for as long as
+    /// those opens hang.
+    @Test func opensHangingOnOneConnectionLeaveTheSlotsToAnother() async throws {
+        let gate = AsyncGate()
+        let pair = TwoConnections(hungOpen: gate, openBudget: .seconds(3))
+        let service = pair.service
+        let hungRequest = pair.request(on: pair.hungID)
+        let hung = (0..<4).map { _ in Task { try await service.run(hungRequest) } }
+        for task in hung {
+            #expect(try await withDeadline(.seconds(60)) { await outcome(of: task) } == "\(MCPLiveReadError.openTimedOut(seconds: 3))")
+        }
+        let slots = pair.slots
+        try await eventually { await slots.inUse == 0 }
+
+        let healthyRequest = pair.request(on: pair.healthyID)
+        _ = try await withDeadline(.seconds(60)) { try await service.run(healthyRequest) }
+
+        await gate.open()
+        let tracker = pair.tracker
+        try await withDeadline(.seconds(60)) { await tracker.waitForCloses(5) }
+        #expect(await slots.inUse == 0)
+    }
+
+    /// The wait for a slot counts against the open budget, so a read that
+    /// waited and then ran out of it while opening lost the budget to the
+    /// cap: "could not open a connection" would send the agent after a
+    /// network problem. A retry that does not wait gets the open's own text.
+    @Test func aReadThatWaitedAndThenRanOutOfItsBudgetWhileOpeningNamesTheCap() async throws {
+        let gate = AsyncGate()
+        let connection = heldConnection(gate)
+        let fifthOpen = AsyncGate()
+        let opens = OpenCounter()
+        // The slot must reach the fifth read before its budget runs out;
+        // five seconds leaves a loaded runner time for the handover.
+        let harness = Harness(connection: connection, openBudget: .seconds(5), open: {
+            if await opens.next() == 5 { await fifthOpen.wait() }
+        })
+        let held = try await holdFourReads(harness, on: connection)
+        let service = harness.service
+        let request = harness.request("SELECT n FROM numbers")
+        let fifth = Task { try await service.run(request) }
+        let slots = harness.slots
+        try await eventually { await slots.waiting == 1 }
+
+        await gate.letOneThrough()
+        #expect(try await withDeadline(.seconds(60)) { await outcome(of: fifth) } == "\(MCPLiveReadError.tooManyConcurrentReads(limit: 4))")
+        // Five opens: the fifth read got the slot and ran out of its budget
+        // while opening, not while it waited.
+        #expect(await harness.tracker.factoryCalls == 5)
+
+        await fifthOpen.open()
+        try await finish(held, through: gate)
+        try await eventually { await slots.inUse == 0 }
+    }
+
+    /// The wait for a slot runs in the request's own task, so shutting the
+    /// coordinator down ends it at once. Outside that task it would wait,
+    /// behind four opens that ignore cancellation, until its budget ran out.
+    @Test func shuttingDownEndsAReadWaitingForASlot() async throws {
+        let gate = AsyncGate()
+        let harness = Harness(open: { await gate.wait() })
+        let service = harness.service
+        let request = harness.request("SELECT 1")
+        let held = (0..<4).map { _ in Task { try await service.run(request) } }
+        let tracker = harness.tracker
+        try await withDeadline(.seconds(60)) { await tracker.waitForFactoryCalls(4) }
+        let fifth = Task { try await service.run(request) }
+        let slots = harness.slots
+        try await eventually { await slots.waiting == 1 }
+
+        let coordinator = harness.coordinator
+        let shutdown = Task { await coordinator.closeAll() }
+        #expect(try await withDeadline(.seconds(60)) { await outcome(of: fifth) } == "\(MCPLiveReadError.queryFailed("unexpected error"))")
+        #expect(await slots.waiting == 0)
+        #expect(await tracker.factoryCalls == 4)
+
+        await gate.open()
+        _ = await shutdown.value
+        for task in held { _ = await outcome(of: task) }
+    }
+
+    @Test func aRefusedReadDoesNotWaitForASlot() async throws {
+        let gate = AsyncGate()
+        let connection = heldConnection(gate)
+        let harness = Harness(connection: connection)
+        let held = try await holdFourReads(harness, on: connection)
+        // Every slot is taken; a wait would end after the 15 s open budget
+        // with the cap's refusal instead of these.
+        guard case .policy? = await harness.failure("DELETE FROM t") else {
+            Issue.record("expected the read policy's refusal")
+            return
+        }
+        let stranger = MCPLiveReadRequest(profileID: UUID(), dialect: .sqlite, sql: "SELECT 1")
+        #expect(try await refusal(stranger, by: harness.service) == .unknownConnection)
+        #expect(await harness.failure("SELECT 1", dialect: .postgresql) == .unsupportedDatabase)
+        #expect(await harness.slots.waiting == 0)
+        #expect(await harness.tracker.factoryCalls == 4)
+
+        try await finish(held, through: gate)
+    }
+}
+
+/// A connection whose every statement returns one column and no row once
+/// `gate` lets it finish.
+private func heldConnection(_ gate: AsyncGate) -> ScriptedReadConnection {
+    ScriptedReadConnection(events: [.columns([ColumnMeta(name: "n", declaredType: "")])], ending: .finishThrough(gate))
+}
+
+/// Starts four reads on `connection`, which must hold its statements, and
+/// returns once all four statements run, so every slot is taken.
+private func holdFourReads(
+    _ harness: Harness, on connection: ScriptedReadConnection
+) async throws -> [Task<MCPLiveReadResult, Error>] {
+    let service = harness.service
+    let request = harness.request("SELECT n FROM numbers")
+    let held = (0..<4).map { _ in Task { try await service.run(request) } }
+    let log = connection.log
+    try await eventually { log.snapshot().statements.count == 4 }
+    return held
+}
+
+/// Opens `gate` and expects every read in `tasks` to return.
+private func finish(_ tasks: [Task<MCPLiveReadResult, Error>], through gate: AsyncGate) async throws {
+    await gate.open()
+    for task in tasks {
+        #expect(try await withDeadline(.seconds(60)) { await outcome(of: task) } == "returned")
+    }
+}
+
+/// The refusal `service` gave `request`; nil when it returned or threw
+/// anything else.
+private func refusal(_ request: MCPLiveReadRequest, by service: MCPLiveReadService) async throws -> MCPLiveReadError? {
+    try await withDeadline(.seconds(60)) { () -> MCPLiveReadError? in
+        do {
+            _ = try await service.run(request)
+            return nil
+        } catch {
+            return error as? MCPLiveReadError
+        }
+    }
+}
+
+/// Numbers calls in arrival order, from any task.
+private actor OpenCounter {
+    private var count = 0
+
+    func next() -> Int {
+        count += 1
+        return count
+    }
+}
+
+/// One project with two live-read profiles on one coordinator: opening
+/// `hungID` waits for the gate, opening `healthyID` returns at once.
+private struct TwoConnections {
+    let hungID: UUID
+    let healthyID: UUID
+    let tracker: Tracker
+    let service: MCPLiveReadService
+
+    var slots: MCPLiveReadSlots { service.slots }
+
+    init(hungOpen gate: AsyncGate, openBudget: Duration) {
+        let hung = UUID()
+        let healthy = UUID()
+        let tracker = Tracker()
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: hung, liveRead: true),
+            MCPProfileAccess(profileID: healthy, liveRead: true),
+        ])
+        let resolver = MCPProjectResolver(
+            loadProject: { MCPVerifiedProject(project: project, liveReadProfileIDs: [hung, healthy]) },
+            profile: { requested in
+                guard requested == hung || requested == healthy else { return nil }
+                return MCPConnectionProfile(id: requested, driverID: .sqlite, config: .sqlite(path: ":memory:"), isProduction: false)
+            }
+        )
+        let connection = ScriptedReadConnection(events: [])
+        let coordinator = MCPConnectionCoordinator(resolver: resolver, sqlFactory: { profile in
+            await tracker.factoryCalled()
+            if profile.id == hung { await gate.wait() }
+            let lifecycle = MCPConnectionLifecycle(cancel: {}, closeConnection: { await tracker.closed() })
+            return MCPSQLSession(connection: connection, lifecycle: lifecycle, profile: profile)
+        })
+        hungID = hung
+        healthyID = healthy
+        self.tracker = tracker
+        service = MCPLiveReadService(coordinator: coordinator, openBudget: openBudget)
+    }
+
+    func request(on profileID: UUID) -> MCPLiveReadRequest {
+        MCPLiveReadRequest(profileID: profileID, dialect: .sqlite, sql: "SELECT 1")
+    }
+}
+
 /// One coordinator over one live-read profile whose sessions run on a
 /// scripted connection; the request's profile ID is the profile's.
 private struct Harness {
     let profileID: UUID
     let tracker: Tracker
+    let coordinator: MCPConnectionCoordinator
     let service: MCPLiveReadService
+
+    var slots: MCPLiveReadSlots { service.slots }
 
     init(
         connection: ScriptedReadConnection = ScriptedReadConnection(events: []),
@@ -467,6 +800,7 @@ private struct Harness {
         })
         profileID = id
         self.tracker = tracker
+        self.coordinator = coordinator
         service = MCPLiveReadService(coordinator: coordinator, openBudget: openBudget)
     }
 
@@ -528,10 +862,15 @@ private func outcome(of task: Task<MCPLiveReadResult, Error>) async -> String {
 private actor AsyncGate {
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private var isOpen = false
+    private var passes = 0
 
     /// Ignores cancellation, as an SSH channel that never comes up does.
     func wait() async {
         if isOpen { return }
+        if passes > 0 {
+            passes -= 1
+            return
+        }
         await withCheckedContinuation { waiters.append($0) }
     }
 
@@ -539,6 +878,16 @@ private actor AsyncGate {
         isOpen = true
         for waiter in waiters { waiter.resume() }
         waiters.removeAll()
+    }
+
+    /// Lets exactly one waiter through: the longest waiting, or else the
+    /// next to arrive.
+    func letOneThrough() {
+        guard !waiters.isEmpty else {
+            passes += 1
+            return
+        }
+        waiters.removeFirst().resume()
     }
 }
 
@@ -581,6 +930,8 @@ private actor ScriptedReadConnection: ReadOnlyExecuting {
         case finish
         case never
         case fail(DriverError)
+        /// Finishes once `gate` lets the statement through.
+        case finishThrough(AsyncGate)
     }
 
     nonisolated let id = UUID()
@@ -631,6 +982,9 @@ private actor ScriptedReadConnection: ReadOnlyExecuting {
             case .finish: continuation.finish()
             case .never: break
             case .fail(let error): continuation.finish(throwing: error)
+            case .finishThrough(let gate):
+                await gate.wait()
+                continuation.finish()
             }
         }
         return stream
