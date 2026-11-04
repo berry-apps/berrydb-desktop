@@ -128,6 +128,13 @@ public final class AIPanelController {
         public struct Model: Equatable, Identifiable, Sendable {
             public let id: String
             public let name: String
+            /// The provider serving this model. Two providers can offer
+            /// models with the same `name`, so `name` alone does not say
+            /// which one serves a request.
+            public let providerID: String
+            /// The provider's display name, or `providerID` when the backend
+            /// sends no usable name.
+            public let providerName: String
             public let tokensRemaining: Int
             /// Tokens this model's lifetime topped-up credit would have
             /// bought — the "total" a usage bar fills against. 0 for an
@@ -137,6 +144,40 @@ public final class AIPanelController {
             /// spent on this model so far (spend isn't tracked per model
             /// server-side; see the server's `ModelBalance` doc comment).
             public let tokensUsed: Int
+
+            /// Reads one `models[]` entry of `GET /v1/ai/balance`, or nil when
+            /// a required key is missing so a malformed entry drops out of the
+            /// list instead of failing the whole balance.
+            static func parse(_ entry: [String: Any]) -> Model? {
+                guard let id = entry["id"] as? String, let name = entry["name"] as? String,
+                      let tokensRemaining = entry["tokens_remaining"] as? Int,
+                      let tokensTotal = entry["tokens_total"] as? Int,
+                      let tokensUsed = entry["tokens_used"] as? Int
+                else { return nil }
+                // Backends that predate `provider_id` and `provider_name` omit
+                // them. Their ids have the same "{provider}/{model}" shape, and
+                // the model part can itself contain "/", as in
+                // "openrouter/openai/gpt-4o-mini", so only the first segment
+                // names the provider.
+                let sentProviderID = entry["provider_id"] as? String ?? ""
+                let providerID = sentProviderID.isEmpty ? String(id.prefix { $0 != "/" }) : sentProviderID
+                let sentProviderName = (entry["provider_name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let providerName = sentProviderName.isEmpty ? providerID : sentProviderName
+                return Model(
+                    id: id, name: name, providerID: providerID, providerName: providerName,
+                    tokensRemaining: tokensRemaining, tokensTotal: tokensTotal, tokensUsed: tokensUsed
+                )
+            }
+
+            /// `name`, plus the provider only when another model in `models`
+            /// has the same name. The collapsed picker and the footer estimate
+            /// are single lines: they need the provider to tell such models
+            /// apart, but naming it for every model would crowd out the rest
+            /// of the line.
+            static func label(for model: Model, in models: [Model]) -> String {
+                let nameIsShared = models.contains { $0.id != model.id && $0.name == model.name }
+                return nameIsShared ? "\(model.name) (\(model.providerName))" : model.name
+            }
         }
         public let plan: String
         public let tokenQuota: TokenQuota
@@ -178,6 +219,31 @@ public final class AIPanelController {
             quotaFallbackActive ? (tokenQuota.isExhausted && balanceMicros <= 0) : balanceMicros <= 0
         }
 
+        /// The models one provider serves, which the model picker shows as
+        /// one section. `id` is the provider id.
+        struct ProviderGroup: Identifiable {
+            let id: String
+            let name: String
+            var models: [Model]
+        }
+
+        /// Groups `models` by provider without reordering them: a provider's
+        /// group sits where its first model was, because the server's order
+        /// is the order the picker has always shown.
+        static func groupedByProvider(_ models: [Model]) -> [ProviderGroup] {
+            var groups: [ProviderGroup] = []
+            var groupIndexByProvider: [String: Int] = [:]
+            for model in models {
+                if let index = groupIndexByProvider[model.providerID] {
+                    groups[index].models.append(model)
+                } else {
+                    groupIndexByProvider[model.providerID] = groups.count
+                    groups.append(ProviderGroup(id: model.providerID, name: model.providerName, models: [model]))
+                }
+            }
+            return groups
+        }
+
         /// Fetches `GET /v1/ai/balance`. Shared by the AI panel footer and
         /// `LicenseView`'s per-model breakdown so both read the identical
         /// shape rather than duplicating the parsing.
@@ -195,14 +261,7 @@ public final class AIPanelController {
             else { return nil }
 
             let tokenQuota = TokenQuota(used: quotaUsed, limit: quotaLimit)
-            let models = (object["models"] as? [[String: Any]] ?? []).compactMap { entry -> Model? in
-                guard let id = entry["id"] as? String, let name = entry["name"] as? String,
-                      let tokensRemaining = entry["tokens_remaining"] as? Int,
-                      let tokensTotal = entry["tokens_total"] as? Int,
-                      let tokensUsed = entry["tokens_used"] as? Int
-                else { return nil }
-                return Model(id: id, name: name, tokensRemaining: tokensRemaining, tokensTotal: tokensTotal, tokensUsed: tokensUsed)
-            }
+            let models = (object["models"] as? [[String: Any]] ?? []).compactMap(Model.parse)
             return Balance(
                 plan: plan, tokenQuota: tokenQuota, balanceMicros: balanceMicros,
                 totalTokensUsed: object["total_tokens_used"] as? Int,

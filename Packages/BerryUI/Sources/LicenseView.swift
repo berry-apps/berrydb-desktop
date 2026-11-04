@@ -412,6 +412,7 @@ struct LicenseView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(model.name).font(.caption).fontWeight(.medium)
+                Text(model.providerName).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Text(L("\(model.tokensUsed.formatted(.number.notation(.compactName)))/\(model.tokensTotal.formatted(.number.notation(.compactName))) tokens"))
                     .font(.caption2).foregroundStyle(.secondary)

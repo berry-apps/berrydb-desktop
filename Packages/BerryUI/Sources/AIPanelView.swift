@@ -1294,7 +1294,7 @@ struct AIPanelView: View {
                     // message), so a user can compare models before choosing.
                     let dollars = String(format: "%.2f", Double(balance.balanceMicros) / 1_000_000)
                     let perModel = balance.models
-                        .map { "\($0.name): ~\($0.tokensRemaining.formatted(.number.notation(.compactName)))" }
+                        .map { "\(AIPanelController.Balance.Model.label(for: $0, in: balance.models)): ~\($0.tokensRemaining.formatted(.number.notation(.compactName)))" }
                         .joined(separator: " · ")
                     HStack(spacing: 3) {
                         if balance.lowBalance {
@@ -1309,10 +1309,18 @@ struct AIPanelView: View {
                     }
                     Spacer()
                     if !balance.models.isEmpty {
+                        // The collapsed picker shows only the selected item's
+                        // text, not its section, so each item carries the label
+                        // that names the provider when another provider offers
+                        // a model with the same name.
                         Picker("", selection: $selectedModel) {
                             Text(L("Default model")).tag("")
-                            ForEach(balance.models) { model in
-                                Text(model.name).tag(model.id)
+                            ForEach(AIPanelController.Balance.groupedByProvider(balance.models)) { group in
+                                Section(group.name) {
+                                    ForEach(group.models) { model in
+                                        Text(AIPanelController.Balance.Model.label(for: model, in: balance.models)).tag(model.id)
+                                    }
+                                }
                             }
                         }
                         .labelsHidden()
