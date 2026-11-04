@@ -473,11 +473,11 @@ public struct MCPLiveReadService: Sendable {
             case .unauthorizedProfile, .missingProfile: return MCPLiveReadError.unknownConnection
             case .liveReadNotEnabled: return MCPLiveReadError.liveReadNotEnabled
             case .projectNotFound, .projectDisabled: return MCPLiveReadError.noProject
-            case .unsupportedDriver: return MCPLiveReadError.unsupportedDatabase
+            case .unsupportedDriver, .tunnelUnsupported: return MCPLiveReadError.unsupportedDatabase
             }
         case let error as MCPConnectionCoordinatorError:
             switch error {
-            case .wrongDriverFamily, .sqlReadOnlyEnforcementUnavailable: return MCPLiveReadError.unsupportedDatabase
+            case .wrongDriverFamily, .sqlReadOnlyEnforcementUnavailable, .partitionQueryUnavailable: return MCPLiveReadError.unsupportedDatabase
             case .duplicateRequestID, .shuttingDown: return MCPLiveReadError.queryFailed(unexpected)
             }
         case let error as MCPResultLimiterError where error == .metadataExceedsByteLimit:

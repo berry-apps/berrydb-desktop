@@ -32,12 +32,13 @@ public struct MCPTunnelEndpoint: Sendable {
     }
 }
 
-/// Opens SQL sessions for the coordinator.
+/// Opens SQL and DynamoDB partition-query sessions for the coordinator.
 ///
 /// A session never leaves the factory before database-enforced read-only
 /// state is established; on any failure the opened connection and tunnel
 /// are closed before the error propagates.
 public struct MCPConnectionFactories: Sendable {
+    public let partition: MCPConnectionCoordinator.PartitionFactory
     public typealias SQLReadOnlyEnforcer = @Sendable (MCPConnectionProfile, any DriverConnection) async throws -> Void
     public let sql: MCPConnectionCoordinator.SQLFactory
 
@@ -54,6 +55,25 @@ public struct MCPConnectionFactories: Sendable {
     ) {
         let enforceSQLReadOnly = enforceSQLReadOnly ?? { try await Self.enforceSQLReadOnly(profile: $0, connection: $1) }
         let openTunnel = openTunnel ?? { try await Self.openTunnel($0) }
+        partition = { profile in
+            // Only DynamoDB speaks partition queries, and the factory opens
+            // no tunnel: a profile with SSH settings never reaches a driver.
+            guard profile.driverID == .dynamodb, profile.config.ssh == nil,
+                  let driver = registries.sql(profile.driverID)
+            else {
+                throw MCPConnectionCoordinatorError.wrongDriverFamily(profile.driverID)
+            }
+            let connection = try await driver.init().connect(profile.config.withApplicationName("BerryDB MCP (read-only)"))
+            let lifecycle = MCPConnectionLifecycle(
+                cancel: { connection.cancelCurrentQuery() },
+                closeConnection: { await connection.close() }
+            )
+            guard let partitions = connection as? any PartitionQuerying else {
+                try? await lifecycle.close()
+                throw MCPConnectionCoordinatorError.partitionQueryUnavailable(profile.driverID)
+            }
+            return MCPPartitionSession(connection: partitions, lifecycle: lifecycle, profile: profile)
+        }
         sql = { profile in
             guard let driver = registries.sql(profile.driverID) else {
                 throw MCPConnectionCoordinatorError.wrongDriverFamily(profile.driverID)
@@ -215,6 +235,21 @@ public struct MCPSQLSession: Sendable {
     }
 }
 
+/// A DynamoDB connection lent to one request's operation, read through
+/// `PartitionQuerying` only. The coordinator owns its lifecycle; the
+/// operation must not close it.
+public struct MCPPartitionSession: Sendable {
+    public let connection: any PartitionQuerying
+    public let lifecycle: MCPConnectionLifecycle
+    public let profile: MCPConnectionProfile?
+
+    public init(connection: any PartitionQuerying, lifecycle: MCPConnectionLifecycle, profile: MCPConnectionProfile? = nil) {
+        self.connection = connection
+        self.lifecycle = lifecycle
+        self.profile = profile
+    }
+}
+
 /// Why the coordinator refused a request before running its operation.
 public enum MCPConnectionCoordinatorError: Error, Equatable, Sendable {
     /// Another request with this ID is still in flight; IDs are never shared.
@@ -224,6 +259,9 @@ public enum MCPConnectionCoordinatorError: Error, Equatable, Sendable {
     /// No database-enforced read-only mode exists for this driver, so no
     /// session is handed out.
     case sqlReadOnlyEnforcementUnavailable(DriverID)
+    /// The DynamoDB connection does not implement partition queries, so no
+    /// session is handed out.
+    case partitionQueryUnavailable(DriverID)
     /// `closeAll()` has begun; no new request starts.
     case shuttingDown
 }
@@ -245,6 +283,7 @@ public struct MCPShutdownReport: Equatable, Sendable {
 /// shutdown. No request starts after `closeAll()` begins.
 public actor MCPConnectionCoordinator {
     public typealias SQLFactory = @Sendable (MCPConnectionProfile) async throws -> MCPSQLSession
+    public typealias PartitionFactory = @Sendable (MCPConnectionProfile) async throws -> MCPPartitionSession
 
     private struct ActiveRequest {
         let token: UUID
@@ -256,6 +295,7 @@ public actor MCPConnectionCoordinator {
 
     private let resolver: MCPProjectResolver
     private let sqlFactory: SQLFactory
+    private let partitionFactory: PartitionFactory
     private let shutdownDeadline: Duration
     private var active: [String: ActiveRequest] = [:]
     private var shuttingDown = false
@@ -290,10 +330,12 @@ public actor MCPConnectionCoordinator {
     public init(
         resolver: MCPProjectResolver,
         sqlFactory: @escaping SQLFactory,
+        partitionFactory: @escaping PartitionFactory = { throw MCPConnectionCoordinatorError.wrongDriverFamily($0.driverID) },
         shutdownDeadline: Duration = .seconds(5)
     ) {
         self.resolver = resolver
         self.sqlFactory = sqlFactory
+        self.partitionFactory = partitionFactory
         self.shutdownDeadline = shutdownDeadline
     }
 
@@ -305,7 +347,10 @@ public actor MCPConnectionCoordinator {
         factories: MCPConnectionFactories = MCPConnectionFactories(),
         shutdownDeadline: Duration = .seconds(5)
     ) {
-        self.init(resolver: resolver, sqlFactory: factories.sql, shutdownDeadline: shutdownDeadline)
+        self.init(
+            resolver: resolver, sqlFactory: factories.sql, partitionFactory: factories.partition,
+            shutdownDeadline: shutdownDeadline
+        )
     }
 
     /// Runs `operation` on a fresh read-only session for a profile with live
@@ -324,6 +369,23 @@ public actor MCPConnectionCoordinator {
             try await beforeOpening?(profile)
             try Task.checkCancellation()
             let session = try await sqlFactory(profile)
+            return (session.lifecycle, { try await operation(session) })
+        }
+    }
+
+    /// Runs `operation` on a fresh partition-query session for a DynamoDB
+    /// profile with live reads enabled, with the same `beforeOpening`,
+    /// cancellation and close behaviour as `withSQLSession`.
+    public func withPartitionSession<T: Sendable>(
+        requestID: String, profileID: UUID,
+        beforeOpening: (@Sendable (MCPConnectionProfile) async throws -> Void)? = nil,
+        operation: @escaping @Sendable (MCPPartitionSession) async throws -> T
+    ) async throws -> T {
+        try await run(requestID: requestID) { [resolver, partitionFactory] in
+            let profile = try await resolver.resolve(profileID: profileID, access: .liveRead)
+            try await beforeOpening?(profile)
+            try Task.checkCancellation()
+            let session = try await partitionFactory(profile)
             return (session.lifecycle, { try await operation(session) })
         }
     }
