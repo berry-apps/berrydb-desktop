@@ -63,6 +63,7 @@ struct DynamoDBPartitionQueryConformanceTests {
         let table = try await makeTable()
         defer { Task { await fixtures.deleteTable(name: table) } }
         let connection = try await makeConnection()
+        defer { Task { await connection.close() } }
         let page = try await connection.queryPartition(
             query(table, sort: .between(.string("1"), .string("2")))
         )
@@ -74,6 +75,7 @@ struct DynamoDBPartitionQueryConformanceTests {
         let table = try await makeTable()
         defer { Task { await fixtures.deleteTable(name: table) } }
         let connection = try await makeConnection()
+        defer { Task { await connection.close() } }
         let page = try await connection.queryPartition(
             query(table, index: "by_status", partition: .string("open"), sort: .beginsWith(.string("1")))
         )
@@ -89,6 +91,7 @@ struct DynamoDBPartitionQueryConformanceTests {
         let table = try await makeTable()
         defer { Task { await fixtures.deleteTable(name: table) } }
         let connection = try await makeConnection()
+        defer { Task { await connection.close() } }
         let page = try await connection.queryPartition(query(table, sort: .equal(.string("1"))))
         let item = try #require(page.items.first)
         #expect(item["n"] == .number(Self.longNumber))
@@ -99,6 +102,7 @@ struct DynamoDBPartitionQueryConformanceTests {
         let table = try await makeTable()
         defer { Task { await fixtures.deleteTable(name: table) } }
         let connection = try await makeConnection()
+        defer { Task { await connection.close() } }
         var collected: [String] = []
         var start: [String: DynamoDBAttributeValue]?
         for _ in 0..<10 {
@@ -115,6 +119,7 @@ struct DynamoDBPartitionQueryConformanceTests {
         let table = try await makeTable()
         defer { Task { await fixtures.deleteTable(name: table) } }
         let connection = try await makeConnection()
+        defer { Task { await connection.close() } }
         let page = try await connection.queryPartition(query(table, projection: ["n"]))
         #expect(page.items.count == 3)
         for item in page.items {
@@ -126,6 +131,7 @@ struct DynamoDBPartitionQueryConformanceTests {
         let table = try await makeTable()
         defer { Task { await fixtures.deleteTable(name: table) } }
         let connection = try await makeConnection()
+        defer { Task { await connection.close() } }
         let page = try await connection.queryPartition(query(table))
         #expect(page.scannedCount == 3)
         // Verified against dynamodb-local 3.3.0: it reports ConsumedCapacity for

@@ -69,6 +69,9 @@ struct DynamoDBHTTPClient: Sendable {
             (data, response) = try await session.data(for: request)
         } catch let error as URLError where error.code == .cancelled {
             throw DriverError.cancelled
+        } catch is CancellationError {
+            // A task cancelled between two legs of one call may fail with this instead of the URLError.
+            throw DriverError.cancelled
         } catch {
             throw DriverError.connectionFailed(error.localizedDescription)
         }

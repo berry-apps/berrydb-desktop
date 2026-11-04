@@ -59,6 +59,7 @@ struct DynamoDBPartitionQueryConnectionTests {
         let page = try await connection.queryPartition(Self.query)
 
         let requests = DynamoDBStubURLProtocol.requests(for: host)
+        #expect(requests.first.map(Self.target) == "DynamoDB_20120810.ListTables")
         let targets = requests.map(Self.target).dropFirst()
         #expect(Set(targets) == ["DynamoDB_20120810.DescribeTable", "DynamoDB_20120810.Query"])
         #expect(schema.partitionKey.name == "pk")
@@ -67,6 +68,24 @@ struct DynamoDBPartitionQueryConnectionTests {
         let body = try #require(queryBodies.wrappedValue.first)
         #expect(body["ReturnConsumedCapacity"] as? String == "TOTAL")
         #expect(body["ScanIndexForward"] as? Bool == true)
+    }
+
+    @Test func theKeySchemaIsDescribedOncePerTable() async throws {
+        let host = Self.newHost()
+        let connection = try await makeConnection(host: host) { request, _ in
+            switch Self.target(request) {
+            case "DynamoDB_20120810.DescribeTable": return Self.described(request)
+            case "DynamoDB_20120810.Query": return Self.ok(request, ["Items": [], "ScannedCount": 0])
+            default: return Self.ok(request, ["TableNames": []])
+            }
+        }
+        _ = try await connection.keySchema(of: "orders")
+        _ = try await connection.queryPartition(Self.query)
+        _ = try await connection.queryPartition(Self.query)
+        #expect(DynamoDBStubURLProtocol.requests(for: host).map(Self.target) == [
+            "DynamoDB_20120810.ListTables", "DynamoDB_20120810.DescribeTable",
+            "DynamoDB_20120810.Query", "DynamoDB_20120810.Query",
+        ])
     }
 
     @Test func queryPartitionPassesTheExclusiveStartKeyThrough() async throws {

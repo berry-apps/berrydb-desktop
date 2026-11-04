@@ -39,6 +39,16 @@ public actor DynamoDBConnection: DriverConnection {
     /// Partition-key name per table, for native INSERT (one DescribeTable per table).
     private var partitionKeys: [String: String] = [:]
 
+    /// Key schema per table, read by one DescribeTable and reused by every
+    /// partition query on the connection. Safe without invalidation: a helper
+    /// connection serves one request, and DynamoDB does not change a table's key
+    /// attributes in place. Adding or removing a global secondary index is a
+    /// table update
+    /// (https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_UpdateTable.html),
+    /// so a connection opened before one sees the old index list until it
+    /// reconnects, as the partition-key cache above already does.
+    private var keySchemas: [String: DynamoDBKeySchema] = [:]
+
     /// Page-size hint for `ExecuteStatement`'s request-level `Limit` field —
     /// also bounds each `.rows` batch to N3's 500–1000 range. Verified
     /// against dynamodb-local: a page's `Items` count can never exceed this,
@@ -325,17 +335,23 @@ public actor DynamoDBConnection: DriverConnection {
 
 extension DynamoDBConnection: PartitionQuerying {
     public func keySchema(of table: String) async throws -> DynamoDBKeySchema {
+        if let known = keySchemas[table] { return known }
         let client = self.client
-        return try await cancellable { try await client.keySchema(of: table) }
+        let schema = try await cancellable { try await client.keySchema(of: table) }
+        keySchemas[table] = schema
+        return schema
     }
 
     public func queryPartition(_ query: DynamoDBPartitionQuery) async throws -> DynamoDBQueryPage {
-        let client = self.client
-        return try await cancellable {
-            let schema = try await client.keySchema(of: query.table)
-            let request = try DynamoDBPartitionQueryRequest.body(for: query, schema: schema)
-            return try await client.query(request)
+        let schema = try await keySchema(of: query.table)
+        let request: DynamoDBQueryRequestBody
+        do {
+            request = try DynamoDBPartitionQueryRequest.body(for: query, schema: schema)
+        } catch {
+            throw Self.mapError(error)
         }
+        let client = self.client
+        return try await cancellable { try await client.query(request) }
     }
 
     /// Runs `work` as a task registered in `cancelBox`, so `cancelCurrentQuery()`
