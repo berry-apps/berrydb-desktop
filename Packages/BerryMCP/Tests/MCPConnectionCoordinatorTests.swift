@@ -282,7 +282,15 @@ struct MCPConnectionCoordinatorTests {
         }
         for _ in 0..<2000 where await connection.queries.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
         await coordinator.coordinator.cancel(requestID: "slow")
-        await #expect(throws: (any Error).self) { try await task.value }
+        #expect(await connection.queries.count == 1)
+        let started = ContinuousClock.now
+        do {
+            _ = try await task.value
+            Issue.record("the cancelled request returned a page")
+        } catch let error as DriverError {
+            guard case .cancelled = error else { throw error }
+        }
+        #expect(ContinuousClock.now - started < .seconds(10))
         #expect(await connection.closeCalls == 1)
     }
 

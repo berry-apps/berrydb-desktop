@@ -38,11 +38,13 @@ public struct MCPTunnelEndpoint: Sendable {
 /// state is established; on any failure the opened connection and tunnel
 /// are closed before the error propagates.
 public struct MCPConnectionFactories: Sendable {
-    public let partition: MCPConnectionCoordinator.PartitionFactory
     public typealias SQLReadOnlyEnforcer = @Sendable (MCPConnectionProfile, any DriverConnection) async throws -> Void
     public let sql: MCPConnectionCoordinator.SQLFactory
+    /// Opens a DynamoDB connection that reads through `PartitionQuerying`;
+    /// any other driver, or a profile with SSH settings, is refused.
+    public let partition: MCPConnectionCoordinator.PartitionFactory
 
-    /// Builds the SQL factory. `enforceSQLReadOnly` defaults to
+    /// Builds the SQL and partition factories. `enforceSQLReadOnly` defaults to
     /// `enforceSQLReadOnly(profile:connection:)`, which admits PostgreSQL, MySQL and SQLite connections that implement the read-only contract;
     /// `openTunnel` defaults to `openTunnel(_:)`. Either override must keep
     /// the guarantee that no session escapes without read-only enforcement.
@@ -56,17 +58,23 @@ public struct MCPConnectionFactories: Sendable {
         let enforceSQLReadOnly = enforceSQLReadOnly ?? { try await Self.enforceSQLReadOnly(profile: $0, connection: $1) }
         let openTunnel = openTunnel ?? { try await Self.openTunnel($0) }
         partition = { profile in
-            // Only DynamoDB speaks partition queries, and the factory opens
-            // no tunnel: a profile with SSH settings never reaches a driver.
             guard profile.driverID == .dynamodb, profile.config.ssh == nil,
                   let driver = registries.sql(profile.driverID)
             else {
                 throw MCPConnectionCoordinatorError.wrongDriverFamily(profile.driverID)
             }
-            let connection = try await driver.init().connect(profile.config.withApplicationName("BerryDB MCP (read-only)"))
+            let endpoint = try await openTunnel(profile.config)
+            let connection: any DriverConnection
+            do {
+                connection = try await driver.init().connect(endpoint.config.withApplicationName("BerryDB MCP (read-only)"))
+            } catch {
+                await endpoint.close()
+                throw error
+            }
             let lifecycle = MCPConnectionLifecycle(
                 cancel: { connection.cancelCurrentQuery() },
-                closeConnection: { await connection.close() }
+                closeConnection: { await connection.close() },
+                closeTunnel: endpoint.close
             )
             guard let partitions = connection as? any PartitionQuerying else {
                 try? await lifecycle.close()
@@ -330,12 +338,13 @@ public actor MCPConnectionCoordinator {
     public init(
         resolver: MCPProjectResolver,
         sqlFactory: @escaping SQLFactory,
-        partitionFactory: @escaping PartitionFactory = { throw MCPConnectionCoordinatorError.wrongDriverFamily($0.driverID) },
+        partitionFactory: PartitionFactory? = nil,
         shutdownDeadline: Duration = .seconds(5)
     ) {
         self.resolver = resolver
         self.sqlFactory = sqlFactory
-        self.partitionFactory = partitionFactory
+        // See `MCPConnectionFactories.init`: a default-argument closure is not safe on a public init.
+        self.partitionFactory = partitionFactory ?? { throw MCPConnectionCoordinatorError.wrongDriverFamily($0.driverID) }
         self.shutdownDeadline = shutdownDeadline
     }
 
