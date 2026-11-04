@@ -32,8 +32,11 @@ public struct MCPConnectionProfile: Sendable {
     public let id: UUID
     public let driverID: DriverID
     public let config: ConnectionConfig
-    /// True when the saved profile carries the production label. It selects
-    /// tighter result limits only; it never decides authorization.
+    /// True when the saved profile carries the production label, or when
+    /// the project's access row for it was sealed under the label (see
+    /// `MCPVerifiedProject.productionSealedProfileIDs`), whichever is
+    /// stricter. It selects tighter result limits only; it never decides
+    /// authorization.
     public let isProduction: Bool
     /// Column names whose values never leave the helper, as verified for the
     /// project's access row (lowercased, deduplicated, sorted).
@@ -50,11 +53,13 @@ public struct MCPConnectionProfile: Sendable {
         self.redactedColumns = redactedColumns
     }
 
-    /// The same profile with `columns` as its redactions.
-    public func redacting(_ columns: [String]) -> MCPConnectionProfile {
+    /// The same profile with `columns` as its redactions, and under the
+    /// production limits when `sealedProduction` says its access row was
+    /// sealed under the label, whatever the profile's own label says now.
+    public func verified(redacting columns: [String], sealedProduction: Bool) -> MCPConnectionProfile {
         MCPConnectionProfile(
             id: id, driverID: driverID, config: config,
-            isProduction: isProduction, redactedColumns: columns
+            isProduction: isProduction || sealedProduction, redactedColumns: columns
         )
     }
 }
@@ -121,7 +126,8 @@ public struct MCPProjectResolver: Sendable {
     private static let liveReadDrivers: Set<DriverID> = [.postgres, .mysql, .sqlite]
 
     /// Loads a saved profile and its secrets from `store`; nil when no such
-    /// profile exists. `isProduction` follows the profile's environment label.
+    /// profile exists. `isProduction` follows the profile's environment
+    /// label; `resolve` then raises it for a row sealed under the label.
     /// A profile whose driver has no read-only session the helper can open
     /// throws `unsupportedDriver` before its secrets are read, so its
     /// Keychain items are never asked for and no connection is attempted,
@@ -167,6 +173,8 @@ public struct MCPProjectResolver: Sendable {
             throw MCPProjectResolutionError.missingProfile(profileID)
         }
         let redactions = verified.project.profiles.first(where: { $0.profileID == profileID })?.redactedColumns ?? []
-        return profile.redacting(redactions)
+        return profile.verified(
+            redacting: redactions, sealedProduction: verified.productionSealedProfileIDs.contains(profileID)
+        )
     }
 }

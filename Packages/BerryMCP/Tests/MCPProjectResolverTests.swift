@@ -30,6 +30,36 @@ struct MCPProjectResolverTests {
         )
         #expect(try await loader(profile.id)?.isProduction == true)
     }
+
+    /// The limits follow the stricter of the sealed label and the current
+    /// one: a label removed from the profile since its row was sealed does
+    /// not lift the connection out of the production limits.
+    @Test func theSealedProductionLabelOutranksTheCurrentOne() async throws {
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [MCPProfileAccess(profileID: a, liveRead: true)])
+        let resolver = MCPProjectResolver(
+            loadProject: {
+                MCPVerifiedProject(project: project, liveReadProfileIDs: [a], productionSealedProfileIDs: [a])
+            },
+            profile: { id in
+                MCPConnectionProfile(id: id, driverID: .sqlite, config: .sqlite(path: ":memory:"), isProduction: false)
+            }
+        )
+        #expect(try await resolver.resolve(profileID: a, access: .liveRead).isProduction == true)
+    }
+
+    /// Guard: a label the profile gained since its row was sealed counts at
+    /// once, without the project being saved again.
+    @Test func theCurrentProductionLabelOutranksTheSealedOne() async throws {
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [MCPProfileAccess(profileID: a, liveRead: true)])
+        let resolver = MCPProjectResolver(
+            loadProject: { MCPVerifiedProject(project: project, liveReadProfileIDs: [a], productionSealedProfileIDs: []) },
+            profile: { id in
+                MCPConnectionProfile(id: id, driverID: .sqlite, config: .sqlite(path: ":memory:"), isProduction: true)
+            }
+        )
+        #expect(try await resolver.resolve(profileID: a, access: .liveRead).isProduction == true)
+    }
+
     let a = UUID()
     let b = UUID()
     let outsider = UUID()

@@ -18,7 +18,9 @@ public struct MCPConnectionDescriptor: Codable, Equatable, Sendable {
     public let name: String
     public let driver: String
     /// "production" or "unlabeled": only a production label is reported, so a
-    /// free-form environment name never reaches the agent.
+    /// free-form environment name never reaches the agent. A label sealed
+    /// into the access row of a connection whose live reads are on counts
+    /// as well, since the helper applies the production limits to it.
     public let environment: String
     /// What the connection serves: "schema" and "graph" from the store, and
     /// "execute_read_query" when its live reads are on.
@@ -295,7 +297,8 @@ public struct MCPMetadataService: Sendable {
                 id: profile.id,
                 name: profile.name,
                 driver: profile.driverID,
-                environment: profile.envColor == "production" ? "production" : "unlabeled",
+                environment: profile.envColor == "production" || project.productionSealedProfileIDs.contains(profile.id)
+                    ? "production" : "unlabeled",
                 capabilities: live.contains(profile.id) ? ["schema", "graph", "execute_read_query"] : ["schema", "graph"],
                 graphHarvestedAt: state.objectCount > 0 ? state.changedAt : nil,
                 checkedAt: state.checkedAt,

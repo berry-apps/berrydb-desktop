@@ -1450,13 +1450,14 @@ public final class BerryStore: Sendable {
                     liveRead: access.liveRead,
                     redactedColumns: access.redactedColumns
                 )
-                // The tag binds the row to the profile's endpoint as stored
-                // right now; a missing profile yields no tag and the insert
-                // below fails on the foreign key.
+                // The tag binds the row to the profile's endpoint and
+                // production label as stored right now; a missing profile
+                // yields no tag and the insert below fails on the foreign key.
                 let integrityTag = try ConnectionProfile.fetchOne(db, key: access.profileID).map { profile in
                     MCPAccessIntegrity.tag(
                         try MCPAccessIntegrity.profilePayload(
-                            projectID: project.id, access: normalizedAccess, profile: profile
+                            projectID: project.id, access: normalizedAccess, profile: profile,
+                            production: Self.isProductionLabeled(profile)
                         ),
                         key: sealingKey
                     )
@@ -1539,8 +1540,11 @@ public final class BerryStore: Sendable {
     /// ID, a tag that does not verify (including because the profile's
     /// endpoint changed since the row was sealed), a profile row that is
     /// missing or cannot be decoded, or a `redactedColumnsJSON` that cannot
-    /// even be decoded. Never throws, for the same reason as
-    /// `resealedProjectTag`.
+    /// even be decoded. The new tag is made over the bytes the old one
+    /// verified against, so the sealed production label, and the payload of
+    /// a row sealed before the label was covered, carry forward as they
+    /// are: a rotation never changes what a row says. Never throws, for the
+    /// same reason as `resealedProjectTag`.
     private static func resealedProfileTag(
         _ row: MCPProjectProfileRecord, projectID: UUID, isDuplicated: Bool,
         sealingKey: SymmetricKey, previousKey: SymmetricKey?, decoder: JSONDecoder, db: Database
@@ -1551,13 +1555,12 @@ public final class BerryStore: Sendable {
         ) else { return nil }
         guard let profile = try? ConnectionProfile.fetchOne(db, key: row.profileID) else { return nil }
         let access = MCPProfileAccess(profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns)
-        guard let payload = try? MCPAccessIntegrity.profilePayload(
-            projectID: projectID, access: access, profile: profile
+        guard let verified = try? MCPAccessIntegrity.verifiedProfilePayload(
+            tag: row.integrityTag, projectID: projectID, access: access, profile: profile, key: previousKey
         ) else {
             return nil
         }
-        guard MCPAccessIntegrity.isValid(row.integrityTag, payload: payload, key: previousKey) else { return nil }
-        return MCPAccessIntegrity.tag(payload, key: sealingKey)
+        return MCPAccessIntegrity.tag(verified.payload, key: sealingKey)
     }
 
     /// Deletes a project as a settings change: the project's rows go (its
@@ -1590,7 +1593,7 @@ public final class BerryStore: Sendable {
     /// cross-wired row cannot borrow another row's payload: any profile ID
     /// that appears on more than one row is treated as tampered and rejected
     /// outright. A verified but disabled project always yields an empty
-    /// `liveReadProfileIDs`.
+    /// `liveReadProfileIDs`, and an empty `productionSealedProfileIDs` with it.
     public func verifiedMCPProject(id: UUID, key: SymmetricKey?) throws -> MCPVerifiedProject? {
         try read { db in
             guard let record = try MCPProjectRecord.fetchOne(db, key: id) else { return nil }
@@ -1607,9 +1610,13 @@ public final class BerryStore: Sendable {
             }
 
             let rows = try MCPProjectProfileRecord.filter(Column("projectID") == id).fetchAll(db)
-            let (verifiedLive, rejected) = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, db: db)
-            let live = project.isEnabled ? verifiedLive : []
-            return MCPVerifiedProject(project: project, liveReadProfileIDs: live, rejectedLiveReadProfileIDs: rejected)
+            let verified = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, db: db)
+            return MCPVerifiedProject(
+                project: project,
+                liveReadProfileIDs: project.isEnabled ? verified.live : [],
+                rejectedLiveReadProfileIDs: verified.rejected,
+                productionSealedProfileIDs: project.isEnabled ? verified.production : []
+            )
         }
     }
 
@@ -1654,7 +1661,7 @@ public final class BerryStore: Sendable {
             }
 
             let rows = try MCPProjectProfileRecord.filter(Column("projectID") == id).fetchAll(db)
-            let (live, _) = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, db: db)
+            let live = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, db: db).live
             for index in project.profiles.indices where !live.contains(project.profiles[index].profileID) {
                 project.profiles[index].liveRead = false
             }
@@ -1665,35 +1672,40 @@ public final class BerryStore: Sendable {
     /// Rows whose own decoded fields produce a tag that verifies under
     /// `key`, split into those with `liveRead` on (`live`) and those that
     /// claim `liveRead` but fail verification or share a duplicated profile
-    /// ID (`rejected`). Deliberately does not apply the project's own
-    /// `isEnabled` gate — `verifiedMCPProject` applies it afterward for its
-    /// public `liveReadProfileIDs`, while `mcpProjectForEditing` needs the
-    /// ungated result so editing a currently-disabled project does not
-    /// discard a row's tag-verified `liveRead`. The payload is rebuilt with
-    /// the endpoint of the profile row as it is now, so a row whose profile
-    /// is missing, cannot be decoded, or was pointed at another endpoint
-    /// since sealing is rejected.
+    /// ID (`rejected`); `production` is the part of `live` sealed under the
+    /// production label, or before the label was covered (see
+    /// `MCPAccessIntegrity.verifiedProfilePayload`). Deliberately does not
+    /// apply the project's own `isEnabled` gate — `verifiedMCPProject`
+    /// applies it afterward for its public `liveReadProfileIDs`, while
+    /// `mcpProjectForEditing` needs the ungated result so editing a
+    /// currently-disabled project does not discard a row's tag-verified
+    /// `liveRead`. The payload is rebuilt with the endpoint of the profile
+    /// row as it is now, so a row whose profile is missing, cannot be
+    /// decoded, or was pointed at another endpoint since sealing is
+    /// rejected.
     private static func verifiedProfileRows(
         projectID: UUID, rows: [MCPProjectProfileRecord], key: SymmetricKey, db: Database
-    ) throws -> (live: Set<UUID>, rejected: Set<UUID>) {
+    ) throws -> (live: Set<UUID>, rejected: Set<UUID>, production: Set<UUID>) {
         var occurrences: [UUID: Int] = [:]
         for row in rows { occurrences[row.profileID, default: 0] += 1 }
 
         let decoder = JSONDecoder()
         var live = Set<UUID>()
         var rejected = Set<UUID>()
+        var production = Set<UUID>()
         for row in rows where row.liveRead {
-            let verifies = try profileRowVerifies(
+            let verified = try profileRowVerification(
                 row, isDuplicated: occurrences[row.profileID] != 1, projectID: projectID,
                 key: key, decoder: decoder, db: db
             )
-            if verifies {
-                live.insert(row.profileID)
-            } else {
+            guard let verified else {
                 rejected.insert(row.profileID)
+                continue
             }
+            live.insert(row.profileID)
+            if verified.production { production.insert(row.profileID) }
         }
-        return (live, rejected)
+        return (live, rejected, production)
     }
 
     /// Profiles of project `projectID` whose access row does not verify
@@ -1712,30 +1724,39 @@ public final class BerryStore: Sendable {
             for row in rows { occurrences[row.profileID, default: 0] += 1 }
             let decoder = JSONDecoder()
             let unverified = try rows.filter { row in
-                try !Self.profileRowVerifies(
+                try Self.profileRowVerification(
                     row, isDuplicated: occurrences[row.profileID] != 1, projectID: projectID,
                     key: key, decoder: decoder, db: db
-                )
+                ) == nil
             }
             return Set(unverified.map(\.profileID))
         }
     }
 
-    /// True when `row`'s own decoded fields, with the endpoint of its
-    /// profile as stored now, produce a tag that verifies under `key`. A
-    /// duplicated profile ID, or a profile that is missing or cannot be
-    /// decoded, never verifies. Throws when `redactedColumnsJSON` cannot be
-    /// decoded.
-    private static func profileRowVerifies(
+    /// The bytes `row`'s tag verifies against under `key`, built from the
+    /// row's own decoded fields with the endpoint of its profile as stored
+    /// now, and whether they seal the production label (see
+    /// `MCPAccessIntegrity.verifiedProfilePayload`); nil when the row does
+    /// not verify. A duplicated profile ID, or a profile that is missing or
+    /// cannot be decoded, never verifies. Throws when `redactedColumnsJSON`
+    /// cannot be decoded.
+    private static func profileRowVerification(
         _ row: MCPProjectProfileRecord, isDuplicated: Bool, projectID: UUID, key: SymmetricKey,
         decoder: JSONDecoder, db: Database
-    ) throws -> Bool {
-        guard !isDuplicated else { return false }
+    ) throws -> (payload: Data, production: Bool)? {
+        guard !isDuplicated else { return nil }
         let redactedColumns = try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8))
-        guard let profile = try? ConnectionProfile.fetchOne(db, key: row.profileID) else { return false }
+        guard let profile = try? ConnectionProfile.fetchOne(db, key: row.profileID) else { return nil }
         let access = MCPProfileAccess(profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns)
-        let payload = try MCPAccessIntegrity.profilePayload(projectID: projectID, access: access, profile: profile)
-        return MCPAccessIntegrity.isValid(row.integrityTag, payload: payload, key: key)
+        return try MCPAccessIntegrity.verifiedProfilePayload(
+            tag: row.integrityTag, projectID: projectID, access: access, profile: profile, key: key
+        )
+    }
+
+    /// The label the connection editor writes for a production connection;
+    /// any other value, or none, is not production.
+    private static func isProductionLabeled(_ profile: ConnectionProfile) -> Bool {
+        profile.envColor == "production"
     }
 
     private static func makeMCPProject(record: MCPProjectRecord, db: Database) throws -> MCPProject {
