@@ -31,6 +31,10 @@ struct MCPPartitionResultBounder {
         var kept: [[String: DynamoDBAttributeValue]] = []
         /// For each kept item, its position in the page DynamoDB returned.
         var keptIndexes: [Int] = []
+        /// For each kept item, its encoded bytes.
+        var keptBytes: [Int] = []
+        /// For each kept item, the attributes redaction removed from it.
+        var keptRedactions: [[String]] = []
         var omittedAttributes: [MCPOmittedAttribute] = []
         var skippedItems: [MCPSkippedItem] = []
         var redactedAttributes: [String] = []
@@ -38,6 +42,23 @@ struct MCPPartitionResultBounder {
         /// one the result leaves out.
         var lastProcessedIndex: Int?
         var cutByCeiling = false
+
+        /// Gives back the last kept item and every item processed after
+        /// it, so the page ends before it; false when no item is kept.
+        /// Used when the whole result, cursor and metadata included, does
+        /// not fit the ceiling the first pass budgeted with.
+        mutating func dropLastKept() -> Bool {
+            guard let dropped = keptIndexes.popLast() else { return false }
+            kept.removeLast()
+            keptBytes.removeLast()
+            keptRedactions.removeLast()
+            omittedAttributes.removeAll { $0.item >= dropped }
+            skippedItems.removeAll { $0.index > dropped }
+            redactedAttributes = Set(keptRedactions.joined()).sorted()
+            lastProcessedIndex = [keptIndexes.last, skippedItems.last?.index].compactMap { $0 }.max()
+            cutByCeiling = true
+            return true
+        }
     }
 
     let limits: MCPResultLimits
@@ -74,7 +95,7 @@ struct MCPPartitionResultBounder {
                 let bytes = try encoder.encode([name: value]).count
                 if bytes > limits.maximumCellBytes {
                     item.removeValue(forKey: name)
-                    omitted.append(MCPOmittedAttribute(item: index, name: name, bytes: bytes))
+                    omitted.append(MCPOmittedAttribute(item: index, name: Self.reported(name), bytes: bytes))
                 }
             }
             let bytes = try encoder.encode(item).count
@@ -92,11 +113,22 @@ struct MCPPartitionResultBounder {
             remaining -= cost
             bounded.kept.append(item)
             bounded.keptIndexes.append(index)
+            bounded.keptBytes.append(bytes)
+            bounded.keptRedactions.append(removed)
             bounded.omittedAttributes += omitted
             redacted.formUnion(removed)
             bounded.lastProcessedIndex = index
         }
         bounded.redactedAttributes = redacted.sorted()
         return bounded
+    }
+
+    /// An attribute name as `omitted_attributes` reports it. A non-key
+    /// attribute name may be up to 64 KB
+    /// (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html#HowItWorks.NamingRules),
+    /// so a few omitted attributes could otherwise fill the page by their
+    /// names alone.
+    private static func reported(_ name: String) -> String {
+        name.count > 255 ? String(name.prefix(254)) + "…" : name
     }
 }

@@ -102,11 +102,18 @@ struct MCPPartitionQueryServiceTests {
     }
 
     @Test func anUnknownTableIsReported() async throws {
+        // DescribeTable is the first request, so a missing table is found there.
         let missing = DriverError.queryFailed(message: "ResourceNotFoundException: Requested resource not found", code: nil)
-        let harness = Harness(connection: ScriptedPartitionConnection(schema: orders, pages: [.failure(missing)]))
+        let connection = ScriptedPartitionConnection(schema: orders, pages: [.success(page([]))], schemaError: missing)
+        let harness = Harness(connection: connection)
         let error = await harness.failure(harness.request(partitionKey: .string("c1")))
         #expect(error == .unknownTable)
         #expect(error?.description == "No table by that name can be read with this connection.")
+        #expect(await connection.queries.isEmpty)
+
+        // A table deleted between DescribeTable and Query.
+        let deleted = Harness(connection: ScriptedPartitionConnection(schema: orders, pages: [.failure(missing)]))
+        #expect(await deleted.failure(deleted.request(partitionKey: .string("c1"))) == .unknownTable)
     }
 
     @Test func itemsComeBackAsTheServiceSentThem() async throws {
@@ -311,6 +318,53 @@ struct MCPPartitionQueryServiceTests {
         #expect(await plain.queries.map(\.limit) == [100, 7])
     }
 
+    @Test func theWholeResultFitsTheCeilingWithALargeCursorAndOmittedAttributes() async throws {
+        // Key attributes at their largest, so the sealed cursor runs to
+        // kilobytes: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html#limits-partition-sort-keys
+        let wide = DynamoDBKeySchema(
+            table: "wide", partitionKey: DynamoDBKeyAttribute(name: "p", type: .string),
+            sortKey: DynamoDBKeyAttribute(name: "s", type: .string), indexes: []
+        )
+        let longName = String(repeating: "b", count: 300)
+        let items = (1...5).map { number -> [String: DynamoDBAttributeValue] in
+            [
+                "p": .string(String(repeating: "p", count: 2_048)),
+                "s": .string(String(repeating: "s", count: 1_020) + "000\(number)"),
+                longName: .string(String(repeating: "x", count: 4_000)),
+            ]
+        }
+        let kept = items[0].filter { $0.key != longName }
+        let itemBytes = try size(kept)
+        let reserve = try MCPPartitionQueryService.reserve(for: MCPKeySchemaDescription(schema: wide, index: nil))
+        // The first pass fits three items; the cursor and three omitted
+        // entries do not fit in what the reserve leaves.
+        let ceiling = reserve + 3 * itemBytes + 2
+        let connection = ScriptedPartitionConnection(schema: wide, pages: [
+            .success(page(items, lastKey: items[4].filter { ["p", "s"].contains($0.key) })),
+            .success(page([])),
+        ])
+        let harness = Harness(connection: connection, limits: { _ in
+            MCPResultLimits(maximumRows: 100, maximumCellBytes: 3_000, maximumSerializedBytes: ceiling, maximumElapsed: .seconds(30))
+        })
+        let request = harness.request(table: "wide", partitionKey: .string(String(repeating: "p", count: 2_048)))
+        let result = try await harness.query(request)
+        #expect(try emittedSize(result) <= ceiling)
+        #expect(try MCPPartitionQueryService.encodedSize(of: result) == emittedSize(result))
+        #expect(result.itemCount > 0)
+        #expect(result.itemCount < 3)
+        #expect(result.items == Array(items[0..<result.itemCount]).map { $0.filter { $0.key != longName } })
+        #expect(result.omittedAttributes.map(\.item) == Array(0..<result.itemCount))
+        #expect(result.omittedAttributes.allSatisfy { $0.name.count == 255 && $0.name.hasSuffix("…") })
+        #expect(result.truncated)
+        let cursor = try #require(result.nextCursor)
+
+        _ = try await harness.query(MCPPartitionQueryRequest(
+            profileID: request.profileID, table: "wide", partitionKey: request.partitionKey, cursor: cursor
+        ))
+        let last = items[result.itemCount - 1]
+        #expect(await connection.queries.last?.exclusiveStartKey == last.filter { ["p", "s"].contains($0.key) })
+    }
+
     @Test func aSQLProfileIsRefusedBeforeOpening() async throws {
         let connection = ScriptedPartitionConnection(schema: orders, pages: [.success(page([]))])
         let harness = Harness(connection: connection, driverID: .postgres)
@@ -321,20 +375,22 @@ struct MCPPartitionQueryServiceTests {
     }
 
     @Test func aQueryPastItsTimeLimitIsCancelled() async throws {
-        // The scripted query would take 30 s; only a cancel ends it sooner.
         let connection = ScriptedPartitionConnection(schema: orders, pages: [.success(page([]))], delay: .seconds(30))
-        let harness = Harness(connection: connection, limits: { _ in
+        // The open budget puts the whole request's bound at 40 + 1 + 2 s;
+        // it reports the same text as the query's own bound of 1 + 1 s, so
+        // only the time taken shows which fired. A loaded parallel run has
+        // delayed a short deadline here by more than 10 s, so the bound sits
+        // between the two rather than near the query's.
+        let harness = Harness(connection: connection, openBudget: .seconds(40), limits: { _ in
             MCPResultLimits(maximumRows: 100, maximumCellBytes: 65_536, maximumSerializedBytes: 1_048_576, maximumElapsed: .seconds(1))
         })
         let clock = ContinuousClock()
         let started = clock.now
         let error = await harness.failure(harness.request(partitionKey: .string("c1")))
+        #expect(clock.now - started < .seconds(25))
         #expect(error == .timedOut(seconds: 1))
         #expect(error?.description == "The query did not finish within 1 seconds.")
-        // The coordinator closes the connection once the cancelled query
-        // returns; without the cancel that is 30 s after it started.
-        try await eventually { await connection.closeCalls == 1 }
-        #expect(clock.now - started < .seconds(25))
+        try await eventually { await connection.sawCancellation }
     }
 
     @Test func aDynamoDBQueryTakesALiveReadSlot() async throws {
@@ -458,6 +514,15 @@ private func page(
     DynamoDBQueryPage(items: items, lastEvaluatedKey: lastKey, consumedCapacityUnits: 0.5, scannedCount: items.count)
 }
 
+/// The bytes of `result` as one JSON object holding its metadata and its
+/// items under `items`, counted independently of the service.
+private func emittedSize(_ result: MCPPartitionQueryResult) throws -> Int {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    let metadata = try encoder.encode(result).count
+    return metadata + #""items":"#.utf8.count + (try encoder.encode(result.items).count) + 1
+}
+
 private func size(_ item: [String: DynamoDBAttributeValue]) throws -> Int {
     try size(items: [item]) - 2
 }
@@ -499,6 +564,7 @@ private struct Harness {
         isProduction: Bool = false,
         redactedColumns: [String] = [],
         resolver: (@Sendable (UUID) -> MCPProjectResolver)? = nil,
+        openBudget: Duration = .seconds(3),
         limits: (@Sendable (Bool) -> MCPResultLimits)? = nil,
         sqlConnection: HeldSQLConnection? = nil
     ) {
@@ -542,9 +608,9 @@ private struct Harness {
         profileID = id
         sqlProfileID = sqlID
         self.tracker = tracker
-        liveReads = MCPLiveReadService(coordinator: coordinator, openBudget: .seconds(3), slots: MCPLiveReadSlots(capacity: 4))
+        liveReads = MCPLiveReadService(coordinator: coordinator, openBudget: openBudget, slots: MCPLiveReadSlots(capacity: 4))
         if let limits {
-            service = MCPPartitionQueryService(coordinator: coordinator, openBudget: .seconds(3), slots: liveReads.slots, limits: limits)
+            service = MCPPartitionQueryService(coordinator: coordinator, openBudget: openBudget, slots: liveReads.slots, limits: limits)
         } else {
             service = MCPPartitionQueryService(sharing: liveReads)
         }

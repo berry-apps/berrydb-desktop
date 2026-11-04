@@ -8,17 +8,29 @@ actor ScriptedPartitionConnection: PartitionQuerying {
     private let schema: DynamoDBKeySchema
     private var pages: [Result<DynamoDBQueryPage, Error>]
     private let delay: Duration
+    private let schemaError: Error?
     private let inFlight = InFlightSleep()
     private(set) var queries: [DynamoDBPartitionQuery] = []
     private(set) var closeCalls = 0
+    /// True once a delayed query was cancelled before its delay ran out.
+    private(set) var sawCancellation = false
 
-    init(schema: DynamoDBKeySchema, pages: [Result<DynamoDBQueryPage, Error>], delay: Duration = .zero) {
+    /// `schemaError`, when set, is what `keySchema(of:)` throws, as
+    /// `DescribeTable` does for a table that does not exist.
+    init(
+        schema: DynamoDBKeySchema, pages: [Result<DynamoDBQueryPage, Error>], delay: Duration = .zero,
+        schemaError: Error? = nil
+    ) {
         self.schema = schema
         self.pages = pages
         self.delay = delay
+        self.schemaError = schemaError
     }
 
-    func keySchema(of table: String) async throws -> DynamoDBKeySchema { schema }
+    func keySchema(of table: String) async throws -> DynamoDBKeySchema {
+        if let schemaError { throw schemaError }
+        return schema
+    }
 
     func queryPartition(_ query: DynamoDBPartitionQuery) async throws -> DynamoDBQueryPage {
         queries.append(query)
@@ -28,6 +40,7 @@ actor ScriptedPartitionConnection: PartitionQuerying {
             do {
                 try await withTaskCancellationHandler { try await sleep.value } onCancel: { sleep.cancel() }
             } catch is CancellationError {
+                sawCancellation = true
                 throw DriverError.cancelled
             }
         }

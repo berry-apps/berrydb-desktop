@@ -287,39 +287,56 @@ public struct MCPPartitionQueryService: Sendable {
             limits: limits, reserve: try reserve(for: description),
             redactedAttributes: Set(profile.redactedColumns)
         )
-        let bounded = try bounder.bound(page.items)
-        let nextKey: [String: DynamoDBAttributeValue]?
-        // A cut page always follows a returned or skipped item: the first
-        // item either fits an empty page or is skipped.
-        if bounded.cutByCeiling, let last = bounded.lastProcessedIndex {
-            // The next page starts after the last item returned or skipped,
-            // so nothing returned repeats and a skipped item is not fetched
-            // again. Its key is read from the item DynamoDB sent, since a
-            // redacted or omitted attribute may be part of it.
-            let keyNames = schema.keyAttributeNames(index: request.indexName)
-            nextKey = page.items[last].filter { keyNames.contains($0.key) }
-        } else {
-            nextKey = page.lastEvaluatedKey
+        var bounded = try bounder.bound(page.items)
+        let keyNames = schema.keyAttributeNames(index: request.indexName)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        // The first pass budgets the metadata with a fixed reserve; the
+        // cursor and the lists of what was left out can outgrow it, so the
+        // finished result is measured and gives back items until it fits.
+        while true {
+            let nextKey: [String: DynamoDBAttributeValue]?
+            // A cut page always follows a returned or skipped item: the first
+            // item either fits an empty page or is skipped, and a page cut
+            // back to nothing is refused below.
+            if bounded.cutByCeiling, let last = bounded.lastProcessedIndex {
+                // The next page starts after the last item returned or
+                // skipped, so nothing returned repeats and a skipped item is
+                // not fetched again. Its key is read from the item DynamoDB
+                // sent, since a redacted or omitted attribute may be part of it.
+                nextKey = page.items[last].filter { keyNames.contains($0.key) }
+            } else {
+                nextKey = page.lastEvaluatedKey
+            }
+            let nextCursor = try nextKey.map { try MCPQueryCursor.seal(lastKey: $0, scope: scope) }
+            let result = MCPPartitionQueryResult(
+                items: bounded.kept,
+                itemCount: bounded.kept.count,
+                keySchema: description,
+                nextCursor: nextCursor,
+                consumedCapacityUnits: page.consumedCapacityUnits,
+                redactedAttributes: bounded.redactedAttributes,
+                omittedAttributes: bounded.omittedAttributes,
+                skippedItems: bounded.skippedItems,
+                truncated: bounded.cutByCeiling || !bounded.omittedAttributes.isEmpty
+                    || !bounded.skippedItems.isEmpty || nextCursor != nil,
+                elapsedMs: milliseconds(elapsed)
+            )
+            let size = encodedSize(metadataBytes: try encoder.encode(result).count, itemBytes: bounded.keptBytes)
+            if size <= limits.maximumSerializedBytes { return result }
+            // Without a processed item the next page could only start where
+            // this one did, so paging would never advance.
+            guard bounded.dropLastKept(), bounded.lastProcessedIndex != nil else {
+                throw MCPPartitionQueryError.resultTooLarge
+            }
         }
-        let nextCursor = try nextKey.map { try MCPQueryCursor.seal(lastKey: $0, scope: scope) }
-        return MCPPartitionQueryResult(
-            items: bounded.kept,
-            itemCount: bounded.kept.count,
-            keySchema: description,
-            nextCursor: nextCursor,
-            consumedCapacityUnits: page.consumedCapacityUnits,
-            redactedAttributes: bounded.redactedAttributes,
-            omittedAttributes: bounded.omittedAttributes,
-            skippedItems: bounded.skippedItems,
-            truncated: bounded.cutByCeiling || !bounded.omittedAttributes.isEmpty
-                || !bounded.skippedItems.isEmpty || nextCursor != nil,
-            elapsedMs: milliseconds(elapsed)
-        )
     }
 
-    /// Bytes of the ceiling held back for everything in the result except
-    /// its items: the result's own encoding with no items, plus room for the
-    /// cursor and the lists of what was left out.
+    /// Bytes of the ceiling the first pass holds back for everything in the
+    /// result except its items: the result's own encoding with no items,
+    /// plus 1,024 bytes. That covers a short cursor and a few omitted or
+    /// skipped entries, not a cursor over large keys; the finished result is
+    /// measured with `encodedSize` and shrunk when it does not fit.
     static func reserve(for keySchema: MCPKeySchemaDescription) throws -> Int {
         let empty = MCPPartitionQueryResult(
             items: [], itemCount: 0, keySchema: keySchema, nextCursor: nil, consumedCapacityUnits: nil,
@@ -328,6 +345,25 @@ public struct MCPPartitionQueryService: Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(empty).count + 1_024
+    }
+
+    /// The bytes of `result` emitted as one JSON object: its encoded
+    /// metadata with its items added under `items`, everything encoded with
+    /// `[.sortedKeys, .withoutEscapingSlashes]`. The byte ceiling bounds this.
+    static func encodedSize(of result: MCPPartitionQueryResult) throws -> Int {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return encodedSize(
+            metadataBytes: try encoder.encode(result).count,
+            itemBytes: try result.items.map { try encoder.encode($0).count }
+        )
+    }
+
+    /// As `encodedSize(of:)`, from the metadata's and each item's encoded
+    /// bytes: the metadata object gains a comma, `"items":`, the brackets
+    /// and a comma between items.
+    static func encodedSize(metadataBytes: Int, itemBytes: [Int]) -> Int {
+        metadataBytes + 1 + #""items":"#.utf8.count + 2 + itemBytes.reduce(0, +) + max(0, itemBytes.count - 1)
     }
 
     // MARK: - Request checks
@@ -527,6 +563,9 @@ public struct MCPPartitionQueryService: Sendable {
     /// (https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_identifiers.html#identifiers-unique-ids),
     /// and an account ID is 12 digits
     /// (https://docs.aws.amazon.com/accounts/latest/reference/manage-acct-identifiers.html).
+    /// Any run of exactly 12 digits is masked, an account ID or not: an
+    /// unrelated number lost from a message costs less than an account ID
+    /// let through.
     static func sanitized(_ message: String) -> String {
         let masked = message
             .replacing(#/arn:[^\s"']+/#, with: "arn:…")

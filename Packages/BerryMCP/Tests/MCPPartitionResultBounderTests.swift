@@ -34,6 +34,48 @@ struct MCPPartitionResultBounderTests {
         #expect(bounded.skippedItems.isEmpty)
     }
 
+    @Test func anOmittedAttributesNameIsCut() throws {
+        let name = String(repeating: "n", count: 300)
+        let bounder = MCPPartitionResultBounder(limits: limits(ceiling: 10_000, cell: 10), reserve: 0, redactedAttributes: [])
+        let bounded = try bounder.bound([[name: .string("value")]])
+        let omitted = try #require(bounded.omittedAttributes.first)
+        #expect(omitted.name == String(repeating: "n", count: 254) + "…")
+    }
+
+    @Test func dropTheLastKeptItemUndoesEverythingAfterIt() throws {
+        let item: [String: DynamoDBAttributeValue] = ["pk": .string("a"), "email": .string("e"), "big": .string("xxxxxxxxxxxxxxxxxxxx")]
+        // No attribute over the cell limit, the whole over the budget.
+        var large: [String: DynamoDBAttributeValue] = ["pk": .string("b")]
+        for number in 0..<10 { large["k\(number)"] = .string("vvvvvvvvvv") }
+        let bounder = MCPPartitionResultBounder(
+            limits: limits(ceiling: 1_000, cell: 25), reserve: 900, redactedAttributes: ["email"]
+        )
+        // Kept 0, skipped 1, kept 2, skipped 3.
+        var bounded = try bounder.bound([item, large, item, large])
+        #expect(bounded.keptIndexes == [0, 2])
+        #expect(bounded.skippedItems.map(\.index) == [1, 3])
+        #expect(bounded.lastProcessedIndex == 3)
+
+        let droppedFirst = bounded.dropLastKept()
+        #expect(droppedFirst)
+        #expect(bounded.keptIndexes == [0])
+        #expect(bounded.kept.count == 1)
+        #expect(bounded.omittedAttributes.map(\.item) == [0])
+        #expect(bounded.skippedItems.map(\.index) == [1])
+        #expect(bounded.lastProcessedIndex == 1)
+        #expect(bounded.cutByCeiling)
+        #expect(bounded.redactedAttributes == ["email"])
+
+        let droppedSecond = bounded.dropLastKept()
+        #expect(droppedSecond)
+        #expect(bounded.kept.isEmpty)
+        #expect(bounded.omittedAttributes.isEmpty)
+        #expect(bounded.redactedAttributes.isEmpty)
+        #expect(bounded.lastProcessedIndex == nil)
+        let droppedNothing = bounded.dropLastKept()
+        #expect(droppedNothing == false)
+    }
+
     @Test func anItemThatNeverFitsIsSkippedAndProcessingContinues() throws {
         let small: [String: DynamoDBAttributeValue] = ["pk": .string("a")]
         let large: [String: DynamoDBAttributeValue] = ["pk": .string("b"), "a": .string(String(repeating: "y", count: 300))]
