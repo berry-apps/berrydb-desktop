@@ -188,6 +188,17 @@ struct MCPMetadataServiceTests {
         )
     }
 
+    /// A connection whose access row was sealed under the production label
+    /// is reported as production even once the profile has lost the label,
+    /// since the helper applies the production limits to it.
+    @Test func listConnectionsReportsASealedProductionLabel() throws {
+        let sealed = MCPVerifiedProject(
+            project: project.project, liveReadProfileIDs: [staging.id], productionSealedProfileIDs: [staging.id]
+        )
+        let descriptors = try makeService().listConnections(in: sealed)
+        #expect(descriptors.map(\.environment) == ["production", "production"])
+    }
+
     @Test func listConnectionsHidesEndpointDetails() throws {
         let descriptors = try makeService().listConnections(in: project)
         #expect(descriptors.map(\.id) == [production.id, staging.id])
