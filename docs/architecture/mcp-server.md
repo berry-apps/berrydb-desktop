@@ -764,7 +764,8 @@ the check when the connection opens), `dynamodb:DescribeTable` and
 `ListTables` takes no table resource, so its statement needs `"Resource":
 "*"`
 ([Actions, resources, and condition keys for Amazon DynamoDB](https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazondynamodb.html));
-the helper never returns the table list to the agent.
+what `ListTables` returns is never passed to the agent: the schema tools
+serve only the stored schema of the connections the project assigns.
 Such a policy has not been tried against AWS; dynamodb-local, which the
 live tests run on, does not enforce IAM. Redacted attributes remove
 top-level attributes by name from every item, nested values are not
