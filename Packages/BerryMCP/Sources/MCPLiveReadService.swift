@@ -39,7 +39,7 @@ public struct MCPLiveReadResult: Encodable, Equatable, Sendable {
 
 public enum MCPLiveReadError: Error, Equatable, Sendable, CustomStringConvertible {
     case unknownConnection, liveReadNotEnabled, noProject, unsupportedDatabase
-    case policy(String), readOnlyUnavailable, connectionFailed, openTimedOut(seconds: Int)
+    case policy(String), readOnlyUnavailable, connectionFailed, connectionLost, openTimedOut(seconds: Int)
     case timedOut(seconds: Int), queryFailed(String), resultTooLarge
 
     public var description: String {
@@ -51,6 +51,7 @@ public enum MCPLiveReadError: Error, Equatable, Sendable, CustomStringConvertibl
         case .policy(let reason): "The query was refused before it ran: \(reason)"
         case .readOnlyUnavailable: "BerryDB could not open a read-only session on this database, so the query did not run."
         case .connectionFailed: "BerryDB could not connect to this database."
+        case .connectionLost: "The connection to the database was lost during the read."
         case .openTimedOut(let seconds): "BerryDB could not open a connection to this database within \(seconds) seconds."
         case .timedOut(let seconds): "The query did not finish within \(seconds) seconds."
         case .queryFailed(let message): "The database refused the query: \(message)"
@@ -161,9 +162,12 @@ public struct MCPLiveReadService: Sendable {
             // Nothing in this process cancelled the statement, so the server
             // ended it at its time bound: the drivers report PostgreSQL's
             // query_canceled (SQLSTATE 57014,
-            // https://www.postgresql.org/docs/current/errcodes-appendix.html)
-            // and MySQL's interrupted statement (error 3024,
+            // https://www.postgresql.org/docs/current/errcodes-appendix.html),
+            // MySQL's interrupted statement (error 3024,
             // https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html)
+            // and MariaDB's statement past `max_statement_time` (error 1969,
+            // ER_STATEMENT_TIMEOUT,
+            // https://mariadb.com/kb/en/mariadb-error-code-reference/)
             // as `DriverError.cancelled`.
             throw MCPLiveReadError.timedOut(seconds: MCPRequestDeadline.wholeSeconds(limits.maximumElapsed))
         }
@@ -312,6 +316,11 @@ public struct MCPLiveReadService: Sendable {
             switch error {
             case .readOnlyUnavailable:
                 return MCPLiveReadError.readOnlyUnavailable
+            // Raised once the session was open, a lost connection dropped
+            // during the read, so the database was reached; raised while
+            // opening, it is a connection that could not be opened.
+            case .connectionLost where wasRead:
+                return MCPLiveReadError.connectionLost
             case .connectionFailed, .connectionLost, .notConnected, .sshHostKeyChanged:
                 return MCPLiveReadError.connectionFailed
             case .queryFailed(let message, _) where wasRead:

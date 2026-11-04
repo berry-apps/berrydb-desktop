@@ -640,7 +640,7 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
             mode = try await firstText("SHOW transaction_read_only")
         } catch {
             await finishTransaction(commit: false)
-            throw DriverError.readOnlyUnavailable(Self.mapError(error).detail)
+            throw DriverError.readOnlySetupFailure(Self.mapError(error))
         }
         await finishTransaction(commit: false)
         guard mode == "on" else {
@@ -734,12 +734,7 @@ extension PostgresDriverConnection: ReadOnlyExecuting {
             cancelBox.transactionPID = try await lastInt32(preamble[1])
         } catch {
             await finishTransaction(commit: false)
-            let mapped = Self.mapError(error)
-            if case .cancelled = mapped {
-                continuation.finish(throwing: mapped)
-            } else {
-                continuation.finish(throwing: DriverError.readOnlyUnavailable(Self.mapError(error).detail))
-            }
+            continuation.finish(throwing: DriverError.readOnlySetupFailure(Self.mapError(error)))
             return
         }
         await afterReadOnlyPreamble?()
