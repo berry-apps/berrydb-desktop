@@ -181,6 +181,21 @@ struct DynamoDBHTTPClient: Sendable {
         return table
     }
 
+    // MARK: - Partition query
+
+    /// Returns `DynamoDBKeySchema` (Sendable) rather than the raw DescribeTable
+    /// JSON, for the same reason as `partitionKeyName(of:)`.
+    func keySchema(of table: String) async throws -> DynamoDBKeySchema {
+        try DynamoDBPartitionQueryRequest.keySchema(describedTable: try await describeTable(name: table), name: table)
+    }
+
+    /// One `Query` call and its one page; never follows `LastEvaluatedKey`.
+    /// https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html
+    func query(_ request: DynamoDBQueryRequestBody) async throws -> DynamoDBQueryPage {
+        let json = try await send(target: "DynamoDB_20120810.Query", body: request.body)
+        return try DynamoDBPartitionQueryRequest.page(json: json)
+    }
+
  /// Fail-fast check for `connect()` ("Test connection" expectation,
     /// same reasoning as `QdrantDriver.connect()`) — an HTTP client has no
     /// TCP-handshake-time failure the way Postgres/MySQL do, so a cheap real

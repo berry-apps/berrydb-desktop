@@ -322,3 +322,44 @@ public actor DynamoDBConnection: DriverConnection {
         cancelBox.current?.cancel()
     }
 }
+
+extension DynamoDBConnection: PartitionQuerying {
+    public func keySchema(of table: String) async throws -> DynamoDBKeySchema {
+        let client = self.client
+        return try await cancellable { try await client.keySchema(of: table) }
+    }
+
+    public func queryPartition(_ query: DynamoDBPartitionQuery) async throws -> DynamoDBQueryPage {
+        let client = self.client
+        return try await cancellable {
+            let schema = try await client.keySchema(of: query.table)
+            let request = try DynamoDBPartitionQueryRequest.body(for: query, schema: schema)
+            return try await client.query(request)
+        }
+    }
+
+    /// Runs `work` as a task registered in `cancelBox`, so `cancelCurrentQuery()`
+    /// aborts its in-flight HTTP request the way it aborts `execute`. `cancelBox`
+    /// holds a `Task<Void, Never>`, so the registered task forwards its
+    /// cancellation to the one doing the work.
+    private func cancellable<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) async throws -> T {
+        guard !isClosed else { throw DriverError.notConnected }
+        let task = Task { try await work() }
+        cancelBox.current = Task {
+            await withTaskCancellationHandler {
+                _ = await task.result
+            } onCancel: {
+                task.cancel()
+            }
+        }
+        do {
+            return try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        } catch {
+            throw Self.mapError(error)
+        }
+    }
+}
