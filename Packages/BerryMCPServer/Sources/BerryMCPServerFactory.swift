@@ -9,18 +9,26 @@ import Synchronization
 /// Invariant: every handler obtains its context from the session, so no
 /// request is served from a project that was not verified for that request.
 public enum BerryMCPServerFactory {
-    /// What a server needs to run live reads.
+    /// What a server needs to run live reads and, with `partition`, DynamoDB
+    /// queries.
     public struct LiveReads: Sendable {
         let service: MCPLiveReadService
         let projectSource: MCPSessionProjectSource
+        let partition: MCPPartitionQueryService?
 
         /// `projectSource` must be the source the service's resolver loads
         /// its project from; `makeServer` binds it to the session it
         /// creates, so the service resolves against that session's project.
         /// A source can be bound once, so one value serves one server.
-        public init(service: MCPLiveReadService, projectSource: MCPSessionProjectSource) {
+        /// `partition` serves `berrydb_dynamodb_query` and must resolve
+        /// through the same source; without it the server answers that tool
+        /// with a fixed refusal.
+        public init(
+            service: MCPLiveReadService, projectSource: MCPSessionProjectSource, partition: MCPPartitionQueryService? = nil
+        ) {
             self.service = service
             self.projectSource = projectSource
+            self.partition = partition
         }
     }
 
@@ -114,28 +122,36 @@ public enum BerryMCPServerFactory {
             liveReads.projectSource.bind { await session.context() }
             return MCPLiveReadTool(service: liveReads.service)
         }
+        let partitionTool = dependencies.liveReads?.partition.map(MCPDynamoDBQueryTool.init)
 
         // Each handler resolves the session's project, which reads the store,
         // so each counts as store activity before it starts.
         await server.withMethodHandler(ListTools.self) { _ in
             onRequest()
             let context = await session.context()
-            // A store that cannot be read lists no live read tool.
+            // A store that cannot be read lists neither live tool.
             var liveReadConnectionIDs: Set<UUID> = []
+            var partitionQueryConnectionIDs: Set<UUID> = []
             if case let .selected(project, _, _) = context {
                 liveReadConnectionIDs = (try? metadata.liveReadConnectionIDs(in: project)) ?? []
+                partitionQueryConnectionIDs = (try? metadata.partitionQueryConnectionIDs(in: project)) ?? []
             }
-            return ListTools.Result(
-                tools: MCPToolCatalog.tools(for: context, liveReadConnectionIDs: liveReadConnectionIDs)
-            )
+            return ListTools.Result(tools: MCPToolCatalog.tools(
+                for: context, liveReadConnectionIDs: liveReadConnectionIDs,
+                partitionQueryConnectionIDs: partitionQueryConnectionIDs
+            ))
         }
-        // A live read is the one call that awaits a database, so it runs on
-        // its own path and the metadata router stays synchronous.
+        // Live reads and DynamoDB queries are the calls that await a
+        // database, so they run on their own path and the metadata router
+        // stays synchronous.
         await server.withMethodHandler(CallTool.self) { params in
             onRequest()
             let context = await session.context()
             if params.name == MCPToolName.executeReadQuery.rawValue, let liveTool {
                 return try await liveTool.call(params.arguments, context: context, metadata: metadata)
+            }
+            if params.name == MCPToolName.dynamodbQuery.rawValue, let partitionTool {
+                return try await partitionTool.call(params.arguments, context: context, metadata: metadata)
             }
             return try router.call(params.name, arguments: params.arguments, context: context)
         }

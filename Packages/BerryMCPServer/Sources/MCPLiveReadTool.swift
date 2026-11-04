@@ -9,11 +9,14 @@ import MCP
 /// `MCPError.invalidParams` whose message never repeats a value, and every
 /// other failure is a one-line tool result. An unassigned and a deleted
 /// profile get the same text, and a statement is checked against the read
-/// policy of the profile's dialect before any connection opens. A cancelled
+/// policy of the profile's dialect before any connection opens; a DynamoDB
+/// connection is pointed to `berrydb_dynamodb_query` instead. A cancelled
 /// call throws `CancellationError`, so the SDK sends no response to it
 /// (`handleRequest` in Server.swift of swift-sdk 0.12.1), as the protocol
 /// asks: https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/cancellation
 struct MCPLiveReadTool: Sendable {
+    static let dynamoDBConnectionText = "This is a DynamoDB connection; use berrydb_dynamodb_query."
+
     let service: MCPLiveReadService
 
     func call(
@@ -32,13 +35,16 @@ struct MCPLiveReadTool: Sendable {
             return MCPToolRouter.failure(MCPLiveReadError.unknownConnection.description)
         }
         let dialect: MCPSQLDialect?
+        let isDynamoDB: Bool
         do {
             dialect = try metadata.dialect(of: connectionID)
+            isDynamoDB = try dialect == nil && metadata.isPartitionQueryable(connectionID)
         } catch let error as MCPMetadataError {
             return MCPToolRouter.failure(error.description)
         } catch {
             return MCPToolRouter.failure(MCPToolRouter.storeFailureText)
         }
+        if isDynamoDB { return MCPToolRouter.failure(Self.dynamoDBConnectionText) }
         guard let dialect else { return MCPToolRouter.failure(MCPLiveReadError.unsupportedDatabase.description) }
 
         do {

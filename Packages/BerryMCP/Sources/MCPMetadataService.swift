@@ -230,6 +230,8 @@ public struct MCPMetadataService: Sendable {
     /// The saved driver IDs a live read runs on, with the dialect the read
     /// policy checks their statements in. MariaDB profiles use `mysql`.
     static let liveReadDialects: [String: MCPSQLDialect] = ["postgres": .postgresql, "mysql": .mysql, "sqlite": .sqlite]
+    /// The saved driver ID a DynamoDB query runs on.
+    static let partitionQueryDriver = "dynamodb"
 
     private let profiles: @Sendable () throws -> [ConnectionProfile]
     private let reader: GraphReader
@@ -288,6 +290,7 @@ public struct MCPMetadataService: Sendable {
     public func listConnections(in project: MCPVerifiedProject) throws -> [MCPConnectionDescriptor] {
         let saved = try savedProfiles()
         let live = Self.liveReadConnectionIDs(in: project, saved: saved)
+        let partition = Self.partitionQueryConnectionIDs(in: project, saved: saved)
         return try project.project.profiles.compactMap { access in
             guard let profile = saved[access.profileID] else { return nil }
             let state = try reader.state(profileID: profile.id)
@@ -296,7 +299,8 @@ public struct MCPMetadataService: Sendable {
                 name: profile.name,
                 driver: profile.driverID,
                 environment: profile.envColor == "production" ? "production" : "unlabeled",
-                capabilities: live.contains(profile.id) ? ["schema", "graph", "execute_read_query"] : ["schema", "graph"],
+                capabilities: ["schema", "graph"] + (live.contains(profile.id) ? ["execute_read_query"] : [])
+                    + (partition.contains(profile.id) ? ["dynamodb_query"] : []),
                 graphHarvestedAt: state.objectCount > 0 ? state.changedAt : nil,
                 checkedAt: state.checkedAt,
                 stale: state.stale,
@@ -313,6 +317,24 @@ public struct MCPMetadataService: Sendable {
     /// project and still saved, and its driver one with a SQL dialect.
     public func liveReadConnectionIDs(in project: MCPVerifiedProject) throws -> Set<UUID> {
         Self.liveReadConnectionIDs(in: project, saved: try savedProfiles())
+    }
+
+    /// The project's connections a DynamoDB query can run on: the switch
+    /// verified on, the profile assigned to the project and still saved,
+    /// and its driver DynamoDB.
+    public func partitionQueryConnectionIDs(in project: MCPVerifiedProject) throws -> Set<UUID> {
+        Self.partitionQueryConnectionIDs(in: project, saved: try savedProfiles())
+    }
+
+    /// Whether a saved profile's driver is the one a DynamoDB query runs
+    /// on, whatever its live-read switch says. Throws `unknownConnection`
+    /// when no such profile is saved; callers check that the profile is
+    /// assigned first.
+    public func isPartitionQueryable(_ profileID: UUID) throws -> Bool {
+        guard let profile = try profiles().first(where: { $0.id == profileID }) else {
+            throw MCPMetadataError.unknownConnection
+        }
+        return profile.driverID == Self.partitionQueryDriver
     }
 
     /// The SQL dialect of a saved profile's driver, nil for a driver
@@ -335,6 +357,15 @@ public struct MCPMetadataService: Sendable {
         Set(project.project.profiles.map(\.profileID).filter { id in
             guard project.liveReadProfileIDs.contains(id), let profile = saved[id] else { return false }
             return liveReadDialects[profile.driverID] != nil
+        })
+    }
+
+    private static func partitionQueryConnectionIDs(
+        in project: MCPVerifiedProject, saved: [UUID: ConnectionProfile]
+    ) -> Set<UUID> {
+        Set(project.project.profiles.map(\.profileID).filter { id in
+            guard project.liveReadProfileIDs.contains(id), let profile = saved[id] else { return false }
+            return profile.driverID == partitionQueryDriver
         })
     }
 

@@ -23,6 +23,10 @@ struct MCPToolArguments {
     static let maximumSQLBytes = 65_536
     static let maximumParameters = 100
     static let rowLimitRange = 1 ... 100
+    static let nameLengthRange = 3 ... 255
+    static let maximumProjection = 50
+    static let itemLimitRange = 1 ... 100
+    static let maximumCursorLength = 4096
 
     private let values: [String: Value]
 
@@ -45,6 +49,8 @@ struct MCPToolArguments {
         case .getGraphStats: return ["connection_id", "object"]
         case .getSchemaChanges: return ["connection_id", "since", "limit"]
         case .executeReadQuery: return ["connection_id", "sql", "parameters", "row_limit"]
+        case .dynamodbQuery:
+            return ["connection_id", "table", "index_name", "partition_key", "sort_key", "projection", "limit", "cursor"]
         }
     }
 
@@ -192,6 +198,97 @@ struct MCPToolArguments {
     /// The rows the caller wants at most; nil leaves the profile's limit.
     func rowLimit() throws -> Int? {
         try integer("row_limit", in: Self.rowLimitRange)
+    }
+
+    func table() throws -> String {
+        guard let table = try name("table") else { throw MCPError.invalidParams("table is required") }
+        return table
+    }
+
+    func indexName() throws -> String? {
+        try name("index_name")
+    }
+
+    /// Only the length is checked here; the service refuses a name outside
+    /// DynamoDB's character set with its own explanation.
+    private func name(_ key: String) throws -> String? {
+        guard let name = try string(key) else { return nil }
+        guard Self.nameLengthRange.contains(name.count) else {
+            throw MCPError.invalidParams(
+                "\(key) must be \(Self.nameLengthRange.lowerBound) to \(Self.nameLengthRange.upperBound) characters"
+            )
+        }
+        return name
+    }
+
+    func partitionKeyInput() throws -> MCPKeyInput {
+        guard let value = values["partition_key"], !value.isNull else {
+            throw MCPError.invalidParams("partition_key is required")
+        }
+        return try Self.keyInput(value, "partition_key")
+    }
+
+    /// The sort key condition, nil when absent. Whether the operator takes
+    /// `value2` is the service's check, since it explains the refusal.
+    func sortKeyInput() throws -> MCPSortKeyInput? {
+        guard let value = values["sort_key"], !value.isNull else { return nil }
+        guard let members = value.objectValue else { throw MCPError.invalidParams("sort_key must be an object") }
+        if let unexpected = members.keys.filter({ !["op", "value", "value2"].contains($0) }).min() {
+            throw MCPError.invalidParams("Unexpected argument: sort_key.\(unexpected)")
+        }
+        let operators = MCPSortKeyOperator.allCases.map(\.rawValue).joined(separator: ", ")
+        guard let opValue = members["op"], !opValue.isNull else { throw MCPError.invalidParams("sort_key.op is required") }
+        guard let text = opValue.stringValue, let op = MCPSortKeyOperator(rawValue: text) else {
+            throw MCPError.invalidParams("sort_key.op must be one of \(operators)")
+        }
+        guard let first = members["value"], !first.isNull else { throw MCPError.invalidParams("sort_key.value is required") }
+        let second = try members["value2"].flatMap { $0.isNull ? nil : try Self.keyInput($0, "sort_key.value2") }
+        return MCPSortKeyInput(op: op, value: try Self.keyInput(first, "sort_key.value"), value2: second)
+    }
+
+    /// A string, or a number that is a whole `Int64`. The SDK decodes an
+    /// integral JSON number that fits 64 bits as `.int` and anything else as
+    /// `.double` (`numbersBindAsTheSDKDecodesThem`), so a `.double` is
+    /// accepted only when it converts exactly. A string shaped like a data
+    /// URL arrives as `.data` without its original text (see `parameters()`),
+    /// so it is refused rather than sent as a different key.
+    private static func keyInput(_ value: Value, _ key: String) throws -> MCPKeyInput {
+        switch value {
+        case let .string(text): return .string(text)
+        case let .int(number): return .integer(Int64(number))
+        case let .double(number):
+            if let whole = Int64(exactly: number) { return .integer(whole) }
+        case .data: throw MCPError.invalidParams("\(key) cannot hold a data: URL string")
+        default: break
+        }
+        throw MCPError.invalidParams("\(key) must be a string or an integer")
+    }
+
+    func projection() throws -> [String]? {
+        guard let value = values["projection"], !value.isNull else { return nil }
+        guard let items = value.arrayValue else { throw MCPError.invalidParams("projection must be an array of strings") }
+        guard items.count <= Self.maximumProjection else {
+            throw MCPError.invalidParams("projection accepts at most \(Self.maximumProjection) names")
+        }
+        return try items.map { item in
+            guard let name = item.stringValue else { throw MCPError.invalidParams("projection must be an array of strings") }
+            return name
+        }
+    }
+
+    /// The items the caller wants at most; nil leaves the profile's limit.
+    func itemLimit() throws -> Int? {
+        try integer("limit", in: Self.itemLimitRange)
+    }
+
+    /// Only the length is checked here; a cursor the service cannot open is
+    /// a tool error that says to start again.
+    func cursor() throws -> String? {
+        guard let cursor = try string("cursor") else { return nil }
+        guard cursor.count <= Self.maximumCursorLength else {
+            throw MCPError.invalidParams("cursor must be at most \(Self.maximumCursorLength) characters")
+        }
+        return cursor
     }
 
     /// The optional statistics target; a blank value means every table.
