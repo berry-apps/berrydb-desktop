@@ -300,21 +300,32 @@ private struct MCPProjectEditorSheet: View {
     }
 
     /// The live-read settings of an assigned profile, indented under its
-    /// row. The redactions are shown while live reads are on; the production
-    /// consent and the privilege check's result only while a save would
-    /// turn them on, since `save` asks for neither for live reads that stay on.
+    /// row. The redactions are shown while live reads are on, and for a
+    /// connection whose saved settings could not be verified also while they
+    /// are off (`showsRedactions`); the production notice only while live
+    /// reads are on; the production consent and the privilege check's result
+    /// only while a save would turn them on, since `save` asks for neither
+    /// for live reads that stay on.
     @ViewBuilder
     private func liveReadSettings(for profile: ConnectionProfile, isProduction: Bool) -> some View {
         let id = profile.id
         let turnsOn = MCPProjectsSettingsModel.turnsLiveReadsOn(id, in: draft)
         Group {
+            if model.unverifiedProfileIDs[draft.id]?.contains(id) == true {
+                Text(L("This connection’s saved settings could not be verified, and its live reads opened off. Review its redacted columns before saving."))
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Toggle(L("Live reads"), isOn: liveRead(of: profile))
-            if draft.access[id]?.liveRead == true {
+            if model.showsRedactions(for: id, in: draft) {
                 TextField(L("Redacted columns"), text: redactedColumns(of: id))
                 Text(L("Values in these result columns are replaced before an agent sees them. A column read under another name is not redacted; use database column privileges for sensitive columns."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if draft.access[id]?.liveRead == true {
                 if isProduction {
                     Text(L("Live reads on a production database use its resources and take shared locks, which can delay migrations. Point this connection at a read replica where you can."))
                         .font(.caption)

@@ -1683,24 +1683,59 @@ public final class BerryStore: Sendable {
         var live = Set<UUID>()
         var rejected = Set<UUID>()
         for row in rows where row.liveRead {
-            guard occurrences[row.profileID] == 1 else {
+            let verifies = try profileRowVerifies(
+                row, isDuplicated: occurrences[row.profileID] != 1, projectID: projectID,
+                key: key, decoder: decoder, db: db
+            )
+            if verifies {
+                live.insert(row.profileID)
+            } else {
                 rejected.insert(row.profileID)
-                continue
             }
-            let redactedColumns = try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8))
-            guard let profile = try? ConnectionProfile.fetchOne(db, key: row.profileID) else {
-                rejected.insert(row.profileID)
-                continue
-            }
-            let access = MCPProfileAccess(profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns)
-            let payload = try MCPAccessIntegrity.profilePayload(projectID: projectID, access: access, profile: profile)
-            guard MCPAccessIntegrity.isValid(row.integrityTag, payload: payload, key: key) else {
-                rejected.insert(row.profileID)
-                continue
-            }
-            live.insert(row.profileID)
         }
         return (live, rejected)
+    }
+
+    /// Profiles of project `projectID` whose access row does not verify
+    /// under `key`, by the same per-row check `verifiedMCPProject` applies:
+    /// every row when there is no key. Rows with live reads off count too,
+    /// since their redacted columns are sealed the same way and are what an
+    /// edit that turns live reads on starts from. The project's own tag is
+    /// not consulted: each row's tag binds the project ID, so a row that
+    /// verifies is one BerryDB sealed for this project whatever happened to
+    /// the project row.
+    public func unverifiedMCPProfileIDs(projectID: UUID, key: SymmetricKey?) throws -> Set<UUID> {
+        try read { db in
+            let rows = try MCPProjectProfileRecord.filter(Column("projectID") == projectID).fetchAll(db)
+            guard let key else { return Set(rows.map(\.profileID)) }
+            var occurrences: [UUID: Int] = [:]
+            for row in rows { occurrences[row.profileID, default: 0] += 1 }
+            let decoder = JSONDecoder()
+            let unverified = try rows.filter { row in
+                try !Self.profileRowVerifies(
+                    row, isDuplicated: occurrences[row.profileID] != 1, projectID: projectID,
+                    key: key, decoder: decoder, db: db
+                )
+            }
+            return Set(unverified.map(\.profileID))
+        }
+    }
+
+    /// True when `row`'s own decoded fields, with the endpoint of its
+    /// profile as stored now, produce a tag that verifies under `key`. A
+    /// duplicated profile ID, or a profile that is missing or cannot be
+    /// decoded, never verifies. Throws when `redactedColumnsJSON` cannot be
+    /// decoded.
+    private static func profileRowVerifies(
+        _ row: MCPProjectProfileRecord, isDuplicated: Bool, projectID: UUID, key: SymmetricKey,
+        decoder: JSONDecoder, db: Database
+    ) throws -> Bool {
+        guard !isDuplicated else { return false }
+        let redactedColumns = try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8))
+        guard let profile = try? ConnectionProfile.fetchOne(db, key: row.profileID) else { return false }
+        let access = MCPProfileAccess(profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns)
+        let payload = try MCPAccessIntegrity.profilePayload(projectID: projectID, access: access, profile: profile)
+        return MCPAccessIntegrity.isValid(row.integrityTag, payload: payload, key: key)
     }
 
     private static func makeMCPProject(record: MCPProjectRecord, db: Database) throws -> MCPProject {
