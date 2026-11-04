@@ -85,4 +85,23 @@ struct MCPQueryCursorTests {
         #expect(base == MCPQueryCursor.digest(of: query(limit: 500, start: lastKey)))
         #expect(base != MCPQueryCursor.digest(of: query(projection: ["pk"])))
     }
+
+    @Test func theDigestCoversTheKeyCondition() throws {
+        func digest(partition: DynamoDBKeyValue = .string("user#1"), sort: DynamoDBSortKeyCondition?) -> Data {
+            MCPQueryCursor.digest(of: DynamoDBPartitionQuery(
+                table: "Orders", indexName: nil, partitionKey: partition, sortKey: sort,
+                projection: nil, limit: 10, exclusiveStartKey: nil))
+        }
+        let digests = [
+            digest(sort: .lessThan(.number("5"))),
+            digest(sort: .lessThanOrEqual(.number("5"))),
+            digest(sort: .lessThan(.number("6"))),
+            digest(partition: .string("user#2"), sort: .lessThan(.number("5"))),
+            digest(sort: .between(.number("1"), .number("9"))),
+            digest(sort: .between(.number("9"), .number("1"))),
+            digest(sort: nil),
+        ]
+        #expect(Set(digests).count == digests.count)
+        #expect(digest(sort: .lessThan(.number("5"))) == digests[0])
+    }
 }

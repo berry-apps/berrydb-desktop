@@ -76,8 +76,12 @@ enum MCPQueryCursor {
             projection: query.projection)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        // Encoding plain strings and tagged values cannot fail.
-        let bytes = (try? encoder.encode(canonical)) ?? Data()
+        // Strings and tagged values always encode. Hashing empty input on a
+        // failure would give every query one digest and let a cursor open on
+        // any of them, so a crash is the safer outcome.
+        guard let bytes = try? encoder.encode(canonical) else {
+            preconditionFailure("query digest: canonical query failed to encode")
+        }
         return Data(SHA256.hash(data: bytes))
     }
 
