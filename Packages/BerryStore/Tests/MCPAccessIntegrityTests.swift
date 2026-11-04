@@ -106,11 +106,16 @@ struct MCPAccessIntegrityTests {
     }
 
     @Test func disabledProjectHasEmptyLiveReadsButValidProjectTag() throws {
-        let (store, a, _) = try makeStore()
-        let project = MCPProject(name: "P", isEnabled: false, profiles: [MCPProfileAccess(profileID: a.id, liveRead: true)])
+        let store = try BerryStore(path: ":memory:")
+        let production = ConnectionProfile(driverID: "postgres", name: "Prod", envColor: "production")
+        try store.save(production)
+        let project = MCPProject(name: "P", isEnabled: false, profiles: [
+            MCPProfileAccess(profileID: production.id, liveRead: true),
+        ])
         try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
         let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
         #expect(verified.liveReadProfileIDs.isEmpty)
+        #expect(verified.productionSealedProfileIDs.isEmpty)
         #expect(verified.projectTagValid)
     }
 
@@ -545,25 +550,68 @@ struct MCPAccessIntegrityTests {
 
     // MARK: - Production label
 
+    /// A fixed row for the byte pins below. The certificate path puts a `/`
+    /// in the payload, which the canonical encoding must leave unescaped: an
+    /// escaped slash would change the bytes of every SQLite, TLS and SSH
+    /// profile's row.
+    private func pinnedRow() throws -> (projectID: UUID, access: MCPProfileAccess, profile: ConnectionProfile) {
+        let projectID = try #require(UUID(uuidString: "11111111-1111-1111-1111-111111111111"))
+        let profileID = try #require(UUID(uuidString: "22222222-2222-2222-2222-222222222222"))
+        let profile = ConnectionProfile(
+            id: profileID, driverID: "postgres", name: "A", envColor: "production",
+            host: "db.example", port: 5432, username: "reader", database: "shop",
+            tlsCACertPath: "/etc/ssl/ca.pem"
+        )
+        let access = MCPProfileAccess(profileID: profileID, liveRead: true, redactedColumns: ["Email", "ssn"])
+        return (projectID, access, profile)
+    }
+
+    private static let pinnedEndpoint = #"""
+    "endpoint":{"database":"shop","driverID":"postgres","elasticsearchAPIKeyEnabled":false,"host":"db.example","port":5432,"sshEnabled":false,"tlsCACertPath":"/etc/ssl/ca.pem","tlsMode":"prefer","username":"reader"}
+    """#
+
     /// The exact bytes rows were sealed over before the production label
     /// joined the payload. Rows sealed by earlier builds carry a tag over
     /// these bytes, so they have to stay reproducible for those rows to
     /// keep verifying.
     @Test func thePayloadSealedBeforeTheLabelKeepsItsBytes() throws {
-        let projectID = try #require(UUID(uuidString: "11111111-1111-1111-1111-111111111111"))
-        let profileID = try #require(UUID(uuidString: "22222222-2222-2222-2222-222222222222"))
-        let profile = ConnectionProfile(
-            id: profileID, driverID: "postgres", name: "A", envColor: "production",
-            host: "db.example", port: 5432, username: "reader", database: "shop"
-        )
+        let row = try pinnedRow()
         let payload = try MCPAccessIntegrity.earlierProfilePayload(
-            projectID: projectID,
-            access: MCPProfileAccess(profileID: profileID, liveRead: true, redactedColumns: ["Email", "ssn"]),
-            profile: profile
+            projectID: row.projectID, access: row.access, profile: row.profile
         )
         #expect(String(decoding: payload, as: UTF8.self) == #"""
-        {"domain":"berrydb.mcp.profile-access.v2","endpoint":{"database":"shop","driverID":"postgres","elasticsearchAPIKeyEnabled":false,"host":"db.example","port":5432,"sshEnabled":false,"tlsMode":"prefer","username":"reader"},"liveRead":true,"profileID":"22222222-2222-2222-2222-222222222222","projectID":"11111111-1111-1111-1111-111111111111","redactedColumns":["email","ssn"]}
+        {"domain":"berrydb.mcp.profile-access.v2",\#(Self.pinnedEndpoint),"liveRead":true,"profileID":"22222222-2222-2222-2222-222222222222","projectID":"11111111-1111-1111-1111-111111111111","redactedColumns":["email","ssn"]}
         """#)
+    }
+
+    /// The bytes rows are sealed over now, pinned so that the next change
+    /// to the payload has its guard ready.
+    @Test func thePayloadKeepsItsBytes() throws {
+        let row = try pinnedRow()
+        let payload = try MCPAccessIntegrity.profilePayload(
+            projectID: row.projectID, access: row.access, profile: row.profile, production: true
+        )
+        #expect(String(decoding: payload, as: UTF8.self) == #"""
+        {"domain":"berrydb.mcp.profile-access.v3",\#(Self.pinnedEndpoint),"liveRead":true,"production":true,"profileID":"22222222-2222-2222-2222-222222222222","projectID":"11111111-1111-1111-1111-111111111111","redactedColumns":["email","ssn"]}
+        """#)
+    }
+
+    /// After an upgrade, a row sealed before the label was covered is not
+    /// one whose settings could not be verified, so the settings pane marks
+    /// no connection, and its live reads stay on in the editing copy, so the
+    /// first save after the upgrade keeps them.
+    @Test func aRowSealedBeforeTheLabelWasCoveredIsNeitherMarkedNorSwitchedOff() throws {
+        let (store, a, _) = try makeStore()
+        let access = MCPProfileAccess(profileID: a.id, liveRead: true)
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [access])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        let earlierTag = MCPAccessIntegrity.tag(
+            try MCPAccessIntegrity.earlierProfilePayload(projectID: project.id, access: access, profile: a), key: key
+        )
+        try store.executeForTesting("UPDATE mcp_project_profile SET integrityTag = ?", arguments: [earlierTag])
+        #expect(try store.unverifiedMCPProfileIDs(projectID: project.id, key: key).isEmpty)
+        let editing = try #require(try store.mcpProjectForEditing(id: project.id, key: key))
+        #expect(editing.profiles.map(\.liveRead) == [true])
     }
 
     /// The production label is sealed into the access row when the project

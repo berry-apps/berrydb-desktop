@@ -64,7 +64,7 @@ this user's files or Keychain), a compromised BerryDB binary.
 | Privilege check when live reads are turned on | No (warning) | Settings warns when the connection's database user can write; the owner can confirm and turn live reads on anyway. |
 | SELECT-only database user | Yes, where configured | Enforced by the database. Recommended, not required: nothing checks for it except the warning above. |
 | Default result limits (rows, size, time) | Yes | Enforced in signed code. |
-| Stricter limits of a production-labeled connection | Yes, once sealed | The label is sealed into the connection's access row when **AI Agents** is saved, and the helper applies the stricter of the sealed label and the current one, so removing the label from the store file does not lift these limits (see [Limits](#limits)). |
+| Stricter limits of a production-labeled connection | Yes, once sealed | The label is sealed into the connection's access row when **AI Agents** is saved, and the helper applies the stricter of the sealed label and the current one, so a label removed from the store file after the row was sealed does not lift these limits (see [Limits](#limits)). |
 | Per-profile live-read setting, redacted columns and project settings | Yes, via integrity check | Stored in a user-writable file; an HMAC keyed from Keychain is what stops the agent from enabling itself. |
 | Project selection (which project a process serves) | No | A process can pass `--project` with any project ID or name it can read from the store, and a repository's own agent configuration can name any project. An interactive Claude Code session asks before it uses a repository's `.mcp.json` and Codex reads a repository's `.codex/config.toml` only for a trusted project, but `claude -p` runs, Agent SDK sessions and cloud sessions load a repository's `.mcp.json` without asking ([Project scope](https://code.claude.com/docs/en/mcp#project-scope)). Selection prevents mistakes and limits exposure; it does not stop a hostile agent or repository from reaching another project's already-enabled capabilities. |
 | Audit log | No (visibility only) | The agent can edit it. |
@@ -94,7 +94,7 @@ structured content
 | Tool | Arguments | Returns |
 |---|---|---|
 | `berrydb_status` | none | Which project the session serves, or why none (see [Status](#status)). Always listed. |
-| `berrydb_list_connections` | none | The project's connections: ID, name, driver, `environment` (`production` when the connection carries the production label or its access row was sealed under it, else `unlabeled`), capabilities and the state of the stored schema. `graph_harvested_at` is the time of the last pass that changed the schema (a pass that found it unchanged, or that only refreshed statistics, does not move it), or null when the connection was never harvested or its stored schema holds no table or view. `checked_at` and `stale` are as above. `stale_reason` is, for a stale schema, the code of the failure that stopped its last pass (`connection_failed`, `timeout`, `cancelled`, `store_write_failed` or `introspection_failed`), never text a server wrote, and null otherwise. `detail_coverage` is `{detailed, total}`: how many stored tables and views have had their columns read. `scope` lists the schemas the harvest is limited to, or is null for the default scope: every user schema, except on MySQL and MariaDB, where it is the connection's database when the profile names one. `hint` is `selectSchemas` when the catalog is too large to harvest whole and schemas should be selected in the app, else null. |
+| `berrydb_list_connections` | none | The project's connections: ID, name, driver, `environment` (`production` when the connection carries the production label or its live reads run under a sealed one, else `unlabeled`), capabilities and the state of the stored schema. `graph_harvested_at` is the time of the last pass that changed the schema (a pass that found it unchanged, or that only refreshed statistics, does not move it), or null when the connection was never harvested or its stored schema holds no table or view. `checked_at` and `stale` are as above. `stale_reason` is, for a stale schema, the code of the failure that stopped its last pass (`connection_failed`, `timeout`, `cancelled`, `store_write_failed` or `introspection_failed`), never text a server wrote, and null otherwise. `detail_coverage` is `{detailed, total}`: how many stored tables and views have had their columns read. `scope` lists the schemas the harvest is limited to, or is null for the default scope: every user schema, except on MySQL and MariaDB, where it is the connection's database when the profile names one. `hint` is `selectSchemas` when the catalog is too large to harvest whole and schemas should be selected in the app, else null. |
 | `berrydb_get_schema` | `connection_id`; optional `object_names` (at most 50), `detail` (`overview` or `full`, default `overview`), `offset` (0 or more, default 0) | One page of tables and views from `offset`: at most 200 objects, and at `full` detail as many as fit an estimated 512 KB, never fewer than one. The page reports `total` (all matching objects), `omitted_count` (those after the page), `next_offset` (pass it back as `offset`; null on the last page), `harvested_at` (when the schema last changed, as `graph_harvested_at`, omitted when none), `checked_at` and `stale`. `full` adds columns, indexes and foreign keys. An object with `detail_pending: true` is listed but its columns have not been read yet, so its `columns`, `indexes` and `foreign_keys` are empty: at `overview` the flag says whether a definition exists, at `full` it marks a definition still missing. |
 | `berrydb_search_schema` | `connection_id`, `query` (1–200 characters after trimming); optional `limit` (1–200, default 50) | Case-insensitive, literal substring matches over table, view, column and index names, each with `name`, `kind` and, where known, `database` and `table` (the owner of a column or index), ordered by kind (table, view, column, index), then database, owning table and name; plus `checked_at` and `stale`. |
 | `berrydb_graph_query` | `connection_id`, `operation`; `node` for `neighbors` and `blast_radius`, `from` and `to` for `path`, optional `limit` (1–50) for `top_centrality` | The dependency-graph answer. The name lists of `neighbors`, `blast_radius` and `circular_dependencies` are capped at 500; a `path` is returned whole, bounded only by the 1 MiB result ceiling. `circular_dependencies` takes no further argument. |
@@ -591,10 +591,11 @@ rather than as part of the fingerprint, so a label change never makes the
 row unverifiable. The helper verifies a row's tag against the payload with
 the label and against the payload without it, and so learns the sealed
 value; it then applies the stricter of the sealed label and the label the
-profile carries now. Removing the label from the store file therefore does
-not lift the production limits, while a label added in the app counts at
-once. Removing the label in the app takes effect for live reads only once
-**AI Agents** is saved again, which seals the row without it. A row sealed
+profile carries now. A label removed from the store file after the row was
+sealed therefore does not lift the production limits, while a label added
+in the app counts at once. Removing the label in the app takes effect for
+live reads only once **AI Agents** is saved again, which seals the row
+without it. A row sealed
 by a build that did not cover the label (payload domain
 `berrydb.mcp.profile-access.v2`) keeps verifying and counts as production
 until its project is saved again. A key rotation re-tags a row over the
@@ -769,13 +770,14 @@ the table applies follows the stricter of the label sealed into the
 connection's access row when **AI Agents** was saved and the label the
 profile carries now (see [Per-profile access and
 integrity](#per-profile-access-and-integrity)), so a process running as the
-same macOS user that edits the store file and removes the label does not
-lift these limits, and a row sealed before the label was covered stays
-under the production limits until its project is saved again.
-`berrydb_list_connections` reports `environment: "production"` for a
-connection under these limits, whichever label put it there.
+same macOS user that removes the label from the store file after the row
+was sealed does not lift these limits, and a row sealed before the label
+was covered stays under the production limits until its project is saved
+again. `berrydb_list_connections` reports `environment: "production"` for
+a connection whose live reads run under these limits, whichever label put
+it there.
 
-| Limit | Default | Production-labeled profile |
+| Limit | Default | Production limits |
 |---|---|---|
 | Opening the connection | 15 s | 15 s |
 | Statement time limit | 30 s | 5 s |
@@ -797,8 +799,8 @@ max_statement_time` on a statement that starts with `SELECT`. If the
 server has not ended the statement one second after the limit, the helper
 ends it; that is the only bound on SQLite, and on a MySQL or MariaDB
 statement that does not start with `SELECT`. Either way the result is `The
-query did not finish within 30 seconds.` (5 for a production-labeled
-connection). A last bound of 47 s (15 + 30 + 2) covers the whole request,
+query did not finish within 30 seconds.` (5 under the production
+limits). A last bound of 47 s (15 + 30 + 2) covers the whole request,
 including building the result and closing the session.
 
 A schema page ends at 200 objects or, at `full` detail, at an estimated

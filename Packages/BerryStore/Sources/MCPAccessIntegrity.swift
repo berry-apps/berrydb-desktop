@@ -138,7 +138,9 @@ enum MCPAccessIntegrity {
 
     /// Canonical bytes of the same row as sealed before the label was
     /// covered (see `EarlierProfilePayload`).
-    static func earlierProfilePayload(projectID: UUID, access: MCPProfileAccess, profile: ConnectionProfile) throws -> Data {
+    static func earlierProfilePayload(
+        projectID: UUID, access: MCPProfileAccess, profile: ConnectionProfile
+    ) throws -> Data {
         try canonical(EarlierProfilePayload(
             projectID: projectID.uuidString.lowercased(),
             profileID: access.profileID.uuidString.lowercased(),
@@ -159,7 +161,9 @@ enum MCPAccessIntegrity {
     ) throws -> (payload: Data, production: Bool)? {
         guard let tag else { return nil }
         for production in [true, false] {
-            let payload = try profilePayload(projectID: projectID, access: access, profile: profile, production: production)
+            let payload = try profilePayload(
+                projectID: projectID, access: access, profile: profile, production: production
+            )
             if isValid(tag, payload: payload, key: key) { return (payload, production) }
         }
         let earlier = try earlierProfilePayload(projectID: projectID, access: access, profile: profile)

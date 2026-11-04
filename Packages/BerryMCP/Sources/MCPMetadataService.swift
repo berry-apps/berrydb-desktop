@@ -19,8 +19,8 @@ public struct MCPConnectionDescriptor: Codable, Equatable, Sendable {
     public let driver: String
     /// "production" or "unlabeled": only a production label is reported, so a
     /// free-form environment name never reaches the agent. A label sealed
-    /// into the connection's access row counts as well, since the helper
-    /// applies the production limits to that connection.
+    /// into the access row of a connection whose live reads are on counts
+    /// as well, since the helper applies the production limits to it.
     public let environment: String
     /// What the connection serves: "schema" and "graph" from the store, and
     /// "execute_read_query" when its live reads are on.

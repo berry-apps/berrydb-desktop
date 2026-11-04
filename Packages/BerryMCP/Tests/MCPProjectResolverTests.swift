@@ -30,6 +30,7 @@ struct MCPProjectResolverTests {
         )
         #expect(try await loader(profile.id)?.isProduction == true)
     }
+
     /// The limits follow the stricter of the sealed label and the current
     /// one: a label removed from the profile since its row was sealed does
     /// not lift the connection out of the production limits.
