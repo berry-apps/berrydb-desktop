@@ -3,7 +3,8 @@ import Foundation
 
 /// One tool call as written to the audit file. It carries no query text, row
 /// values or error detail beyond a short classification, since the file sits
-/// in a user-readable directory; its digest still confirms a guessed query.
+/// in a user-readable directory. The digest is keyed, so the file can leave
+/// the machine without revealing a query or key value.
 public struct MCPAuditRecord: Codable, Equatable, Sendable {
     public enum Outcome: String, Codable, Sendable {
         case ok, error, invalidParams = "invalid_params", cancelled
@@ -30,7 +31,7 @@ public struct MCPAuditRecord: Codable, Equatable, Sendable {
         error: String? = nil, digest: String? = nil, durationMs: Int, rows: Int? = nil, bytes: Int,
         truncated: Bool? = nil, redacted: Bool? = nil, consumedCapacityUnits: Double? = nil
     ) {
-        self.v = 1
+        self.v = 2
         self.at = at
         self.host = host
         self.projectID = projectID
@@ -111,7 +112,7 @@ public enum MCPAuditLog {
             }
             return date
         }
-        guard let record = try? decoder.decode(MCPAuditRecord.self, from: line), record.v == 1 else { return nil }
+        guard let record = try? decoder.decode(MCPAuditRecord.self, from: line), record.v == 2 else { return nil }
         return record
     }
 
@@ -131,6 +132,10 @@ public enum MCPAuditLog {
     /// since `read` would skip them anyway, and the newest valid line is kept
     /// even when it alone exceeds `keepBytes`, so one inflated line cannot
     /// empty the file.
+    ///
+    /// Only lines that decode as a current record are kept. The file is meant
+    /// to be shared, and a line whose digest was computed without a key, or
+    /// one edited into something else, must not outlive the cap.
     public static func cap(
         at url: URL, thresholdBytes: Int = capThresholdBytes, keepBytes: Int = capKeepBytes
     ) throws {
@@ -138,7 +143,7 @@ public enum MCPAuditLog {
         var newestFirst: [Data.SubSequence] = []
         var kept = 0
         for line in data.split(separator: 0x0A, omittingEmptySubsequences: true).reversed() {
-            guard line.count <= maximumLineBytes else { continue }
+            guard line.count <= maximumLineBytes, record(from: Data(line)) != nil else { continue }
             let size = line.count + 1
             if kept + size > keepBytes, !newestFirst.isEmpty { break }
             kept += size

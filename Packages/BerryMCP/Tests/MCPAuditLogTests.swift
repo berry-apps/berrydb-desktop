@@ -17,13 +17,13 @@ import Testing
 
     @Test func lineIsOneSortedSnakeCaseObject() throws {
         let line = String(decoding: try MCPAuditLog.line(Self.sample()), as: UTF8.self)
-        #expect(line == #"{"at":"2026-11-05T01:02:03.500Z","bytes":120,"digest":"00112233445566778899aabbccddeeff","duration_ms":12,"host":"codex","outcome":"ok","profile_id":"22222222-2222-2222-2222-222222222222","project_id":"11111111-1111-1111-1111-111111111111","redacted":false,"rows":3,"tool":"berrydb_execute_read_query","truncated":false,"v":1}"# + "\n")
+        #expect(line == #"{"at":"2026-11-05T01:02:03.500Z","bytes":120,"digest":"00112233445566778899aabbccddeeff","duration_ms":12,"host":"codex","outcome":"ok","profile_id":"22222222-2222-2222-2222-222222222222","project_id":"11111111-1111-1111-1111-111111111111","redacted":false,"rows":3,"tool":"berrydb_execute_read_query","truncated":false,"v":2}"# + "\n")
     }
     @Test func nilFieldsAreOmitted() throws {
         let record = MCPAuditRecord(at: Date(timeIntervalSince1970: 0), host: "unknown", projectID: nil, profileID: nil,
                                     tool: "berrydb_status", outcome: .invalidParams, durationMs: 0, bytes: 0)
         let line = String(decoding: try MCPAuditLog.line(record), as: UTF8.self)
-        #expect(line == #"{"at":"1970-01-01T00:00:00.000Z","bytes":0,"duration_ms":0,"host":"unknown","outcome":"invalid_params","tool":"berrydb_status","v":1}"# + "\n")
+        #expect(line == #"{"at":"1970-01-01T00:00:00.000Z","bytes":0,"duration_ms":0,"host":"unknown","outcome":"invalid_params","tool":"berrydb_status","v":2}"# + "\n")
     }
     @Test func lineRoundTrips() throws {
         let record = Self.sample()
@@ -32,8 +32,10 @@ import Testing
     @Test func unknownVersionAndGarbageAreNil() throws {
         #expect(MCPAuditLog.record(from: Data("not json\n".utf8)) == nil)
         var other = try JSONSerialization.jsonObject(with: try MCPAuditLog.line(Self.sample())) as! [String: Any]
-        other["v"] = 2
-        #expect(MCPAuditLog.record(from: try JSONSerialization.data(withJSONObject: other)) == nil)
+        for version in [1, 3] {
+            other["v"] = version
+            #expect(MCPAuditLog.record(from: try JSONSerialization.data(withJSONObject: other)) == nil)
+        }
     }
     @Test func readSkipsBrokenAndOversizedLinesAndKeepsOrder() throws {
         let dir = try makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
@@ -76,6 +78,20 @@ import Testing
         try MCPAuditLog.cap(at: url, thresholdBytes: lineBytes * 10, keepBytes: lineBytes * 5)
         #expect(MCPAuditLog.read(from: url).map { Int($0.at.timeIntervalSince1970) } == Array(15..<20))
         #expect(!String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("xxxx"))
+    }
+    @Test func capDropsLinesOfAnotherVersionAndGarbage() throws {
+        let dir = try makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        var current: [Data] = []
+        for i in 0..<3 { current.append(try MCPAuditLog.line(Self.sample(at: Date(timeIntervalSince1970: Double(i))))) }
+        var other = try JSONSerialization.jsonObject(with: try MCPAuditLog.line(Self.sample())) as! [String: Any]
+        other["v"] = 1
+        let older = try JSONSerialization.data(withJSONObject: other, options: [.sortedKeys]) + Data([0x0A])
+        var data = Data()
+        data += current[0]; data += older; data += current[1]; data += Data("not json\n".utf8); data += current[2]
+        try data.write(to: url)
+        try MCPAuditLog.cap(at: url, thresholdBytes: data.count - 1, keepBytes: data.count * 2)
+        #expect(try Data(contentsOf: url) == current.reduce(Data(), +))
     }
     @Test func capKeepsTheNewestLineEvenWhenItAloneExceedsTheKeepSize() throws {
         let dir = try makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
