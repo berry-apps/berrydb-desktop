@@ -137,6 +137,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
 
     private let store: BerryStore
     private let keyStore: MCPAccessKeyStore
+    private let auditKeyStore: MCPAuditKeyStore
     private let helperLocation: MCPHelperLocation
     private let privilegeChecker: @Sendable (ConnectionProfile) async throws -> [String]
     private let privilegeCheckLimit: Duration
@@ -146,15 +147,16 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         return url
     }
 
-    /// `keyStore` defaults to the Keychain item the helper reads; the
+    /// `keyStore` and `auditKeyStore` default to the Keychain items the helper reads; the
     /// helper is looked up once, inside the running app's bundle. Privilege
     /// checks connect to the profile's server.
     public convenience init(
-        store: BerryStore, keyStore: MCPAccessKeyStore = .keychain, auditLogURL: URL = MCPAuditLog.defaultURL()
+        store: BerryStore, keyStore: MCPAccessKeyStore = .keychain,
+        auditKeyStore: MCPAuditKeyStore = .keychain, auditLogURL: URL = MCPAuditLog.defaultURL()
     ) {
         let location = Self.helperLocation(in: Bundle.main.bundleURL, isOnReadOnlyVolume: Self.isOnReadOnlyVolume)
         self.init(
-            store: store, keyStore: keyStore, helperLocation: location,
+            store: store, keyStore: keyStore, auditKeyStore: auditKeyStore, helperLocation: location,
             privilegeChecker: { try await MCPProjectsSettingsModel.livePrivilegeChecker($0) },
             auditLogURL: auditLogURL
         )
@@ -162,7 +164,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
 
     /// A model whose helper is at `helperURL`, or that has none when it is nil.
     convenience init(
-        store: BerryStore, keyStore: MCPAccessKeyStore, helperURL: URL?,
+        store: BerryStore, keyStore: MCPAccessKeyStore, auditKeyStore: MCPAuditKeyStore, helperURL: URL?,
         privilegeCheckLimit: Duration = defaultPrivilegeCheckLimit,
         auditLogURL: URL = MCPAuditLog.defaultURL(),
         privilegeChecker: @escaping @Sendable (ConnectionProfile) async throws -> [String] = { _ in
@@ -170,7 +172,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         }
     ) {
         self.init(
-            store: store, keyStore: keyStore,
+            store: store, keyStore: keyStore, auditKeyStore: auditKeyStore,
             helperLocation: helperURL.map(MCPHelperLocation.bundled) ?? .notBundled,
             privilegeChecker: privilegeChecker,
             privilegeCheckLimit: privilegeCheckLimit,
@@ -179,7 +181,8 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     }
 
     init(
-        store: BerryStore, keyStore: MCPAccessKeyStore, helperLocation: MCPHelperLocation,
+        store: BerryStore, keyStore: MCPAccessKeyStore, auditKeyStore: MCPAuditKeyStore,
+        helperLocation: MCPHelperLocation,
         privilegeChecker: @escaping @Sendable (ConnectionProfile) async throws -> [String],
         privilegeCheckLimit: Duration = defaultPrivilegeCheckLimit,
         auditLogURL: URL = MCPAuditLog.defaultURL()
@@ -187,6 +190,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         self.auditLogURL = auditLogURL
         self.store = store
         self.keyStore = keyStore
+        self.auditKeyStore = auditKeyStore
         self.helperLocation = helperLocation
         self.privilegeChecker = privilegeChecker
         self.privilegeCheckLimit = privilegeCheckLimit
@@ -521,6 +525,12 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// a result describes a profile as it was when checked, and a profile
     /// can be edited in the main window before the next editor opens.
     public func reload() {
+        // The helper only reads the audit key, so it is created here, when AI
+        // Agents opens: before any project can be saved and before the helper
+        // can digest a call. A failure is not an error of this pane; the
+        // helper reports it on its own stderr and records calls without a
+        // digest.
+        _ = try? auditKeyStore.loadOrCreate()
         errorMessage = nil
         privilegeStates = [:]
         privilegeChecks = [:]

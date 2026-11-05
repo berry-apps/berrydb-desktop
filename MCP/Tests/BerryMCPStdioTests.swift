@@ -294,6 +294,9 @@ struct BerryMCPStdioTests {
         let records = MCPAuditLog.read(from: auditURL)
         #expect(records.map(\.tool) == ["berrydb_status", "berrydb_execute_read_query"])
         #expect(records.allSatisfy { $0.host == "stdio-canary" })
+        // No project is selected, so no query is digested and the helper,
+        // which reads the key from the real Keychain, never reads it.
+        #expect(records.allSatisfy { $0.digest == nil })
         let raw = try String(contentsOf: auditURL, encoding: .utf8)
         #expect(!raw.contains("CANARY_TEXT_7f3a"))
         #expect(!raw.contains("PARAM_CANARY_19b2"))
