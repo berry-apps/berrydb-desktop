@@ -1514,12 +1514,19 @@ public final class BerryStore: Sendable {
             let rows = try MCPProjectProfileRecord.filter(Column("projectID") == other.id).fetchAll(db)
             var occurrences: [UUID: Int] = [:]
             for row in rows { occurrences[row.profileID, default: 0] += 1 }
-            for var row in rows {
-                row.integrityTag = Self.resealedProfileTag(
+            for row in rows {
+                let tag = Self.resealedProfileTag(
                     row, projectID: other.id, isDuplicated: occurrences[row.profileID] != 1,
                     sealingKey: sealingKey, previousKey: previousKey, decoder: decoder, db: db
                 )
-                try row.save(db)
+                // Only the tag column is written. Saving the whole record
+                // re-encodes the expiry from its decoded `Date`, and a value
+                // another process wrote that no date string can express
+                // (1e300) comes back as an empty string, after which every
+                // read of the project fails to decode.
+                try MCPProjectProfileRecord
+                    .filter(Column("projectID") == other.id && Column("profileID") == row.profileID)
+                    .updateAll(db, Column("integrityTag").set(to: tag))
             }
         }
     }
@@ -1637,8 +1644,9 @@ public final class BerryStore: Sendable {
     }
 
     /// The only safe source for a `MCPProject` value passed back into
-    /// `saveMCPProject`: `liveRead` is forced false on every profile that is
-    /// not in `verifiedMCPProject(id:key:).liveReadProfileIDs`, and
+    /// `saveMCPProject`: `liveRead` is forced false, and `liveReadUntil` nil,
+    /// on every profile that is not in
+    /// `verifiedMCPProject(id:key:).liveReadProfileIDs`, and
     /// `isEnabled` is forced false when the project's own tag does not
     /// verify. One case is handled independently of `liveReadProfileIDs`:
     /// when the project tag verifies but the project is disabled,
@@ -1673,15 +1681,22 @@ public final class BerryStore: Sendable {
 
             guard projectTagValid, let key else {
                 project.isEnabled = false
-                for index in project.profiles.indices { project.profiles[index].liveRead = false }
+                for index in project.profiles.indices {
+                    project.profiles[index].liveRead = false
+                    project.profiles[index].liveReadUntil = nil
+                }
                 return project
             }
 
             let rows = try MCPProjectProfileRecord.filter(Column("projectID") == id).fetchAll(db)
             let verified = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, now: Date(), db: db)
             let sealed = verified.live.union(verified.expired)
+            // The expiry column is writable by any process of the same user,
+            // so an expiry on a row that does not verify is dropped with its
+            // `liveRead`: a draft built from this copy is sealed on save.
             for index in project.profiles.indices where !sealed.contains(project.profiles[index].profileID) {
                 project.profiles[index].liveRead = false
+                project.profiles[index].liveReadUntil = nil
             }
             return project
         }

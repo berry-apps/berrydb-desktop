@@ -900,4 +900,107 @@ struct MCPAccessIntegrityTests {
         try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
         #expect(try store.unverifiedMCPProfileIDs(projectID: project.id, key: key).isEmpty)
     }
+
+    /// The expiry column is writable by any process of the same user; an
+    /// expiry on a row that does not verify must not reach a draft that a
+    /// later save would seal.
+    @Test func theEditingCopyDropsTheExpiryOfAnUnverifiedRow() throws {
+        let (store, a, _) = try makeStore()
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [MCPProfileAccess(profileID: a.id, liveRead: false)])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        let forged = Date(timeIntervalSince1970: 253_402_300_799)
+        try store.executeForTesting(
+            "UPDATE mcp_project_profile SET liveRead = 1, liveReadUntil = ?", arguments: [forged]
+        )
+
+        let editing = try #require(try store.mcpProjectForEditing(id: project.id, key: key))
+        #expect(editing.profiles.map(\.liveRead) == [false])
+        #expect(editing.profiles.map(\.liveReadUntil) == [nil])
+
+        let withoutKey = try #require(try store.mcpProjectForEditing(id: project.id, key: nil))
+        #expect(withoutKey.profiles.map(\.liveRead) == [false])
+        #expect(withoutKey.profiles.map(\.liveReadUntil) == [nil])
+    }
+
+    @Test func anExpiredRowIsCarriedForwardByARotationAndStaysExpired() throws {
+        let (store, a, b) = try makeStore()
+        let key1 = SymmetricKey(size: .bits256)
+        let key2 = SymmetricKey(size: .bits256)
+        let expiry = Date(timeIntervalSince1970: 1_000_000_000)
+        let projectA = MCPProject(name: "A", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: a.id, liveRead: true, liveReadUntil: expiry),
+        ])
+        let projectB = MCPProject(name: "B", isEnabled: true, profiles: [MCPProfileAccess(profileID: b.id, liveRead: true)])
+        try store.saveMCPProject(projectA, sealingKey: key1, previousKey: nil)
+        try store.saveMCPProject(projectB, sealingKey: key1, previousKey: key1)
+
+        try store.saveMCPProject(projectB, sealingKey: key2, previousKey: key1)
+
+        let verifiedA = try #require(try store.verifiedMCPProject(id: projectA.id, key: key2))
+        #expect(verifiedA.projectTagValid)
+        #expect(verifiedA.expiredLiveReadProfileIDs == [a.id])
+        #expect(verifiedA.liveReadProfileIDs.isEmpty)
+        #expect(verifiedA.rejectedLiveReadProfileIDs.isEmpty)
+        #expect(verifiedA.project.profiles.map(\.liveReadUntil) == [expiry])
+    }
+
+    @Test func anUnrepresentableExpiryRowLosesItsTagOnRotationWithoutThrowing() throws {
+        let (store, a, b) = try makeStore()
+        let key1 = SymmetricKey(size: .bits256)
+        let key2 = SymmetricKey(size: .bits256)
+        let projectA = MCPProject(name: "A", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: a.id, liveRead: true, liveReadUntil: Date(timeIntervalSince1970: 1_800_000_000)),
+        ])
+        let projectB = MCPProject(name: "B", isEnabled: true, profiles: [MCPProfileAccess(profileID: b.id, liveRead: true)])
+        try store.saveMCPProject(projectA, sealingKey: key1, previousKey: nil)
+        try store.saveMCPProject(projectB, sealingKey: key1, previousKey: key1)
+        try store.executeForTesting(
+            "UPDATE mcp_project_profile SET liveReadUntil = 1e300 WHERE projectID = ?", arguments: [projectA.id]
+        )
+
+        try store.saveMCPProject(projectB, sealingKey: key2, previousKey: key1)
+
+        let tags = try store.fetchForTesting(
+            "SELECT integrityTag FROM mcp_project_profile WHERE projectID = ?", arguments: [projectA.id]
+        )
+        #expect(tags.map { $0["integrityTag"] as Data? } == [nil])
+        let verifiedA = try #require(try store.verifiedMCPProject(
+            id: projectA.id, key: key2, now: Date(timeIntervalSince1970: 1_700_000_000)
+        ))
+        #expect(verifiedA.rejectedLiveReadProfileIDs == [a.id])
+        #expect(verifiedA.liveReadProfileIDs.isEmpty)
+        let verifiedB = try #require(try store.verifiedMCPProject(id: projectB.id, key: key2))
+        #expect(verifiedB.liveReadProfileIDs == [b.id])
+    }
+
+    /// The expiry is sealed inside the write transaction, so a value that
+    /// cannot be sealed aborts the save before any row changes.
+    @Test func savingAnUnrepresentableExpiryThrowsAndLeavesTheStoreUnchanged() throws {
+        let (store, a, b) = try makeStore()
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: a.id, liveRead: true, liveReadUntil: Date(timeIntervalSince1970: 1_800_000_000)),
+        ])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        let projectsBefore = try store.fetchForTesting("SELECT * FROM mcp_project ORDER BY id")
+        let rowsBefore = try store.fetchForTesting("SELECT * FROM mcp_project_profile ORDER BY projectID, profileID")
+
+        var edited = project
+        edited.name = "Renamed"
+        edited.profiles = [
+            MCPProfileAccess(profileID: a.id, liveRead: true, liveReadUntil: Date(timeIntervalSince1970: 1e300)),
+            MCPProfileAccess(profileID: b.id, liveRead: false),
+        ]
+        #expect(throws: MCPProjectError.liveReadUntilOutOfRange) {
+            try store.saveMCPProject(edited, sealingKey: SymmetricKey(size: .bits256), previousKey: key)
+        }
+
+        #expect(try store.fetchForTesting("SELECT * FROM mcp_project ORDER BY id") == projectsBefore)
+        #expect(try store.fetchForTesting(
+            "SELECT * FROM mcp_project_profile ORDER BY projectID, profileID"
+        ) == rowsBefore)
+        let verified = try #require(try store.verifiedMCPProject(
+            id: project.id, key: key, now: Date(timeIntervalSince1970: 1_700_000_000)
+        ))
+        #expect(verified.liveReadProfileIDs == [a.id])
+    }
 }
