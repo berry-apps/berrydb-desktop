@@ -1387,6 +1387,100 @@ struct MCPProjectsSettingsModelTests {
         #expect(verified.liveReadProfileIDs == [orders.id])
     }
 
+    @Test func aWritableRoleOnAProductionConnectionIsRefusedEvenWhenAcknowledged() async throws {
+        let (store, _, _) = try makeStore()
+        let ledger = ConnectionProfile(driverID: "postgres", name: "Ledger", envColor: "production")
+        try store.save(ledger)
+        let box = KeyBox()
+        seedKey(box)
+        let stub = PrivilegeCheckStub(.success(["table_write"]))
+        let model = makeModel(store, box, privilegeChecker: stub.checker)
+
+        await model.checkPrivileges(of: ledger.id)
+        #expect(model.privilegeStates[ledger.id] == .writableRole(["table_write"]))
+
+        let refusal = L("Live reads cannot be turned on for Ledger: its database user can write, and this connection is labelled production. Use a SELECT-only role or a read replica.")
+        var draft = liveReadDraft(model, ledger)
+        // Without any acknowledgment the save gets the refusal, not a request
+        // for a consent that would then be refused.
+        draft.acknowledged = []
+        #expect(model.save(draft) == false)
+        #expect(model.errorMessage == refusal)
+        draft.acknowledged = [.production(ledger.id), .writableRole(ledger.id)]
+        #expect(model.save(draft) == false)
+        #expect(model.errorMessage == refusal)
+        #expect(try store.mcpProject(id: draft.id) == nil)
+        #expect(box.writeCount == 0)
+    }
+
+    @Test func aWritableRoleOnAProductionMySQLConnectionIsRefused() async throws {
+        let (store, _, _) = try makeStore()
+        let ledger = ConnectionProfile(driverID: "mysql", name: "Ledger", envColor: "production")
+        try store.save(ledger)
+        let box = KeyBox()
+        seedKey(box)
+        let stub = PrivilegeCheckStub(.success(["table_write"]))
+        let model = makeModel(store, box, privilegeChecker: stub.checker)
+
+        await model.checkPrivileges(of: ledger.id)
+        #expect(model.privilegeStates[ledger.id] == .writableRole(["table_write"]))
+
+        var draft = liveReadDraft(model, ledger)
+        draft.acknowledged = [.production(ledger.id), .writableRole(ledger.id)]
+        #expect(model.save(draft) == false)
+        #expect(model.errorMessage == L("Live reads cannot be turned on for Ledger: its database user can write, and this connection is labelled production. Use a SELECT-only role or a read replica."))
+        #expect(try store.mcpProject(id: draft.id) == nil)
+        #expect(box.writeCount == 0)
+    }
+
+    /// Rows that stay on are not checked again: the refusal covers turning
+    /// live reads on, so relabelling a connection production does not switch
+    /// off a row that was already on.
+    @Test func aProductionRowAlreadyOnWithAWritableRoleStaysOnUntilTurnedOff() throws {
+        let (store, _, _) = try makeStore()
+        var ledger = ConnectionProfile(driverID: "postgres", name: "Ledger")
+        try store.save(ledger)
+        let box = KeyBox()
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: ledger.id, liveRead: true),
+        ])
+        ledger.envColor = "production"
+        try store.save(ledger)
+        let model = makeModel(store, box)
+        model.reload()
+
+        let draft = try #require(model.draft(for: seeded.id))
+        #expect(draft.access[ledger.id]?.liveRead == true)
+        #expect(model.save(draft))
+        let verified = try #require(try store.verifiedMCPProject(id: seeded.id, key: box.key))
+        #expect(verified.liveReadProfileIDs == [ledger.id])
+    }
+
+    /// A check that could not run proves nothing about the role, so it keeps
+    /// the acknowledgment path on a production connection too.
+    @Test func aFailedCheckOnAProductionConnectionStillTakesTheAcknowledgment() async throws {
+        let (store, _, _) = try makeStore()
+        let ledger = ConnectionProfile(driverID: "postgres", name: "Ledger", envColor: "production")
+        try store.save(ledger)
+        let box = KeyBox()
+        seedKey(box)
+        let stub = PrivilegeCheckStub(.failure(InjectedCheckFailure()))
+        let model = makeModel(store, box, privilegeChecker: stub.checker)
+
+        await model.checkPrivileges(of: ledger.id)
+        #expect(model.privilegeStates[ledger.id] == .failed("role lookup failed"))
+
+        var draft = liveReadDraft(model, ledger)
+        draft.acknowledged = [.production(ledger.id)]
+        #expect(model.save(draft) == false)
+        #expect(model.errorMessage == Self.writableRoleNotAcknowledged("Ledger"))
+
+        draft.acknowledged = [.production(ledger.id), .writableRole(ledger.id)]
+        #expect(model.save(draft))
+        let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
+        #expect(verified.liveReadProfileIDs == [ledger.id])
+    }
+
     /// A check still running has not shown the role read-only, so a save
     /// started meanwhile is refused like one before any check.
     @Test func aRunningCheckIsShownAndBlocksTheSave() async throws {

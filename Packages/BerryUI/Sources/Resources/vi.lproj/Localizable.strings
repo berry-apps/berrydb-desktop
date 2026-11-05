@@ -781,6 +781,8 @@
 "This database user can change data (%@). BerryDB runs every agent query in a read-only transaction, but a read-only database user is the safer setup." = "Người dùng database này có thể thay đổi dữ liệu (%@). BerryDB chạy mọi truy vấn của agent trong một transaction chỉ đọc, nhưng dùng người dùng database chỉ có quyền đọc vẫn là cách thiết lập an toàn hơn.";
 "Use this connection for live reads anyway" = "Vẫn dùng kết nối này để đọc dữ liệu thật";
 "BerryDB could not check this user’s privileges: %@" = "BerryDB không thể kiểm tra quyền của người dùng này: %@";
+"Live reads cannot be turned on for %@: its database user can write, and this connection is labelled production. Use a SELECT-only role or a read replica." = "Không thể bật đọc dữ liệu thật cho %@: người dùng database của nó có quyền ghi, và kết nối này được gắn nhãn production. Hãy dùng role chỉ có SELECT hoặc một read replica.";
+"Live reads stay off on this production connection while its database user can write. Use a SELECT-only role or a read replica." = "Đọc dữ liệu thật vẫn tắt trên kết nối production này khi người dùng database của nó có quyền ghi. Hãy dùng role chỉ có SELECT hoặc một read replica.";
 "The check did not finish in time." = "Việc kiểm tra không hoàn tất trong thời gian cho phép.";
 "Schema and graph metadata of these connections, and the rows of live reads, become visible to coding agents you configure and to their model providers." = "Metadata schema và graph của các kết nối này, cùng các dòng dữ liệu mà việc đọc dữ liệu thật trả về, sẽ hiển thị cho các coding agent bạn cấu hình và cho nhà cung cấp mô hình của chúng.";
 "Recent Activity" = "Hoạt động gần đây";
