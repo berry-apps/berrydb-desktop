@@ -70,7 +70,7 @@ this user's files or Keychain), a compromised BerryDB binary.
 | Stricter limits of a production-labeled connection | Yes, once sealed | The label is sealed into the connection's access row when **AI Agents** is saved, and the helper applies the stricter of the sealed label and the current one, so a label removed from the store file after the row was sealed does not lift these limits (see [Limits](#limits)). |
 | Per-profile live-read setting, redacted columns and project settings | Yes, via integrity check | Stored in a user-writable file; an HMAC keyed from Keychain is what stops the agent from enabling itself. |
 | Project selection (which project a process serves) | No | A process can pass `--project` with any project ID or name it can read from the store, and a repository's own agent configuration can name any project. An interactive Claude Code session asks before it uses a repository's `.mcp.json` and Codex reads a repository's `.codex/config.toml` only for a trusted project, but `claude -p` runs, Agent SDK sessions and cloud sessions load a repository's `.mcp.json` without asking ([Project scope](https://code.claude.com/docs/en/mcp#project-scope)). Selection prevents mistakes and limits exposure; it does not stop a hostile agent or repository from reaching another project's already-enabled capabilities. |
-| Audit log | No (visibility only) | The agent can edit it. |
+| Audit log | No (visibility only) | The agent can edit it. Its digests are keyed, so the file reveals no query or key value to anyone without the Keychain item. |
 
 Every guarantee this document calls a boundary holds for any project a
 process can name, not only the project of the current workspace. Data
@@ -993,7 +993,7 @@ for the default store), one JSON object per line, in a file created with mode
 
 | Field | Meaning |
 | --- | --- |
-| `v` | Record version, currently `1`; the app skips lines with another value. |
+| `v` | Record version, currently `2`; the app skips lines with another value. |
 | `at` | ISO 8601 time the handler finished the call, UTC, with fractional seconds. |
 | `host` | The client name the host gave in `initialize`; `unknown` until it has. |
 | `project_id` | The selected project, when one was selected. |
@@ -1001,7 +1001,7 @@ for the default store), one JSON object per line, in a file created with mode
 | `tool` | The tool name as called, `unknown` for a tool that does not exist. |
 | `outcome` | `ok`, `error`, `invalid_params` or `cancelled`. |
 | `error` | A short error code for an `error` outcome; never message text. |
-| `digest` | A hash identifying the query of a live read, so two identical queries can be recognised. |
+| `digest` | An HMAC-SHA256 under the install's audit key, identifying the query of a live read without revealing it. |
 | `duration_ms` | How long the call took. |
 | `rows` | Rows (or items) returned, for tools that return them. |
 | `bytes` | UTF-8 length of the response's text content; `0` when the call threw (`invalid_params`, `cancelled`, or an unexpected error). |
@@ -1011,14 +1011,19 @@ for the default store), one JSON object per line, in a file created with mode
 
 The file never holds query text, parameters, result rows, column or table
 names, workspace paths, or error message text: the digest and the codes stand
-in for them. The digest is an unkeyed, domain-separated SHA-256 with every
-field length-prefixed, so anyone who guesses a query, table or key value can
-confirm the guess by hashing it: the file identifies query shapes, and hides
-contents only from a reader who does not test candidates. The host name is
-chosen by the host, so line breaks and other control characters are removed
-and it is cut to 64 characters and 64 unicode scalars, which keeps a record on
-one line and bounds its size. The app also ignores any line longer than 4096
-bytes.
+in for them. The digest is a domain-separated HMAC-SHA256 with every field
+length-prefixed, under a 256-bit key the app creates in the Keychain
+(`dev.berrydb.mcp.audit-key`) when **AI Agents** opens, which only
+BerryDB-signed binaries can read. Without the key a digest confirms nothing,
+so the file can be shared; within one install it still shows that two calls
+ran the same query, which is why the key is never rotated. A helper that
+cannot read the key records the call without a digest and says so once on
+stderr (`audit digest key unavailable: records carry no digest`). The app
+skips lines of another record version on read, and the next cap removes them.
+The host name is chosen by the host, so line breaks and other control
+characters are removed and it is cut to 64 characters and 64 unicode scalars,
+which keeps a record on one line and bounds its size. The app also ignores any
+line longer than 4096 bytes.
 
 The writer opens, appends one whole line and closes the file for every
 record. It opens without following a symbolic link and without waiting (a
@@ -1029,8 +1034,9 @@ the tool call.
 
 The app caps the file when **Recent Activity** loads: past 4 MiB it keeps the
 newest whole lines that fit in 2 MiB, skipping lines over 4096 bytes and
-always keeping the newest valid line, and swaps the trimmed copy in with an
-atomic rename, so a reader never sees a partial file. Records a helper
+lines that no longer decode (another version, or edited), always keeping the
+newest valid line, and swaps the trimmed copy in with an atomic rename, so a
+reader never sees a partial file. Records a helper
 appends between the cap's read and its rename go to the replaced file and
 are lost; the next record goes to the new file.
 
