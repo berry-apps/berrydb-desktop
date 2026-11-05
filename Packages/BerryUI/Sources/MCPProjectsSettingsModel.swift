@@ -997,6 +997,14 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             switch checkedAsStored ? privilegeStates[profile.id] ?? .notChecked : .notChecked {
             case .readOnlyRole:
                 break
+            case .writableRole where profile.envColor == "production":
+                // No acknowledgment overrides this. A read-only transaction does
+                // not stop a function with side effects, so with a user that can
+                // write, the lexical SQL policy is the only guard, and on a
+                // production database that is too thin for an admin role. A
+                // failed check proves nothing either way, so it keeps the
+                // acknowledgment path below.
+                return L("Live reads cannot be turned on for \(profile.name): its database user can write, and this connection is labelled production. Use a SELECT-only role or a read replica.")
             case .writableRole, .failed:
                 if !draft.acknowledged.contains(.writableRole(profile.id)) {
                     return L("Live reads on \(profile.name) need your confirmation to use this connection anyway, since its privileges were not found read-only.")
