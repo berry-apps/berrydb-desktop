@@ -64,6 +64,30 @@ public enum MCPLiveReadError: Error, Equatable, Sendable, CustomStringConvertibl
     }
 }
 
+extension MCPLiveReadError {
+    /// A stable code for the audit log. A `switch` of literals, never the
+    /// case's description or a reflection of it: several cases carry database
+    /// text that must not reach the log.
+    public var auditCode: String {
+        switch self {
+        case .unknownConnection: "unknown_connection"
+        case .liveReadNotEnabled: "live_read_not_enabled"
+        case .noProject: "no_project"
+        case .unsupportedDatabase: "unsupported_database"
+        case .policy: "policy"
+        case .readOnlyUnavailable: "read_only_unavailable"
+        case .connectionFailed: "connection_failed"
+        case .connectionLost: "connection_lost"
+        case .openTimedOut: "open_timed_out"
+        case .timedOut: "timed_out"
+        case .queryFailed: "query_failed"
+        case .resultTooLarge: "result_too_large"
+        case .tooManyConcurrentReads: "too_many_concurrent_reads"
+        case .openStillPending: "open_still_pending"
+        }
+    }
+}
+
 /// Runs one statement for a coding agent on a fresh session the database
 /// itself keeps read-only, and returns at most the profile's limits of it.
 public struct MCPLiveReadService: Sendable {

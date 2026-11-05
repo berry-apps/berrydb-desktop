@@ -145,10 +145,10 @@ public enum BerryMCPServerFactory {
             onRequest()
             let context = await session.context()
             if params.name == MCPToolName.executeReadQuery.rawValue, let liveTool {
-                return try await liveTool.call(params.arguments, context: context, metadata: metadata)
+                return try await liveTool.call(params.arguments, context: context, metadata: metadata).result
             }
             if params.name == MCPToolName.dynamodbQuery.rawValue, let partitionTool {
-                return try await partitionTool.call(params.arguments, context: context, metadata: metadata)
+                return try await partitionTool.call(params.arguments, context: context, metadata: metadata).result
             }
             return try router.call(params.name, arguments: params.arguments, context: context)
         }

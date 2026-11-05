@@ -671,7 +671,7 @@ struct MCPToolCatalogTests {
         func call(_ id: UUID, context: MCPProjectContext) async throws -> CallTool.Result {
             try await liveTool().call(
                 ["connection_id": .string(id.uuidString), "sql": "SELECT 1"], context: context, metadata: metadata
-            )
+            ).result
         }
 
         let unassigned = try await call(outsider.id, context: context)
@@ -1502,5 +1502,34 @@ struct MCPToolCatalogTests {
         } catch let error as MCPError {
             #expect(error == MCPError.internalError("BerryDB could not read its store for this request."))
         }
+    }
+}
+
+extension MCPToolCatalogTests {
+    @Test func metadataReplyCarriesTheConnectionIDAndNoDigest() throws {
+        let reply = try router().reply(
+            MCPToolName.getSchema.rawValue, arguments: ["connection_id": .string(shop.id.uuidString)], context: selected()
+        )
+        #expect(reply.audit.profileID == shop.id)
+        #expect(reply.audit.digest == nil)
+        #expect(reply.audit.error == nil)
+    }
+
+    @Test func noProjectReplyIsCoded() throws {
+        let context = MCPProjectContext.unconfigured(.noMatchingProject, workspace: nil)
+        let reply = try router().reply(
+            MCPToolName.listConnections.rawValue, arguments: nil, context: context
+        )
+        #expect(reply.audit.error == "no_project")
+    }
+
+    @Test func liveToolsThroughTheRouterAreCoded() throws {
+        let reply = try router().reply(
+            MCPToolName.executeReadQuery.rawValue,
+            arguments: ["connection_id": .string(shop.id.uuidString), "sql": "SELECT 1"], context: selected(liveRead: true)
+        )
+        #expect(reply.result.isError == true)
+        #expect(reply.audit.error == "live_reads_unavailable")
+        #expect(reply.audit.profileID == shop.id)
     }
 }

@@ -833,7 +833,7 @@ struct BerryMCPServerFactoryTests {
 /// A DynamoDB query service and a SQL live-read service over one
 /// coordinator: sessions for `dynamoID` run on `connection`, and every other
 /// profile is SQLite with no scripted SQL connection.
-private struct PartitionHarness {
+struct PartitionHarness {
     let tracker = SessionTracker()
     let liveReads: BerryMCPServerFactory.LiveReads
 
@@ -867,7 +867,7 @@ private struct PartitionHarness {
 
 /// Answers `orders` queries with scripted pages in order and records each
 /// query; with a `delay`, a query waits that long unless cancelled.
-private actor ScriptedPartitionConnection: PartitionQuerying {
+actor ScriptedPartitionConnection: PartitionQuerying {
     /// `orders`: customer (S) and placed (S).
     static let orders = DynamoDBKeySchema(
         table: "orders",
@@ -923,7 +923,7 @@ private actor ScriptedPartitionConnection: PartitionQuerying {
 
 /// A live-read service over one coordinator whose sessions run on
 /// `connection`, resolving its project through the source the server binds.
-private struct LiveReadHarness {
+struct LiveReadHarness {
     let tracker = SessionTracker()
     let liveReads: BerryMCPServerFactory.LiveReads
 
@@ -944,7 +944,7 @@ private struct LiveReadHarness {
     }
 }
 
-private actor SessionTracker {
+actor SessionTracker {
     private(set) var closes = 0
     private(set) var opens = 0
 
@@ -966,7 +966,7 @@ private actor SessionTracker {
 /// Answers every read-only statement with `events`, then finishes the
 /// stream, or leaves it open when `finishes` is false, as a statement still
 /// running on the server does.
-private actor ScriptedReadOnlyConnection: ReadOnlyExecuting {
+actor ScriptedReadOnlyConnection: ReadOnlyExecuting {
     struct Statement: Equatable, Sendable {
         let sql: String
         let parameters: [SQLParameter]

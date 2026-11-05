@@ -21,18 +21,22 @@ struct MCPLiveReadTool: Sendable {
 
     func call(
         _ arguments: [String: Value]?, context: MCPProjectContext, metadata: MCPMetadataService
-    ) async throws -> CallTool.Result {
+    ) async throws -> MCPToolReply {
         guard case let .selected(project, _, _) = context else {
-            return MCPToolRouter.failure(MCPToolRouter.noProjectText)
+            return .failure(MCPToolRouter.noProjectText, code: "no_project")
         }
         let arguments = try MCPToolArguments(arguments, allowing: MCPToolArguments.allowedKeys(for: .executeReadQuery))
         let connectionID = try arguments.connectionID()
         let sql = try arguments.sql()
         let parameters = try arguments.parameters()
         let rowLimit = try arguments.rowLimit()
+        let detail = MCPAuditDetail(profileID: connectionID, digest: MCPAuditDigest.sql(sql))
 
         guard project.project.profiles.contains(where: { $0.profileID == connectionID }) else {
-            return MCPToolRouter.failure(MCPLiveReadError.unknownConnection.description)
+            return .failure(
+                MCPLiveReadError.unknownConnection.description, code: MCPLiveReadError.unknownConnection.auditCode,
+                audit: detail
+            )
         }
         let dialect: MCPSQLDialect?
         let isDynamoDB: Bool
@@ -40,20 +44,34 @@ struct MCPLiveReadTool: Sendable {
             dialect = try metadata.dialect(of: connectionID)
             isDynamoDB = try dialect == nil && metadata.isPartitionQueryable(connectionID)
         } catch let error as MCPMetadataError {
-            return MCPToolRouter.failure(error.description)
+            return .failure(error.description, code: "metadata", audit: detail)
         } catch {
-            return MCPToolRouter.failure(MCPToolRouter.storeFailureText)
+            return .failure(MCPToolRouter.storeFailureText, code: "store", audit: detail)
         }
-        if isDynamoDB { return MCPToolRouter.failure(Self.dynamoDBConnectionText) }
-        guard let dialect else { return MCPToolRouter.failure(MCPLiveReadError.unsupportedDatabase.description) }
+        if isDynamoDB { return .failure(Self.dynamoDBConnectionText, code: "wrong_tool", audit: detail) }
+        guard let dialect else {
+            return .failure(
+                MCPLiveReadError.unsupportedDatabase.description,
+                code: MCPLiveReadError.unsupportedDatabase.auditCode, audit: detail
+            )
+        }
 
         do {
             let result = try await service.run(MCPLiveReadRequest(
                 profileID: connectionID, dialect: dialect, sql: sql, parameters: parameters, rowLimit: rowLimit
             ))
-            return try MCPToolRouter.respond(result)
+            let response = try MCPToolRouter.respond(result)
+            var audit = detail
+            if MCPToolReply.isTooLargeRefusal(response) {
+                audit.error = "result_too_large"
+            } else {
+                audit.rows = result.rowCount
+                audit.truncated = result.truncated
+                audit.redacted = !result.redactedColumns.isEmpty
+            }
+            return MCPToolReply(result: response, audit: audit)
         } catch let error as MCPLiveReadError {
-            return MCPToolRouter.failure(error.description)
+            return .failure(error.description, code: error.auditCode, audit: detail)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -61,7 +79,7 @@ struct MCPLiveReadTool: Sendable {
             // anything else. The SDK would send any other error's localized
             // description to the host, so it gets the service's own text for
             // an unexpected failure instead.
-            return MCPToolRouter.failure(MCPLiveReadError.queryFailed("unexpected error").description)
+            return .failure(MCPLiveReadError.queryFailed("unexpected error").description, code: "unexpected", audit: detail)
         }
     }
 }
