@@ -218,18 +218,48 @@ public final class MCPProjectsSettingsModel: ObservableObject {
 
     @Published public private(set) var activity: [ActivityRow] = []
 
+    /// One started load of `activity`. Loads can overlap: the sheet starts
+    /// one per project it shows, and a refresh can start another.
+    public struct ActivityLoad: Equatable, Sendable {
+        let serial: Int
+        let projectID: UUID
+    }
+
+    private var activityLoadSerial = 0
+    private var activityProjectID: UUID?
+
     /// Reads the audit log and trims it on a utility task: the file can hold
     /// tens of thousands of lines, which must not stall the main actor. A
     /// failed trim is ignored, the list is still valid.
     public func loadActivity(for projectID: UUID) async {
+        let load = beginActivityLoad(for: projectID)
         let url = auditLogURL
         let records = await Task.detached(priority: .utility) {
             let records = MCPAuditLog.read(from: url)
             try? MCPAuditLog.cap(at: url)
             return records
         }.value
+        finishActivityLoad(load, records: records)
+    }
+
+    /// Starts a load; rows of another project are cleared at once, so they
+    /// never stand under this project while its read runs.
+    func beginActivityLoad(for projectID: UUID) -> ActivityLoad {
+        activityLoadSerial += 1
+        if activityProjectID != projectID {
+            activityProjectID = projectID
+            activity = []
+        }
+        return ActivityLoad(serial: activityLoadSerial, projectID: projectID)
+    }
+
+    /// Publishes a load's rows unless a later load has started: reads finish
+    /// in any order, and an earlier one finishing last would otherwise show
+    /// another project's activity.
+    func finishActivityLoad(_ load: ActivityLoad, records: [MCPAuditRecord]) {
+        guard load.serial == activityLoadSerial else { return }
         let names = Dictionary(profiles.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
-        activity = Self.activityRows(records, projectID: projectID, profileNames: names)
+        activity = Self.activityRows(records, projectID: load.projectID, profileNames: names)
     }
 
     public static func activityRows(
@@ -243,7 +273,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             case .invalidParams, .cancelled: outcome = record.outcome.rawValue
             }
             let prefix = "berrydb_"
-            let name = profileNames[record.profileID ?? UUID()]
+            let name = record.profileID.flatMap { profileNames[$0] }
             return ActivityRow(
                 id: index, at: record.at, host: record.host,
                 tool: record.tool.hasPrefix(prefix) ? String(record.tool.dropFirst(prefix.count)) : record.tool,

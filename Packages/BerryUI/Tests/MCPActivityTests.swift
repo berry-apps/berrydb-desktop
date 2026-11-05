@@ -85,6 +85,41 @@ import Testing
         #expect(try Data(contentsOf: url) == data)
     }
 
+    /// The first load finishing after the second must not replace the
+    /// second's rows: the sheet would show another project's activity.
+    @Test func aStaleLoadNeverReplacesANewerProjectsRows() throws {
+        let store = try BerryStore(path: ":memory:")
+        let box = MCPProjectsSettingsModelTests.KeyBox()
+        let model = MCPProjectsSettingsModel(
+            store: store, keyStore: box.keyStore, helperURL: nil,
+            auditLogURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let records = [record(1, project: Self.projectA), record(2, project: Self.projectB)]
+
+        let first = model.beginActivityLoad(for: Self.projectA)
+        let second = model.beginActivityLoad(for: Self.projectB)
+        model.finishActivityLoad(second, records: records)
+        model.finishActivityLoad(first, records: records)
+        #expect(model.activity.map(\.at) == [Date(timeIntervalSince1970: 1_002)])
+    }
+
+    /// Opening another project clears the list at once, so the previous
+    /// project's rows are not shown while its own load runs.
+    @Test func switchingProjectsClearsTheRowsBeforeTheLoadFinishes() throws {
+        let store = try BerryStore(path: ":memory:")
+        let box = MCPProjectsSettingsModelTests.KeyBox()
+        let model = MCPProjectsSettingsModel(
+            store: store, keyStore: box.keyStore, helperURL: nil,
+            auditLogURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let records = [record(1, project: Self.projectA), record(2, project: Self.projectB)]
+
+        model.finishActivityLoad(model.beginActivityLoad(for: Self.projectA), records: records)
+        #expect(model.activity.count == 1)
+        _ = model.beginActivityLoad(for: Self.projectA)
+        #expect(model.activity.count == 1)
+        _ = model.beginActivityLoad(for: Self.projectB)
+        #expect(model.activity.isEmpty)
+    }
+
     private func row(
         outcome: String = "ok", rows: Int? = nil, bytes: Int = 0, truncated: Bool = false,
         redacted: Bool = false, capacity: Double? = nil
