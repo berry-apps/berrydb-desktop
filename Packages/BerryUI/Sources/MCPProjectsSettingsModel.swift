@@ -1139,18 +1139,13 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         project.name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         project.isEnabled = draft.isEnabled
         project.workspaceRoots = draft.workspaceRoots.map(Self.canonicalRoot)
-        let staysOn = Set(editing?.profiles.filter(\.liveRead).map(\.profileID) ?? [])
         project.profiles = draft.profileIDs.map { id in
             let access = draft.access[id] ?? AccessDraft()
             // Only a production consent expires. The default keeps a consent
             // bounded even when the picker was never touched; an expiry in a
-            // draft for any other profile is dropped. The draft's expiry is
-            // kept only for live reads that stay on, where it is either the
-            // stored one or a renewal: a row being turned on starts a fresh
-            // consent of the default length.
+            // draft for any other profile is dropped.
             let expires = access.liveRead && profiles[id]?.envColor == "production"
-            let renewable = staysOn.contains(id) ? access.liveReadUntil : nil
-            let until = expires ? renewable ?? now().addingTimeInterval(Self.defaultSeconds) : nil
+            let until = expires ? access.liveReadUntil ?? now().addingTimeInterval(Self.defaultSeconds) : nil
             return MCPProfileAccess(
                 profileID: id, liveRead: access.liveRead, redactedColumns: access.redactedColumns,
                 liveReadUntil: until

@@ -1287,14 +1287,27 @@ struct MCPProjectsSettingsModelTests {
 
         var draft = liveReadDraft(model, ledger)
         draft.acknowledged = [.production(ledger.id)]
-        // A row being turned on starts a fresh consent, so an expiry the
-        // draft carries for it is not what gets sealed.
-        draft.access[ledger.id]?.liveReadUntil = Self.consentNow.addingTimeInterval(-3_600)
         #expect(model.save(draft))
 
         let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
         let expected = Date(timeIntervalSince1970: 1_800_000_000 + 86_400)
         #expect(verified.project.profiles.first?.liveReadUntil == expected)
+    }
+
+    @Test func turningLiveReadsOnSealsThePickedDuration() throws {
+        let (store, _, _) = try makeStore()
+        let ledger = try productionLedger(store)
+        let box = KeyBox()
+        let model = makeModel(store, box, now: { Self.consentNow })
+
+        var draft = liveReadDraft(model, ledger)
+        draft.acknowledged = [.production(ledger.id)]
+        let picked = Self.consentNow.addingTimeInterval(3_600)
+        draft.access[ledger.id]?.liveReadUntil = picked
+        #expect(model.save(draft))
+
+        let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
+        #expect(verified.project.profiles.first?.liveReadUntil == picked)
     }
 
     @Test func needsProductionConsentForATurnOnAndForARenewalOnly() throws {
