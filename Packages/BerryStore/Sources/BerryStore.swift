@@ -1723,7 +1723,7 @@ public final class BerryStore: Sendable {
                 rejected.insert(row.profileID)
                 continue
             }
-            if let until = row.liveReadUntil, until < now {
+            if let until = verified.liveReadUntil, until < now {
                 expired.insert(row.profileID)
                 continue
             }
@@ -1761,14 +1761,17 @@ public final class BerryStore: Sendable {
     /// The bytes `row`'s tag verifies against under `key`, built from the
     /// row's own decoded fields with the endpoint of its profile as stored
     /// now, and whether they seal the production label (see
-    /// `MCPAccessIntegrity.verifiedProfilePayload`); nil when the row does
-    /// not verify. A duplicated profile ID, or a profile that is missing or
+    /// `MCPAccessIntegrity.verifiedProfilePayload`), with the expiry those
+    /// bytes cover; nil when the row does not verify. The expiry is the
+    /// stored one floored to whole seconds, as sealed: comparing the stored
+    /// column instead would let a fraction written next to a valid tag
+    /// extend the grant. A duplicated profile ID, or a profile that is missing or
     /// cannot be decoded, never verifies. Throws when `redactedColumnsJSON`
     /// cannot be decoded.
     private static func profileRowVerification(
         _ row: MCPProjectProfileRecord, isDuplicated: Bool, projectID: UUID, key: SymmetricKey,
         decoder: JSONDecoder, db: Database
-    ) throws -> (payload: Data, production: Bool)? {
+    ) throws -> (payload: Data, production: Bool, liveReadUntil: Date?)? {
         guard !isDuplicated else { return nil }
         let redactedColumns = try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8))
         guard let profile = try? ConnectionProfile.fetchOne(db, key: row.profileID) else { return nil }
@@ -1776,9 +1779,10 @@ public final class BerryStore: Sendable {
             profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns,
             liveReadUntil: row.liveReadUntil
         )
-        return try MCPAccessIntegrity.verifiedProfilePayload(
+        guard let verified = try MCPAccessIntegrity.verifiedProfilePayload(
             tag: row.integrityTag, projectID: projectID, access: access, profile: profile, key: key
-        )
+        ) else { return nil }
+        return (verified.payload, verified.production, access.liveReadUntil)
     }
 
     /// The label the connection editor writes for a production connection;

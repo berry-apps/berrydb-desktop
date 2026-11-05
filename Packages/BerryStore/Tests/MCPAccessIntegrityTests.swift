@@ -801,6 +801,31 @@ struct MCPAccessIntegrityTests {
         #expect(before.expiredLiveReadProfileIDs.isEmpty)
     }
 
+    /// The tag covers the expiry in whole seconds, so a fraction written
+    /// next to it still verifies; the expiry compared with `now` is the
+    /// sealed whole second, so the fraction does not extend the grant.
+    @Test func aFractionalSecondAddedToAStoredExpiryDoesNotExtendIt() throws {
+        let (store, a, _) = try makeStore()
+        let expiry = Date(timeIntervalSince1970: 1_800_000_000)
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: a.id, liveRead: true, liveReadUntil: expiry),
+        ])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        try store.executeForTesting(
+            "UPDATE mcp_project_profile SET liveReadUntil = ?",
+            arguments: [Date(timeIntervalSince1970: 1_800_000_000.9)]
+        )
+        let verified = try #require(try store.verifiedMCPProject(
+            id: project.id, key: key, now: Date(timeIntervalSince1970: 1_800_000_000.5)
+        ))
+        #expect(verified.expiredLiveReadProfileIDs == [a.id])
+        #expect(verified.liveReadProfileIDs.isEmpty)
+        #expect(verified.rejectedLiveReadProfileIDs.isEmpty)
+        #expect(verified.project.profiles.map(\.liveReadUntil) == [expiry])
+        let editing = try #require(try store.mcpProjectForEditing(id: project.id, key: key))
+        #expect(editing.profiles.map(\.liveReadUntil) == [expiry])
+    }
+
     /// Renewing an expired grant starts from the editing copy, so the copy
     /// keeps live reads on and the expiry it had rather than switching the
     /// row off.
