@@ -174,8 +174,8 @@ public enum MCPPartitionQueryError: Error, Equatable, Sendable, CustomStringConv
     public var description: String {
         switch self {
         case .unknownConnection: "Unknown connection for this project"
-        case .liveReadExpired: "Live reads on this production connection have expired. The user can renew them in BerryDB Settings → AI Agents."
         case .liveReadNotEnabled: "Live reads are not turned on for this connection. The user can turn them on in BerryDB Settings → AI Agents."
+        case .liveReadExpired: "Live reads on this production connection have expired. The user can renew them in BerryDB Settings → AI Agents."
         case .noProject: "No BerryDB project is selected for this workspace. Call berrydb_status for details."
         case .unsupportedDatabase: "DynamoDB queries run on DynamoDB connections only; use berrydb_execute_read_query for a SQL connection."
         case .tunnelUnsupported: "Live reads over an SSH tunnel are not available for DynamoDB connections."

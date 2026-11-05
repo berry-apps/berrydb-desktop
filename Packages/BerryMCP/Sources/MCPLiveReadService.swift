@@ -45,8 +45,8 @@ public enum MCPLiveReadError: Error, Equatable, Sendable, CustomStringConvertibl
     public var description: String {
         switch self {
         case .unknownConnection: "Unknown connection for this project"
-        case .liveReadExpired: "Live reads on this production connection have expired. The user can renew them in BerryDB Settings → AI Agents."
         case .liveReadNotEnabled: "Live reads are not turned on for this connection. The user can turn them on in BerryDB Settings → AI Agents."
+        case .liveReadExpired: "Live reads on this production connection have expired. The user can renew them in BerryDB Settings → AI Agents."
         case .noProject: "No BerryDB project is selected for this workspace. Call berrydb_status for details."
         case .unsupportedDatabase: "Live reads are available for PostgreSQL, MySQL, MariaDB and SQLite connections only."
         case .policy(let reason): "The query was refused before it ran: \(reason)"

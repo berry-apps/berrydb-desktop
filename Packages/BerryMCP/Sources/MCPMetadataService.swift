@@ -298,6 +298,10 @@ public struct MCPMetadataService: Sendable {
         let saved = try savedProfiles()
         let live = Self.liveReadConnectionIDs(in: project, saved: saved)
         let partition = Self.partitionQueryConnectionIDs(in: project, saved: saved)
+        // The expiry column is writable by any process of the same user; only
+        // a row whose tag verified, live or expired, has an expiry BerryDB
+        // sealed, so any other row reports none rather than a forged date.
+        let sealedExpiry = project.liveReadProfileIDs.union(project.expiredLiveReadProfileIDs)
         return try project.project.profiles.compactMap { access in
             guard let profile = saved[access.profileID] else { return nil }
             let state = try reader.state(profileID: profile.id)
@@ -316,7 +320,7 @@ public struct MCPMetadataService: Sendable {
                 detailCoverage: .init(detailed: state.detailedCount, total: state.objectCount),
                 scope: state.selectedSchemas,
                 hint: state.hint,
-                liveReadUntil: access.liveReadUntil
+                liveReadUntil: sealedExpiry.contains(profile.id) ? access.liveReadUntil : nil
             )
         }
     }

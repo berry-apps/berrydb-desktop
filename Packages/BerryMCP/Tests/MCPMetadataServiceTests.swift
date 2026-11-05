@@ -215,6 +215,28 @@ struct MCPMetadataServiceTests {
         #expect(descriptors.map(\.liveReadUntil) == [until, nil])
     }
 
+    /// The expiry column is writable by any process of the same user, so a
+    /// row that did not verify reports no expiry; an expired row did verify
+    /// and reports the one it was sealed with.
+    @Test func listConnectionsReportsNoExpiryForARowThatDidNotVerify() throws {
+        let forged = Date(timeIntervalSince1970: 253_402_300_799)
+        let expired = Date(timeIntervalSince1970: 1_000_000_000)
+        let rejected = MCPVerifiedProject(
+            project: MCPProject(
+                name: "P", isEnabled: true,
+                profiles: [
+                    MCPProfileAccess(profileID: production.id, liveRead: true, liveReadUntil: forged),
+                    MCPProfileAccess(profileID: staging.id, liveRead: true, liveReadUntil: expired),
+                ]
+            ),
+            liveReadProfileIDs: [],
+            rejectedLiveReadProfileIDs: [production.id],
+            expiredLiveReadProfileIDs: [staging.id]
+        )
+        let descriptors = try makeService().listConnections(in: rejected)
+        #expect(descriptors.map(\.liveReadUntil) == [nil, expired])
+    }
+
     @Test func listConnectionsHidesEndpointDetails() throws {
         let descriptors = try makeService().listConnections(in: project)
         #expect(descriptors.map(\.id) == [production.id, staging.id])
