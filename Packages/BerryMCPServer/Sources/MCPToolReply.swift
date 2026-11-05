@@ -1,12 +1,13 @@
+import BerryMCP
 import Foundation
 import MCP
 
 /// What the audit log records about one tool call beyond its name and
 /// outcome. Never holds statement text, key values or database error text:
-/// `digest` identifies a request and `error` is a fixed code.
+/// `query` is what the log digests to identify a request and `error` is a fixed code.
 public struct MCPAuditDetail: Equatable, Sendable {
     public var profileID: UUID?
-    public var digest: String?
+    public var query: MCPAuditQuery?
     public var error: String?
     public var rows: Int?
     public var truncated: Bool?
@@ -14,11 +15,11 @@ public struct MCPAuditDetail: Equatable, Sendable {
     public var consumedCapacityUnits: Double?
 
     public init(
-        profileID: UUID? = nil, digest: String? = nil, error: String? = nil, rows: Int? = nil,
+        profileID: UUID? = nil, query: MCPAuditQuery? = nil, error: String? = nil, rows: Int? = nil,
         truncated: Bool? = nil, redacted: Bool? = nil, consumedCapacityUnits: Double? = nil
     ) {
         self.profileID = profileID
-        self.digest = digest
+        self.query = query
         self.error = error
         self.rows = rows
         self.truncated = truncated
@@ -54,5 +55,17 @@ public struct MCPToolReply: Sendable {
             guard case let .text(a, _, _) = left, case let .text(b, _, _) = right, a == b else { return false }
         }
         return true
+    }
+}
+
+/// The audit log's two halves: where records go and how their digests are
+/// keyed.
+public struct MCPAudit: Sendable {
+    public let writer: MCPAuditWriter
+    public let digester: MCPAuditDigester
+
+    public init(writer: MCPAuditWriter, digester: MCPAuditDigester) {
+        self.writer = writer
+        self.digester = digester
     }
 }

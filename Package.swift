@@ -562,7 +562,7 @@ let package = Package(
             // GRDB: a test breaks a store's tables to make every read fail.
             // BerryDriverKit: a scripted read-only connection serves live reads.
             dependencies: [
-                "BerryMCPServer", "BerryMCP", "BerryStore", "BerryGraph", "BerryDriverKit",
+                "BerryMCPServer", "BerryMCP", "BerryCredentials", "BerryStore", "BerryGraph", "BerryDriverKit",
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],

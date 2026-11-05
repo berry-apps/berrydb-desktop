@@ -134,8 +134,9 @@ import Testing
         #expect(other.digest(.sql("select 1")) == "e58b3e3a3359048dfe3d8e4ac248cb34")
     }
     @Test func keyedDigestIsNotTheUnkeyedHash() {
-        // SHA-256 of the same input, the previous record format. Pinned because
-        // a digest that ignores its key would still pass every other test.
+        // Pins the digest of the previous, unkeyed record format and documents
+        // that a keyed digest differs from it. A digest that ignores its key is
+        // caught by the pinned vector for key 0x42 above.
         #expect(MCPAuditDigest(key: Self.testKey).digest(.sql("select 1")) != "d085ef13d4e6e4c8e01a0e86b57d36d4")
     }
     @Test func digestsAreDomainSeparated() {

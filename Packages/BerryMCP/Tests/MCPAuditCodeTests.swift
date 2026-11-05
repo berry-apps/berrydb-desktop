@@ -18,33 +18,6 @@ struct MCPAuditCodeTests {
         #expect(MCPPartitionQueryError.openStillPending(retryAfterSeconds: 3).auditCode == "open_still_pending")
     }
 
-    @Test func partitionRequestDigestIgnoresLimitAndCursorAndSeesTheKey() {
-        let id = UUID()
-        func request(sort: String, limit: Int?, cursor: String?) -> MCPPartitionQueryRequest {
-            MCPPartitionQueryRequest(
-                profileID: id, table: "orders", indexName: nil, partitionKey: .string("c-1"),
-                sortKey: MCPSortKeyInput(op: .beginsWith, value: .string(sort), value2: nil),
-                projection: ["total"], limit: limit, cursor: cursor
-            )
-        }
-        let base = request(sort: "2026-", limit: nil, cursor: nil)
-        #expect(base.auditDigest == request(sort: "2026-", limit: 5, cursor: "abc").auditDigest)
-        #expect(base.auditDigest != request(sort: "2027-", limit: nil, cursor: nil).auditDigest)
-        #expect(base.auditDigest.count == 32)
-    }
-
-    @Test func partitionRequestDigestKeepsKeyValuesApartFromTheConditionSyntax() {
-        let id = UUID()
-        let packed = MCPPartitionQueryRequest(
-            profileID: id, table: "orders", partitionKey: .string("c-1;sk=eq:s:x")
-        )
-        let split = MCPPartitionQueryRequest(
-            profileID: id, table: "orders", partitionKey: .string("c-1"),
-            sortKey: MCPSortKeyInput(op: .eq, value: .string("x"))
-        )
-        #expect(packed.auditDigest != split.auditDigest)
-    }
-
     @Test func partitionRequestAuditQueryIgnoresLimitAndCursorAndSeesTheKey() {
         func request(sort: String, limit: Int?, cursor: String?) -> MCPPartitionQueryRequest {
             MCPPartitionQueryRequest(

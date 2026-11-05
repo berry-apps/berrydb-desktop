@@ -209,18 +209,6 @@ public struct MCPAuditDigest {
         return Self.hex(code)
     }
 
-    /// Unkeyed form, still used by the server's tools.
-    public static func sql(_ text: String) -> String {
-        hex(SHA256.hash(data: Data(MCPAuditQuery.sql(text).canonicalInput.utf8)))
-    }
-
-    /// Unkeyed form, still used by the server's tools.
-    public static func partitionQuery(table: String, indexName: String?, keyCondition: String, projection: [String]) -> String {
-        let query = MCPAuditQuery.partitionQuery(
-            table: table, indexName: indexName, keyCondition: keyCondition, projection: projection)
-        return hex(SHA256.hash(data: Data(query.canonicalInput.utf8)))
-    }
-
     /// The UTF-8 byte count, a colon, then the text.
     static func field(_ text: String) -> String {
         "\(text.utf8.count):" + text

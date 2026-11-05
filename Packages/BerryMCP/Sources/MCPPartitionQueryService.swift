@@ -65,13 +65,6 @@ extension MCPPartitionQueryRequest {
     /// `s<length>:<text>` or `i:<number>`, and the last part is the upper
     /// bound of `between`. The length prefix stops a key value that contains
     /// the condition's own punctuation from reading as a different condition.
-    public var auditDigest: String {
-        MCPAuditDigest.partitionQuery(
-            table: table, indexName: indexName, keyCondition: auditKeyCondition, projection: projection ?? []
-        )
-    }
-
-    /// The same request as `auditDigest` covers, for the keyed digest.
     public var auditQuery: MCPAuditQuery {
         .partitionQuery(
             table: table, indexName: indexName, keyCondition: auditKeyCondition, projection: projection ?? []

@@ -1506,12 +1506,12 @@ struct MCPToolCatalogTests {
 }
 
 extension MCPToolCatalogTests {
-    @Test func metadataReplyCarriesTheConnectionIDAndNoDigest() throws {
+    @Test func metadataReplyCarriesTheConnectionIDAndNoQuery() throws {
         let reply = try router().reply(
             MCPToolName.getSchema.rawValue, arguments: ["connection_id": .string(shop.id.uuidString)], context: selected()
         )
         #expect(reply.audit.profileID == shop.id)
-        #expect(reply.audit.digest == nil)
+        #expect(reply.audit.query == nil)
         #expect(reply.audit.error == nil)
     }
 

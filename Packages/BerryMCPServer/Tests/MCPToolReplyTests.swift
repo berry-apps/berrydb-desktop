@@ -33,7 +33,7 @@ struct MCPToolReplyTests {
         )
     }
 
-    @Test func sqlReplyCarriesDigestRowsAndFlagsWithoutTheText() async throws {
+    @Test func sqlReplyCarriesQueryRowsAndFlagsWithoutTheText() async throws {
         let connection = ScriptedReadOnlyConnection(events: [
             .columns([ColumnMeta(name: "id", declaredType: "INTEGER"), ColumnMeta(name: "email", declaredType: "TEXT")]),
             .rows([[.int(1), .text("a@x")], [.int(2), .text("b@x")], [.int(3), .text("c@x")]]),
@@ -49,12 +49,12 @@ struct MCPToolReplyTests {
         )
         #expect(reply.result.isError != true)
         #expect(reply.audit == MCPAuditDetail(
-            profileID: billing.id, digest: MCPAuditDigest.sql(sql), error: nil, rows: 3, truncated: false,
+            profileID: billing.id, query: .sql(sql), error: nil, rows: 3, truncated: false,
             redacted: true, consumedCapacityUnits: nil
         ))
     }
 
-    @Test func sqlRefusalCarriesTheCodeAndTheDigest() async throws {
+    @Test func sqlRefusalCarriesTheCodeAndTheQuery() async throws {
         let live = LiveReadHarness(connection: ScriptedReadOnlyConnection(events: []))
         let context = context()
         live.liveReads.projectSource.bind { context }
@@ -65,7 +65,7 @@ struct MCPToolReplyTests {
         )
         #expect(reply.result.isError == true)
         #expect(reply.audit.error == "policy")
-        #expect(reply.audit.digest == MCPAuditDigest.sql(sql))
+        #expect(reply.audit.query == .sql(sql))
         #expect(reply.audit.profileID == billing.id)
     }
 
@@ -88,7 +88,7 @@ struct MCPToolReplyTests {
         let request = MCPPartitionQueryRequest(profileID: orders.id, table: "orders", partitionKey: .string("c1"))
         #expect(reply.audit.rows == 2)
         #expect(reply.audit.consumedCapacityUnits == 1.5)
-        #expect(reply.audit.digest == request.auditDigest)
+        #expect(reply.audit.query == request.auditQuery)
         #expect(reply.audit.profileID == orders.id)
         #expect(reply.audit.error == nil)
     }

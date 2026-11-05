@@ -30,7 +30,7 @@ struct MCPLiveReadTool: Sendable {
         let sql = try arguments.sql()
         let parameters = try arguments.parameters()
         let rowLimit = try arguments.rowLimit()
-        let detail = MCPAuditDetail(profileID: connectionID, digest: MCPAuditDigest.sql(sql))
+        let detail = MCPAuditDetail(profileID: connectionID, query: .sql(sql))
 
         guard project.project.profiles.contains(where: { $0.profileID == connectionID }) else {
             return .failure(

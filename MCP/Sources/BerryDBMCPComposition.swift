@@ -103,7 +103,10 @@ public enum BerryDBMCPComposition {
     ///
     /// Tool calls are recorded in the audit file beside the store at
     /// `storePath` rather than at a fixed location, so a
-    /// helper run on a test store leaves the real audit file alone.
+    /// helper run on a test store leaves the real audit file alone. The audit
+    /// key is read from the Keychain only when a call's query is digested, so
+    /// a session that never serves a live read, including one that selected
+    /// no project, never reads it.
     ///
     /// Also returns the connection coordinator, which owns every connection a
     /// live read opened, so the caller can close them before the process exits.
@@ -134,8 +137,11 @@ public enum BerryDBMCPComposition {
                 service: liveReads, projectSource: source, partition: MCPPartitionQueryService(sharing: liveReads)
             ),
             onRequest: onRequest,
-            audit: MCPAuditWriter(
-                url: MCPAuditLog.url(besideStore: storePath), diagnostics: { Self.diagnose($0) }
+            audit: MCPAudit(
+                writer: MCPAuditWriter(
+                    url: MCPAuditLog.url(besideStore: storePath), diagnostics: { Self.diagnose($0) }
+                ),
+                digester: MCPAuditDigester(keyStore: .keychain, diagnostics: { Self.diagnose($0) })
             )
         )
         return (dependencies, coordinator)
