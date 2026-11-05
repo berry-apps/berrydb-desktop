@@ -70,7 +70,7 @@ this user's files or Keychain), a compromised BerryDB binary.
 | Stricter limits of a production-labeled connection | Yes, once sealed | The label is sealed into the connection's access row when **AI Agents** is saved, and the helper applies the stricter of the sealed label and the current one, so a label removed from the store file after the row was sealed does not lift these limits (see [Limits](#limits)). |
 | Per-profile live-read setting, redacted columns and project settings | Yes, via integrity check | Stored in a user-writable file; an HMAC keyed from Keychain is what stops the agent from enabling itself. |
 | Project selection (which project a process serves) | No | A process can pass `--project` with any project ID or name it can read from the store, and a repository's own agent configuration can name any project. An interactive Claude Code session asks before it uses a repository's `.mcp.json` and Codex reads a repository's `.codex/config.toml` only for a trusted project, but `claude -p` runs, Agent SDK sessions and cloud sessions load a repository's `.mcp.json` without asking ([Project scope](https://code.claude.com/docs/en/mcp#project-scope)). Selection prevents mistakes and limits exposure; it does not stop a hostile agent or repository from reaching another project's already-enabled capabilities. |
-| Audit log | No (visibility only) | The agent can edit it. Its digests are keyed, so the file reveals no query or key value to anyone without the Keychain item. |
+| Audit log | No (visibility only) | The agent can edit it. Its digests are keyed, so a recipient of the file cannot confirm a guessed query or key value; a same-user process can still obtain digests by running this install's helper. |
 
 Every guarantee this document calls a boundary holds for any project a
 process can name, not only the project of the current workspace. Data
@@ -650,6 +650,11 @@ data-protection Keychain access group or an app-written ACL on the key item,
 which is packaging work (see
 [gate G1](../mcp-server-compatibility.md#g1-keychain-sharing)).
 
+The same holds for the audit key's item: a same-user process that pre-creates
+`dev.berrydb.mcp.audit-key` chooses the key, and the file then identifies
+query shapes to that process; it still reveals nothing to a recipient of the
+file.
+
 ## Read-only enforcement layers
 
 `berrydb_execute_read_query` runs one read-only SQL statement on a PostgreSQL,
@@ -1013,12 +1018,24 @@ The file never holds query text, parameters, result rows, column or table
 names, workspace paths, or error message text: the digest and the codes stand
 in for them. The digest is a domain-separated HMAC-SHA256 with every field
 length-prefixed, under a 256-bit key the app creates in the Keychain
-(`dev.berrydb.mcp.audit-key`) when **AI Agents** opens, which only
-BerryDB-signed binaries can read. Without the key a digest confirms nothing,
+(`dev.berrydb.mcp.audit-key`) when **AI Agents** opens, with an
+access list that trusts only the app. Without the key a digest confirms nothing,
 so the file can be shared; within one install it still shows that two calls
-ran the same query, which is why the key is never rotated. A helper that
-cannot read the key records the call without a digest and says so once on
-stderr (`audit digest key unavailable: records carry no digest`). The app
+ran the same query, which is why the key is never rotated. Like the access
+key's item (see [Setup](#setup)), the audit key's item is created by the app
+and trusts only the app, so the bundled helper's first read of it shows its
+own Keychain dialog. Choose **Always Allow**. **Deny** refuses that one read
+and the next digested call asks again, because the key is read per call.
+Until a read succeeds, the helper records calls without a digest and has
+warned once on stderr (`audit digest key unavailable: records carry no
+digest`). The dialog has not been seen with a packaged, Developer ID–signed
+helper; that follows from the mechanism described under Setup and is not yet
+observed. A stored item of the wrong length is never overwritten, so the
+app's `loadOrCreate` keeps failing and every helper records without digests
+until the item is removed by hand; the only trace is the one stderr line per
+helper process. A same-user process that pre-creates the item chooses the
+key (see the known limitation in
+[Per-profile access and integrity](#per-profile-access-and-integrity)). The app
 skips lines of another record version on read, and the next cap removes them.
 The host name is chosen by the host, so line breaks and other control
 characters are removed and it is cut to 64 characters and 64 unicode scalars,
