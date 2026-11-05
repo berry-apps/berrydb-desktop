@@ -254,9 +254,11 @@ struct BerryMCPStdioTests {
     }
 
     /// Every tool call lands in the audit file beside the store the helper
-    /// opened, tagged with the host's own name, and nothing the caller typed
-    /// or where the store lives reaches the file. The canary strings stand
-    /// for query text, a bound parameter and a path.
+    /// opened, tagged with the host's own name, and neither the arguments of
+    /// a refused call nor where the store lives reaches the file. No project
+    /// is selected, so the read is refused before its arguments are parsed:
+    /// this covers the host name and the no-project path. The in-memory
+    /// server tests cover calls whose arguments are parsed and served.
     @Test
     func toolCallsAreAuditedBesideTheStoreWithoutTheQueryText() async throws {
         let store = try TemporaryStore()

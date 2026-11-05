@@ -62,12 +62,13 @@ extension MCPPartitionQueryRequest {
     /// `cursor` stay out so every page of one query shares a digest.
     ///
     /// The key condition is `pk=<key>[;sk=<op>:<key>[:<key>]]` where a key is
-    /// `s:<text>` or `i:<number>`, and the last part is the upper bound of
-    /// `between`.
+    /// `s<length>:<text>` or `i:<number>`, and the last part is the upper
+    /// bound of `between`. The length prefix stops a key value that contains
+    /// the condition's own punctuation from reading as a different condition.
     public var auditDigest: String {
         func key(_ input: MCPKeyInput) -> String {
             switch input {
-            case .string(let text): "s:\(text)"
+            case .string(let text): "s" + MCPAuditDigest.field(text)
             case .integer(let number): "i:\(number)"
             }
         }

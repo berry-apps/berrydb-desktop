@@ -32,4 +32,16 @@ struct MCPAuditCodeTests {
         #expect(base.auditDigest != request(sort: "2027-", limit: nil, cursor: nil).auditDigest)
         #expect(base.auditDigest.count == 32)
     }
+
+    @Test func partitionRequestDigestKeepsKeyValuesApartFromTheConditionSyntax() {
+        let id = UUID()
+        let packed = MCPPartitionQueryRequest(
+            profileID: id, table: "orders", partitionKey: .string("c-1;sk=eq:s:x")
+        )
+        let split = MCPPartitionQueryRequest(
+            profileID: id, table: "orders", partitionKey: .string("c-1"),
+            sortKey: MCPSortKeyInput(op: .eq, value: .string("x"))
+        )
+        #expect(packed.auditDigest != split.auditDigest)
+    }
 }

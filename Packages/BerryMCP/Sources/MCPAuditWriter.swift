@@ -6,8 +6,11 @@ import Foundation
 /// The file is opened, written and closed on every record instead of keeping a
 /// descriptor. The app replaces the file by renaming a trimmed copy over it to
 /// cap its size, and a descriptor held open would go on writing to the
-/// unlinked old file. `O_APPEND` with the whole line in one `write(2)` keeps
-/// lines whole when several helper processes append to the same regular file.
+/// unlinked old file. With `O_APPEND` the offset is moved to the end of the
+/// file before each write with no intervening modification (POSIX.1 `write()`,
+/// https://pubs.opengroup.org/onlinepubs/9699919799/functions/write.html), so
+/// a line written whole by one `write(2)` cannot be interleaved with another
+/// helper process's line in the same regular file.
 ///
 /// The directory is never created here: it belongs to the app, and a helper
 /// that created it would hide that the app has not run.
@@ -29,12 +32,31 @@ public actor MCPAuditWriter {
             warn(String(describing: error))
             return
         }
-        let descriptor = open(url.path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o600)
+        // The record is awaited before the tool call is answered, so the open
+        // must not wait. Anything able to write to the directory can put a
+        // FIFO at this path; without `O_NONBLOCK` a write-only open of a FIFO
+        // with no reader blocks until one appears, and with it the open fails
+        // with ENXIO (POSIX.1 `open()`,
+        // https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html).
+        // `O_NOFOLLOW` fails with ELOOP on a symbolic link instead of appending
+        // to whatever file it names.
+        let descriptor = open(url.path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW, 0o600)
         guard descriptor >= 0 else {
             warn(String(cString: strerror(errno)))
             return
         }
         defer { close(descriptor) }
+        // A FIFO that does have a reader, or a device node, opens without
+        // error; only a regular file gives the whole-line append above.
+        var status = stat()
+        guard fstat(descriptor, &status) == 0 else {
+            warn(String(cString: strerror(errno)))
+            return
+        }
+        guard status.st_mode & S_IFMT == S_IFREG else {
+            warn("not a regular file")
+            return
+        }
         let failure: Int32? = line.withUnsafeBytes { buffer in
             var offset = 0
             while offset < buffer.count {

@@ -158,12 +158,18 @@ public enum BerryMCPServerFactory {
             onRequest()
             let started = ContinuousClock.now
             let context = await session.context()
-            let record: @Sendable (MCPAuditRecord.Outcome, MCPAuditDetail, Int) async -> Void = { outcome, detail, bytes in
+            // Read here rather than from the tool's detail: a tool that
+            // refuses before parsing (no project) or throws on another
+            // argument returns no detail, and the record must still say
+            // which connection the call named.
+            var namedConnection: UUID?
+            if case let .string(text)? = params.arguments?["connection_id"] { namedConnection = UUID(uuidString: text) }
+            let record: @Sendable (MCPAuditRecord.Outcome, MCPAuditDetail, Int) async -> Void = { [namedConnection] outcome, detail, bytes in
                 guard let audit else { return }
                 var projectID: UUID?
                 if case let .selected(project, _, _) = context { projectID = project.project.id }
                 await audit.record(MCPAuditRecord(
-                    at: Date(), host: host.name, projectID: projectID, profileID: detail.profileID,
+                    at: Date(), host: host.name, projectID: projectID, profileID: namedConnection ?? detail.profileID,
                     tool: MCPToolName(rawValue: params.name)?.rawValue ?? "unknown", outcome: outcome,
                     error: detail.error, digest: detail.digest,
                     durationMs: Int((ContinuousClock.now - started) / .milliseconds(1)),

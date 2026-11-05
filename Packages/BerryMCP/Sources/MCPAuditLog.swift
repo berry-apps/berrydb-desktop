@@ -2,8 +2,8 @@ import CryptoKit
 import Foundation
 
 /// One tool call as written to the audit file. It carries no query text, row
-/// values or error detail beyond a short classification: the file sits in a
-/// user-readable directory and must stay safe to open and share.
+/// values or error detail beyond a short classification, since the file sits
+/// in a user-readable directory; its digest still confirms a guessed query.
 public struct MCPAuditRecord: Codable, Equatable, Sendable {
     public enum Outcome: String, Codable, Sendable {
         case ok, error, invalidParams = "invalid_params", cancelled
@@ -122,22 +122,33 @@ public enum MCPAuditLog {
     }
 
     /// The replacement is written beside the original and swapped in, so a
-    /// reader never sees a half-written file and the helper's open append
-    /// handle keeps working on the old inode until it reopens.
+    /// reader never sees a half-written file. Records a helper appends
+    /// between the read here and the rename go to the replaced file and are
+    /// lost; the helper opens the file per record, so the next one lands in
+    /// the new file.
+    ///
+    /// Lines longer than `maximumLineBytes` are dropped rather than kept,
+    /// since `read` would skip them anyway, and the newest valid line is kept
+    /// even when it alone exceeds `keepBytes`, so one inflated line cannot
+    /// empty the file.
     public static func cap(
         at url: URL, thresholdBytes: Int = capThresholdBytes, keepBytes: Int = capKeepBytes
     ) throws {
         guard let data = try? Data(contentsOf: url), data.count > thresholdBytes else { return }
-        var start = data.endIndex
+        var newestFirst: [Data.SubSequence] = []
         var kept = 0
         for line in data.split(separator: 0x0A, omittingEmptySubsequences: true).reversed() {
+            guard line.count <= maximumLineBytes else { continue }
             let size = line.count + 1
-            if kept + size > keepBytes { break }
+            if kept + size > keepBytes, !newestFirst.isEmpty { break }
             kept += size
-            start = line.startIndex
+            newestFirst.append(line)
         }
-        var tail = Data(data[start...])
-        if tail.last != 0x0A, !tail.isEmpty { tail.append(0x0A) }
+        var tail = Data(capacity: kept)
+        for line in newestFirst.reversed() {
+            tail.append(contentsOf: line)
+            tail.append(0x0A)
+        }
 
         let temporary = url.deletingLastPathComponent()
             .appendingPathComponent("\(url.lastPathComponent).tmp-\(ProcessInfo.processInfo.processIdentifier)")
@@ -153,18 +164,30 @@ public enum MCPAuditLog {
     }
 }
 
-/// Query identifiers for the audit file: a salted-by-domain hash instead of the
-/// text, so the file shows that two calls ran the same query without storing
-/// what it said.
+/// Query identifiers for the audit file: a domain-separated, unkeyed SHA-256
+/// instead of the text, so the file shows that two calls ran the same query
+/// without storing what it said. Being unkeyed, a digest confirms a guessed
+/// query: it hides contents from a casual reader, not from someone testing
+/// candidates.
 public enum MCPAuditDigest {
     public static func sql(_ text: String) -> String {
         hex("berrydb-mcp-audit/sql\n" + text)
     }
 
+    /// Every field is length-prefixed, and an absent index is marked apart
+    /// from an empty name, so no two distinct requests encode to the same
+    /// input whatever characters their names contain.
     public static func partitionQuery(table: String, indexName: String?, keyCondition: String, projection: [String]) -> String {
-        hex(
-            "berrydb-mcp-audit/dynamodb\n" + table + "\n" + (indexName ?? "") + "\n" + keyCondition + "\n"
-                + projection.joined(separator: "\u{1F}"))
+        var input = "berrydb-mcp-audit/dynamodb\n" + field(table)
+        input += indexName.map { "i" + field($0) } ?? "-"
+        input += field(keyCondition) + "\(projection.count):"
+        for name in projection { input += field(name) }
+        return hex(input)
+    }
+
+    /// The UTF-8 byte count, a colon, then the text.
+    static func field(_ text: String) -> String {
+        "\(text.utf8.count):" + text
     }
 
     private static func hex(_ text: String) -> String {

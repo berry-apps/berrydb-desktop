@@ -64,6 +64,36 @@ import Testing
         let mode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as! Int
         #expect(mode == 0o600)
     }
+    @Test func capSkipsAnOversizedNewestLineAndKeepsTheNewestValidLines() throws {
+        let dir = try makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        var data = Data()
+        for i in 0..<20 { data += try MCPAuditLog.line(Self.sample(at: Date(timeIntervalSince1970: Double(i)))) }
+        data += Data((String(repeating: "x", count: MCPAuditLog.maximumLineBytes + 1) + "\n").utf8)
+        try data.write(to: url)
+        let lineBytes = try MCPAuditLog.line(Self.sample()).count
+        try MCPAuditLog.cap(at: url, thresholdBytes: lineBytes * 10, keepBytes: lineBytes * 5)
+        #expect(MCPAuditLog.read(from: url).map { Int($0.at.timeIntervalSince1970) } == Array(15..<20))
+        #expect(!String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("xxxx"))
+    }
+    @Test func capKeepsTheNewestLineEvenWhenItAloneExceedsTheKeepSize() throws {
+        let dir = try makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        var data = Data()
+        for i in 0..<20 { data += try MCPAuditLog.line(Self.sample(at: Date(timeIntervalSince1970: Double(i)))) }
+        try data.write(to: url)
+        try MCPAuditLog.cap(at: url, thresholdBytes: 100, keepBytes: 10)
+        #expect(MCPAuditLog.read(from: url).map { Int($0.at.timeIntervalSince1970) } == [19])
+    }
+    @Test func capLeavesAFileExactlyAtTheThresholdAlone() throws {
+        let dir = try makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        var data = Data()
+        for i in 0..<20 { data += try MCPAuditLog.line(Self.sample(at: Date(timeIntervalSince1970: Double(i)))) }
+        try data.write(to: url)
+        try MCPAuditLog.cap(at: url, thresholdBytes: data.count, keepBytes: 10)
+        #expect(try Data(contentsOf: url) == data)
+    }
     @Test func capLeavesASmallFileAlone() throws {
         let dir = try makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent(MCPAuditLog.fileName)
@@ -82,6 +112,12 @@ import Testing
         #expect(sql != MCPAuditDigest.partitionQuery(table: "select 1", indexName: nil, keyCondition: "", projection: []))
         #expect(MCPAuditDigest.partitionQuery(table: "t", indexName: nil, keyCondition: "pk=a", projection: ["x"])
                 != MCPAuditDigest.partitionQuery(table: "t", indexName: "gsi", keyCondition: "pk=a", projection: ["x"]))
+        #expect(MCPAuditDigest.partitionQuery(table: "t", indexName: nil, keyCondition: "pk=a", projection: [])
+                != MCPAuditDigest.partitionQuery(table: "t", indexName: "", keyCondition: "pk=a", projection: []))
+        #expect(MCPAuditDigest.partitionQuery(table: "t", indexName: nil, keyCondition: "pk=a", projection: ["a\u{1F}b"])
+                != MCPAuditDigest.partitionQuery(table: "t", indexName: nil, keyCondition: "pk=a", projection: ["a", "b"]))
+        #expect(MCPAuditDigest.partitionQuery(table: "a\nb", indexName: "", keyCondition: "pk=a", projection: [])
+                != MCPAuditDigest.partitionQuery(table: "a", indexName: "b\n", keyCondition: "pk=a", projection: []))
     }
     @Test func urlsSitBesideTheStore() {
         #expect(MCPAuditLog.url(besideStore: "/tmp/x/store.sqlite").path == "/tmp/x/mcp-audit.jsonl")
