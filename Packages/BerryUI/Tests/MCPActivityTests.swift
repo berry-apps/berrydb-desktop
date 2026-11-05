@@ -84,4 +84,23 @@ import Testing
         #expect(model.activity.map(\.at) == [3, 2, 1].map { Date(timeIntervalSince1970: 1_000 + Double($0)) })
         #expect(try Data(contentsOf: url) == data)
     }
+
+    private func row(
+        outcome: String = "ok", rows: Int? = nil, bytes: Int = 0, truncated: Bool = false,
+        redacted: Bool = false, capacity: Double? = nil
+    ) -> MCPProjectsSettingsModel.ActivityRow {
+        MCPProjectsSettingsModel.ActivityRow(
+            id: 0, at: Date(timeIntervalSince1970: 1_000), host: "codex", tool: "status", connection: nil,
+            connectionRemoved: false, outcome: outcome, rows: rows, bytes: bytes, truncated: truncated,
+            redacted: redacted, consumedCapacityUnits: capacity)
+    }
+
+    @Test func activityLineListsOnlyWhatTheRecordHas() {
+        #expect(
+            MCPProjectsSettingsModel.activityLine(
+                row(rows: 3, bytes: 1024, truncated: true, redacted: true, capacity: 1.5))
+                == "ok · 3 rows · 1 KB · truncated · redacted · 1.5 RCU")
+        #expect(MCPProjectsSettingsModel.activityLine(row(outcome: "policy", bytes: 90)) == "policy · 90 bytes")
+        #expect(MCPProjectsSettingsModel.activityLine(row(rows: 1, bytes: 90, capacity: 2)) == "ok · 1 row · 90 bytes · 2 RCU")
+    }
 }

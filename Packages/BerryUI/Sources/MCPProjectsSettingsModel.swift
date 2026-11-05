@@ -254,6 +254,24 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         }
     }
 
+    /// The second line of an Activity row. Parts the record does not have are
+    /// left out, so a failed call shows its code and size and nothing else.
+    public static func activityLine(_ row: ActivityRow) -> String {
+        let sizes = ByteCountFormatter()
+        sizes.countStyle = .file
+        sizes.allowedUnits = [.useBytes, .useKB, .useMB]
+        sizes.allowsNonnumericFormatting = false
+        var parts = [row.outcome]
+        if let count = row.rows { parts.append(count == 1 ? "1 row" : "\(count) rows") }
+        parts.append(sizes.string(fromByteCount: Int64(row.bytes)))
+        if row.truncated { parts.append("truncated") }
+        if row.redacted { parts.append("redacted") }
+        if let units = row.consumedCapacityUnits {
+            parts.append(units.formatted(.number.precision(.fractionLength(0...1)).locale(Locale(identifier: "en_US_POSIX"))) + " RCU")
+        }
+        return parts.joined(separator: " · ")
+    }
+
     /// How long a privilege check may take before it is reported as failed:
     /// the default request limit of a live read, so a server that answers
     /// the helper in time also answers the check in time.

@@ -174,6 +174,7 @@ private struct MCPProjectEditorSheet: View {
                 }
                 rootsSection
                 connectionsSection
+                if !isNew { activitySection }
                 snippetsSection
             }
             .formStyle(.grouped)
@@ -297,6 +298,45 @@ private struct MCPProjectEditorSheet: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private var activitySection: some View {
+        Section {
+            if model.activity.isEmpty {
+                Text(L("No activity recorded yet.")).foregroundStyle(.secondary)
+            }
+            ForEach(model.activity) { row in
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(row.at, format: .dateTime.month().day().hour().minute())
+                        Text(row.host)
+                        Text(row.tool)
+                        if let connection = row.connection {
+                            Text(connection)
+                        } else if row.connectionRemoved {
+                            Text(L("connection removed")).foregroundStyle(.orange)
+                        }
+                    }
+                    .font(.caption.monospacedDigit())
+                    Text(MCPProjectsSettingsModel.activityLine(row))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Text(L("Written by the helper to mcp-audit.jsonl in BerryDB’s Application Support folder. For visibility only: any process running as you can edit it."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } header: {
+            HStack {
+                Text(L("Recent Activity"))
+                Spacer()
+                Button(L("Refresh")) {
+                    Task { await model.loadActivity(for: draft.id) }
+                }
+            }
+        }
+        .task(id: draft.id) { await model.loadActivity(for: draft.id) }
     }
 
     /// The live-read settings of an assigned profile, indented under its
