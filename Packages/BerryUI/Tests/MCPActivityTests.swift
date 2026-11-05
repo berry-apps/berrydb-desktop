@@ -70,7 +70,8 @@ import Testing
         let store = try BerryStore(path: ":memory:")
         let box = MCPProjectsSettingsModelTests.KeyBox()
         let model = MCPProjectsSettingsModel(
-            store: store, keyStore: box.keyStore, helperURL: nil, auditLogURL: url)
+            store: store, keyStore: box.keyStore,
+            auditKeyStore: MCPProjectsSettingsModelTests.AuditKeyBox().keyStore, helperURL: nil, auditLogURL: url)
 
         await model.loadActivity(for: Self.projectA)
         #expect(model.activity == [])
@@ -91,7 +92,8 @@ import Testing
         let store = try BerryStore(path: ":memory:")
         let box = MCPProjectsSettingsModelTests.KeyBox()
         let model = MCPProjectsSettingsModel(
-            store: store, keyStore: box.keyStore, helperURL: nil,
+            store: store, keyStore: box.keyStore,
+            auditKeyStore: MCPProjectsSettingsModelTests.AuditKeyBox().keyStore, helperURL: nil,
             auditLogURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         let records = [record(1, project: Self.projectA), record(2, project: Self.projectB)]
 
@@ -108,7 +110,8 @@ import Testing
         let store = try BerryStore(path: ":memory:")
         let box = MCPProjectsSettingsModelTests.KeyBox()
         let model = MCPProjectsSettingsModel(
-            store: store, keyStore: box.keyStore, helperURL: nil,
+            store: store, keyStore: box.keyStore,
+            auditKeyStore: MCPProjectsSettingsModelTests.AuditKeyBox().keyStore, helperURL: nil,
             auditLogURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         let records = [record(1, project: Self.projectA), record(2, project: Self.projectB)]
 

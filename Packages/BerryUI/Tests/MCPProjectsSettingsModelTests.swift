@@ -42,6 +42,31 @@ struct MCPProjectsSettingsModelTests {
         var key: SymmetricKey? { data.map { SymmetricKey(data: $0) } }
     }
 
+    /// In-memory stand-in for the Keychain item behind `MCPAuditKeyStore`.
+    final class AuditKeyBox: @unchecked Sendable {
+        var data: Data?
+        var readError: Error?
+        var writeSucceeds = true
+        var writeCount = 0
+
+        var keyStore: MCPAuditKeyStore {
+            MCPAuditKeyStore(
+                read: {
+                    if let error = self.readError {
+                        throw error
+                    }
+                    return self.data
+                },
+                write: { data in
+                    self.writeCount += 1
+                    guard self.writeSucceeds else { return false }
+                    self.data = data
+                    return true
+                }
+            )
+        }
+    }
+
     private struct InjectedReadFailure: Error {}
 
     private func makeStore() throws -> (BerryStore, ConnectionProfile, ConnectionProfile) {
@@ -56,19 +81,58 @@ struct MCPProjectsSettingsModelTests {
     /// Without a `privilegeChecker`, the model's own default fails every
     /// check, so no test opens a real connection.
     private func makeModel(
-        _ store: BerryStore, _ box: KeyBox, helperURL: URL? = nil,
+        _ store: BerryStore, _ box: KeyBox, auditBox: AuditKeyBox = AuditKeyBox(), helperURL: URL? = nil,
         privilegeCheckLimit: Duration = MCPProjectsSettingsModel.defaultPrivilegeCheckLimit,
         privilegeChecker: (@Sendable (ConnectionProfile) async throws -> [String])? = nil
     ) -> MCPProjectsSettingsModel {
         if let privilegeChecker {
             return MCPProjectsSettingsModel(
-                store: store, keyStore: box.keyStore, helperURL: helperURL,
+                store: store, keyStore: box.keyStore, auditKeyStore: auditBox.keyStore, helperURL: helperURL,
                 privilegeCheckLimit: privilegeCheckLimit, privilegeChecker: privilegeChecker
             )
         }
         return MCPProjectsSettingsModel(
-            store: store, keyStore: box.keyStore, helperURL: helperURL, privilegeCheckLimit: privilegeCheckLimit
+            store: store, keyStore: box.keyStore, auditKeyStore: auditBox.keyStore, helperURL: helperURL,
+            privilegeCheckLimit: privilegeCheckLimit
         )
+    }
+
+    @Test func openingTheModelCreatesTheAuditKeyOnce() throws {
+        let (store, _, _) = try makeStore()
+        let audit = AuditKeyBox()
+        let model = makeModel(store, KeyBox(), auditBox: audit)
+
+        #expect(audit.data?.count == 32)
+        #expect(audit.writeCount == 1)
+        let created = audit.data
+
+        model.reload()
+        #expect(audit.writeCount == 1)
+        #expect(audit.data == created)
+    }
+
+    @Test func aFailedAuditKeyWriteDoesNotFailThePane() throws {
+        let (store, _, _) = try makeStore()
+        let audit = AuditKeyBox()
+        audit.writeSucceeds = false
+        let model = makeModel(store, KeyBox(), auditBox: audit)
+
+        #expect(model.errorMessage == nil)
+        #expect(model.projects.isEmpty)
+        var draft = model.draftForNewProject()
+        draft.name = "Billing"
+        #expect(model.save(draft))
+        #expect(model.projects.map(\.id) == [draft.id])
+    }
+
+    @Test func anAuditKeyReadFailureDoesNotFailThePane() throws {
+        let (store, _, _) = try makeStore()
+        let audit = AuditKeyBox()
+        audit.readError = InjectedReadFailure()
+        let model = makeModel(store, KeyBox(), auditBox: audit)
+
+        #expect(model.errorMessage == nil)
+        #expect(audit.writeCount == 0)
     }
 
     @Test func newProjectIsSealedAndVerifies() throws {
@@ -717,7 +781,8 @@ struct MCPProjectsSettingsModelTests {
         let (store, _, _) = try makeStore()
         // The test runner's main bundle never contains the helper, so the
         // default lookup must find nothing.
-        let model = MCPProjectsSettingsModel(store: store, keyStore: KeyBox().keyStore)
+        let model = MCPProjectsSettingsModel(
+            store: store, keyStore: KeyBox().keyStore, auditKeyStore: AuditKeyBox().keyStore)
         #expect(model.configurationSnippets(project: UUID()).isEmpty)
 
         let bundle = FileManager.default.temporaryDirectory

@@ -27,7 +27,7 @@ struct MCPDynamoDBQueryTool: Sendable {
             partitionKey: try arguments.partitionKeyInput(), sortKey: try arguments.sortKeyInput(),
             projection: try arguments.projection(), limit: try arguments.itemLimit(), cursor: try arguments.cursor()
         )
-        let detail = MCPAuditDetail(profileID: connectionID, digest: request.auditDigest)
+        let detail = MCPAuditDetail(profileID: connectionID, query: request.auditQuery)
 
         guard project.project.profiles.contains(where: { $0.profileID == connectionID }) else {
             return .failure(

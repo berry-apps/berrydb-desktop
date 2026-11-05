@@ -1,7 +1,9 @@
 import BerryDriverKit
 import BerryGraph
+@testable import BerryCredentials
 @testable import BerryMCP
 import BerryStore
+import CryptoKit
 import Foundation
 import MCP
 import Synchronization
@@ -124,7 +126,7 @@ struct BerryMCPServerFactoryTests {
         diagnostics: Locked<[String]> = Locked([]),
         requests: Locked<Int> = Locked(0),
         liveReads: BerryMCPServerFactory.LiveReads? = nil,
-        audit: MCPAuditWriter? = nil,
+        audit: MCPAudit? = nil,
         _ body: @escaping @Sendable (Client) async throws -> Void
     ) async throws {
         let dependencies = BerryMCPServerFactory.Dependencies(
@@ -847,10 +849,27 @@ struct BerryMCPServerFactoryTests {
         }
     }
 
+    static let auditKeyData = Data(repeating: 0x42, count: 32)
+    static let auditKey = SymmetricKey(data: auditKeyData)
+
+    /// A writer for `url` and a digester whose key store holds `key`. Never
+    /// the Keychain.
+    fileprivate func audit(
+        at url: URL, key: Data? = BerryMCPServerFactoryTests.auditKeyData, diagnostics: Locked<[String]> = Locked([])
+    ) -> MCPAudit {
+        let report: @Sendable (String) -> Void = { line in diagnostics.update { $0.append(line) } }
+        return MCPAudit(
+            writer: MCPAuditWriter(url: url, diagnostics: report),
+            digester: MCPAuditDigester(
+                keyStore: MCPAuditKeyStore(read: { key }, write: { _ in false }), diagnostics: report
+            )
+        )
+    }
+
     @Test func everyToolCallWritesOneRecordWithHostAndDuration() async throws {
         let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent(MCPAuditLog.fileName)
-        let audit = MCPAuditWriter(url: url, diagnostics: { _ in })
+        let audit = self.audit(at: url)
         let results = Locked<[CallTool.Result]>([])
         try await withSession(store: Locked(Store(projects: [projectA, projectB])), roots: .undeclared([]), audit: audit) { client in
             let status = try await Self.call(client, .status)
@@ -869,7 +888,7 @@ struct BerryMCPServerFactoryTests {
     @Test func unknownToolAndBadArgumentsAreRecordedAsInvalidParams() async throws {
         let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent(MCPAuditLog.fileName)
-        let audit = MCPAuditWriter(url: url, diagnostics: { _ in })
+        let audit = self.audit(at: url)
         try await withSession(store: Locked(Store(projects: [projectA, projectB])), roots: .undeclared([]), audit: audit) { client in
             await #expect(throws: MCPError.self) {
                 _ = try await client.send(CallTool.request(.init(name: "no_such_tool"))).value
@@ -890,7 +909,7 @@ struct BerryMCPServerFactoryTests {
     @Test func liveReadRecordCarriesTheDetail() async throws {
         let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent(MCPAuditLog.fileName)
-        let audit = MCPAuditWriter(url: url, diagnostics: { _ in })
+        let audit = self.audit(at: url)
         let connection = ScriptedReadOnlyConnection(events: [
             .columns([ColumnMeta(name: "id", declaredType: "INTEGER")]),
             .rows([[.int(1)], [.int(2)]]),
@@ -912,7 +931,7 @@ struct BerryMCPServerFactoryTests {
         #expect(record.outcome == .ok)
         #expect(record.projectID == projectB.id)
         #expect(record.profileID == billing.id)
-        #expect(record.digest == MCPAuditDigest.sql(sql))
+        #expect(record.digest == MCPAuditDigest(key: Self.auditKey).digest(.sql(sql)))
         #expect(record.rows == 2)
         #expect(record.truncated == false)
         #expect(record.redacted == false)
@@ -926,7 +945,7 @@ struct BerryMCPServerFactoryTests {
     @Test func cancelledCallIsRecordedAsCancelled() async throws {
         let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent(MCPAuditLog.fileName)
-        let audit = MCPAuditWriter(url: url, diagnostics: { _ in })
+        let audit = self.audit(at: url)
         let connection = ScriptedReadOnlyConnection(
             events: [.columns([ColumnMeta(name: "n", declaredType: "INTEGER")])], finishes: false
         )
@@ -957,7 +976,7 @@ struct BerryMCPServerFactoryTests {
     @Test func malformedCallStillRecordsTheNamedConnection() async throws {
         let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent(MCPAuditLog.fileName)
-        let audit = MCPAuditWriter(url: url, diagnostics: { _ in })
+        let audit = self.audit(at: url)
         let shopID = shop.id
         try await withSession(store: Locked(Store(projects: [projectA, projectB])), roots: .undeclared([]), audit: audit) { client in
             await #expect(throws: MCPError.self) {
@@ -975,7 +994,7 @@ struct BerryMCPServerFactoryTests {
     @Test func noProjectRefusalOfALiveToolRecordsTheNamedConnection() async throws {
         let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent(MCPAuditLog.fileName)
-        let audit = MCPAuditWriter(url: url, diagnostics: { _ in })
+        let audit = self.audit(at: url)
         let live = LiveReadHarness(connection: ScriptedReadOnlyConnection(events: []))
         let billingID = billing.id
         try await withSession(
@@ -998,7 +1017,7 @@ struct BerryMCPServerFactoryTests {
     @Test func auditFileHoldsNoQueryTextNamesOrKeyValues() async throws {
         let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent(MCPAuditLog.fileName)
-        let audit = MCPAuditWriter(url: url, diagnostics: { _ in })
+        let audit = self.audit(at: url)
         let connection = ScriptedReadOnlyConnection(events: [
             .columns([ColumnMeta(name: "ledger_note", declaredType: "TEXT")]),
             .rows([[.text("x")]]),
@@ -1025,6 +1044,7 @@ struct BerryMCPServerFactoryTests {
         ])
         let dynamo = PartitionHarness(connection: partition, dynamoID: orders.id)
         let ordersID = orders.id
+        let dynamoRequest = MCPPartitionQueryRequest(profileID: ordersID, table: "orders", partitionKey: .string("zulu-kilo"))
         try await withSession(
             store: partitionStore(), roots: .declared(["file:///work/c"]), liveReads: dynamo.liveReads, audit: audit
         ) { client in
@@ -1035,7 +1055,10 @@ struct BerryMCPServerFactoryTests {
         let records = MCPAuditLog.read(from: url)
         #expect(records.map(\.outcome) == [.ok, .error, .ok])
         #expect(records.map(\.error) == [nil, "policy", nil])
-        #expect(records.map(\.digest) == [MCPAuditDigest.sql(read), MCPAuditDigest.sql(write), records.last?.digest])
+        let digest = MCPAuditDigest(key: Self.auditKey)
+        #expect(records.map(\.digest) == [
+            digest.digest(.sql(read)), digest.digest(.sql(write)), digest.digest(dynamoRequest.auditQuery),
+        ])
         #expect(records.allSatisfy { $0.digest != nil })
         let dynamoRecord = try #require(records.last)
         #expect(dynamoRecord.tool == MCPToolName.dynamodbQuery.rawValue)
@@ -1045,10 +1068,72 @@ struct BerryMCPServerFactoryTests {
         for canary in ["ledger_note", "vault_entries", "quartz", "SELECT", "DELETE", "orders", "customer", "zulu-kilo"] {
             #expect(!raw.contains(canary), "\(canary) reached the audit file")
         }
+        // A digest computed without the key would be this value.
+        for statement in [read, write] {
+            let unkeyed = SHA256.hash(data: Data(("berrydb-mcp-audit/sql\n" + statement).utf8))
+                .prefix(16).map { String(format: "%02x", $0) }.joined()
+            #expect(!raw.contains(unkeyed), "an unkeyed digest reached the audit file")
+        }
+    }
+
+    @Test func withoutAnAuditKeyEveryCallIsRecordedWithoutADigestAndWarnsOnce() async throws {
+        let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        let diagnostics = Locked<[String]>([])
+        let audit = self.audit(at: url, key: nil, diagnostics: diagnostics)
+        let live = LiveReadHarness(connection: ScriptedReadOnlyConnection(events: [
+            .columns([ColumnMeta(name: "id", declaredType: "INTEGER")]),
+            .rows([[.int(1)]]),
+            .complete(QueryStats(rowsAffected: nil, duration: .zero)),
+        ]))
+        let billingID = billing.id
+        try await withSession(
+            store: liveStore(), roots: .declared(["file:///work/b"]), liveReads: live.liveReads, audit: audit
+        ) { client in
+            let served = try await client.send(Self.readCall(billingID, sql: "SELECT id FROM users")).value
+            #expect(served.isError != true, "\(Self.text(served))")
+            _ = try await Self.call(client, .status)
+        }
+        let records = MCPAuditLog.read(from: url)
+        #expect(records.map(\.tool) == [MCPToolName.executeReadQuery.rawValue, MCPToolName.status.rawValue])
+        #expect(records.map(\.digest) == [nil, nil])
+        #expect(diagnostics.value.filter { $0.contains("audit digest key unavailable") }.count == 1)
+    }
+
+    @Test func recordedDurationOfARefusedReadExcludesTheDigestsKeyRead() async throws {
+        let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        let keyData = Self.auditKeyData
+        let audit = MCPAudit(
+            writer: MCPAuditWriter(url: url, diagnostics: { _ in }),
+            digester: MCPAuditDigester(
+                keyStore: MCPAuditKeyStore(read: { Thread.sleep(forTimeInterval: 1.0); return keyData }, write: { _ in false }),
+                diagnostics: { _ in }
+            )
+        )
+        let live = LiveReadHarness(connection: ScriptedReadOnlyConnection(events: []))
+        let billingID = billing.id
+        try await withSession(
+            store: liveStore(), roots: .declared(["file:///work/b"]), liveReads: live.liveReads, audit: audit
+        ) { client in
+            // The read policy refuses a write before any connection opens, and
+            // the refusal still carries the query, so the digester runs.
+            let refused = try await client.send(
+                Self.readCall(billingID, sql: "DELETE FROM vault_entries WHERE ledger_note = 'quartz'")
+            ).value
+            #expect(refused.isError == true)
+        }
+        let record = try #require(MCPAuditLog.read(from: url).first)
+        #expect(record.digest != nil)
+        // The refused call itself takes milliseconds and the key read sleeps
+        // 1 s (a Keychain dialog can wait on the user; that wait is not the
+        // call's duration). With a 500 ms allowance this holds under load and
+        // fails by at least 500 ms if the duration is taken after the digest.
+        #expect(record.durationMs < 500, "durationMs \(record.durationMs) includes the key read")
     }
 
     /// The status result of a session that selects project A, with `audit`.
-    fileprivate func statusResult(audit: MCPAuditWriter?, diagnostics: Locked<[String]> = Locked([])) async throws -> [CallTool.Result] {
+    fileprivate func statusResult(audit: MCPAudit?, diagnostics: Locked<[String]> = Locked([])) async throws -> [CallTool.Result] {
         let results = Locked<[CallTool.Result]>([])
         try await withSession(
             store: Locked(Store(projects: [projectA, projectB])), roots: .undeclared([]), diagnostics: diagnostics, audit: audit
@@ -1062,12 +1147,12 @@ struct BerryMCPServerFactoryTests {
 
     @Test func unwritableAuditFileNeverChangesTheResponse() async throws {
         let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
-        let working = MCPAuditWriter(url: dir.appendingPathComponent(MCPAuditLog.fileName), diagnostics: { _ in })
+        let working = audit(at: dir.appendingPathComponent(MCPAuditLog.fileName))
         let expected = try await statusResult(audit: working)
 
         let diagnostics = Locked<[String]>([])
         let missing = dir.appendingPathComponent("missing").appendingPathComponent(MCPAuditLog.fileName)
-        let unwritable = MCPAuditWriter(url: missing, diagnostics: { line in diagnostics.update { $0.append(line) } })
+        let unwritable = audit(at: missing, diagnostics: diagnostics)
         let results = try await statusResult(audit: unwritable, diagnostics: diagnostics)
 
         #expect(results == expected)
@@ -1082,7 +1167,7 @@ struct BerryMCPServerFactoryTests {
         let written = dir.appendingPathComponent("written")
         try FileManager.default.createDirectory(at: written, withIntermediateDirectories: true)
         let expected = try await statusResult(
-            audit: MCPAuditWriter(url: written.appendingPathComponent(MCPAuditLog.fileName), diagnostics: { _ in })
+            audit: audit(at: written.appendingPathComponent(MCPAuditLog.fileName))
         )
         #expect(MCPAuditLog.read(from: written.appendingPathComponent(MCPAuditLog.fileName)).count == 2)
 

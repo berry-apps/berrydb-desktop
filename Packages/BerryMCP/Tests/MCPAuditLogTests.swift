@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 
@@ -16,13 +17,13 @@ import Testing
 
     @Test func lineIsOneSortedSnakeCaseObject() throws {
         let line = String(decoding: try MCPAuditLog.line(Self.sample()), as: UTF8.self)
-        #expect(line == #"{"at":"2026-11-05T01:02:03.500Z","bytes":120,"digest":"00112233445566778899aabbccddeeff","duration_ms":12,"host":"codex","outcome":"ok","profile_id":"22222222-2222-2222-2222-222222222222","project_id":"11111111-1111-1111-1111-111111111111","redacted":false,"rows":3,"tool":"berrydb_execute_read_query","truncated":false,"v":1}"# + "\n")
+        #expect(line == #"{"at":"2026-11-05T01:02:03.500Z","bytes":120,"digest":"00112233445566778899aabbccddeeff","duration_ms":12,"host":"codex","outcome":"ok","profile_id":"22222222-2222-2222-2222-222222222222","project_id":"11111111-1111-1111-1111-111111111111","redacted":false,"rows":3,"tool":"berrydb_execute_read_query","truncated":false,"v":2}"# + "\n")
     }
     @Test func nilFieldsAreOmitted() throws {
         let record = MCPAuditRecord(at: Date(timeIntervalSince1970: 0), host: "unknown", projectID: nil, profileID: nil,
                                     tool: "berrydb_status", outcome: .invalidParams, durationMs: 0, bytes: 0)
         let line = String(decoding: try MCPAuditLog.line(record), as: UTF8.self)
-        #expect(line == #"{"at":"1970-01-01T00:00:00.000Z","bytes":0,"duration_ms":0,"host":"unknown","outcome":"invalid_params","tool":"berrydb_status","v":1}"# + "\n")
+        #expect(line == #"{"at":"1970-01-01T00:00:00.000Z","bytes":0,"duration_ms":0,"host":"unknown","outcome":"invalid_params","tool":"berrydb_status","v":2}"# + "\n")
     }
     @Test func lineRoundTrips() throws {
         let record = Self.sample()
@@ -31,8 +32,10 @@ import Testing
     @Test func unknownVersionAndGarbageAreNil() throws {
         #expect(MCPAuditLog.record(from: Data("not json\n".utf8)) == nil)
         var other = try JSONSerialization.jsonObject(with: try MCPAuditLog.line(Self.sample())) as! [String: Any]
-        other["v"] = 2
-        #expect(MCPAuditLog.record(from: try JSONSerialization.data(withJSONObject: other)) == nil)
+        for version in [1, 3] {
+            other["v"] = version
+            #expect(MCPAuditLog.record(from: try JSONSerialization.data(withJSONObject: other)) == nil)
+        }
     }
     @Test func readSkipsBrokenAndOversizedLinesAndKeepsOrder() throws {
         let dir = try makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
@@ -76,6 +79,38 @@ import Testing
         #expect(MCPAuditLog.read(from: url).map { Int($0.at.timeIntervalSince1970) } == Array(15..<20))
         #expect(!String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("xxxx"))
     }
+    @Test func capDropsLinesOfAnotherVersionAndGarbage() throws {
+        let dir = try makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        var current: [Data] = []
+        for i in 0..<3 { current.append(try MCPAuditLog.line(Self.sample(at: Date(timeIntervalSince1970: Double(i))))) }
+        var other = try JSONSerialization.jsonObject(with: try MCPAuditLog.line(Self.sample())) as! [String: Any]
+        other["v"] = 1
+        let older = try JSONSerialization.data(withJSONObject: other, options: [.sortedKeys]) + Data([0x0A])
+        var data = Data()
+        data += current[0]; data += older; data += current[1]; data += Data("not json\n".utf8); data += current[2]
+        try data.write(to: url)
+        // keepBytes is exactly the three version-2 lines. Had the version-1
+        // line and the garbage line been charged to the budget, the oldest
+        // version-2 line would no longer fit and would be dropped.
+        let keepBytes = current.reduce(0) { $0 + $1.count }
+        try MCPAuditLog.cap(at: url, thresholdBytes: data.count - 1, keepBytes: keepBytes)
+        #expect(try Data(contentsOf: url) == current.reduce(Data(), +))
+    }
+    @Test func capSkipsAnUndecodableNewestLineAndKeepsTheNewestValidOne() throws {
+        let dir = try makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        let first = try MCPAuditLog.line(Self.sample(at: Date(timeIntervalSince1970: 1)))
+        let second = try MCPAuditLog.line(Self.sample(at: Date(timeIntervalSince1970: 2)))
+        var other = try JSONSerialization.jsonObject(with: second) as! [String: Any]
+        other["v"] = 1
+        let older = try JSONSerialization.data(withJSONObject: other, options: [.sortedKeys]) + Data([0x0A])
+        let data = first + second + older
+        try data.write(to: url)
+        // keepBytes is below one line, so only the newest valid line stays.
+        try MCPAuditLog.cap(at: url, thresholdBytes: data.count - 1, keepBytes: second.count - 1)
+        #expect(try Data(contentsOf: url) == second)
+    }
     @Test func capKeepsTheNewestLineEvenWhenItAloneExceedsTheKeepSize() throws {
         let dir = try makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent(MCPAuditLog.fileName)
@@ -104,20 +139,38 @@ import Testing
         try MCPAuditLog.cap(at: dir.appendingPathComponent("missing.jsonl"))   // no throw, no file
         #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("missing.jsonl").path))
     }
-    @Test func digestsAreDomainSeparatedHex() {
-        let sql = MCPAuditDigest.sql("select 1")
+    static let testKey = SymmetricKey(data: Data(repeating: 0x42, count: 32))
+
+    @Test func keyedDigestsArePinned() {
+        let digest = MCPAuditDigest(key: Self.testKey)
+        #expect(digest.digest(.sql("select 1")) == "802e6de50cda3d2fa5eedf68b713e62e")
+        #expect(digest.digest(.partitionQuery(table: "orders", indexName: nil, keyCondition: "pk=s3:c-1", projection: ["total"]))
+                == "a30178dd6d633b4507a0bbc20875380b")
+    }
+    @Test func anotherKeyGivesAnotherDigest() {
+        let other = MCPAuditDigest(key: SymmetricKey(data: Data(repeating: 0x43, count: 32)))
+        #expect(other.digest(.sql("select 1")) == "e58b3e3a3359048dfe3d8e4ac248cb34")
+    }
+    @Test func keyedDigestIsNotTheUnkeyedHash() {
+        // Pins the digest of the previous, unkeyed record format and documents
+        // that a keyed digest differs from it. A digest that ignores its key is
+        // caught by the pinned vector for key 0x42 above.
+        #expect(MCPAuditDigest(key: Self.testKey).digest(.sql("select 1")) != "d085ef13d4e6e4c8e01a0e86b57d36d4")
+    }
+    @Test func digestsAreDomainSeparated() {
+        let digest = MCPAuditDigest(key: Self.testKey)
+        func pq(_ table: String, _ index: String?, _ condition: String, _ projection: [String]) -> String {
+            digest.digest(.partitionQuery(table: table, indexName: index, keyCondition: condition, projection: projection))
+        }
+        let sql = digest.digest(.sql("select 1"))
         #expect(sql.count == 32)
         #expect(sql.allSatisfy { $0.isHexDigit && !$0.isUppercase })
-        #expect(sql != MCPAuditDigest.sql("select 2"))
-        #expect(sql != MCPAuditDigest.partitionQuery(table: "select 1", indexName: nil, keyCondition: "", projection: []))
-        #expect(MCPAuditDigest.partitionQuery(table: "t", indexName: nil, keyCondition: "pk=a", projection: ["x"])
-                != MCPAuditDigest.partitionQuery(table: "t", indexName: "gsi", keyCondition: "pk=a", projection: ["x"]))
-        #expect(MCPAuditDigest.partitionQuery(table: "t", indexName: nil, keyCondition: "pk=a", projection: [])
-                != MCPAuditDigest.partitionQuery(table: "t", indexName: "", keyCondition: "pk=a", projection: []))
-        #expect(MCPAuditDigest.partitionQuery(table: "t", indexName: nil, keyCondition: "pk=a", projection: ["a\u{1F}b"])
-                != MCPAuditDigest.partitionQuery(table: "t", indexName: nil, keyCondition: "pk=a", projection: ["a", "b"]))
-        #expect(MCPAuditDigest.partitionQuery(table: "a\nb", indexName: "", keyCondition: "pk=a", projection: [])
-                != MCPAuditDigest.partitionQuery(table: "a", indexName: "b\n", keyCondition: "pk=a", projection: []))
+        #expect(sql != digest.digest(.sql("select 2")))
+        #expect(sql != pq("select 1", nil, "", []))
+        #expect(pq("t", nil, "pk=a", ["x"]) != pq("t", "gsi", "pk=a", ["x"]))
+        #expect(pq("t", nil, "pk=a", []) != pq("t", "", "pk=a", []))
+        #expect(pq("t", nil, "pk=a", ["a\u{1F}b"]) != pq("t", nil, "pk=a", ["a", "b"]))
+        #expect(pq("a\nb", "", "pk=a", []) != pq("a", "b\n", "pk=a", []))
     }
     @Test func urlsSitBesideTheStore() {
         #expect(MCPAuditLog.url(besideStore: "/tmp/x/store.sqlite").path == "/tmp/x/mcp-audit.jsonl")

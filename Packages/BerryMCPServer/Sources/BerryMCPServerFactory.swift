@@ -42,7 +42,7 @@ public enum BerryMCPServerFactory {
         let liveReads: LiveReads?
         let diagnostics: @Sendable (String) -> Void
         let onRequest: @Sendable () -> Void
-        let audit: MCPAuditWriter?
+        let audit: MCPAudit?
 
         /// - Parameters:
         ///   - version: Reported to the host as the server version.
@@ -53,8 +53,8 @@ public enum BerryMCPServerFactory {
         ///   - onRequest: Called once for every tool or resource request the
         ///     server answers, listings included, each of which reads the
         ///     store.
-        ///   - audit: Receives one record per tool call; without it nothing
-        ///     is recorded.
+        ///   - audit: Receives one record per tool call, digested under its
+        ///     key; without it nothing is recorded.
         public init(
             resolver: MCPProjectContextResolver,
             metadata: MCPMetadataService,
@@ -64,7 +64,7 @@ public enum BerryMCPServerFactory {
             liveReads: LiveReads? = nil,
             diagnostics: @escaping @Sendable (String) -> Void = MCPSessionContext.standardError,
             onRequest: @escaping @Sendable () -> Void = {},
-            audit: MCPAuditWriter? = nil
+            audit: MCPAudit? = nil
         ) {
             self.resolver = resolver
             self.metadata = metadata
@@ -166,13 +166,15 @@ public enum BerryMCPServerFactory {
             if case let .string(text)? = params.arguments?["connection_id"] { namedConnection = UUID(uuidString: text) }
             let record: @Sendable (MCPAuditRecord.Outcome, MCPAuditDetail, Int) async -> Void = { [namedConnection] outcome, detail, bytes in
                 guard let audit else { return }
+                // Taken before the digest: it reads the Keychain, and a Keychain dialog may be waiting on the user.
+                let durationMs = Int((ContinuousClock.now - started) / .milliseconds(1))
                 var projectID: UUID?
                 if case let .selected(project, _, _) = context { projectID = project.project.id }
-                await audit.record(MCPAuditRecord(
+                await audit.writer.record(MCPAuditRecord(
                     at: Date(), host: host.name, projectID: projectID, profileID: namedConnection ?? detail.profileID,
                     tool: MCPToolName(rawValue: params.name)?.rawValue ?? "unknown", outcome: outcome,
-                    error: detail.error, digest: detail.digest,
-                    durationMs: Int((ContinuousClock.now - started) / .milliseconds(1)),
+                    error: detail.error, digest: audit.digester.digest(detail.query),
+                    durationMs: durationMs,
                     rows: detail.rows, bytes: bytes, truncated: detail.truncated, redacted: detail.redacted,
                     consumedCapacityUnits: detail.consumedCapacityUnits
                 ))

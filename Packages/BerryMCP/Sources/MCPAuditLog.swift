@@ -3,7 +3,8 @@ import Foundation
 
 /// One tool call as written to the audit file. It carries no query text, row
 /// values or error detail beyond a short classification, since the file sits
-/// in a user-readable directory; its digest still confirms a guessed query.
+/// in a user-readable directory. The digest is keyed, so the file can leave
+/// the machine without revealing a query or key value.
 public struct MCPAuditRecord: Codable, Equatable, Sendable {
     public enum Outcome: String, Codable, Sendable {
         case ok, error, invalidParams = "invalid_params", cancelled
@@ -30,7 +31,7 @@ public struct MCPAuditRecord: Codable, Equatable, Sendable {
         error: String? = nil, digest: String? = nil, durationMs: Int, rows: Int? = nil, bytes: Int,
         truncated: Bool? = nil, redacted: Bool? = nil, consumedCapacityUnits: Double? = nil
     ) {
-        self.v = 1
+        self.v = 2
         self.at = at
         self.host = host
         self.projectID = projectID
@@ -111,7 +112,7 @@ public enum MCPAuditLog {
             }
             return date
         }
-        guard let record = try? decoder.decode(MCPAuditRecord.self, from: line), record.v == 1 else { return nil }
+        guard let record = try? decoder.decode(MCPAuditRecord.self, from: line), record.v == 2 else { return nil }
         return record
     }
 
@@ -131,6 +132,10 @@ public enum MCPAuditLog {
     /// since `read` would skip them anyway, and the newest valid line is kept
     /// even when it alone exceeds `keepBytes`, so one inflated line cannot
     /// empty the file.
+    ///
+    /// Only lines that decode as a current record are kept. The file is meant
+    /// to be shared, and a line whose digest was computed without a key, or
+    /// one edited into something else, must not outlive the cap.
     public static func cap(
         at url: URL, thresholdBytes: Int = capThresholdBytes, keepBytes: Int = capKeepBytes
     ) throws {
@@ -138,7 +143,7 @@ public enum MCPAuditLog {
         var newestFirst: [Data.SubSequence] = []
         var kept = 0
         for line in data.split(separator: 0x0A, omittingEmptySubsequences: true).reversed() {
-            guard line.count <= maximumLineBytes else { continue }
+            guard line.count <= maximumLineBytes, record(from: Data(line)) != nil else { continue }
             let size = line.count + 1
             if kept + size > keepBytes, !newestFirst.isEmpty { break }
             kept += size
@@ -164,25 +169,44 @@ public enum MCPAuditLog {
     }
 }
 
-/// Query identifiers for the audit file: a domain-separated, unkeyed SHA-256
-/// instead of the text, so the file shows that two calls ran the same query
-/// without storing what it said. Being unkeyed, a digest confirms a guessed
-/// query: it hides contents from a casual reader, not from someone testing
-/// candidates.
-public enum MCPAuditDigest {
-    public static func sql(_ text: String) -> String {
-        hex("berrydb-mcp-audit/sql\n" + text)
+/// What a digest is computed over: the request, never the result.
+public enum MCPAuditQuery: Equatable, Sendable {
+    case sql(String)
+    case partitionQuery(table: String, indexName: String?, keyCondition: String, projection: [String])
+
+    /// Domain-separated so a SQL text can never collide with a DynamoDB
+    /// request. Every DynamoDB field is length-prefixed, and an absent index is
+    /// marked apart from an empty name, so no two distinct requests encode to
+    /// the same input whatever characters their names contain.
+    fileprivate var canonicalInput: String {
+        switch self {
+        case .sql(let text):
+            return "berrydb-mcp-audit/sql\n" + text
+        case .partitionQuery(let table, let indexName, let keyCondition, let projection):
+            var input = "berrydb-mcp-audit/dynamodb\n" + MCPAuditDigest.field(table)
+            input += indexName.map { "i" + MCPAuditDigest.field($0) } ?? "-"
+            input += MCPAuditDigest.field(keyCondition) + "\(projection.count):"
+            for name in projection { input += MCPAuditDigest.field(name) }
+            return input
+        }
+    }
+}
+
+/// Query identifiers for the audit file: an HMAC-SHA256 under a key the audit
+/// file does not contain, so the file shows that two calls ran the same query
+/// without storing what it said, and a holder of the file alone cannot confirm
+/// a guessed query or key value.
+public struct MCPAuditDigest {
+    private let key: SymmetricKey
+
+    public init(key: SymmetricKey) {
+        self.key = key
     }
 
-    /// Every field is length-prefixed, and an absent index is marked apart
-    /// from an empty name, so no two distinct requests encode to the same
-    /// input whatever characters their names contain.
-    public static func partitionQuery(table: String, indexName: String?, keyCondition: String, projection: [String]) -> String {
-        var input = "berrydb-mcp-audit/dynamodb\n" + field(table)
-        input += indexName.map { "i" + field($0) } ?? "-"
-        input += field(keyCondition) + "\(projection.count):"
-        for name in projection { input += field(name) }
-        return hex(input)
+    /// First 16 bytes of the MAC, lowercase hex.
+    public func digest(_ query: MCPAuditQuery) -> String {
+        let code = HMAC<SHA256>.authenticationCode(for: Data(query.canonicalInput.utf8), using: key)
+        return Self.hex(code)
     }
 
     /// The UTF-8 byte count, a colon, then the text.
@@ -190,7 +214,7 @@ public enum MCPAuditDigest {
         "\(text.utf8.count):" + text
     }
 
-    private static func hex(_ text: String) -> String {
-        SHA256.hash(data: Data(text.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+    private static func hex<D: Sequence>(_ bytes: D) -> String where D.Element == UInt8 {
+        bytes.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 }
