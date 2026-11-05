@@ -609,8 +609,9 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// it needs a privilege check whose state is not `.readOnlyRole` and is
     /// not a `.writableRole` or `.failed` result that `acknowledged`
     /// accepts with `.writableRole`. A `.writableRole` result on a
-    /// production-labeled profile is refused whatever is acknowledged. A result counts only while the stored
-    /// profile still reaches the server and account it was checked on. Live
+    /// production-labeled profile is refused whatever is acknowledged. A
+    /// result counts only while the stored profile still reaches the server
+    /// and account it was checked on. Live
     /// reads that stay on are not checked again. These rules compare with the verified editing copy, which
     /// takes the stored key to read, so they run after the key is read and
     /// before a new one is stored: a refused draft changes nothing either.
@@ -997,13 +998,14 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             // does not prevent all writes to disk"
             // (https://www.postgresql.org/docs/current/sql-set-transaction.html),
             // and functions that act on another session or on the server
-            // (dblink, pg_terminate_backend, file readers) run anyway. On
-            // MySQL 8.4.11 and MariaDB a procedure or compound statement can
-            // leave the read-only transaction and write (observed, see
-            // MySQLDriverConnection). With a user that can write, the lexical
-            // SQL policy is then the only guard, and on a production database
-            // that is too thin for an admin role. A failed check proves
-            // nothing either way, so it keeps the acknowledgment path below.
+            // (dblink, pg_terminate_backend, file readers) run anyway. A CALL
+            // of a writing procedure on MySQL 8.4.11 and MariaDB, and a
+            // compound statement on MariaDB 11.8.9, leave the read-only
+            // transaction and write (observed, see MySQLDriverConnection).
+            // With a user that can write, the lexical SQL policy is then the
+            // only guard, and on a production database that is too thin for an
+            // admin role. A failed check proves nothing either way, so it keeps
+            // the acknowledgment path below.
             if Self.needsPrivilegeCheck(profile), profile.envColor == "production",
                case .writableRole = privilegeState {
                 return L("Live reads cannot be turned on for \(profile.name): its database user can write, and this connection is labelled production. Use a SELECT-only role or a read replica.")
