@@ -394,7 +394,7 @@ private struct MCPProjectEditorSheet: View {
                     )
                 }
                 if turnsOn {
-                    privilegeStatus(of: id)
+                    privilegeStatus(of: id, isProduction: isProduction)
                 }
             }
         }
@@ -402,7 +402,7 @@ private struct MCPProjectEditorSheet: View {
     }
 
     @ViewBuilder
-    private func privilegeStatus(of profileID: UUID) -> some View {
+    private func privilegeStatus(of profileID: UUID, isProduction: Bool) -> some View {
         switch model.privilegeStates[profileID] ?? .notChecked {
         case .notChecked, .readOnlyRole:
             EmptyView()
@@ -418,7 +418,14 @@ private struct MCPProjectEditorSheet: View {
                 .font(.caption)
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
-            Toggle(L("Use this connection for live reads anyway"), isOn: acknowledgment(.writableRole(profileID)))
+            if isProduction {
+                Text(L("Live reads stay off on this production connection while its database user can write. Use a SELECT-only role or a read replica."))
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Toggle(L("Use this connection for live reads anyway"), isOn: acknowledgment(.writableRole(profileID)))
+            }
         case let .failed(message):
             Text(L("BerryDB could not check this user’s privileges: \(message)"))
                 .font(.caption)

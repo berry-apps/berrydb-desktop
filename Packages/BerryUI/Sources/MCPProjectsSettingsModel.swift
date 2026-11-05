@@ -1001,7 +1001,10 @@ public final class MCPProjectsSettingsModel: ObservableObject {
                 // No acknowledgment overrides this. A read-only transaction does
                 // not stop a function with side effects, so with a user that can
                 // write, the lexical SQL policy is the only guard, and on a
-                // production database that is too thin for an admin role. A
+                // production database that is too thin for an admin role (the
+                // read-only transaction rules list INSERT, UPDATE, DELETE,
+                // MERGE, COPY FROM and DDL, not functions:
+                // https://www.postgresql.org/docs/current/sql-set-transaction.html). A
                 // failed check proves nothing either way, so it keeps the
                 // acknowledgment path below.
                 return L("Live reads cannot be turned on for \(profile.name): its database user can write, and this connection is labelled production. Use a SELECT-only role or a read replica.")

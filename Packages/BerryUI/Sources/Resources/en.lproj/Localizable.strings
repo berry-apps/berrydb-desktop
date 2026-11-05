@@ -781,6 +781,8 @@
 "This database user can change data (%@). BerryDB runs every agent query in a read-only transaction, but a read-only database user is the safer setup." = "This database user can change data (%@). BerryDB runs every agent query in a read-only transaction, but a read-only database user is the safer setup.";
 "Use this connection for live reads anyway" = "Use this connection for live reads anyway";
 "BerryDB could not check this user’s privileges: %@" = "BerryDB could not check this user’s privileges: %@";
+"Live reads cannot be turned on for %@: its database user can write, and this connection is labelled production. Use a SELECT-only role or a read replica." = "Live reads cannot be turned on for %@: its database user can write, and this connection is labelled production. Use a SELECT-only role or a read replica.";
+"Live reads stay off on this production connection while its database user can write. Use a SELECT-only role or a read replica." = "Live reads stay off on this production connection while its database user can write. Use a SELECT-only role or a read replica.";
 "The check did not finish in time." = "The check did not finish in time.";
 "Schema and graph metadata of these connections, and the rows of live reads, become visible to coding agents you configure and to their model providers." = "Schema and graph metadata of these connections, and the rows of live reads, become visible to coding agents you configure and to their model providers.";
 "Recent Activity" = "Recent Activity";
