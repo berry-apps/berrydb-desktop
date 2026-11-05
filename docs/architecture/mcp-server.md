@@ -54,12 +54,20 @@ the same macOS user as BerryDB, may have shell access, and can read and write
 any file that user can, including agent configuration, BerryDB's SQLite
 store, and audit files.
 
+Returned data is part of that injection channel. A value in a row, a column
+comment or an object name returned by a schema or live-read tool can carry
+text written to steer an agent, and the helper returns result content as
+stored; nothing in BerryDB screens it. Whatever protection exists against
+such text is the host's own. The read-only session, the limits and the
+audit log bound what a steered agent can do through BerryDB, not what it
+does elsewhere in the workspace.
+
 **Out of scope:** root/admin compromise, other macOS users (they cannot read
 this user's files or Keychain), a compromised BerryDB binary.
 
 | Mechanism | Boundary against the primary adversary? | Reason |
 |---|---|---|
-| Keychain ACL on connection secrets | Yes | Only BerryDB-signed binaries can read items; the helper never emits secrets. |
+| Keychain ACL on connection secrets | Yes | Items are created by the app with an access list that trusts only the app, and the bundled helper is added by the user's **Always Allow** (see [Setup](#setup)); the helper never emits secrets. |
 | Helper-side tool surface (read-only tools, no `Scan`) | Yes | Enforced in signed code the agent cannot modify. |
 | Database read-only session for live reads | Yes | Enforced by the database itself, and the only boundary on what a live read can change (see [Read-only enforcement layers](#read-only-enforcement-layers)). |
 | SQL read policy | No (defense in depth) | Refuses a statement before it reaches the server, but it is lexical: it cannot see a function behind a view, an operator or a cast. |
@@ -642,6 +650,10 @@ matches is whatever the query labels a result column, so an alias
 (`SELECT u FROM users u`) carries a sensitive value past it. Database column
 privileges on the MCP profile's database user are the boundary for sensitive
 columns: a column the user cannot select cannot be returned under any name.
+Whether a returned value is personal data, and whether it may reach the
+host's model provider, is the user's own data-protection decision: BerryDB
+cannot tell which columns are personal, and redaction by name is a
+convenience, not a control.
 
 Known limitation: with legacy file-keychain items, a same-user process able
 to delete or pre-create the HMAC key item could choose the key, and with it
@@ -899,6 +911,21 @@ statement that does not start with `SELECT`. Either way the result is `The
 query did not finish within 30 seconds.` (5 under the production
 limits). A last bound of 47 s (15 + 30 + 2) covers the whole request,
 including building the result and closing the session.
+
+These limits bound time and size, not load. A read runs with whatever plan
+the server chooses, so a heavy join costs the server what it would cost any
+client, for up to the statement limit. On PostgreSQL the read-only
+transaction holds its snapshot for that long, and vacuum cannot remove rows
+that snapshot can still see
+([Routine Vacuuming](https://www.postgresql.org/docs/current/routine-vacuuming.html#VACUUM-BASICS));
+the 5 s `lock_timeout` keeps a read from queueing behind uncommitted DDL,
+and other sessions from queueing behind the read. On MySQL and MariaDB a
+transaction holds metadata locks on the tables it read until it ends
+([Metadata Locking](https://dev.mysql.com/doc/refman/8.4/en/metadata-locking.html)),
+so DDL on those tables waits for the read. For a production database the
+recommendations stand: a read replica and a SELECT-only role; the
+production limits exist so that one call cannot become a long or large
+read.
 
 One helper process serves one agent session and runs at most 4 live reads
 at once. Each live read opens its own connection, and its own SSH tunnel
