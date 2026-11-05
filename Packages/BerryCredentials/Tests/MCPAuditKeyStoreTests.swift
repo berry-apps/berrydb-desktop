@@ -44,10 +44,10 @@ struct MCPAuditKeyStoreTests {
         #expect(box.data == nil)
     }
 
-    @Test func wrongLengthStoredValueIsRejected() {
+    @Test(arguments: [16, 33]) func wrongLengthStoredValueIsRejected(length: Int) {
         let box = Box()
         let store = MCPAuditKeyStore(
-            read: { Data(repeating: 1, count: 16) },
+            read: { Data(repeating: 1, count: length) },
             write: { _ in
                 box.writeCalled = true
                 return true

@@ -90,8 +90,26 @@ import Testing
         var data = Data()
         data += current[0]; data += older; data += current[1]; data += Data("not json\n".utf8); data += current[2]
         try data.write(to: url)
-        try MCPAuditLog.cap(at: url, thresholdBytes: data.count - 1, keepBytes: data.count * 2)
+        // keepBytes is exactly the three version-2 lines. Had the version-1
+        // line and the garbage line been charged to the budget, the oldest
+        // version-2 line would no longer fit and would be dropped.
+        let keepBytes = current.reduce(0) { $0 + $1.count }
+        try MCPAuditLog.cap(at: url, thresholdBytes: data.count - 1, keepBytes: keepBytes)
         #expect(try Data(contentsOf: url) == current.reduce(Data(), +))
+    }
+    @Test func capSkipsAnUndecodableNewestLineAndKeepsTheNewestValidOne() throws {
+        let dir = try makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        let first = try MCPAuditLog.line(Self.sample(at: Date(timeIntervalSince1970: 1)))
+        let second = try MCPAuditLog.line(Self.sample(at: Date(timeIntervalSince1970: 2)))
+        var other = try JSONSerialization.jsonObject(with: second) as! [String: Any]
+        other["v"] = 1
+        let older = try JSONSerialization.data(withJSONObject: other, options: [.sortedKeys]) + Data([0x0A])
+        let data = first + second + older
+        try data.write(to: url)
+        // keepBytes is below one line, so only the newest valid line stays.
+        try MCPAuditLog.cap(at: url, thresholdBytes: data.count - 1, keepBytes: second.count - 1)
+        #expect(try Data(contentsOf: url) == second)
     }
     @Test func capKeepsTheNewestLineEvenWhenItAloneExceedsTheKeepSize() throws {
         let dir = try makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }

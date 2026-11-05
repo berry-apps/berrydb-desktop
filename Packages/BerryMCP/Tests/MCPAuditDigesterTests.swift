@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import Synchronization
 import Testing
@@ -6,7 +5,7 @@ import Testing
 @testable import BerryCredentials
 @testable import BerryMCP
 
-private final class KeyBox: @unchecked Sendable {
+private final class KeyBox: Sendable {
     private let lock = Mutex<Data?>(nil)
     private let readCount = Mutex(0)
     var data: Data? {
@@ -45,6 +44,19 @@ private final class Messages: Sendable {
         let digester = MCPAuditDigester(keyStore: KeyBox().store, diagnostics: messages.add)
         #expect(digester.digest(.sql("select 1")) == nil)
         #expect(digester.digest(.sql("select 1")) == nil)
+        #expect(messages.all == ["audit digest key unavailable: records carry no digest"])
+    }
+
+    @Test func concurrentFirstCallsWarnOnce() {
+        let messages = Messages()
+        let digester = MCPAuditDigester(keyStore: KeyBox().store, diagnostics: messages.add)
+        let results = Mutex<[String?]>([])
+        DispatchQueue.concurrentPerform(iterations: 32) { _ in
+            let digest = digester.digest(.sql("select 1"))
+            results.withLock { $0.append(digest) }
+        }
+        #expect(results.withLock { $0 }.count == 32)
+        #expect(results.withLock { $0 }.allSatisfy { $0 == nil })
         #expect(messages.all == ["audit digest key unavailable: records carry no digest"])
     }
 
