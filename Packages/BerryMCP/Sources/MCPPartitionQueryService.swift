@@ -166,7 +166,7 @@ public struct MCPPartitionQueryResult: Encodable, Equatable, Sendable {
 }
 
 public enum MCPPartitionQueryError: Error, Equatable, Sendable, CustomStringConvertible {
-    case unknownConnection, liveReadNotEnabled, noProject, unsupportedDatabase, tunnelUnsupported
+    case unknownConnection, liveReadNotEnabled, liveReadExpired, noProject, unsupportedDatabase, tunnelUnsupported
     case invalidRequest(String), unknownTable, unknownIndex, invalidCursor, throttled, queryFailed(String)
     case connectionFailed, openTimedOut(seconds: Int), timedOut(seconds: Int), resultTooLarge
     case tooManyConcurrentReads(limit: Int), openStillPending(retryAfterSeconds: Int)
@@ -174,6 +174,7 @@ public enum MCPPartitionQueryError: Error, Equatable, Sendable, CustomStringConv
     public var description: String {
         switch self {
         case .unknownConnection: "Unknown connection for this project"
+        case .liveReadExpired: "Live reads on this production connection have expired. The user can renew them in BerryDB Settings → AI Agents."
         case .liveReadNotEnabled: "Live reads are not turned on for this connection. The user can turn them on in BerryDB Settings → AI Agents."
         case .noProject: "No BerryDB project is selected for this workspace. Call berrydb_status for details."
         case .unsupportedDatabase: "DynamoDB queries run on DynamoDB connections only; use berrydb_execute_read_query for a SQL connection."
@@ -202,6 +203,7 @@ extension MCPPartitionQueryError {
         switch self {
         case .unknownConnection: "unknown_connection"
         case .liveReadNotEnabled: "live_read_not_enabled"
+        case .liveReadExpired: "live_read_expired"
         case .noProject: "no_project"
         case .unsupportedDatabase: "unsupported_database"
         case .tunnelUnsupported: "tunnel_unsupported"
@@ -565,6 +567,7 @@ public struct MCPPartitionQueryService: Sendable {
             switch error {
             case .unauthorizedProfile, .missingProfile: return MCPPartitionQueryError.unknownConnection
             case .liveReadNotEnabled: return MCPPartitionQueryError.liveReadNotEnabled
+            case .liveReadExpired: return MCPPartitionQueryError.liveReadExpired
             case .projectNotFound, .projectDisabled: return MCPPartitionQueryError.noProject
             case .unsupportedDriver: return MCPPartitionQueryError.unsupportedDatabase
             case .tunnelUnsupported: return MCPPartitionQueryError.tunnelUnsupported

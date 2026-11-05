@@ -49,6 +49,9 @@ public struct MCPConnectionDescriptor: Codable, Equatable, Sendable {
     /// `"selectSchemas"` when the catalog is too large to harvest whole and
     /// schemas should be selected in the app, else nil.
     public let hint: String?
+    /// The sealed production consent expiry of the connection's access row;
+    /// nil when the row carries none. Not part of the encoded form.
+    public var liveReadUntil: Date? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, name, driver, environment, capabilities, graphHarvestedAt, checkedAt, stale, staleReason, detailCoverage
@@ -310,7 +313,8 @@ public struct MCPMetadataService: Sendable {
                 staleReason: state.stale ? state.lastErrorCode.flatMap { HarvestErrorCode(rawValue: $0)?.rawValue } : nil,
                 detailCoverage: .init(detailed: state.detailedCount, total: state.objectCount),
                 scope: state.selectedSchemas,
-                hint: state.hint
+                hint: state.hint,
+                liveReadUntil: access.liveReadUntil
             )
         }
     }

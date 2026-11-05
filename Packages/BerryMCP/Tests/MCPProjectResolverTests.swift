@@ -123,6 +123,19 @@ struct MCPProjectResolverTests {
         #expect(try await resolver(live: [a]).resolve(profileID: a, access: .liveRead).id == a)
     }
 
+    @Test func anExpiredLiveReadIsRefusedWithItsOwnReason() async throws {
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [MCPProfileAccess(profileID: a, liveRead: true)])
+        let verified = MCPVerifiedProject(project: project, liveReadProfileIDs: [], expiredLiveReadProfileIDs: [a])
+        let resolver = MCPProjectResolver(
+            loadProject: { verified },
+            profile: { id in MCPConnectionProfile(id: id, driverID: .sqlite, config: .sqlite(path: ":memory:")) }
+        )
+        await #expect(throws: MCPProjectResolutionError.liveReadExpired(a)) {
+            try await resolver.resolve(profileID: a, access: .liveRead)
+        }
+        #expect(try await resolver.resolve(profileID: a, access: .metadata).id == a)
+    }
+
     @Test func unassignedProfileLooksTheSameWhetherItExistsOrNot() async {
         await #expect(throws: MCPProjectResolutionError.unauthorizedProfile(outsider)) {
             try await resolver().resolve(profileID: outsider, access: .metadata)

@@ -199,6 +199,22 @@ struct MCPMetadataServiceTests {
         #expect(descriptors.map(\.environment) == ["production", "production"])
     }
 
+    @Test func listConnectionsCarriesTheSealedExpiryOfEachAccessRow() throws {
+        let until = Date(timeIntervalSince1970: 1_800_000_000)
+        let withExpiry = MCPVerifiedProject(
+            project: MCPProject(
+                name: "P", isEnabled: true,
+                profiles: [
+                    MCPProfileAccess(profileID: production.id, liveRead: true, liveReadUntil: until),
+                    MCPProfileAccess(profileID: staging.id),
+                ]
+            ),
+            liveReadProfileIDs: [production.id]
+        )
+        let descriptors = try makeService().listConnections(in: withExpiry)
+        #expect(descriptors.map(\.liveReadUntil) == [until, nil])
+    }
+
     @Test func listConnectionsHidesEndpointDetails() throws {
         let descriptors = try makeService().listConnections(in: project)
         #expect(descriptors.map(\.id) == [production.id, staging.id])
