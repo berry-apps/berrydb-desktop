@@ -136,7 +136,8 @@ struct MCPAccessIntegrityTests {
                 profileID BLOB NOT NULL,
                 liveRead BOOLEAN NOT NULL DEFAULT 0,
                 redactedColumnsJSON TEXT NOT NULL DEFAULT '[]',
-                integrityTag BLOB
+                integrityTag BLOB,
+                liveReadUntil DATETIME
             )
             """
         )
@@ -487,7 +488,8 @@ struct MCPAccessIntegrityTests {
                 profileID BLOB NOT NULL,
                 liveRead BOOLEAN NOT NULL DEFAULT 0,
                 redactedColumnsJSON TEXT NOT NULL DEFAULT '[]',
-                integrityTag BLOB
+                integrityTag BLOB,
+                liveReadUntil DATETIME
             )
             """
         )

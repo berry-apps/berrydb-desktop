@@ -1084,6 +1084,13 @@ public final class BerryStore: Sendable {
                 try db.execute(sql: "DROP TABLE IF EXISTS \(table)")
             }
         }
+        migrator.registerMigration("v37-mcp-profile-access-live-read-until") { db in
+            // NULL means the row has no expiry, which is what every row
+            // written before this migration meant.
+            try db.alter(table: "mcp_project_profile") { t in
+                t.add(column: "liveReadUntil", .datetime)
+            }
+        }
         return migrator
     }
 
@@ -1448,7 +1455,8 @@ public final class BerryStore: Sendable {
                 let normalizedAccess = MCPProfileAccess(
                     profileID: access.profileID,
                     liveRead: access.liveRead,
-                    redactedColumns: access.redactedColumns
+                    redactedColumns: access.redactedColumns,
+                    liveReadUntil: access.liveReadUntil
                 )
                 // The tag binds the row to the profile's endpoint and
                 // production label as stored right now; a missing profile
@@ -1470,7 +1478,8 @@ public final class BerryStore: Sendable {
                         decoding: try encoder.encode(normalizedAccess.redactedColumns),
                         as: UTF8.self
                     ),
-                    integrityTag: integrityTag
+                    integrityTag: integrityTag,
+                    liveReadUntil: normalizedAccess.liveReadUntil
                 ).insert(db)
             }
             try Self.reseal(
@@ -1554,7 +1563,10 @@ public final class BerryStore: Sendable {
             [String].self, from: Data(row.redactedColumnsJSON.utf8)
         ) else { return nil }
         guard let profile = try? ConnectionProfile.fetchOne(db, key: row.profileID) else { return nil }
-        let access = MCPProfileAccess(profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns)
+        let access = MCPProfileAccess(
+            profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns,
+            liveReadUntil: row.liveReadUntil
+        )
         guard let verified = try? MCPAccessIntegrity.verifiedProfilePayload(
             tag: row.integrityTag, projectID: projectID, access: access, profile: profile, key: previousKey
         ) else {
@@ -1747,7 +1759,10 @@ public final class BerryStore: Sendable {
         guard !isDuplicated else { return nil }
         let redactedColumns = try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8))
         guard let profile = try? ConnectionProfile.fetchOne(db, key: row.profileID) else { return nil }
-        let access = MCPProfileAccess(profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns)
+        let access = MCPProfileAccess(
+            profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns,
+            liveReadUntil: row.liveReadUntil
+        )
         return try MCPAccessIntegrity.verifiedProfilePayload(
             tag: row.integrityTag, projectID: projectID, access: access, profile: profile, key: key
         )
@@ -1772,7 +1787,8 @@ public final class BerryStore: Sendable {
             MCPProfileAccess(
                 profileID: row.profileID,
                 liveRead: row.liveRead,
-                redactedColumns: try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8))
+                redactedColumns: try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8)),
+                liveReadUntil: row.liveReadUntil
             )
         }
         return MCPProject(

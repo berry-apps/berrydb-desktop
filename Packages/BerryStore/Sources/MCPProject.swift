@@ -19,10 +19,19 @@ public struct MCPProfileAccess: Codable, Equatable, Sendable {
     /// Column names redacted from live results; stored lowercased, deduped and sorted.
     public var redactedColumns: [String]
 
-    public init(profileID: UUID, liveRead: Bool = false, redactedColumns: [String] = []) {
+    /// When live read stops being honoured; nil means no expiry. Held in whole
+    /// seconds because the sealed payload carries whole seconds, so the stored,
+    /// sealed and reported values must agree.
+    public var liveReadUntil: Date?
+
+    public init(
+        profileID: UUID, liveRead: Bool = false, redactedColumns: [String] = [],
+        liveReadUntil: Date? = nil
+    ) {
         self.profileID = profileID
         self.liveRead = liveRead
         self.redactedColumns = Self.normalizedColumns(redactedColumns)
+        self.liveReadUntil = liveReadUntil.map { Date(timeIntervalSince1970: floor($0.timeIntervalSince1970)) }
     }
 
     static func normalizedColumns(_ columns: [String]) -> [String] {
@@ -112,6 +121,7 @@ struct MCPProjectProfileRecord: Codable, FetchableRecord, PersistableRecord {
     var liveRead: Bool
     var redactedColumnsJSON: String
     var integrityTag: Data?
+    var liveReadUntil: Date?
 }
 
 extension MCPProject {
