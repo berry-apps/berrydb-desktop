@@ -994,40 +994,49 @@ for the default store), one JSON object per line, in a file created with mode
 | Field | Meaning |
 | --- | --- |
 | `v` | Record version, currently `1`; the app skips lines with another value. |
-| `at` | ISO 8601 time of the call, UTC, with fractional seconds. |
+| `at` | ISO 8601 time the handler finished the call, UTC, with fractional seconds. |
 | `host` | The client name the host gave in `initialize`; `unknown` until it has. |
 | `project_id` | The selected project, when one was selected. |
-| `profile_id` | The connection the call addressed, when it named one. |
+| `profile_id` | The `connection_id` the call passed, whenever it is a UUID, on every outcome, including calls refused or rejected before the tool read its arguments. |
 | `tool` | The tool name as called, `unknown` for a tool that does not exist. |
 | `outcome` | `ok`, `error`, `invalid_params` or `cancelled`. |
 | `error` | A short error code for an `error` outcome; never message text. |
 | `digest` | A hash identifying the query of a live read, so two identical queries can be recognised. |
 | `duration_ms` | How long the call took. |
 | `rows` | Rows (or items) returned, for tools that return them. |
-| `bytes` | Size of the serialized response. |
+| `bytes` | UTF-8 length of the response's text content; `0` when the call threw (`invalid_params`, `cancelled`, or an unexpected error). |
 | `truncated` | Whether the result was cut at a limit. |
-| `redacted` | Whether a redacted column or attribute was removed from the result. |
+| `redacted` | Whether the values of a redacted column or attribute were replaced in the result (replaced, not removed). |
 | `consumed_capacity_units` | Read capacity a DynamoDB query consumed. |
 
 The file never holds query text, parameters, result rows, column or table
 names, workspace paths, or error message text: the digest and the codes stand
-in for them, so the file stays safe to open and share. The host name is
+in for them. The digest is an unkeyed, domain-separated SHA-256 with every
+field length-prefixed, so anyone who guesses a query, table or key value can
+confirm the guess by hashing it: the file identifies query shapes, and hides
+contents only from a reader who does not test candidates. The host name is
 chosen by the host, so line breaks and other control characters are removed
-and it is cut to 64 characters, which keeps a record on one line and bounds
-its size. The app also ignores any line longer than 4096 bytes.
+and it is cut to 64 characters and 64 unicode scalars, which keeps a record on
+one line and bounds its size. The app also ignores any line longer than 4096
+bytes.
 
 The writer opens, appends one whole line and closes the file for every
-record. It never creates the directory, which belongs to the app. A failure
-to write is reported once on stderr (`audit log unavailable: …`) and never
-fails the tool call.
+record. It opens without following a symbolic link and without waiting (a
+FIFO at the path has no reader to wait for), and writes only to a regular
+file. It never creates the directory, which belongs to the app. A failure to
+write is reported once on stderr (`audit log unavailable: …`) and never fails
+the tool call.
 
 The app caps the file when **Recent Activity** loads: past 4 MiB it keeps the
-newest whole lines that fit in 2 MiB and swaps the trimmed copy in with an
-atomic rename, so a reader never sees a partial file and a helper that opens
-the file for its next record writes to the new one.
+newest whole lines that fit in 2 MiB, skipping lines over 4096 bytes and
+always keeping the newest valid line, and swaps the trimmed copy in with an
+atomic rename, so a reader never sees a partial file. Records a helper
+appends between the cap's read and its rename go to the replaced file and
+are lost; the next record goes to the new file.
 
-In **AI Agents**, a project's settings sheet lists the newest 100 records of
-that project under **Recent Activity**: time, host, tool, connection (or
+In **AI Agents**, the settings sheet of a saved project (not a new one being
+created) lists the newest 100 records of that project under **Recent
+Activity**: time, host, tool, connection (or
 "connection removed" when the profile is gone), outcome, rows, size, and the
 truncated, redacted and capacity details when present. **Refresh** reloads
 the list.
