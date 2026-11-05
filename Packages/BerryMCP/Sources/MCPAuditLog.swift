@@ -164,25 +164,56 @@ public enum MCPAuditLog {
     }
 }
 
-/// Query identifiers for the audit file: a domain-separated, unkeyed SHA-256
-/// instead of the text, so the file shows that two calls ran the same query
-/// without storing what it said. Being unkeyed, a digest confirms a guessed
-/// query: it hides contents from a casual reader, not from someone testing
-/// candidates.
-public enum MCPAuditDigest {
-    public static func sql(_ text: String) -> String {
-        hex("berrydb-mcp-audit/sql\n" + text)
+/// What a digest is computed over: the request, never the result.
+public enum MCPAuditQuery: Equatable, Sendable {
+    case sql(String)
+    case partitionQuery(table: String, indexName: String?, keyCondition: String, projection: [String])
+
+    /// Domain-separated so a SQL text can never collide with a DynamoDB
+    /// request. Every DynamoDB field is length-prefixed, and an absent index is
+    /// marked apart from an empty name, so no two distinct requests encode to
+    /// the same input whatever characters their names contain.
+    fileprivate var canonicalInput: String {
+        switch self {
+        case .sql(let text):
+            return "berrydb-mcp-audit/sql\n" + text
+        case .partitionQuery(let table, let indexName, let keyCondition, let projection):
+            var input = "berrydb-mcp-audit/dynamodb\n" + MCPAuditDigest.field(table)
+            input += indexName.map { "i" + MCPAuditDigest.field($0) } ?? "-"
+            input += MCPAuditDigest.field(keyCondition) + "\(projection.count):"
+            for name in projection { input += MCPAuditDigest.field(name) }
+            return input
+        }
+    }
+}
+
+/// Query identifiers for the audit file: an HMAC-SHA256 under a key the audit
+/// file does not contain, so the file shows that two calls ran the same query
+/// without storing what it said, and a holder of the file alone cannot confirm
+/// a guessed query or key value.
+public struct MCPAuditDigest {
+    private let key: SymmetricKey
+
+    public init(key: SymmetricKey) {
+        self.key = key
     }
 
-    /// Every field is length-prefixed, and an absent index is marked apart
-    /// from an empty name, so no two distinct requests encode to the same
-    /// input whatever characters their names contain.
+    /// First 16 bytes of the MAC, lowercase hex.
+    public func digest(_ query: MCPAuditQuery) -> String {
+        let code = HMAC<SHA256>.authenticationCode(for: Data(query.canonicalInput.utf8), using: key)
+        return Self.hex(code)
+    }
+
+    /// Unkeyed form, still used by the server's tools.
+    public static func sql(_ text: String) -> String {
+        hex(SHA256.hash(data: Data(MCPAuditQuery.sql(text).canonicalInput.utf8)))
+    }
+
+    /// Unkeyed form, still used by the server's tools.
     public static func partitionQuery(table: String, indexName: String?, keyCondition: String, projection: [String]) -> String {
-        var input = "berrydb-mcp-audit/dynamodb\n" + field(table)
-        input += indexName.map { "i" + field($0) } ?? "-"
-        input += field(keyCondition) + "\(projection.count):"
-        for name in projection { input += field(name) }
-        return hex(input)
+        let query = MCPAuditQuery.partitionQuery(
+            table: table, indexName: indexName, keyCondition: keyCondition, projection: projection)
+        return hex(SHA256.hash(data: Data(query.canonicalInput.utf8)))
     }
 
     /// The UTF-8 byte count, a colon, then the text.
@@ -190,7 +221,7 @@ public enum MCPAuditDigest {
         "\(text.utf8.count):" + text
     }
 
-    private static func hex(_ text: String) -> String {
-        SHA256.hash(data: Data(text.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+    private static func hex<D: Sequence>(_ bytes: D) -> String where D.Element == UInt8 {
+        bytes.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 }

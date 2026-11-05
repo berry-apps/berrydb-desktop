@@ -66,6 +66,19 @@ extension MCPPartitionQueryRequest {
     /// bound of `between`. The length prefix stops a key value that contains
     /// the condition's own punctuation from reading as a different condition.
     public var auditDigest: String {
+        MCPAuditDigest.partitionQuery(
+            table: table, indexName: indexName, keyCondition: auditKeyCondition, projection: projection ?? []
+        )
+    }
+
+    /// The same request as `auditDigest` covers, for the keyed digest.
+    public var auditQuery: MCPAuditQuery {
+        .partitionQuery(
+            table: table, indexName: indexName, keyCondition: auditKeyCondition, projection: projection ?? []
+        )
+    }
+
+    private var auditKeyCondition: String {
         func key(_ input: MCPKeyInput) -> String {
             switch input {
             case .string(let text): "s" + MCPAuditDigest.field(text)
@@ -77,9 +90,7 @@ extension MCPPartitionQueryRequest {
             condition += ";sk=\(sortKey.op.rawValue):\(key(sortKey.value))"
             if let upper = sortKey.value2 { condition += ":\(key(upper))" }
         }
-        return MCPAuditDigest.partitionQuery(
-            table: table, indexName: indexName, keyCondition: condition, projection: projection ?? []
-        )
+        return condition
     }
 }
 

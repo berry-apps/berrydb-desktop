@@ -44,4 +44,32 @@ struct MCPAuditCodeTests {
         )
         #expect(packed.auditDigest != split.auditDigest)
     }
+
+    @Test func partitionRequestAuditQueryIgnoresLimitAndCursorAndSeesTheKey() {
+        func request(sort: String, limit: Int?, cursor: String?) -> MCPPartitionQueryRequest {
+            MCPPartitionQueryRequest(
+                profileID: UUID(), table: "orders", indexName: nil, partitionKey: .string("c-1"),
+                sortKey: MCPSortKeyInput(op: .beginsWith, value: .string(sort), value2: nil),
+                projection: ["total"], limit: limit, cursor: cursor
+            )
+        }
+        let base = request(sort: "2026-", limit: nil, cursor: nil)
+        let op = MCPSortKeyOperator.beginsWith.rawValue
+        #expect(base.auditQuery == request(sort: "2026-", limit: 5, cursor: "abc").auditQuery)
+        #expect(base.auditQuery != request(sort: "2027-", limit: nil, cursor: nil).auditQuery)
+        #expect(base.auditQuery == .partitionQuery(
+            table: "orders", indexName: nil, keyCondition: "pk=s3:c-1;sk=\(op):s5:2026-", projection: ["total"]))
+    }
+
+    @Test func partitionRequestAuditQueryKeepsKeyValuesApartFromTheConditionSyntax() {
+        let id = UUID()
+        let packed = MCPPartitionQueryRequest(
+            profileID: id, table: "orders", partitionKey: .string("c-1;sk=eq:s:x")
+        )
+        let split = MCPPartitionQueryRequest(
+            profileID: id, table: "orders", partitionKey: .string("c-1"),
+            sortKey: MCPSortKeyInput(op: .eq, value: .string("x"))
+        )
+        #expect(packed.auditQuery != split.auditQuery)
+    }
 }

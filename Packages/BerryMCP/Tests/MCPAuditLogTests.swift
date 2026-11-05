@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 
@@ -104,20 +105,37 @@ import Testing
         try MCPAuditLog.cap(at: dir.appendingPathComponent("missing.jsonl"))   // no throw, no file
         #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("missing.jsonl").path))
     }
-    @Test func digestsAreDomainSeparatedHex() {
-        let sql = MCPAuditDigest.sql("select 1")
+    static let testKey = SymmetricKey(data: Data(repeating: 0x42, count: 32))
+
+    @Test func keyedDigestsArePinned() {
+        let digest = MCPAuditDigest(key: Self.testKey)
+        #expect(digest.digest(.sql("select 1")) == "802e6de50cda3d2fa5eedf68b713e62e")
+        #expect(digest.digest(.partitionQuery(table: "orders", indexName: nil, keyCondition: "pk=s3:c-1", projection: ["total"]))
+                == "a30178dd6d633b4507a0bbc20875380b")
+    }
+    @Test func anotherKeyGivesAnotherDigest() {
+        let other = MCPAuditDigest(key: SymmetricKey(data: Data(repeating: 0x43, count: 32)))
+        #expect(other.digest(.sql("select 1")) == "e58b3e3a3359048dfe3d8e4ac248cb34")
+    }
+    @Test func keyedDigestIsNotTheUnkeyedHash() {
+        // SHA-256 of the same input, the previous record format. Pinned because
+        // a digest that ignores its key would still pass every other test.
+        #expect(MCPAuditDigest(key: Self.testKey).digest(.sql("select 1")) != "d085ef13d4e6e4c8e01a0e86b57d36d4")
+    }
+    @Test func digestsAreDomainSeparated() {
+        let digest = MCPAuditDigest(key: Self.testKey)
+        func pq(_ table: String, _ index: String?, _ condition: String, _ projection: [String]) -> String {
+            digest.digest(.partitionQuery(table: table, indexName: index, keyCondition: condition, projection: projection))
+        }
+        let sql = digest.digest(.sql("select 1"))
         #expect(sql.count == 32)
         #expect(sql.allSatisfy { $0.isHexDigit && !$0.isUppercase })
-        #expect(sql != MCPAuditDigest.sql("select 2"))
-        #expect(sql != MCPAuditDigest.partitionQuery(table: "select 1", indexName: nil, keyCondition: "", projection: []))
-        #expect(MCPAuditDigest.partitionQuery(table: "t", indexName: nil, keyCondition: "pk=a", projection: ["x"])
-                != MCPAuditDigest.partitionQuery(table: "t", indexName: "gsi", keyCondition: "pk=a", projection: ["x"]))
-        #expect(MCPAuditDigest.partitionQuery(table: "t", indexName: nil, keyCondition: "pk=a", projection: [])
-                != MCPAuditDigest.partitionQuery(table: "t", indexName: "", keyCondition: "pk=a", projection: []))
-        #expect(MCPAuditDigest.partitionQuery(table: "t", indexName: nil, keyCondition: "pk=a", projection: ["a\u{1F}b"])
-                != MCPAuditDigest.partitionQuery(table: "t", indexName: nil, keyCondition: "pk=a", projection: ["a", "b"]))
-        #expect(MCPAuditDigest.partitionQuery(table: "a\nb", indexName: "", keyCondition: "pk=a", projection: [])
-                != MCPAuditDigest.partitionQuery(table: "a", indexName: "b\n", keyCondition: "pk=a", projection: []))
+        #expect(sql != digest.digest(.sql("select 2")))
+        #expect(sql != pq("select 1", nil, "", []))
+        #expect(pq("t", nil, "pk=a", ["x"]) != pq("t", "gsi", "pk=a", ["x"]))
+        #expect(pq("t", nil, "pk=a", []) != pq("t", "", "pk=a", []))
+        #expect(pq("t", nil, "pk=a", ["a\u{1F}b"]) != pq("t", nil, "pk=a", ["a", "b"]))
+        #expect(pq("a\nb", "", "pk=a", []) != pq("a", "b\n", "pk=a", []))
     }
     @Test func urlsSitBesideTheStore() {
         #expect(MCPAuditLog.url(besideStore: "/tmp/x/store.sqlite").path == "/tmp/x/mcp-audit.jsonl")
