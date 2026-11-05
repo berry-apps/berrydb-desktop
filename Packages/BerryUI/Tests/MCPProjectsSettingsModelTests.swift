@@ -1817,7 +1817,8 @@ struct MCPProjectsSettingsModelTests {
         let verified = try #require(try store.verifiedMCPProject(id: seeded.id, key: box.key))
         #expect(verified.liveReadProfileIDs == [orders.id, ledger.id])
         let saved = Dictionary(uniqueKeysWithValues: verified.project.profiles.map { ($0.profileID, $0) })
-        // A production row stored without an expiry is bounded by the save.
+        // A production row stored without an expiry is bounded by the save: consent
+        // on production is bounded from the next save on, and nothing is re-checked.
         #expect(saved[ledger.id] == MCPProfileAccess(
             profileID: ledger.id, liveRead: true, redactedColumns: ["email", "ssn"],
             liveReadUntil: Self.consentNow.addingTimeInterval(86_400)
