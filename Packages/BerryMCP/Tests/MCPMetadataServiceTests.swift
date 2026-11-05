@@ -229,6 +229,7 @@ struct MCPMetadataServiceTests {
         for secret in ["db.internal.example", "svc_reader_account", "staging.internal.example", "stage_user_account", "/secret"] {
             #expect(!json.contains(secret))
         }
+        #expect(json.components(separatedBy: "\"liveReadUntil\":null").count == 3)
     }
 
     /// Live reads are offered for a profile only when its switch verified,

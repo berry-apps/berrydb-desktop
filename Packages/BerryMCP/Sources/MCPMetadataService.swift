@@ -50,12 +50,13 @@ public struct MCPConnectionDescriptor: Codable, Equatable, Sendable {
     /// schemas should be selected in the app, else nil.
     public let hint: String?
     /// The sealed production consent expiry of the connection's access row;
-    /// nil when the row carries none. Not part of the encoded form.
+    /// nil when the row carries none. Encoded as null in that case, so an
+    /// agent sees when a production connection's live reads lapse.
     public var liveReadUntil: Date? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, name, driver, environment, capabilities, graphHarvestedAt, checkedAt, stale, staleReason, detailCoverage
-        case scope, hint
+        case scope, hint, liveReadUntil
     }
 
     /// Writes every optional field as null when it is nil; the synthesized
@@ -75,6 +76,7 @@ public struct MCPConnectionDescriptor: Codable, Equatable, Sendable {
         try container.encode(detailCoverage, forKey: .detailCoverage)
         try container.encode(scope, forKey: .scope)
         try container.encode(hint, forKey: .hint)
+        try container.encode(liveReadUntil, forKey: .liveReadUntil)
     }
 }
 

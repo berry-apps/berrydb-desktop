@@ -222,10 +222,11 @@ public enum MCPToolCatalog {
             "detail_coverage": object(["detailed": integer, "total": integer], required: ["detailed", "total"]),
             "scope": ["type": ["array", "null"], "items": text],
             "hint": ["type": ["string", "null"]],
+            "live_read_until": ["type": ["string", "null"], "format": "date-time"],
         ],
         required: [
             "id", "name", "driver", "environment", "capabilities", "graph_harvested_at",
-            "checked_at", "stale", "stale_reason", "detail_coverage", "scope", "hint",
+            "checked_at", "stale", "stale_reason", "detail_coverage", "scope", "hint", "live_read_until",
         ]
     )
 
