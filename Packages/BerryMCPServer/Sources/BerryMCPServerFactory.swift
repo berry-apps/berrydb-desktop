@@ -42,6 +42,7 @@ public enum BerryMCPServerFactory {
         let liveReads: LiveReads?
         let diagnostics: @Sendable (String) -> Void
         let onRequest: @Sendable () -> Void
+        let audit: MCPAuditWriter?
 
         /// - Parameters:
         ///   - version: Reported to the host as the server version.
@@ -52,6 +53,8 @@ public enum BerryMCPServerFactory {
         ///   - onRequest: Called once for every tool or resource request the
         ///     server answers, listings included, each of which reads the
         ///     store.
+        ///   - audit: Receives one record per tool call; without it nothing
+        ///     is recorded.
         public init(
             resolver: MCPProjectContextResolver,
             metadata: MCPMetadataService,
@@ -60,7 +63,8 @@ public enum BerryMCPServerFactory {
             version: String,
             liveReads: LiveReads? = nil,
             diagnostics: @escaping @Sendable (String) -> Void = MCPSessionContext.standardError,
-            onRequest: @escaping @Sendable () -> Void = {}
+            onRequest: @escaping @Sendable () -> Void = {},
+            audit: MCPAuditWriter? = nil
         ) {
             self.resolver = resolver
             self.metadata = metadata
@@ -70,6 +74,7 @@ public enum BerryMCPServerFactory {
             self.liveReads = liveReads
             self.diagnostics = diagnostics
             self.onRequest = onRequest
+            self.audit = audit
         }
     }
 
@@ -118,6 +123,8 @@ public enum BerryMCPServerFactory {
         let router = MCPToolRouter(metadata: dependencies.metadata)
         let metadata = dependencies.metadata
         let onRequest = dependencies.onRequest
+        let audit = dependencies.audit
+        let host = MCPHostIdentity()
         let liveTool = dependencies.liveReads.map { liveReads in
             liveReads.projectSource.bind { await session.context() }
             return MCPLiveReadTool(service: liveReads.service)
@@ -141,16 +148,60 @@ public enum BerryMCPServerFactory {
         // Live reads and DynamoDB queries are the calls that await a
         // database, so they run on their own path and the metadata router
         // stays synchronous.
+        //
+        // The audit record is awaited before the response is returned or the
+        // error rethrown, so a host that reads the file right after an answer
+        // sees that call. A write failure is reported once by the writer and
+        // never reaches the host. The writer makes no cancellation checks, so
+        // a handler whose task was cancelled still writes its record.
         await server.withMethodHandler(CallTool.self) { params in
             onRequest()
+            let started = ContinuousClock.now
             let context = await session.context()
-            if params.name == MCPToolName.executeReadQuery.rawValue, let liveTool {
-                return try await liveTool.call(params.arguments, context: context, metadata: metadata)
+            // Read here rather than from the tool's detail: a tool that
+            // refuses before parsing (no project) or throws on another
+            // argument returns no detail, and the record must still say
+            // which connection the call named.
+            var namedConnection: UUID?
+            if case let .string(text)? = params.arguments?["connection_id"] { namedConnection = UUID(uuidString: text) }
+            let record: @Sendable (MCPAuditRecord.Outcome, MCPAuditDetail, Int) async -> Void = { [namedConnection] outcome, detail, bytes in
+                guard let audit else { return }
+                var projectID: UUID?
+                if case let .selected(project, _, _) = context { projectID = project.project.id }
+                await audit.record(MCPAuditRecord(
+                    at: Date(), host: host.name, projectID: projectID, profileID: namedConnection ?? detail.profileID,
+                    tool: MCPToolName(rawValue: params.name)?.rawValue ?? "unknown", outcome: outcome,
+                    error: detail.error, digest: detail.digest,
+                    durationMs: Int((ContinuousClock.now - started) / .milliseconds(1)),
+                    rows: detail.rows, bytes: bytes, truncated: detail.truncated, redacted: detail.redacted,
+                    consumedCapacityUnits: detail.consumedCapacityUnits
+                ))
             }
-            if params.name == MCPToolName.dynamodbQuery.rawValue, let partitionTool {
-                return try await partitionTool.call(params.arguments, context: context, metadata: metadata)
+            let reply: MCPToolReply
+            do {
+                if params.name == MCPToolName.executeReadQuery.rawValue, let liveTool {
+                    reply = try await liveTool.call(params.arguments, context: context, metadata: metadata)
+                } else if params.name == MCPToolName.dynamodbQuery.rawValue, let partitionTool {
+                    reply = try await partitionTool.call(params.arguments, context: context, metadata: metadata)
+                } else {
+                    reply = try router.reply(params.name, arguments: params.arguments, context: context)
+                }
+            } catch let error as CancellationError {
+                await record(.cancelled, MCPAuditDetail(), 0)
+                throw error
+            } catch let error as MCPError {
+                await record(.invalidParams, MCPAuditDetail(), 0)
+                throw error
+            } catch {
+                await record(.error, MCPAuditDetail(error: "unexpected"), 0)
+                throw error
             }
-            return try router.call(params.name, arguments: params.arguments, context: context)
+            let bytes = reply.result.content.reduce(0) { total, item in
+                guard case let .text(text, _, _) = item else { return total }
+                return total + text.utf8.count
+            }
+            await record(reply.result.isError == true ? .error : .ok, reply.audit, bytes)
+            return reply.result
         }
         await server.withMethodHandler(ListResources.self) { _ in
             onRequest()
@@ -170,7 +221,8 @@ public enum BerryMCPServerFactory {
         // Server.swift of swift-sdk 0.12.1), so a request the host sends
         // after that response always sees both flags.
         let start: @Sendable (any Transport) async throws -> Void = { transport in
-            try await server.start(transport: transport) { _, capabilities in
+            try await server.start(transport: transport) { info, capabilities in
+                host.set(clientName: info.name)
                 if capabilities.roots != nil { rootsDeclared.set() }
                 initialized.set()
             }

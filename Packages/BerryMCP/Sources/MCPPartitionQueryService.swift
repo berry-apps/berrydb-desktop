@@ -54,6 +54,35 @@ public struct MCPPartitionQueryRequest: Sendable {
     }
 }
 
+extension MCPPartitionQueryRequest {
+    /// Identifies the query for the audit log without its text. Built from
+    /// the request's own fields so it exists before any connection opens and
+    /// for requests that fail; the cursor's digest hashes the typed driver
+    /// query, which only exists after the table was described. `limit` and
+    /// `cursor` stay out so every page of one query shares a digest.
+    ///
+    /// The key condition is `pk=<key>[;sk=<op>:<key>[:<key>]]` where a key is
+    /// `s<length>:<text>` or `i:<number>`, and the last part is the upper
+    /// bound of `between`. The length prefix stops a key value that contains
+    /// the condition's own punctuation from reading as a different condition.
+    public var auditDigest: String {
+        func key(_ input: MCPKeyInput) -> String {
+            switch input {
+            case .string(let text): "s" + MCPAuditDigest.field(text)
+            case .integer(let number): "i:\(number)"
+            }
+        }
+        var condition = "pk=\(key(partitionKey))"
+        if let sortKey {
+            condition += ";sk=\(sortKey.op.rawValue):\(key(sortKey.value))"
+            if let upper = sortKey.value2 { condition += ":\(key(upper))" }
+        }
+        return MCPAuditDigest.partitionQuery(
+            table: table, indexName: indexName, keyCondition: condition, projection: projection ?? []
+        )
+    }
+}
+
 /// The key attributes the query used, so an agent can form the next query
 /// without describing the table again.
 public struct MCPKeySchemaDescription: Encodable, Equatable, Sendable {
@@ -158,6 +187,31 @@ public enum MCPPartitionQueryError: Error, Equatable, Sendable, CustomStringConv
             "BerryDB is already running \(limit) live reads for this session; try again when one finishes."
         case .openStillPending(let seconds):
             "An earlier connection to this database has not opened yet, so BerryDB did not open another; try again in \(seconds) \(seconds == 1 ? "second" : "seconds")."
+        }
+    }
+}
+
+extension MCPPartitionQueryError {
+    /// A stable code for the audit log; see `MCPLiveReadError.auditCode`.
+    public var auditCode: String {
+        switch self {
+        case .unknownConnection: "unknown_connection"
+        case .liveReadNotEnabled: "live_read_not_enabled"
+        case .noProject: "no_project"
+        case .unsupportedDatabase: "unsupported_database"
+        case .tunnelUnsupported: "tunnel_unsupported"
+        case .invalidRequest: "invalid_request"
+        case .unknownTable: "unknown_table"
+        case .unknownIndex: "unknown_index"
+        case .invalidCursor: "invalid_cursor"
+        case .throttled: "throttled"
+        case .queryFailed: "query_failed"
+        case .connectionFailed: "connection_failed"
+        case .openTimedOut: "open_timed_out"
+        case .timedOut: "timed_out"
+        case .resultTooLarge: "result_too_large"
+        case .tooManyConcurrentReads: "too_many_concurrent_reads"
+        case .openStillPending: "open_still_pending"
         }
     }
 }

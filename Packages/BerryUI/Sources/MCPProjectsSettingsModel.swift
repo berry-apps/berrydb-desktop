@@ -140,6 +140,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     private let helperLocation: MCPHelperLocation
     private let privilegeChecker: @Sendable (ConnectionProfile) async throws -> [String]
     private let privilegeCheckLimit: Duration
+    private let auditLogURL: URL
     private var helperURL: URL? {
         guard case let .bundled(url) = helperLocation else { return nil }
         return url
@@ -148,11 +149,14 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// `keyStore` defaults to the Keychain item the helper reads; the
     /// helper is looked up once, inside the running app's bundle. Privilege
     /// checks connect to the profile's server.
-    public convenience init(store: BerryStore, keyStore: MCPAccessKeyStore = .keychain) {
+    public convenience init(
+        store: BerryStore, keyStore: MCPAccessKeyStore = .keychain, auditLogURL: URL = MCPAuditLog.defaultURL()
+    ) {
         let location = Self.helperLocation(in: Bundle.main.bundleURL, isOnReadOnlyVolume: Self.isOnReadOnlyVolume)
         self.init(
             store: store, keyStore: keyStore, helperLocation: location,
-            privilegeChecker: { try await MCPProjectsSettingsModel.livePrivilegeChecker($0) }
+            privilegeChecker: { try await MCPProjectsSettingsModel.livePrivilegeChecker($0) },
+            auditLogURL: auditLogURL
         )
     }
 
@@ -160,6 +164,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     convenience init(
         store: BerryStore, keyStore: MCPAccessKeyStore, helperURL: URL?,
         privilegeCheckLimit: Duration = defaultPrivilegeCheckLimit,
+        auditLogURL: URL = MCPAuditLog.defaultURL(),
         privilegeChecker: @escaping @Sendable (ConnectionProfile) async throws -> [String] = { _ in
             throw PrivilegeCheckUnavailable()
         }
@@ -168,21 +173,141 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             store: store, keyStore: keyStore,
             helperLocation: helperURL.map(MCPHelperLocation.bundled) ?? .notBundled,
             privilegeChecker: privilegeChecker,
-            privilegeCheckLimit: privilegeCheckLimit
+            privilegeCheckLimit: privilegeCheckLimit,
+            auditLogURL: auditLogURL
         )
     }
 
     init(
         store: BerryStore, keyStore: MCPAccessKeyStore, helperLocation: MCPHelperLocation,
         privilegeChecker: @escaping @Sendable (ConnectionProfile) async throws -> [String],
-        privilegeCheckLimit: Duration = defaultPrivilegeCheckLimit
+        privilegeCheckLimit: Duration = defaultPrivilegeCheckLimit,
+        auditLogURL: URL = MCPAuditLog.defaultURL()
     ) {
+        self.auditLogURL = auditLogURL
         self.store = store
         self.keyStore = keyStore
         self.helperLocation = helperLocation
         self.privilegeChecker = privilegeChecker
         self.privilegeCheckLimit = privilegeCheckLimit
         reload()
+    }
+
+    /// One line of the Activity list: a tool call the helper recorded for a project.
+    public struct ActivityRow: Identifiable, Equatable, Sendable {
+        /// Position in the list, newest first.
+        public let id: Int
+        public let at: Date
+        public let host: String
+        /// The tool name without its `berrydb_` prefix.
+        public let tool: String
+        /// The connection's current name; nil when the record names none.
+        public let connection: String?
+        /// The record names a connection that is no longer saved.
+        public let connectionRemoved: Bool
+        /// "ok", otherwise the recorded error code or the outcome's raw value.
+        public let outcome: String
+        public let rows: Int?
+        public let bytes: Int
+        public let truncated: Bool
+        public let redacted: Bool
+        public let consumedCapacityUnits: Double?
+    }
+
+    public static let activityLimit = 100
+
+    @Published public private(set) var activity: [ActivityRow] = []
+
+    /// One started load of `activity`. Loads can overlap: the sheet starts
+    /// one per project it shows, and a refresh can start another.
+    public struct ActivityLoad: Equatable, Sendable {
+        let serial: Int
+        let projectID: UUID
+    }
+
+    private var activityLoadSerial = 0
+    private var activityProjectID: UUID?
+
+    /// Reads the audit log and trims it on a utility task: the file can hold
+    /// tens of thousands of lines, which must not stall the main actor. A
+    /// failed trim is ignored, the list is still valid.
+    public func loadActivity(for projectID: UUID) async {
+        let load = beginActivityLoad(for: projectID)
+        let url = auditLogURL
+        let records = await Task.detached(priority: .utility) {
+            let records = MCPAuditLog.read(from: url)
+            try? MCPAuditLog.cap(at: url)
+            return records
+        }.value
+        finishActivityLoad(load, records: records)
+    }
+
+    /// Starts a load; rows of another project are cleared at once, so they
+    /// never stand under this project while its read runs.
+    func beginActivityLoad(for projectID: UUID) -> ActivityLoad {
+        activityLoadSerial += 1
+        if activityProjectID != projectID {
+            activityProjectID = projectID
+            activity = []
+        }
+        return ActivityLoad(serial: activityLoadSerial, projectID: projectID)
+    }
+
+    /// Publishes a load's rows unless a later load has started: reads finish
+    /// in any order, and an earlier one finishing last would otherwise show
+    /// another project's activity.
+    func finishActivityLoad(_ load: ActivityLoad, records: [MCPAuditRecord]) {
+        guard load.serial == activityLoadSerial else { return }
+        let names = Dictionary(profiles.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        activity = Self.activityRows(records, projectID: load.projectID, profileNames: names)
+    }
+
+    public static func activityRows(
+        _ records: [MCPAuditRecord], projectID: UUID, profileNames: [UUID: String], limit: Int = activityLimit
+    ) -> [ActivityRow] {
+        records.reversed().lazy.filter { $0.projectID == projectID }.prefix(limit).enumerated().map { index, record in
+            let outcome: String
+            switch record.outcome {
+            case .ok: outcome = "ok"
+            case .error: outcome = record.error ?? "error"
+            case .invalidParams, .cancelled: outcome = record.outcome.rawValue
+            }
+            let prefix = "berrydb_"
+            let name = record.profileID.flatMap { profileNames[$0] }
+            return ActivityRow(
+                id: index, at: record.at, host: record.host,
+                tool: record.tool.hasPrefix(prefix) ? String(record.tool.dropFirst(prefix.count)) : record.tool,
+                connection: name, connectionRemoved: record.profileID != nil && name == nil,
+                outcome: outcome, rows: record.rows, bytes: record.bytes,
+                truncated: record.truncated ?? false, redacted: record.redacted ?? false,
+                consumedCapacityUnits: record.consumedCapacityUnits)
+        }
+    }
+
+    /// The second line of an Activity row. Parts the record does not have are
+    /// left out, so a failed call shows its code and size and nothing else.
+    public static func activityLine(_ row: ActivityRow) -> String {
+        // The locale is fixed because this is a technical line whose text the
+        // tests pin: a system locale would change the unit words and the digit
+        // separators. The size is composed here because the locale-aware byte
+        // formatters spell the kilobyte unit differently from each other.
+        let locale = Locale(identifier: "en_US_POSIX")
+        func number(_ value: Double) -> String {
+            value.formatted(.number.precision(.fractionLength(0...1)).locale(locale))
+        }
+        let size: String
+        switch row.bytes {
+        case ..<1_000: size = row.bytes == 1 ? "1 byte" : "\(row.bytes) bytes"
+        case ..<1_000_000: size = number(Double(row.bytes) / 1_000) + " KB"
+        default: size = number(Double(row.bytes) / 1_000_000) + " MB"
+        }
+        var parts = [row.outcome]
+        if let count = row.rows { parts.append(count == 1 ? "1 row" : "\(count) rows") }
+        parts.append(size)
+        if row.truncated { parts.append("truncated") }
+        if row.redacted { parts.append("redacted") }
+        if let units = row.consumedCapacityUnits { parts.append(number(units) + " RCU") }
+        return parts.joined(separator: " · ")
     }
 
     /// How long a privilege check may take before it is reported as failed:

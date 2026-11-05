@@ -16,9 +16,9 @@ struct MCPDynamoDBQueryTool: Sendable {
 
     func call(
         _ arguments: [String: Value]?, context: MCPProjectContext, metadata: MCPMetadataService
-    ) async throws -> CallTool.Result {
+    ) async throws -> MCPToolReply {
         guard case let .selected(project, _, _) = context else {
-            return MCPToolRouter.failure(MCPToolRouter.noProjectText)
+            return .failure(MCPToolRouter.noProjectText, code: "no_project")
         }
         let arguments = try MCPToolArguments(arguments, allowing: MCPToolArguments.allowedKeys(for: .dynamodbQuery))
         let connectionID = try arguments.connectionID()
@@ -27,31 +27,50 @@ struct MCPDynamoDBQueryTool: Sendable {
             partitionKey: try arguments.partitionKeyInput(), sortKey: try arguments.sortKeyInput(),
             projection: try arguments.projection(), limit: try arguments.itemLimit(), cursor: try arguments.cursor()
         )
+        let detail = MCPAuditDetail(profileID: connectionID, digest: request.auditDigest)
 
         guard project.project.profiles.contains(where: { $0.profileID == connectionID }) else {
-            return MCPToolRouter.failure(MCPPartitionQueryError.unknownConnection.description)
+            return .failure(
+                MCPPartitionQueryError.unknownConnection.description,
+                code: MCPPartitionQueryError.unknownConnection.auditCode, audit: detail
+            )
         }
         do {
             guard try metadata.isPartitionQueryable(connectionID) else {
-                return MCPToolRouter.failure(MCPPartitionQueryError.unsupportedDatabase.description)
+                return .failure(
+                    MCPPartitionQueryError.unsupportedDatabase.description, code: "wrong_tool", audit: detail
+                )
             }
         } catch let error as MCPMetadataError {
-            return MCPToolRouter.failure(error.description)
+            return .failure(error.description, code: "metadata", audit: detail)
         } catch {
-            return MCPToolRouter.failure(MCPToolRouter.storeFailureText)
+            return .failure(MCPToolRouter.storeFailureText, code: "store", audit: detail)
         }
 
         do {
-            return try Self.respond(try await service.run(request))
+            let result = try await service.run(request)
+            let response = try Self.respond(result)
+            var audit = detail
+            if MCPToolReply.isTooLargeRefusal(response) {
+                audit.error = "result_too_large"
+            } else {
+                audit.rows = result.itemCount
+                audit.truncated = result.truncated
+                audit.redacted = !result.redactedAttributes.isEmpty
+                audit.consumedCapacityUnits = result.consumedCapacityUnits
+            }
+            return MCPToolReply(result: response, audit: audit)
         } catch let error as MCPPartitionQueryError {
-            return MCPToolRouter.failure(error.description)
+            return .failure(error.description, code: error.auditCode, audit: detail)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
             // Neither the service nor the encoding of its result throws
             // anything else; the SDK would send another error's localized
             // description to the host.
-            return MCPToolRouter.failure(MCPPartitionQueryError.queryFailed("unexpected error").description)
+            return .failure(
+                MCPPartitionQueryError.queryFailed("unexpected error").description, code: "unexpected", audit: detail
+            )
         }
     }
 

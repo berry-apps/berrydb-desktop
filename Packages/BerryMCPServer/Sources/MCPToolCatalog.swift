@@ -425,21 +425,36 @@ public struct MCPToolRouter: Sendable {
     /// Throws `MCPError.invalidParams` for unknown tools and malformed arguments;
     /// returns `isError: true` results for expected failures.
     public func call(_ name: String, arguments: [String: Value]?, context: MCPProjectContext) throws -> CallTool.Result {
+        try reply(name, arguments: arguments, context: context).result
+    }
+
+    /// As `call`, with the detail the audit log records. `profileID` is the
+    /// connection the arguments named, on failures too.
+    public func reply(_ name: String, arguments: [String: Value]?, context: MCPProjectContext) throws -> MCPToolReply {
         guard let tool = MCPToolName(rawValue: name) else { throw MCPError.invalidParams("Unknown tool") }
         if tool == .status {
             _ = try MCPToolArguments(arguments, allowing: MCPToolArguments.allowedKeys(for: tool))
-            return status(context)
+            return MCPToolReply(result: status(context), audit: MCPAuditDetail())
         }
-        guard case let .selected(project, _, _) = context else { return Self.failure(Self.noProjectText) }
+        guard case let .selected(project, _, _) = context else {
+            return .failure(Self.noProjectText, code: "no_project")
+        }
         let arguments = try MCPToolArguments(arguments, allowing: MCPToolArguments.allowedKeys(for: tool))
+        let detail = MCPAuditDetail(profileID: try? arguments.connectionID())
         do {
-            return try run(tool, arguments, in: project, context: context)
+            let result = try run(tool, arguments, in: project, context: context)
+            if tool == .executeReadQuery || tool == .dynamodbQuery {
+                return .failure(Self.noLiveReadsText, code: "live_reads_unavailable", audit: detail)
+            }
+            var audit = detail
+            if MCPToolReply.isTooLargeRefusal(result) { audit.error = "result_too_large" }
+            return MCPToolReply(result: result, audit: audit)
         } catch let error as MCPError {
             throw error
         } catch let error as MCPMetadataError {
-            return Self.failure(error.description)
+            return .failure(error.description, code: "metadata", audit: detail)
         } catch {
-            return Self.failure(Self.storeFailureText)
+            return .failure(Self.storeFailureText, code: "store", audit: detail)
         }
     }
 

@@ -783,6 +783,10 @@
 "BerryDB could not check this user’s privileges: %@" = "BerryDB không thể kiểm tra quyền của người dùng này: %@";
 "The check did not finish in time." = "Việc kiểm tra không hoàn tất trong thời gian cho phép.";
 "Schema and graph metadata of these connections, and the rows of live reads, become visible to coding agents you configure and to their model providers." = "Metadata schema và graph của các kết nối này, cùng các dòng dữ liệu mà việc đọc dữ liệu thật trả về, sẽ hiển thị cho các coding agent bạn cấu hình và cho nhà cung cấp mô hình của chúng.";
+"Recent Activity" = "Hoạt động gần đây";
+"No activity recorded yet." = "Chưa ghi nhận hoạt động nào.";
+"connection removed" = "kết nối đã bị xóa";
+"Written by the helper to mcp-audit.jsonl in BerryDB’s Application Support folder. For visibility only: any process running as you can edit it." = "Được helper ghi vào mcp-audit.jsonl trong thư mục Application Support của BerryDB. Chỉ để theo dõi: mọi tiến trình chạy dưới tài khoản của bạn đều có thể sửa tệp này.";
 "Agent Setup" = "Thiết lập agent";
 "Each user-level command adds an entry named berrydb to the agent’s user configuration; run one of them once per agent. The shared entry works in every repository and selects the project from the agent’s folder." = "Mỗi lệnh cấp người dùng thêm một mục tên berrydb vào cấu hình người dùng của agent; chạy một trong các lệnh đó một lần cho mỗi agent. Mục dùng chung hoạt động ở mọi repository và chọn dự án theo thư mục của agent.";
 "An entry marked “always this project” serves this project in every folder the agent works in, whatever workspace folders would select, except in a repository with its own entry." = "Mục có ghi “luôn dùng dự án này” phục vụ dự án này ở mọi thư mục mà agent làm việc, bất kể các thư mục làm việc sẽ chọn dự án nào, trừ trong repository có mục riêng.";

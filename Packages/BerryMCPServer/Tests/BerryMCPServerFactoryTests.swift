@@ -124,6 +124,7 @@ struct BerryMCPServerFactoryTests {
         diagnostics: Locked<[String]> = Locked([]),
         requests: Locked<Int> = Locked(0),
         liveReads: BerryMCPServerFactory.LiveReads? = nil,
+        audit: MCPAuditWriter? = nil,
         _ body: @escaping @Sendable (Client) async throws -> Void
     ) async throws {
         let dependencies = BerryMCPServerFactory.Dependencies(
@@ -131,7 +132,8 @@ struct BerryMCPServerFactoryTests {
             explicitProject: explicitProject, workingDirectory: workingDirectory, version: "test",
             liveReads: liveReads,
             diagnostics: { line in diagnostics.update { $0.append(line) } },
-            onRequest: { requests.update { $0 += 1 } }
+            onRequest: { requests.update { $0 += 1 } },
+            audit: audit
         )
         let (server, start) = await BerryMCPServerFactory.makeServer(dependencies)
 
@@ -828,12 +830,271 @@ struct BerryMCPServerFactoryTests {
         let tracker = live.tracker
         try await withDeadline(.seconds(10)) { await tracker.waitForCloses(1) }
     }
+
+    // MARK: Audit log
+
+    static func makeTempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mcp-audit-server-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// The UTF-8 length of every text item, as the audit record counts it.
+    static func textBytes(_ result: CallTool.Result) -> Int {
+        result.content.reduce(0) { total, item in
+            guard case let .text(text, _, _) = item else { return total }
+            return total + text.utf8.count
+        }
+    }
+
+    @Test func everyToolCallWritesOneRecordWithHostAndDuration() async throws {
+        let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        let audit = MCPAuditWriter(url: url, diagnostics: { _ in })
+        let results = Locked<[CallTool.Result]>([])
+        try await withSession(store: Locked(Store(projects: [projectA, projectB])), roots: .undeclared([]), audit: audit) { client in
+            let status = try await Self.call(client, .status)
+            let connections = try await Self.call(client, .listConnections)
+            results.update { $0 = [status, connections] }
+        }
+        let records = MCPAuditLog.read(from: url)
+        #expect(records.map(\.tool) == [MCPToolName.status.rawValue, MCPToolName.listConnections.rawValue])
+        #expect(records.map(\.host) == ["test-host", "test-host"])
+        #expect(records.map(\.outcome) == [.ok, .ok])
+        #expect(records.map(\.projectID) == [projectA.id, projectA.id])
+        #expect(records.map(\.bytes) == results.value.map(Self.textBytes))
+        #expect(records.allSatisfy { $0.bytes > 0 && $0.durationMs >= 0 && $0.error == nil })
+    }
+
+    @Test func unknownToolAndBadArgumentsAreRecordedAsInvalidParams() async throws {
+        let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        let audit = MCPAuditWriter(url: url, diagnostics: { _ in })
+        try await withSession(store: Locked(Store(projects: [projectA, projectB])), roots: .undeclared([]), audit: audit) { client in
+            await #expect(throws: MCPError.self) {
+                _ = try await client.send(CallTool.request(.init(name: "no_such_tool"))).value
+            }
+            await #expect(throws: MCPError.self) {
+                _ = try await client.send(CallTool.request(.init(
+                    name: MCPToolName.getSchema.rawValue, arguments: ["connection_id": "not-a-uuid"]
+                ))).value
+            }
+        }
+        let records = MCPAuditLog.read(from: url)
+        #expect(records.map(\.tool) == ["unknown", MCPToolName.getSchema.rawValue])
+        #expect(records.map(\.outcome) == [.invalidParams, .invalidParams])
+        #expect(records.map(\.bytes) == [0, 0])
+        #expect(records.map(\.profileID) == [nil, nil])
+    }
+
+    @Test func liveReadRecordCarriesTheDetail() async throws {
+        let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        let audit = MCPAuditWriter(url: url, diagnostics: { _ in })
+        let connection = ScriptedReadOnlyConnection(events: [
+            .columns([ColumnMeta(name: "id", declaredType: "INTEGER")]),
+            .rows([[.int(1)], [.int(2)]]),
+            .complete(QueryStats(rowsAffected: nil, duration: .zero)),
+        ])
+        let live = LiveReadHarness(connection: connection)
+        let billingID = billing.id
+        let sql = "SELECT id FROM events"
+        let bytes = Locked(0)
+        try await withSession(
+            store: liveStore(), roots: .declared(["file:///work/b"]), liveReads: live.liveReads, audit: audit
+        ) { client in
+            let result = try await client.send(Self.readCall(billingID, sql: sql)).value
+            #expect(result.isError != true)
+            bytes.update { $0 = Self.textBytes(result) }
+        }
+        let record = try #require(MCPAuditLog.read(from: url).first)
+        #expect(record.tool == MCPToolName.executeReadQuery.rawValue)
+        #expect(record.outcome == .ok)
+        #expect(record.projectID == projectB.id)
+        #expect(record.profileID == billing.id)
+        #expect(record.digest == MCPAuditDigest.sql(sql))
+        #expect(record.rows == 2)
+        #expect(record.truncated == false)
+        #expect(record.redacted == false)
+        #expect(record.bytes == bytes.value)
+        #expect(MCPAuditLog.read(from: url).count == 1)
+    }
+
+    /// The host's cancel notification reaches the handler through the
+    /// in-memory transport, as `cancellingTheCallCancelsTheRequest` shows,
+    /// so the record is awaited from the file with a bound.
+    @Test func cancelledCallIsRecordedAsCancelled() async throws {
+        let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        let audit = MCPAuditWriter(url: url, diagnostics: { _ in })
+        let connection = ScriptedReadOnlyConnection(
+            events: [.columns([ColumnMeta(name: "n", declaredType: "INTEGER")])], finishes: false
+        )
+        let live = LiveReadHarness(connection: connection)
+        let billingID = billing.id
+        let log = connection.log
+        try await withSession(
+            store: liveStore(), roots: .declared(["file:///work/b"]), liveReads: live.liveReads, audit: audit
+        ) { client in
+            let call = try await client.send(Self.readCall(billingID, sql: "SELECT n FROM numbers"))
+            try await withDeadline(.seconds(10)) { await log.waitForStatement() }
+            try await client.cancelRequest(call.requestID, reason: "stopped")
+            try await withDeadline(.seconds(10)) {
+                while MCPAuditLog.read(from: url).isEmpty {
+                    try await Task.sleep(for: .milliseconds(5))
+                }
+            }
+        }
+        let records = MCPAuditLog.read(from: url)
+        #expect(records.map(\.outcome) == [.cancelled])
+        #expect(records.map(\.tool) == [MCPToolName.executeReadQuery.rawValue])
+        #expect(records.map(\.bytes) == [0])
+        #expect(records.map(\.projectID) == [projectB.id])
+    }
+
+    /// The connection the arguments name is recorded even when another
+    /// argument is malformed and the tool never parses it.
+    @Test func malformedCallStillRecordsTheNamedConnection() async throws {
+        let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        let audit = MCPAuditWriter(url: url, diagnostics: { _ in })
+        let shopID = shop.id
+        try await withSession(store: Locked(Store(projects: [projectA, projectB])), roots: .undeclared([]), audit: audit) { client in
+            await #expect(throws: MCPError.self) {
+                _ = try await client.send(CallTool.request(.init(
+                    name: MCPToolName.getSchema.rawValue,
+                    arguments: ["connection_id": .string(shopID.uuidString), "detail": "bogus"]
+                ))).value
+            }
+        }
+        let records = MCPAuditLog.read(from: url)
+        #expect(records.map(\.outcome) == [.invalidParams])
+        #expect(records.map(\.profileID) == [shopID])
+    }
+
+    @Test func noProjectRefusalOfALiveToolRecordsTheNamedConnection() async throws {
+        let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        let audit = MCPAuditWriter(url: url, diagnostics: { _ in })
+        let live = LiveReadHarness(connection: ScriptedReadOnlyConnection(events: []))
+        let billingID = billing.id
+        try await withSession(
+            store: liveStore(), roots: .undeclared([]), workingDirectory: "/elsewhere", liveReads: live.liveReads, audit: audit
+        ) { client in
+            let result = try await client.send(Self.readCall(billingID, sql: "SELECT 1")).value
+            #expect(result.isError == true)
+        }
+        let records = MCPAuditLog.read(from: url)
+        #expect(records.map(\.outcome) == [.error])
+        #expect(records.map(\.error) == ["no_project"])
+        #expect(records.map(\.profileID) == [billingID])
+        #expect(records.map(\.projectID) == [nil])
+    }
+
+    /// The raw file, not only the decoded records, holds no statement text,
+    /// no table or column name and no key value, for a served read, a
+    /// refused one and a DynamoDB query. Each canary contains a letter that
+    /// is not a hex digit, so a digest cannot contain it by chance.
+    @Test func auditFileHoldsNoQueryTextNamesOrKeyValues() async throws {
+        let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        let audit = MCPAuditWriter(url: url, diagnostics: { _ in })
+        let connection = ScriptedReadOnlyConnection(events: [
+            .columns([ColumnMeta(name: "ledger_note", declaredType: "TEXT")]),
+            .rows([[.text("x")]]),
+            .complete(QueryStats(rowsAffected: nil, duration: .zero)),
+        ])
+        let live = LiveReadHarness(connection: connection)
+        let billingID = billing.id
+        let read = "SELECT ledger_note FROM vault_entries WHERE ledger_note <> 'quartz'"
+        let write = "DELETE FROM vault_entries WHERE ledger_note = 'quartz'"
+        try await withSession(
+            store: liveStore(), roots: .declared(["file:///work/b"]), liveReads: live.liveReads, audit: audit
+        ) { client in
+            let served = try await client.send(Self.readCall(billingID, sql: read)).value
+            #expect(served.isError != true, "\(Self.text(served))")
+            let refused = try await client.send(Self.readCall(billingID, sql: write)).value
+            #expect(refused.isError == true)
+        }
+
+        let partition = ScriptedPartitionConnection(pages: [
+            DynamoDBQueryPage(
+                items: [["customer": .string("zulu-kilo"), "placed": .string("w")]], lastEvaluatedKey: nil,
+                consumedCapacityUnits: 0.5, scannedCount: 1
+            ),
+        ])
+        let dynamo = PartitionHarness(connection: partition, dynamoID: orders.id)
+        let ordersID = orders.id
+        try await withSession(
+            store: partitionStore(), roots: .declared(["file:///work/c"]), liveReads: dynamo.liveReads, audit: audit
+        ) { client in
+            let result = try await client.send(Self.dynamoCall(ordersID, ["partition_key": "zulu-kilo"])).value
+            #expect(result.isError != true, "\(Self.text(result))")
+        }
+
+        let records = MCPAuditLog.read(from: url)
+        #expect(records.map(\.outcome) == [.ok, .error, .ok])
+        #expect(records.map(\.error) == [nil, "policy", nil])
+        #expect(records.map(\.digest) == [MCPAuditDigest.sql(read), MCPAuditDigest.sql(write), records.last?.digest])
+        #expect(records.allSatisfy { $0.digest != nil })
+        let dynamoRecord = try #require(records.last)
+        #expect(dynamoRecord.tool == MCPToolName.dynamodbQuery.rawValue)
+        #expect(dynamoRecord.rows == 1)
+        #expect(dynamoRecord.consumedCapacityUnits == 0.5)
+        let raw = String(decoding: try Data(contentsOf: url), as: UTF8.self)
+        for canary in ["ledger_note", "vault_entries", "quartz", "SELECT", "DELETE", "orders", "customer", "zulu-kilo"] {
+            #expect(!raw.contains(canary), "\(canary) reached the audit file")
+        }
+    }
+
+    /// The status result of a session that selects project A, with `audit`.
+    fileprivate func statusResult(audit: MCPAuditWriter?, diagnostics: Locked<[String]> = Locked([])) async throws -> [CallTool.Result] {
+        let results = Locked<[CallTool.Result]>([])
+        try await withSession(
+            store: Locked(Store(projects: [projectA, projectB])), roots: .undeclared([]), diagnostics: diagnostics, audit: audit
+        ) { client in
+            let first = try await Self.call(client, .status)
+            let second = try await Self.call(client, .status)
+            results.update { $0 = [first, second] }
+        }
+        return results.value
+    }
+
+    @Test func unwritableAuditFileNeverChangesTheResponse() async throws {
+        let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let working = MCPAuditWriter(url: dir.appendingPathComponent(MCPAuditLog.fileName), diagnostics: { _ in })
+        let expected = try await statusResult(audit: working)
+
+        let diagnostics = Locked<[String]>([])
+        let missing = dir.appendingPathComponent("missing").appendingPathComponent(MCPAuditLog.fileName)
+        let unwritable = MCPAuditWriter(url: missing, diagnostics: { line in diagnostics.update { $0.append(line) } })
+        let results = try await statusResult(audit: unwritable, diagnostics: diagnostics)
+
+        #expect(results == expected)
+        #expect(results.first?.structuredContent?.objectValue?["state"] == "selected")
+        #expect(diagnostics.value.count == 1)
+        #expect(diagnostics.value.first?.hasPrefix("audit log unavailable") == true)
+        #expect(!FileManager.default.fileExists(atPath: missing.path))
+    }
+
+    @Test func withoutAWriterNothingIsWritten() async throws {
+        let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let written = dir.appendingPathComponent("written")
+        try FileManager.default.createDirectory(at: written, withIntermediateDirectories: true)
+        let expected = try await statusResult(
+            audit: MCPAuditWriter(url: written.appendingPathComponent(MCPAuditLog.fileName), diagnostics: { _ in })
+        )
+        #expect(MCPAuditLog.read(from: written.appendingPathComponent(MCPAuditLog.fileName)).count == 2)
+
+        let results = try await statusResult(audit: nil)
+        #expect(results == expected)
+    }
 }
 
 /// A DynamoDB query service and a SQL live-read service over one
 /// coordinator: sessions for `dynamoID` run on `connection`, and every other
 /// profile is SQLite with no scripted SQL connection.
-private struct PartitionHarness {
+struct PartitionHarness {
     let tracker = SessionTracker()
     let liveReads: BerryMCPServerFactory.LiveReads
 
@@ -867,7 +1128,7 @@ private struct PartitionHarness {
 
 /// Answers `orders` queries with scripted pages in order and records each
 /// query; with a `delay`, a query waits that long unless cancelled.
-private actor ScriptedPartitionConnection: PartitionQuerying {
+actor ScriptedPartitionConnection: PartitionQuerying {
     /// `orders`: customer (S) and placed (S).
     static let orders = DynamoDBKeySchema(
         table: "orders",
@@ -923,7 +1184,7 @@ private actor ScriptedPartitionConnection: PartitionQuerying {
 
 /// A live-read service over one coordinator whose sessions run on
 /// `connection`, resolving its project through the source the server binds.
-private struct LiveReadHarness {
+struct LiveReadHarness {
     let tracker = SessionTracker()
     let liveReads: BerryMCPServerFactory.LiveReads
 
@@ -944,7 +1205,7 @@ private struct LiveReadHarness {
     }
 }
 
-private actor SessionTracker {
+actor SessionTracker {
     private(set) var closes = 0
     private(set) var opens = 0
 
@@ -966,7 +1227,7 @@ private actor SessionTracker {
 /// Answers every read-only statement with `events`, then finishes the
 /// stream, or leaves it open when `finishes` is false, as a statement still
 /// running on the server does.
-private actor ScriptedReadOnlyConnection: ReadOnlyExecuting {
+actor ScriptedReadOnlyConnection: ReadOnlyExecuting {
     struct Statement: Equatable, Sendable {
         let sql: String
         let parameters: [SQLParameter]
