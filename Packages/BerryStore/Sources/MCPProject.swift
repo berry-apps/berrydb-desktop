@@ -136,6 +136,27 @@ struct MCPProjectProfileRecord: Codable, FetchableRecord, PersistableRecord {
     var liveReadUntil: Date?
 }
 
+extension MCPProjectProfileRecord {
+    /// Reads the expiry leniently. Any process of the same user can write
+    /// anything to that column, and the synthesized decoding throws on a
+    /// value no date can be made from (`''`, `'not a date'`), which fails
+    /// every fetch of the project's rows, and inside a key rotation fails
+    /// it after the new key is already stored. Such a value reads as no
+    /// expiry instead: a row sealed with one then no longer matches its
+    /// tag and is rejected, and a row sealed without one is unaffected.
+    /// NULL and every value a date can be made from read as before.
+    init(row: Row) throws {
+        self.init(
+            projectID: try row.decode(forColumn: "projectID"),
+            profileID: try row.decode(forColumn: "profileID"),
+            liveRead: try row.decode(forColumn: "liveRead"),
+            redactedColumnsJSON: try row.decode(forColumn: "redactedColumnsJSON"),
+            integrityTag: try row.decode(forColumn: "integrityTag"),
+            liveReadUntil: Date.fromDatabaseValue(row["liveReadUntil"] as DatabaseValue)
+        )
+    }
+}
+
 extension MCPProject {
     /// Normalizes roots for persisted display/configuration metadata only.
     /// These paths are never an authorization input.

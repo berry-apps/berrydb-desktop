@@ -1003,4 +1003,44 @@ struct MCPAccessIntegrityTests {
         ))
         #expect(verified.liveReadProfileIDs == [a.id])
     }
+
+    /// Any process of the same user can write anything to the expiry
+    /// column. A value no date can be made from reads as no expiry, which
+    /// the sealed payload does not match, so the row is rejected while the
+    /// project, and a key rotation over it, keep working.
+    @Test(arguments: ["''", "'not a date'"])
+    func aNonDateValueInTheExpiryColumnNeverBreaksAReadAndRejectsTheRow(value: String) throws {
+        let (store, a, b) = try makeStore()
+        let key1 = SymmetricKey(size: .bits256)
+        let key2 = SymmetricKey(size: .bits256)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let projectA = MCPProject(name: "A", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: a.id, liveRead: true, liveReadUntil: Date(timeIntervalSince1970: 1_800_000_000)),
+        ])
+        let projectB = MCPProject(name: "B", isEnabled: true, profiles: [MCPProfileAccess(profileID: b.id, liveRead: true)])
+        try store.saveMCPProject(projectA, sealingKey: key1, previousKey: nil)
+        try store.saveMCPProject(projectB, sealingKey: key1, previousKey: key1)
+        try store.executeForTesting(
+            "UPDATE mcp_project_profile SET liveReadUntil = \(value) WHERE projectID = ?", arguments: [projectA.id]
+        )
+
+        #expect(try store.mcpProjects().count == 2)
+        let verified = try #require(try store.verifiedMCPProject(id: projectA.id, key: key1, now: now))
+        #expect(verified.rejectedLiveReadProfileIDs == [a.id])
+        #expect(verified.liveReadProfileIDs.isEmpty)
+        #expect(verified.expiredLiveReadProfileIDs.isEmpty)
+        let editing = try #require(try store.mcpProjectForEditing(id: projectA.id, key: key1))
+        #expect(editing.profiles.map(\.liveRead) == [false])
+        #expect(editing.profiles.map(\.liveReadUntil) == [nil])
+        #expect(try store.unverifiedMCPProfileIDs(projectID: projectA.id, key: key1) == [a.id])
+
+        try store.saveMCPProject(projectB, sealingKey: key2, previousKey: key1)
+
+        let tags = try store.fetchForTesting(
+            "SELECT integrityTag FROM mcp_project_profile WHERE projectID = ?", arguments: [projectA.id]
+        )
+        #expect(tags.map { $0["integrityTag"] as Data? } == [nil])
+        let verifiedB = try #require(try store.verifiedMCPProject(id: projectB.id, key: key2))
+        #expect(verifiedB.liveReadProfileIDs == [b.id])
+    }
 }
