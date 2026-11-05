@@ -608,7 +608,8 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// production-labeled and `acknowledged` lacks `.production`, or when
     /// it needs a privilege check whose state is not `.readOnlyRole` and is
     /// not a `.writableRole` or `.failed` result that `acknowledged`
-    /// accepts with `.writableRole`. A result counts only while the stored
+    /// accepts with `.writableRole`. A `.writableRole` result on a
+    /// production-labeled profile is refused whatever is acknowledged. A result counts only while the stored
     /// profile still reaches the server and account it was checked on. Live
     /// reads that stay on are not checked again. These rules compare with the verified editing copy, which
     /// takes the stored key to read, so they run after the key is read and
@@ -986,6 +987,27 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             if profile.driver == .dynamodb, profile.sshEnabled {
                 return L("Live reads are not available for \(profile.name) through an SSH tunnel.")
             }
+            let checkedAsStored = privilegeChecks[profile.id]?.endpoint == Self.endpoint(of: profile)
+            let privilegeState = checkedAsStored ? privilegeStates[profile.id] ?? .notChecked : .notChecked
+            // No acknowledgment overrides this, so it comes before the consent
+            // below: a save that cannot succeed is not asked for one first.
+            //
+            // A read-only transaction does not stop every write. PostgreSQL
+            // calls its read-only mode "a high-level notion of read-only that
+            // does not prevent all writes to disk"
+            // (https://www.postgresql.org/docs/current/sql-set-transaction.html),
+            // and functions that act on another session or on the server
+            // (dblink, pg_terminate_backend, file readers) run anyway. On
+            // MySQL 8.4.11 and MariaDB a procedure or compound statement can
+            // leave the read-only transaction and write (observed, see
+            // MySQLDriverConnection). With a user that can write, the lexical
+            // SQL policy is then the only guard, and on a production database
+            // that is too thin for an admin role. A failed check proves
+            // nothing either way, so it keeps the acknowledgment path below.
+            if Self.needsPrivilegeCheck(profile), profile.envColor == "production",
+               case .writableRole = privilegeState {
+                return L("Live reads cannot be turned on for \(profile.name): its database user can write, and this connection is labelled production. Use a SELECT-only role or a read replica.")
+            }
             if profile.envColor == "production", !draft.acknowledged.contains(.production(profile.id)) {
                 if profile.driver == .dynamodb {
                     return L("Live reads on \(profile.name) need your confirmation that you reviewed its redacted attributes and accept reads on this production database.")
@@ -993,21 +1015,9 @@ public final class MCPProjectsSettingsModel: ObservableObject {
                 return L("Live reads on \(profile.name) need your confirmation that you reviewed its redacted columns and accept reads on this production database.")
             }
             guard Self.needsPrivilegeCheck(profile) else { continue }
-            let checkedAsStored = privilegeChecks[profile.id]?.endpoint == Self.endpoint(of: profile)
-            switch checkedAsStored ? privilegeStates[profile.id] ?? .notChecked : .notChecked {
+            switch privilegeState {
             case .readOnlyRole:
                 break
-            case .writableRole where profile.envColor == "production":
-                // No acknowledgment overrides this. A read-only transaction does
-                // not stop a function with side effects, so with a user that can
-                // write, the lexical SQL policy is the only guard, and on a
-                // production database that is too thin for an admin role (the
-                // read-only transaction rules list INSERT, UPDATE, DELETE,
-                // MERGE, COPY FROM and DDL, not functions:
-                // https://www.postgresql.org/docs/current/sql-set-transaction.html). A
-                // failed check proves nothing either way, so it keeps the
-                // acknowledgment path below.
-                return L("Live reads cannot be turned on for \(profile.name): its database user can write, and this connection is labelled production. Use a SELECT-only role or a read replica.")
             case .writableRole, .failed:
                 if !draft.acknowledged.contains(.writableRole(profile.id)) {
                     return L("Live reads on \(profile.name) need your confirmation to use this connection anyway, since its privileges were not found read-only.")
