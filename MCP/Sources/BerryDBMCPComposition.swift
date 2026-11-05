@@ -101,10 +101,14 @@ public enum BerryDBMCPComposition {
     /// the next request, and a session whose selection chose no project never
     /// touches the Keychain.
     ///
+    /// Tool calls are recorded in the audit file beside the store at
+    /// `storePath` rather than at a fixed location, so a
+    /// helper run on a test store leaves the real audit file alone.
+    ///
     /// Also returns the connection coordinator, which owns every connection a
     /// live read opened, so the caller can close them before the process exits.
     static func dependencies(
-        store: BerryStore, metadata: MCPMetadataService, explicitProject: MCPProjectReference?,
+        store: BerryStore, storePath: String, metadata: MCPMetadataService, explicitProject: MCPProjectReference?,
         workingDirectory: String, onRequest: @escaping @Sendable () -> Void
     ) -> (BerryMCPServerFactory.Dependencies, MCPConnectionCoordinator) {
         let resolver = MCPProjectContextResolver(
@@ -129,7 +133,10 @@ public enum BerryDBMCPComposition {
             liveReads: BerryMCPServerFactory.LiveReads(
                 service: liveReads, projectSource: source, partition: MCPPartitionQueryService(sharing: liveReads)
             ),
-            onRequest: onRequest
+            onRequest: onRequest,
+            audit: MCPAuditWriter(
+                url: MCPAuditLog.url(besideStore: storePath), diagnostics: { Self.diagnose($0) }
+            )
         )
         return (dependencies, coordinator)
     }

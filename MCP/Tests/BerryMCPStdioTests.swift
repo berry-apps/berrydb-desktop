@@ -253,6 +253,51 @@ struct BerryMCPStdioTests {
         Self.expectOnlyJSONRPC(helper.stdout, messages: 4)
     }
 
+    /// Every tool call lands in the audit file beside the store the helper
+    /// opened, tagged with the host's own name, and nothing the caller typed
+    /// or where the store lives reaches the file. The canary strings stand
+    /// for query text, a bound parameter and a path.
+    @Test
+    func toolCallsAreAuditedBesideTheStoreWithoutTheQueryText() async throws {
+        let store = try TemporaryStore()
+        defer { store.remove() }
+        let helper = try HelperProcess(arguments: ["--store-path", store.path], workingDirectory: store.directory)
+        defer { helper.stop() }
+
+        try helper.send(Self.initialize(id: 1, protocolVersion: "2025-11-25", client: "stdio-canary"))
+        _ = try await helper.response(id: 1)
+        try helper.send(["jsonrpc": "2.0", "method": "notifications/initialized"])
+        try helper.send(Self.callStatus(id: 2))
+        _ = try await helper.response(id: 2)
+        // No project is selected, so the call is refused; it is still a call.
+        try helper.send([
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": [
+                "name": "berrydb_execute_read_query",
+                "arguments": [
+                    "connection_id": UUID().uuidString,
+                    "sql": "select 'CANARY_TEXT_7f3a' as c",
+                    "parameters": ["PARAM_CANARY_19b2"],
+                ],
+            ],
+        ])
+        _ = try await helper.response(id: 3)
+
+        // Records are written by the helper's writer, so read them once the
+        // helper has exited and everything it accepted is on disk.
+        try helper.closeInput()
+        #expect(try await helper.termination().status == 0)
+
+        let auditURL = store.directory.appendingPathComponent("mcp-audit.jsonl")
+        let records = MCPAuditLog.read(from: auditURL)
+        #expect(records.map(\.tool) == ["berrydb_status", "berrydb_execute_read_query"])
+        #expect(records.allSatisfy { $0.host == "stdio-canary" })
+        let raw = try String(contentsOf: auditURL, encoding: .utf8)
+        #expect(!raw.contains("CANARY_TEXT_7f3a"))
+        #expect(!raw.contains("PARAM_CANARY_19b2"))
+        #expect(!raw.contains(store.directory.path))
+    }
+
     @Test
     func missingStoreExitsWithStderrOnly() async throws {
         let store = try TemporaryStore()
@@ -274,6 +319,11 @@ struct BerryMCPStdioTests {
         #expect(!stderr.contains(missing))
         #expect(!stderr.contains(store.directory.path))
         #expect(!FileManager.default.fileExists(atPath: missing))
+        // The helper exits before composition, so no audit file appears
+        // beside the store path it was given.
+        let audit = URL(fileURLWithPath: missing).deletingLastPathComponent()
+            .appendingPathComponent("mcp-audit.jsonl")
+        #expect(!FileManager.default.fileExists(atPath: audit.path))
     }
 
     @Test

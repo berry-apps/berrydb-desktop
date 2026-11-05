@@ -24,9 +24,10 @@ do {
     exit(2)
 }
 
+let storePath = arguments.storePath ?? BerryDBMCPComposition.defaultStorePath()
 let store: BerryStore
 do {
-    store = try BerryStore.openReadOnly(path: arguments.storePath ?? BerryDBMCPComposition.defaultStorePath())
+    store = try BerryStore.openReadOnly(path: storePath)
 } catch {
     BerryDBMCPComposition.diagnose(
         "cannot open the BerryDB store (\(BerryDBMCPComposition.openFailureReason(error)))"
@@ -42,6 +43,7 @@ let memory = StoreMemoryManager(store: store, onPressure: { [metadata] in metada
 
 let (dependencies, coordinator) = BerryDBMCPComposition.dependencies(
     store: store,
+    storePath: storePath,
     metadata: metadata,
     explicitProject: arguments.project,
     workingDirectory: FileManager.default.currentDirectoryPath,
