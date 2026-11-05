@@ -257,18 +257,26 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// The second line of an Activity row. Parts the record does not have are
     /// left out, so a failed call shows its code and size and nothing else.
     public static func activityLine(_ row: ActivityRow) -> String {
-        let sizes = ByteCountFormatter()
-        sizes.countStyle = .file
-        sizes.allowedUnits = [.useBytes, .useKB, .useMB]
-        sizes.allowsNonnumericFormatting = false
+        // The locale is fixed because this is a technical line whose text the
+        // tests pin: a system locale would change the unit words and the digit
+        // separators. The size is composed here because the locale-aware byte
+        // formatters spell the kilobyte unit differently from each other.
+        let locale = Locale(identifier: "en_US_POSIX")
+        func number(_ value: Double) -> String {
+            value.formatted(.number.precision(.fractionLength(0...1)).locale(locale))
+        }
+        let size: String
+        switch row.bytes {
+        case ..<1_000: size = row.bytes == 1 ? "1 byte" : "\(row.bytes) bytes"
+        case ..<1_000_000: size = number(Double(row.bytes) / 1_000) + " KB"
+        default: size = number(Double(row.bytes) / 1_000_000) + " MB"
+        }
         var parts = [row.outcome]
         if let count = row.rows { parts.append(count == 1 ? "1 row" : "\(count) rows") }
-        parts.append(sizes.string(fromByteCount: Int64(row.bytes)))
+        parts.append(size)
         if row.truncated { parts.append("truncated") }
         if row.redacted { parts.append("redacted") }
-        if let units = row.consumedCapacityUnits {
-            parts.append(units.formatted(.number.precision(.fractionLength(0...1)).locale(Locale(identifier: "en_US_POSIX"))) + " RCU")
-        }
+        if let units = row.consumedCapacityUnits { parts.append(number(units) + " RCU") }
         return parts.joined(separator: " · ")
     }
 
