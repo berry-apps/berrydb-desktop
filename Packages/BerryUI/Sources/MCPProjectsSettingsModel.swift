@@ -147,9 +147,9 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         return url
     }
 
-    /// `keyStore` and `auditKeyStore` default to the Keychain items the helper reads; the
-    /// helper is looked up once, inside the running app's bundle. Privilege
-    /// checks connect to the profile's server.
+    /// `keyStore` and `auditKeyStore` default to the Keychain items the
+    /// helper reads; the helper is looked up once, inside the running app's
+    /// bundle. Privilege checks connect to the profile's server.
     public convenience init(
         store: BerryStore, keyStore: MCPAccessKeyStore = .keychain,
         auditKeyStore: MCPAuditKeyStore = .keychain, auditLogURL: URL = MCPAuditLog.defaultURL()

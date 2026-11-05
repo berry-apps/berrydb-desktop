@@ -1100,6 +1100,36 @@ struct BerryMCPServerFactoryTests {
         #expect(diagnostics.value.filter { $0.contains("audit digest key unavailable") }.count == 1)
     }
 
+    @Test func recordedDurationExcludesTheDigestsKeyRead() async throws {
+        let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        let keyData = Self.auditKeyData
+        let audit = MCPAudit(
+            writer: MCPAuditWriter(url: url, diagnostics: { _ in }),
+            digester: MCPAuditDigester(
+                keyStore: MCPAuditKeyStore(read: { Thread.sleep(forTimeInterval: 2.0); return keyData }, write: { _ in false }),
+                diagnostics: { _ in }
+            )
+        )
+        let live = LiveReadHarness(connection: ScriptedReadOnlyConnection(events: [
+            .columns([ColumnMeta(name: "id", declaredType: "INTEGER")]),
+            .rows([[.int(1)]]),
+            .complete(QueryStats(rowsAffected: nil, duration: .zero)),
+        ]))
+        let billingID = billing.id
+        try await withSession(
+            store: liveStore(), roots: .declared(["file:///work/b"]), liveReads: live.liveReads, audit: audit
+        ) { client in
+            let served = try await client.send(Self.readCall(billingID, sql: "SELECT id FROM users")).value
+            #expect(served.isError != true, "\(Self.text(served))")
+        }
+        let record = try #require(MCPAuditLog.read(from: url).first)
+        #expect(record.digest != nil)
+        // The digest reads the key (2 s here), which can wait on a
+        // Keychain dialog; that wait is not the call's duration.
+        #expect(record.durationMs < 1500, "durationMs \(record.durationMs) includes the key read")
+    }
+
     /// The status result of a session that selects project A, with `audit`.
     fileprivate func statusResult(audit: MCPAudit?, diagnostics: Locked<[String]> = Locked([])) async throws -> [CallTool.Result] {
         let results = Locked<[CallTool.Result]>([])

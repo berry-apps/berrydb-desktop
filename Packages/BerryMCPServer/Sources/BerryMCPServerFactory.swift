@@ -166,13 +166,15 @@ public enum BerryMCPServerFactory {
             if case let .string(text)? = params.arguments?["connection_id"] { namedConnection = UUID(uuidString: text) }
             let record: @Sendable (MCPAuditRecord.Outcome, MCPAuditDetail, Int) async -> Void = { [namedConnection] outcome, detail, bytes in
                 guard let audit else { return }
+                // Taken before the digest: it reads the Keychain, and a Keychain dialog may be waiting on the user.
+                let durationMs = Int((ContinuousClock.now - started) / .milliseconds(1))
                 var projectID: UUID?
                 if case let .selected(project, _, _) = context { projectID = project.project.id }
                 await audit.writer.record(MCPAuditRecord(
                     at: Date(), host: host.name, projectID: projectID, profileID: namedConnection ?? detail.profileID,
                     tool: MCPToolName(rawValue: params.name)?.rawValue ?? "unknown", outcome: outcome,
                     error: detail.error, digest: audit.digester.digest(detail.query),
-                    durationMs: Int((ContinuousClock.now - started) / .milliseconds(1)),
+                    durationMs: durationMs,
                     rows: detail.rows, bytes: bytes, truncated: detail.truncated, redacted: detail.redacted,
                     consumedCapacityUnits: detail.consumedCapacityUnits
                 ))

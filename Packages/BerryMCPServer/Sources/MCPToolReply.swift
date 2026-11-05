@@ -3,8 +3,10 @@ import Foundation
 import MCP
 
 /// What the audit log records about one tool call beyond its name and
-/// outcome. Never holds statement text, key values or database error text:
-/// `query` is what the log digests to identify a request and `error` is a fixed code.
+/// outcome. It holds the request (`query`) in memory so the server can digest
+/// it under the install key. The record written from it never holds statement
+/// text, key values or database error text: `digest` replaces the query and
+/// `error` is a fixed code.
 public struct MCPAuditDetail: Equatable, Sendable {
     public var profileID: UUID?
     public var query: MCPAuditQuery?

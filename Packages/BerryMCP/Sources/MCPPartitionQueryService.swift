@@ -61,16 +61,17 @@ extension MCPPartitionQueryRequest {
     /// query, which only exists after the table was described. `limit` and
     /// `cursor` stay out so every page of one query shares a digest.
     ///
-    /// The key condition is `pk=<key>[;sk=<op>:<key>[:<key>]]` where a key is
-    /// `s<length>:<text>` or `i:<number>`, and the last part is the upper
-    /// bound of `between`. The length prefix stops a key value that contains
-    /// the condition's own punctuation from reading as a different condition.
+    /// `keyCondition` has the form described on `auditKeyCondition`.
     public var auditQuery: MCPAuditQuery {
         .partitionQuery(
             table: table, indexName: indexName, keyCondition: auditKeyCondition, projection: projection ?? []
         )
     }
 
+    /// The key condition is `pk=<key>[;sk=<op>:<key>[:<key>]]` where a key is
+    /// `s<length>:<text>` or `i:<number>`, and the last part is the upper
+    /// bound of `between`. The length prefix stops a key value that contains
+    /// the condition's own punctuation from reading as a different condition.
     private var auditKeyCondition: String {
         func key(_ input: MCPKeyInput) -> String {
             switch input {
