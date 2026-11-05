@@ -6,6 +6,9 @@ public enum MCPProjectError: Error, Equatable, Sendable {
     /// A workspace root was not an absolute path; nothing is saved or
     /// loaded, since a relative root has no stable meaning across processes.
     case workspaceRootMustBeAbsolute(String)
+    /// A live-read expiry beyond the whole seconds since 1970 an `Int` can
+    /// hold; it cannot be sealed, so nothing is saved.
+    case liveReadUntilOutOfRange
 }
 
 /// The settings one MCP project holds for one saved connection profile.
@@ -90,7 +93,9 @@ public struct MCPVerifiedProject: Equatable, Sendable {
     /// Profiles whose tag-verified row has liveRead on but whose live-read
     /// expiry has passed, in an enabled, verified project. They are in
     /// neither `liveReadProfileIDs` nor `rejectedLiveReadProfileIDs`: the
-    /// row is BerryDB's own and only needs renewing.
+    /// row is BerryDB's own and only needs renewing. They are never in
+    /// `productionSealedProfileIDs` either, so a caller renewing one of
+    /// these rows must not read its production limits from that set.
     public let expiredLiveReadProfileIDs: Set<UUID>
 
     public init(

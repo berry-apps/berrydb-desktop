@@ -141,18 +141,33 @@ enum MCPAccessIntegrity {
     /// the row refers to (see `EndpointFingerprint`) — to `production`,
     /// whether the profile carries the production label, and to the row's
     /// live-read expiry.
+    /// Throws `MCPProjectError.liveReadUntilOutOfRange` when the expiry
+    /// cannot be sealed (see `sealedSeconds`).
     static func profilePayload(
         projectID: UUID, access: MCPProfileAccess, profile: ConnectionProfile, production: Bool
     ) throws -> Data {
-        try canonical(ProfilePayload(
+        var liveReadUntil: Int?
+        if let until = access.liveReadUntil {
+            guard let seconds = sealedSeconds(until) else { throw MCPProjectError.liveReadUntilOutOfRange }
+            liveReadUntil = seconds
+        }
+        return try canonical(ProfilePayload(
             projectID: projectID.uuidString.lowercased(),
             profileID: access.profileID.uuidString.lowercased(),
             liveRead: access.liveRead,
             redactedColumns: MCPProfileAccess.normalizedColumns(access.redactedColumns),
             endpoint: EndpointFingerprint(profile),
             production: production,
-            liveReadUntil: access.liveReadUntil.map { Int(floor($0.timeIntervalSince1970)) }
+            liveReadUntil: liveReadUntil
         ))
+    }
+
+    /// Whole seconds since 1970 of `date`, or nil when that is infinite or
+    /// beyond `Int`. Any number in the store's expiry column decodes to a
+    /// `Date`, so a plain `Int` conversion would trap on a value written by
+    /// another process and take every read of the project down with it.
+    private static func sealedSeconds(_ date: Date) -> Int? {
+        Int(exactly: floor(date.timeIntervalSince1970))
     }
 
     /// Canonical bytes of the same row as sealed before the live-read
@@ -203,6 +218,9 @@ enum MCPAccessIntegrity {
         tag: Data?, projectID: UUID, access: MCPProfileAccess, profile: ConnectionProfile, key: SymmetricKey
     ) throws -> (payload: Data, production: Bool)? {
         guard let tag else { return nil }
+        // No build can have sealed an expiry it cannot represent; such a
+        // row is rejected here rather than failing the whole project.
+        if let until = access.liveReadUntil, sealedSeconds(until) == nil { return nil }
         for production in [true, false] {
             let payload = try profilePayload(
                 projectID: projectID, access: access, profile: profile, production: production

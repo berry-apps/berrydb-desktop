@@ -799,6 +799,55 @@ struct MCPAccessIntegrityTests {
         #expect(before.liveReadProfileIDs == [production.id])
         #expect(before.productionSealedProfileIDs == [production.id])
         #expect(before.expiredLiveReadProfileIDs.isEmpty)
+
+        let atTheExpiry = try #require(try store.verifiedMCPProject(id: project.id, key: key, now: expiry))
+        #expect(atTheExpiry.liveReadProfileIDs == [production.id])
+    }
+
+    /// The tag covers the expiry, so moving it later or clearing it leaves
+    /// a row that no payload verifies; clearing it must not fall back to
+    /// the older payloads, which never covered one.
+    @Test func anExpiryExtendedOrRemovedOnASealedRowDoesNotVerify() throws {
+        let (store, a, _) = try makeStore()
+        let expiry = Date(timeIntervalSince1970: 1_800_000_000)
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: a.id, liveRead: true, liveReadUntil: expiry),
+        ])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        let now = expiry.addingTimeInterval(-60)
+
+        try store.executeForTesting(
+            "UPDATE mcp_project_profile SET liveReadUntil = ?", arguments: [expiry.addingTimeInterval(3600)]
+        )
+        let extended = try #require(try store.verifiedMCPProject(id: project.id, key: key, now: now))
+        #expect(extended.rejectedLiveReadProfileIDs == [a.id])
+        #expect(extended.liveReadProfileIDs.isEmpty)
+        #expect(extended.expiredLiveReadProfileIDs.isEmpty)
+
+        try store.executeForTesting("UPDATE mcp_project_profile SET liveReadUntil = NULL")
+        let removed = try #require(try store.verifiedMCPProject(id: project.id, key: key, now: now))
+        #expect(removed.rejectedLiveReadProfileIDs == [a.id])
+        #expect(removed.liveReadProfileIDs.isEmpty)
+        #expect(removed.expiredLiveReadProfileIDs.isEmpty)
+    }
+
+    /// The store file can hold any number in the expiry column, and one
+    /// beyond whole seconds an `Int` can hold cannot be what BerryDB
+    /// sealed; the row is rejected without failing the whole project.
+    @Test func anUnrepresentableExpiryRejectsTheRowWithoutCrashing() throws {
+        let (store, a, _) = try makeStore()
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: a.id, liveRead: true, liveReadUntil: Date(timeIntervalSince1970: 1_800_000_000)),
+        ])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        try store.executeForTesting("UPDATE mcp_project_profile SET liveReadUntil = 1e300")
+        let verified = try #require(try store.verifiedMCPProject(
+            id: project.id, key: key, now: Date(timeIntervalSince1970: 1_700_000_000)
+        ))
+        #expect(verified.rejectedLiveReadProfileIDs == [a.id])
+        #expect(verified.liveReadProfileIDs.isEmpty)
+        #expect(verified.expiredLiveReadProfileIDs.isEmpty)
+        #expect(try store.unverifiedMCPProfileIDs(projectID: project.id, key: key) == [a.id])
     }
 
     /// The tag covers the expiry in whole seconds, so a fraction written
