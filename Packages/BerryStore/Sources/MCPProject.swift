@@ -87,19 +87,26 @@ public struct MCPVerifiedProject: Equatable, Sendable {
     /// seal the label at all. The helper applies the production limits to
     /// these whatever label the profile carries now.
     public let productionSealedProfileIDs: Set<UUID>
+    /// Profiles whose tag-verified row has liveRead on but whose live-read
+    /// expiry has passed, in an enabled, verified project. They are in
+    /// neither `liveReadProfileIDs` nor `rejectedLiveReadProfileIDs`: the
+    /// row is BerryDB's own and only needs renewing.
+    public let expiredLiveReadProfileIDs: Set<UUID>
 
     public init(
         project: MCPProject,
         liveReadProfileIDs: Set<UUID>,
         projectTagValid: Bool = true,
         rejectedLiveReadProfileIDs: Set<UUID> = [],
-        productionSealedProfileIDs: Set<UUID> = []
+        productionSealedProfileIDs: Set<UUID> = [],
+        expiredLiveReadProfileIDs: Set<UUID> = []
     ) {
         self.project = project
         self.liveReadProfileIDs = liveReadProfileIDs
         self.projectTagValid = projectTagValid
         self.rejectedLiveReadProfileIDs = rejectedLiveReadProfileIDs
         self.productionSealedProfileIDs = productionSealedProfileIDs
+        self.expiredLiveReadProfileIDs = expiredLiveReadProfileIDs
     }
 }
 

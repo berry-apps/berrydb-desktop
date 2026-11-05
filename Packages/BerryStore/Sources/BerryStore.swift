@@ -1605,8 +1605,11 @@ public final class BerryStore: Sendable {
     /// cross-wired row cannot borrow another row's payload: any profile ID
     /// that appears on more than one row is treated as tampered and rejected
     /// outright. A verified but disabled project always yields an empty
-    /// `liveReadProfileIDs`, and an empty `productionSealedProfileIDs` with it.
-    public func verifiedMCPProject(id: UUID, key: SymmetricKey?) throws -> MCPVerifiedProject? {
+    /// `liveReadProfileIDs`, and empty `productionSealedProfileIDs` and
+    /// `expiredLiveReadProfileIDs` with it. A verified row whose live-read
+    /// expiry is before `now` is reported in `expiredLiveReadProfileIDs`
+    /// instead of `liveReadProfileIDs`.
+    public func verifiedMCPProject(id: UUID, key: SymmetricKey?, now: Date = Date()) throws -> MCPVerifiedProject? {
         try read { db in
             guard let record = try MCPProjectRecord.fetchOne(db, key: id) else { return nil }
             let project = try Self.makeMCPProject(record: record, db: db)
@@ -1622,12 +1625,13 @@ public final class BerryStore: Sendable {
             }
 
             let rows = try MCPProjectProfileRecord.filter(Column("projectID") == id).fetchAll(db)
-            let verified = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, db: db)
+            let verified = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, now: now, db: db)
             return MCPVerifiedProject(
                 project: project,
                 liveReadProfileIDs: project.isEnabled ? verified.live : [],
                 rejectedLiveReadProfileIDs: verified.rejected,
-                productionSealedProfileIDs: project.isEnabled ? verified.production : []
+                productionSealedProfileIDs: project.isEnabled ? verified.production : [],
+                expiredLiveReadProfileIDs: project.isEnabled ? verified.expired : []
             )
         }
     }
@@ -1644,7 +1648,8 @@ public final class BerryStore: Sendable {
     /// disabled at edit time. Instead, a disabled-but-verified project keeps
     /// each row's own tag-verified `liveRead`, so re-enabling and saving the
     /// editing copy restores exactly what was there before, no more and no
-    /// less.
+    /// less. A row whose live-read expiry has passed keeps `liveRead` and
+    /// its expiry too, since renewing the grant starts from this copy.
     ///
     /// `key` must be the currently stored key — the `previousKey` read with
     /// `MCPAccessKeyStore.loadForRotation()` before `replace(with:)` — never
@@ -1673,8 +1678,9 @@ public final class BerryStore: Sendable {
             }
 
             let rows = try MCPProjectProfileRecord.filter(Column("projectID") == id).fetchAll(db)
-            let live = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, db: db).live
-            for index in project.profiles.indices where !live.contains(project.profiles[index].profileID) {
+            let verified = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, now: Date(), db: db)
+            let sealed = verified.live.union(verified.expired)
+            for index in project.profiles.indices where !sealed.contains(project.profiles[index].profileID) {
                 project.profiles[index].liveRead = false
             }
             return project
@@ -1686,7 +1692,9 @@ public final class BerryStore: Sendable {
     /// claim `liveRead` but fail verification or share a duplicated profile
     /// ID (`rejected`); `production` is the part of `live` sealed under the
     /// production label, or before the label was covered (see
-    /// `MCPAccessIntegrity.verifiedProfilePayload`). Deliberately does not
+    /// `MCPAccessIntegrity.verifiedProfilePayload`). A verified row whose
+    /// live-read expiry is before `now` goes to `expired` instead of `live`,
+    /// and so never into `production`. Deliberately does not
     /// apply the project's own `isEnabled` gate — `verifiedMCPProject`
     /// applies it afterward for its public `liveReadProfileIDs`, while
     /// `mcpProjectForEditing` needs the ungated result so editing a
@@ -1696,8 +1704,8 @@ public final class BerryStore: Sendable {
     /// decoded, or was pointed at another endpoint since sealing is
     /// rejected.
     private static func verifiedProfileRows(
-        projectID: UUID, rows: [MCPProjectProfileRecord], key: SymmetricKey, db: Database
-    ) throws -> (live: Set<UUID>, rejected: Set<UUID>, production: Set<UUID>) {
+        projectID: UUID, rows: [MCPProjectProfileRecord], key: SymmetricKey, now: Date, db: Database
+    ) throws -> (live: Set<UUID>, rejected: Set<UUID>, production: Set<UUID>, expired: Set<UUID>) {
         var occurrences: [UUID: Int] = [:]
         for row in rows { occurrences[row.profileID, default: 0] += 1 }
 
@@ -1705,6 +1713,7 @@ public final class BerryStore: Sendable {
         var live = Set<UUID>()
         var rejected = Set<UUID>()
         var production = Set<UUID>()
+        var expired = Set<UUID>()
         for row in rows where row.liveRead {
             let verified = try profileRowVerification(
                 row, isDuplicated: occurrences[row.profileID] != 1, projectID: projectID,
@@ -1714,10 +1723,14 @@ public final class BerryStore: Sendable {
                 rejected.insert(row.profileID)
                 continue
             }
+            if let until = row.liveReadUntil, until < now {
+                expired.insert(row.profileID)
+                continue
+            }
             live.insert(row.profileID)
             if verified.production { production.insert(row.profileID) }
         }
-        return (live, rejected, production)
+        return (live, rejected, production, expired)
     }
 
     /// Profiles of project `projectID` whose access row does not verify

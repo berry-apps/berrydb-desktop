@@ -586,11 +586,12 @@ struct MCPAccessIntegrityTests {
         """#)
     }
 
-    /// The bytes rows are sealed over now, pinned so that the next change
-    /// to the payload has its guard ready.
+    /// The bytes rows were sealed over after the production label joined
+    /// the payload and before the live-read expiry did. Rows sealed by
+    /// those builds carry a tag over these bytes.
     @Test func thePayloadKeepsItsBytes() throws {
         let row = try pinnedRow()
-        let payload = try MCPAccessIntegrity.profilePayload(
+        let payload = try MCPAccessIntegrity.labelProfilePayload(
             projectID: row.projectID, access: row.access, profile: row.profile, production: true
         )
         #expect(String(decoding: payload, as: UTF8.self) == #"""
@@ -704,5 +705,125 @@ struct MCPAccessIntegrityTests {
         let verified = try #require(try store.verifiedMCPProject(id: projectA.id, key: key2))
         #expect(verified.liveReadProfileIDs == [production.id, earlier.id])
         #expect(verified.productionSealedProfileIDs == [production.id, earlier.id])
+    }
+
+    /// The bytes rows are sealed over now, pinned so that the next change
+    /// to the payload has its guard ready. The expiry is whole seconds
+    /// since 1970.
+    @Test func thePayloadWithAnExpiryKeepsItsBytes() throws {
+        let row = try pinnedRow()
+        var access = row.access
+        access.liveReadUntil = Date(timeIntervalSince1970: 1_800_000_000)
+        let payload = try MCPAccessIntegrity.profilePayload(
+            projectID: row.projectID, access: access, profile: row.profile, production: true
+        )
+        #expect(String(decoding: payload, as: UTF8.self) == #"""
+        {"domain":"berrydb.mcp.profile-access.v4",\#(Self.pinnedEndpoint),"liveRead":true,"liveReadUntil":1800000000,"production":true,"profileID":"22222222-2222-2222-2222-222222222222","projectID":"11111111-1111-1111-1111-111111111111","redactedColumns":["email","ssn"]}
+        """#)
+    }
+
+    /// A row sealed after the label was covered but before the expiry was
+    /// keeps verifying with the label it was sealed under, since it grants
+    /// no more than it did when it was sealed.
+    @Test func aRowSealedByThePreviousPayloadStillVerifiesWithoutAnExpiry() throws {
+        let store = try BerryStore(path: ":memory:")
+        let production = ConnectionProfile(driverID: "postgres", name: "Prod", envColor: "production")
+        try store.save(production)
+        let access = MCPProfileAccess(profileID: production.id, liveRead: true)
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [access])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        let previousTag = MCPAccessIntegrity.tag(
+            try MCPAccessIntegrity.labelProfilePayload(
+                projectID: project.id, access: access, profile: production, production: true
+            ),
+            key: key
+        )
+        try store.executeForTesting("UPDATE mcp_project_profile SET integrityTag = ?", arguments: [previousTag])
+        let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
+        #expect(verified.liveReadProfileIDs == [production.id])
+        #expect(verified.productionSealedProfileIDs == [production.id])
+        #expect(verified.expiredLiveReadProfileIDs.isEmpty)
+    }
+
+    /// Payloads older than the expiry do not cover it, so an expiry stored
+    /// next to such a tag was not sealed by BerryDB; the row is rejected
+    /// rather than verified with the expiry ignored.
+    @Test func anExpiryWrittenNextToAnOlderTagDoesNotVerify() throws {
+        let (store, a, _) = try makeStore()
+        let expiry = Date(timeIntervalSince1970: 4_000_000_000)
+        let access = MCPProfileAccess(profileID: a.id, liveRead: true, liveReadUntil: expiry)
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [access])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        let olderTags = [
+            MCPAccessIntegrity.tag(
+                try MCPAccessIntegrity.labelProfilePayload(
+                    projectID: project.id, access: access, profile: a, production: false
+                ),
+                key: key
+            ),
+            MCPAccessIntegrity.tag(
+                try MCPAccessIntegrity.earlierProfilePayload(projectID: project.id, access: access, profile: a),
+                key: key
+            ),
+        ]
+        for olderTag in olderTags {
+            try store.executeForTesting("UPDATE mcp_project_profile SET integrityTag = ?", arguments: [olderTag])
+            let verified = try #require(try store.verifiedMCPProject(id: project.id, key: key))
+            #expect(verified.liveReadProfileIDs.isEmpty)
+            #expect(verified.expiredLiveReadProfileIDs.isEmpty)
+            #expect(verified.rejectedLiveReadProfileIDs == [a.id])
+        }
+    }
+
+    @Test func anExpiredRowIsReportedApartFromLiveAndRejected() throws {
+        let store = try BerryStore(path: ":memory:")
+        let production = ConnectionProfile(driverID: "postgres", name: "Prod", envColor: "production")
+        try store.save(production)
+        let expiry = Date(timeIntervalSince1970: 1_800_000_000)
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: production.id, liveRead: true, liveReadUntil: expiry),
+        ])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+
+        let after = try #require(try store.verifiedMCPProject(
+            id: project.id, key: key, now: expiry.addingTimeInterval(1)
+        ))
+        #expect(after.expiredLiveReadProfileIDs == [production.id])
+        #expect(after.liveReadProfileIDs.isEmpty)
+        #expect(after.rejectedLiveReadProfileIDs.isEmpty)
+        #expect(after.productionSealedProfileIDs.isEmpty)
+
+        let before = try #require(try store.verifiedMCPProject(
+            id: project.id, key: key, now: expiry.addingTimeInterval(-1)
+        ))
+        #expect(before.liveReadProfileIDs == [production.id])
+        #expect(before.productionSealedProfileIDs == [production.id])
+        #expect(before.expiredLiveReadProfileIDs.isEmpty)
+    }
+
+    /// Renewing an expired grant starts from the editing copy, so the copy
+    /// keeps live reads on and the expiry it had rather than switching the
+    /// row off.
+    @Test func theEditingCopyKeepsAnExpiredRowOnWithItsExpiry() throws {
+        let (store, a, _) = try makeStore()
+        let expiry = Date(timeIntervalSince1970: 1_000_000_000)
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: a.id, liveRead: true, liveReadUntil: expiry),
+        ])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        let editing = try #require(try store.mcpProjectForEditing(id: project.id, key: key))
+        #expect(editing.profiles.map(\.liveRead) == [true])
+        #expect(editing.profiles.map(\.liveReadUntil) == [expiry])
+    }
+
+    /// An expired row was sealed by BerryDB; the settings pane must not
+    /// mark it as settings that could not be verified.
+    @Test func anExpiredRowIsNotUnverified() throws {
+        let (store, a, _) = try makeStore()
+        let project = MCPProject(name: "P", isEnabled: true, profiles: [
+            MCPProfileAccess(profileID: a.id, liveRead: true, liveReadUntil: Date(timeIntervalSince1970: 1_000_000_000)),
+        ])
+        try store.saveMCPProject(project, sealingKey: key, previousKey: nil)
+        #expect(try store.unverifiedMCPProfileIDs(projectID: project.id, key: key).isEmpty)
     }
 }
