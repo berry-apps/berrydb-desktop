@@ -848,3 +848,4 @@
 "8 hours" = "8 hours";
 "24 hours" = "24 hours";
 "7 days" = "7 days";
+"Live reads on %@ have an expiry that cannot be stored." = "Live reads on %@ have an expiry that cannot be stored.";

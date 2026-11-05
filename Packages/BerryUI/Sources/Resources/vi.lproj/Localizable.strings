@@ -848,3 +848,4 @@
 "8 hours" = "8 giờ";
 "24 hours" = "24 giờ";
 "7 days" = "7 ngày";
+"Live reads on %@ have an expiry that cannot be stored." = "Đọc dữ liệu thật trên %@ có thời hạn không thể lưu.";

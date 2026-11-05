@@ -347,9 +347,10 @@ private struct MCPProjectEditorSheet: View {
     /// row. The redactions are shown while live reads are on, and for a
     /// connection whose saved settings could not be verified also while they
     /// are off (`showsRedactions`); the production notice only while live
-    /// reads are on; the production consent and the privilege check's result
-    /// only while a save would turn them on, since `save` asks for neither
-    /// for live reads that stay on.
+    /// reads are on; the production consent while a save would turn them on
+    /// or renew their expiry (`needsProductionConsent`), and the privilege
+    /// check's result only while a save would turn them on, since `save`
+    /// asks for neither for live reads that stay on unchanged.
     @ViewBuilder
     private func liveReadSettings(for profile: ConnectionProfile, isProduction: Bool) -> some View {
         let id = profile.id
@@ -389,7 +390,7 @@ private struct MCPProjectEditorSheet: View {
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if isProduction, turnsOn {
+                if isProduction, MCPProjectsSettingsModel.needsProductionConsent(id, in: draft) {
                     Toggle(
                         isDynamoDB
                             ? L("I reviewed the redacted attributes and accept reads on this production database")

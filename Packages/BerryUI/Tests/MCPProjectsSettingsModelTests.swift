@@ -1287,11 +1287,66 @@ struct MCPProjectsSettingsModelTests {
 
         var draft = liveReadDraft(model, ledger)
         draft.acknowledged = [.production(ledger.id)]
+        // A row being turned on starts a fresh consent, so an expiry the
+        // draft carries for it is not what gets sealed.
+        draft.access[ledger.id]?.liveReadUntil = Self.consentNow.addingTimeInterval(-3_600)
         #expect(model.save(draft))
 
         let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
         let expected = Date(timeIntervalSince1970: 1_800_000_000 + 86_400)
         #expect(verified.project.profiles.first?.liveReadUntil == expected)
+    }
+
+    @Test func needsProductionConsentForATurnOnAndForARenewalOnly() throws {
+        let (store, _, _) = try makeStore()
+        let ledger = try productionLedger(store)
+        let archive = ConnectionProfile(
+            driverID: "sqlite", name: "Archive", envColor: "production", filePath: "/data/archive.sqlite"
+        )
+        try store.save(archive)
+        let box = KeyBox()
+        let stored = Self.consentNow.addingTimeInterval(3_600)
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: ledger.id, liveRead: true, liveReadUntil: stored),
+            MCPProfileAccess(profileID: archive.id, liveRead: false),
+        ])
+        let model = makeModel(store, box, now: { Self.consentNow })
+
+        var draft = try #require(model.draft(for: seeded.id))
+        #expect(draft.storedLiveReadUntil == [ledger.id: stored])
+        #expect(MCPProjectsSettingsModel.needsProductionConsent(archive.id, in: draft) == false)
+        draft.access[archive.id]?.liveRead = true
+        #expect(MCPProjectsSettingsModel.needsProductionConsent(archive.id, in: draft))
+
+        #expect(MCPProjectsSettingsModel.needsProductionConsent(ledger.id, in: draft) == false)
+        draft.access[ledger.id]?.liveReadUntil = Self.consentNow.addingTimeInterval(28_800)
+        #expect(MCPProjectsSettingsModel.needsProductionConsent(ledger.id, in: draft))
+        draft.access[ledger.id]?.liveReadUntil = stored
+        #expect(MCPProjectsSettingsModel.needsProductionConsent(ledger.id, in: draft) == false)
+    }
+
+    @Test func anUnrepresentableExpiryIsRefusedBeforeTheKeyRotates() throws {
+        let (store, _, _) = try makeStore()
+        let ledger = try productionLedger(store)
+        let box = KeyBox()
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: ledger.id, liveRead: true, liveReadUntil: Self.consentNow.addingTimeInterval(3_600)),
+        ])
+        let model = makeModel(store, box, now: { Self.consentNow })
+        let keyBefore = box.data
+        let projectBefore = try store.mcpProject(id: seeded.id)
+
+        var draft = try #require(model.draft(for: seeded.id))
+        draft.access[ledger.id]?.liveReadUntil = Date(timeIntervalSince1970: 1e300)
+        draft.acknowledged = [.production(ledger.id)]
+        #expect(model.save(draft) == false)
+
+        #expect(model.errorMessage == L("Live reads on \("Ledger") have an expiry that cannot be stored."))
+        #expect(box.writeCount == 0)
+        #expect(box.data == keyBefore)
+        #expect(try store.mcpProject(id: seeded.id) == projectBefore)
+        let verified = try #require(try store.verifiedMCPProject(id: seeded.id, key: box.key, now: Self.consentNow))
+        #expect(verified.liveReadProfileIDs == [ledger.id])
     }
 
     @Test func anUnlabeledProfileNeverCarriesAnExpiry() throws {
@@ -1817,8 +1872,8 @@ struct MCPProjectsSettingsModelTests {
         let verified = try #require(try store.verifiedMCPProject(id: seeded.id, key: box.key))
         #expect(verified.liveReadProfileIDs == [orders.id, ledger.id])
         let saved = Dictionary(uniqueKeysWithValues: verified.project.profiles.map { ($0.profileID, $0) })
-        // A production row stored without an expiry is bounded by the save: consent
-        // on production is bounded from the next save on, and nothing is re-checked.
+        // A production row stored without an expiry receives the default one when
+        // its project is saved; turning nothing on, it needs no new privilege check.
         #expect(saved[ledger.id] == MCPProfileAccess(
             profileID: ledger.id, liveRead: true, redactedColumns: ["email", "ssn"],
             liveReadUntil: Self.consentNow.addingTimeInterval(86_400)
