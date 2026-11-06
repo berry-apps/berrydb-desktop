@@ -10,6 +10,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=deploy/staple.sh
+. "$ROOT/deploy/staple.sh"
 
 # ---- Config (env / deploy/.env) ---------------------------------------------
 [ -f deploy/.env ] && set -a && . ./deploy/.env && set +a
@@ -100,8 +102,7 @@ xcrun notarytool submit "$ZIP" \
   --wait
 
 echo "▸ Stapling the app (offline-safe once dragged out of the DMG)…"
-xcrun stapler staple "$APP"
-xcrun stapler validate "$APP"
+staple_and_validate "$APP"
 rm -f "$ZIP"   # the zip was only the notarization vehicle
 
 # ---- Build the drag-to-Applications DMG (the download users get) ------------
@@ -122,8 +123,7 @@ xcrun notarytool submit "$DMG" \
   --password "$APP_SPEC_PASSWORD" \
   --team-id "$APPLE_TEAM_ID" \
   --wait
-xcrun stapler staple "$DMG"
-xcrun stapler validate "$DMG"
+staple_and_validate "$DMG"
 
 # ---- Sparkle EdDSA signature (Sparkle 2 installs from a .dmg) ---------------
 ED_SIG=""
