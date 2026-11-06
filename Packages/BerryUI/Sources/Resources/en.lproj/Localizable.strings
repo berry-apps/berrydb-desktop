@@ -849,3 +849,9 @@
 "24 hours" = "24 hours";
 "7 days" = "7 days";
 "Live reads on %@ have an expiry that cannot be stored." = "Live reads on %@ have an expiry that cannot be stored.";
+"Add Connection…" = "Add Connection…";
+"Search connections" = "Search connections";
+"No connections match." = "No connections match.";
+"Every saved connection is already in this project." = "Every saved connection is already in this project.";
+"No connections assigned yet." = "No connections assigned yet.";
+"Remove from this project" = "Remove from this project";
