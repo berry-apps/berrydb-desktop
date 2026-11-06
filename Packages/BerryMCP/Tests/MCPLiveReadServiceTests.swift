@@ -379,6 +379,14 @@ struct MCPRequestDeadlineTests {
         #expect(await harness.tracker.factoryCalls == 0)
     }
 
+    @Test func anExpiredLiveReadIsRefusedWithItsOwnReason() async throws {
+        let harness = Harness(liveRead: false, expired: true)
+        let error = await harness.failure("SELECT 1")
+        #expect(error == .liveReadExpired)
+        #expect(error?.description == "Live reads on this production connection have expired. The user can renew them in BerryDB Settings → AI Agents.")
+        #expect(await harness.tracker.factoryCalls == 0)
+    }
+
     @Test func aSessionWithoutItsProfileRunsNothing() async throws {
         let connection = ScriptedReadConnection(events: [.columns([ColumnMeta(name: "n", declaredType: "")])])
         let harness = Harness(connection: connection, sessionCarriesProfile: false)
@@ -841,6 +849,7 @@ private struct Harness {
         isProduction: Bool = false,
         redactedColumns: [String] = [],
         liveRead: Bool = true,
+        expired: Bool = false,
         sessionCarriesProfile: Bool = true,
         resolver: (@Sendable (UUID) -> MCPProjectResolver)? = nil,
         openBudget: Duration = .seconds(15),
@@ -853,7 +862,7 @@ private struct Harness {
             profiles: [MCPProfileAccess(profileID: id, liveRead: liveRead, redactedColumns: redactedColumns)]
         )
         let resolver = resolver?(id) ?? MCPProjectResolver(
-            loadProject: { MCPVerifiedProject(project: project, liveReadProfileIDs: liveRead ? [id] : []) },
+            loadProject: { MCPVerifiedProject(project: project, liveReadProfileIDs: liveRead ? [id] : [], expiredLiveReadProfileIDs: expired ? [id] : []) },
             profile: { requested in
                 guard requested == id else { return nil }
                 return MCPConnectionProfile(id: id, driverID: driverID, config: .sqlite(path: ":memory:"), isProduction: isProduction)

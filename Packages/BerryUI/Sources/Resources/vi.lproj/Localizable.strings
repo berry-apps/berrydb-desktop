@@ -840,3 +840,12 @@
 "Shown" = "Đang hiển thị";
 
 "Hidden" = "Đã ẩn";
+
+"Live reads expire after" = "Đọc dữ liệu thật hết hạn sau";
+"Live reads until %@" = "Đọc dữ liệu thật đến %@";
+"Live reads expired %@" = "Đọc dữ liệu thật đã hết hạn %@";
+"1 hour" = "1 giờ";
+"8 hours" = "8 giờ";
+"24 hours" = "24 giờ";
+"7 days" = "7 ngày";
+"Live reads on %@ have an expiry that cannot be stored." = "Đọc dữ liệu thật trên %@ có thời hạn không thể lưu.";

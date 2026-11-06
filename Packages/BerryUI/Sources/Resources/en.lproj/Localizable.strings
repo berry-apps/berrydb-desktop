@@ -840,3 +840,12 @@
 "Shown" = "Shown";
 
 "Hidden" = "Hidden";
+
+"Live reads expire after" = "Live reads expire after";
+"Live reads until %@" = "Live reads until %@";
+"Live reads expired %@" = "Live reads expired %@";
+"1 hour" = "1 hour";
+"8 hours" = "8 hours";
+"24 hours" = "24 hours";
+"7 days" = "7 days";
+"Live reads on %@ have an expiry that cannot be stored." = "Live reads on %@ have an expiry that cannot be stored.";

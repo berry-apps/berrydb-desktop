@@ -6,6 +6,9 @@ public enum MCPProjectError: Error, Equatable, Sendable {
     /// A workspace root was not an absolute path; nothing is saved or
     /// loaded, since a relative root has no stable meaning across processes.
     case workspaceRootMustBeAbsolute(String)
+    /// A live-read expiry beyond the whole seconds since 1970 an `Int` can
+    /// hold; it cannot be sealed, so nothing is saved.
+    case liveReadUntilOutOfRange
 }
 
 /// The settings one MCP project holds for one saved connection profile.
@@ -19,10 +22,19 @@ public struct MCPProfileAccess: Codable, Equatable, Sendable {
     /// Column names redacted from live results; stored lowercased, deduped and sorted.
     public var redactedColumns: [String]
 
-    public init(profileID: UUID, liveRead: Bool = false, redactedColumns: [String] = []) {
+    /// When live read stops being honoured; nil means no expiry. Held in whole
+    /// seconds because the sealed payload carries whole seconds, so the stored,
+    /// sealed and reported values must agree.
+    public var liveReadUntil: Date?
+
+    public init(
+        profileID: UUID, liveRead: Bool = false, redactedColumns: [String] = [],
+        liveReadUntil: Date? = nil
+    ) {
         self.profileID = profileID
         self.liveRead = liveRead
         self.redactedColumns = Self.normalizedColumns(redactedColumns)
+        self.liveReadUntil = liveReadUntil.map { Date(timeIntervalSince1970: floor($0.timeIntervalSince1970)) }
     }
 
     static func normalizedColumns(_ columns: [String]) -> [String] {
@@ -78,19 +90,28 @@ public struct MCPVerifiedProject: Equatable, Sendable {
     /// seal the label at all. The helper applies the production limits to
     /// these whatever label the profile carries now.
     public let productionSealedProfileIDs: Set<UUID>
+    /// Profiles whose tag-verified row has liveRead on but whose live-read
+    /// expiry has passed, in an enabled, verified project. They are in
+    /// neither `liveReadProfileIDs` nor `rejectedLiveReadProfileIDs`: the
+    /// row is BerryDB's own and only needs renewing. They are never in
+    /// `productionSealedProfileIDs` either, so a caller renewing one of
+    /// these rows must not read its production limits from that set.
+    public let expiredLiveReadProfileIDs: Set<UUID>
 
     public init(
         project: MCPProject,
         liveReadProfileIDs: Set<UUID>,
         projectTagValid: Bool = true,
         rejectedLiveReadProfileIDs: Set<UUID> = [],
-        productionSealedProfileIDs: Set<UUID> = []
+        productionSealedProfileIDs: Set<UUID> = [],
+        expiredLiveReadProfileIDs: Set<UUID> = []
     ) {
         self.project = project
         self.liveReadProfileIDs = liveReadProfileIDs
         self.projectTagValid = projectTagValid
         self.rejectedLiveReadProfileIDs = rejectedLiveReadProfileIDs
         self.productionSealedProfileIDs = productionSealedProfileIDs
+        self.expiredLiveReadProfileIDs = expiredLiveReadProfileIDs
     }
 }
 
@@ -112,6 +133,28 @@ struct MCPProjectProfileRecord: Codable, FetchableRecord, PersistableRecord {
     var liveRead: Bool
     var redactedColumnsJSON: String
     var integrityTag: Data?
+    var liveReadUntil: Date?
+}
+
+extension MCPProjectProfileRecord {
+    /// Reads the expiry leniently. Any process of the same user can write
+    /// anything to that column, and the synthesized decoding throws on a
+    /// value no date can be made from (`''`, `'not a date'`), which fails
+    /// every fetch of the project's rows, and inside a key rotation fails
+    /// it after the new key is already stored. Such a value reads as no
+    /// expiry instead: a row sealed with one then no longer matches its
+    /// tag and is rejected, and a row sealed without one is unaffected.
+    /// NULL and every value a date can be made from read as before.
+    init(row: Row) throws {
+        self.init(
+            projectID: try row.decode(forColumn: "projectID"),
+            profileID: try row.decode(forColumn: "profileID"),
+            liveRead: try row.decode(forColumn: "liveRead"),
+            redactedColumnsJSON: try row.decode(forColumn: "redactedColumnsJSON"),
+            integrityTag: try row.decode(forColumn: "integrityTag"),
+            liveReadUntil: Date.fromDatabaseValue(row["liveReadUntil"] as DatabaseValue)
+        )
+    }
 }
 
 extension MCPProject {

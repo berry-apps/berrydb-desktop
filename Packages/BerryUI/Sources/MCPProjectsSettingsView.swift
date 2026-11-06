@@ -152,6 +152,10 @@ private struct MCPProjectEditorSheet: View {
     @State private var confirmDelete = false
     /// The redacted-columns fields as typed, by profile.
     @State private var redactionText: [UUID: String] = [:]
+    /// The expiry the user chose per profile, as an index into
+    /// `productionConsentDurations`. Only a pick or a renewal writes it to
+    /// the draft, so an untouched draft keeps the stored expiry.
+    @State private var consentDurationIndex: [UUID: Int] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -343,9 +347,10 @@ private struct MCPProjectEditorSheet: View {
     /// row. The redactions are shown while live reads are on, and for a
     /// connection whose saved settings could not be verified also while they
     /// are off (`showsRedactions`); the production notice only while live
-    /// reads are on; the production consent and the privilege check's result
-    /// only while a save would turn them on, since `save` asks for neither
-    /// for live reads that stay on.
+    /// reads are on; the production consent while a save would turn them on
+    /// or renew their expiry (`needsProductionConsent`), and the privilege
+    /// check's result only while a save would turn them on, since `save`
+    /// asks for neither for live reads that stay on unchanged.
     @ViewBuilder
     private func liveReadSettings(for profile: ConnectionProfile, isProduction: Bool) -> some View {
         let id = profile.id
@@ -385,7 +390,7 @@ private struct MCPProjectEditorSheet: View {
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if isProduction, turnsOn {
+                if isProduction, MCPProjectsSettingsModel.needsProductionConsent(id, in: draft) {
                     Toggle(
                         isDynamoDB
                             ? L("I reviewed the redacted attributes and accept reads on this production database")
@@ -393,12 +398,58 @@ private struct MCPProjectEditorSheet: View {
                         isOn: acknowledgment(.production(id))
                     )
                 }
+                if isProduction {
+                    productionConsentExpiry(for: id)
+                }
                 if turnsOn {
                     privilegeStatus(of: id, isProduction: isProduction)
                 }
             }
         }
         .padding(.leading, 20)
+    }
+
+    /// The consent lasts a limited time. A renewal clears the acknowledgment
+    /// so the user has to confirm again before the new expiry can be saved.
+    @ViewBuilder
+    private func productionConsentExpiry(for id: UUID) -> some View {
+        let durations = MCPProjectsSettingsModel.productionConsentDurations
+        let defaultIndex = durations.firstIndex { $0.duration == MCPProjectsSettingsModel.defaultProductionConsent } ?? 0
+        let index = consentDurationIndex[id] ?? defaultIndex
+        Picker(L("Live reads expire after"), selection: Binding(
+            get: { index },
+            set: { picked in
+                consentDurationIndex[id] = picked
+                setConsentExpiry(of: id, index: picked)
+            }
+        )) {
+            ForEach(durations.indices, id: \.self) { Text(durations[$0].label).tag($0) }
+        }
+        switch model.liveReadStatus(for: id, in: draft) {
+        case .none:
+            EmptyView()
+        case let .until(date):
+            Text(L("Live reads until \(date.formatted(date: .abbreviated, time: .shortened))"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case let .expired(date):
+            Text(L("Live reads expired \(date.formatted(date: .abbreviated, time: .shortened))"))
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+        if draft.verifiedLiveReads.contains(id) {
+            Button(L("Renew")) {
+                setConsentExpiry(of: id, index: index)
+                draft.acknowledged.remove(.production(id))
+            }
+        }
+    }
+
+    private func setConsentExpiry(of id: UUID, index: Int) {
+        let durations = MCPProjectsSettingsModel.productionConsentDurations
+        guard durations.indices.contains(index) else { return }
+        let seconds = Double(durations[index].duration.components.seconds)
+        draft.access[id, default: .init()].liveReadUntil = model.currentDate().addingTimeInterval(seconds)
     }
 
     @ViewBuilder

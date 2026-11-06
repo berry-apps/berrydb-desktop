@@ -83,17 +83,18 @@ struct MCPProjectsSettingsModelTests {
     private func makeModel(
         _ store: BerryStore, _ box: KeyBox, auditBox: AuditKeyBox = AuditKeyBox(), helperURL: URL? = nil,
         privilegeCheckLimit: Duration = MCPProjectsSettingsModel.defaultPrivilegeCheckLimit,
-        privilegeChecker: (@Sendable (ConnectionProfile) async throws -> [String])? = nil
+        privilegeChecker: (@Sendable (ConnectionProfile) async throws -> [String])? = nil,
+        now: @escaping @Sendable () -> Date = Date.init
     ) -> MCPProjectsSettingsModel {
         if let privilegeChecker {
             return MCPProjectsSettingsModel(
                 store: store, keyStore: box.keyStore, auditKeyStore: auditBox.keyStore, helperURL: helperURL,
-                privilegeCheckLimit: privilegeCheckLimit, privilegeChecker: privilegeChecker
+                privilegeCheckLimit: privilegeCheckLimit, privilegeChecker: privilegeChecker, now: now
             )
         }
         return MCPProjectsSettingsModel(
             store: store, keyStore: box.keyStore, auditKeyStore: auditBox.keyStore, helperURL: helperURL,
-            privilegeCheckLimit: privilegeCheckLimit
+            privilegeCheckLimit: privilegeCheckLimit, now: now
         )
     }
 
@@ -1268,6 +1269,176 @@ struct MCPProjectsSettingsModelTests {
         #expect(verified.liveReadProfileIDs == [ledger.id])
     }
 
+    nonisolated private static let consentNow = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func productionLedger(_ store: BerryStore) throws -> ConnectionProfile {
+        let ledger = ConnectionProfile(
+            driverID: "sqlite", name: "Ledger", envColor: "production", filePath: "/data/ledger.sqlite"
+        )
+        try store.save(ledger)
+        return ledger
+    }
+
+    @Test func turningLiveReadsOnAProductionProfileSealsTheDefaultExpiry() throws {
+        let (store, _, _) = try makeStore()
+        let ledger = try productionLedger(store)
+        let box = KeyBox()
+        let model = makeModel(store, box, now: { Self.consentNow })
+
+        var draft = liveReadDraft(model, ledger)
+        draft.acknowledged = [.production(ledger.id)]
+        #expect(model.save(draft))
+
+        let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
+        let expected = Date(timeIntervalSince1970: 1_800_000_000 + 86_400)
+        #expect(verified.project.profiles.first?.liveReadUntil == expected)
+    }
+
+    @Test func turningLiveReadsOnSealsThePickedDuration() throws {
+        let (store, _, _) = try makeStore()
+        let ledger = try productionLedger(store)
+        let box = KeyBox()
+        let model = makeModel(store, box, now: { Self.consentNow })
+
+        var draft = liveReadDraft(model, ledger)
+        draft.acknowledged = [.production(ledger.id)]
+        let picked = Self.consentNow.addingTimeInterval(3_600)
+        draft.access[ledger.id]?.liveReadUntil = picked
+        #expect(model.save(draft))
+
+        let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
+        #expect(verified.project.profiles.first?.liveReadUntil == picked)
+    }
+
+    @Test func needsProductionConsentForATurnOnAndForARenewalOnly() throws {
+        let (store, _, _) = try makeStore()
+        let ledger = try productionLedger(store)
+        let archive = ConnectionProfile(
+            driverID: "sqlite", name: "Archive", envColor: "production", filePath: "/data/archive.sqlite"
+        )
+        try store.save(archive)
+        let box = KeyBox()
+        let stored = Self.consentNow.addingTimeInterval(3_600)
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: ledger.id, liveRead: true, liveReadUntil: stored),
+            MCPProfileAccess(profileID: archive.id, liveRead: false),
+        ])
+        let model = makeModel(store, box, now: { Self.consentNow })
+
+        var draft = try #require(model.draft(for: seeded.id))
+        #expect(draft.storedLiveReadUntil == [ledger.id: stored])
+        #expect(MCPProjectsSettingsModel.needsProductionConsent(archive.id, in: draft) == false)
+        draft.access[archive.id]?.liveRead = true
+        #expect(MCPProjectsSettingsModel.needsProductionConsent(archive.id, in: draft))
+
+        #expect(MCPProjectsSettingsModel.needsProductionConsent(ledger.id, in: draft) == false)
+        draft.access[ledger.id]?.liveReadUntil = Self.consentNow.addingTimeInterval(28_800)
+        #expect(MCPProjectsSettingsModel.needsProductionConsent(ledger.id, in: draft))
+        draft.access[ledger.id]?.liveReadUntil = stored
+        #expect(MCPProjectsSettingsModel.needsProductionConsent(ledger.id, in: draft) == false)
+    }
+
+    @Test func anUnrepresentableExpiryIsRefusedBeforeTheKeyRotates() throws {
+        let (store, _, _) = try makeStore()
+        let ledger = try productionLedger(store)
+        let box = KeyBox()
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: ledger.id, liveRead: true, liveReadUntil: Self.consentNow.addingTimeInterval(3_600)),
+        ])
+        let model = makeModel(store, box, now: { Self.consentNow })
+        let keyBefore = box.data
+        let projectBefore = try store.mcpProject(id: seeded.id)
+
+        var draft = try #require(model.draft(for: seeded.id))
+        draft.access[ledger.id]?.liveReadUntil = Date(timeIntervalSince1970: 1e300)
+        draft.acknowledged = [.production(ledger.id)]
+        #expect(model.save(draft) == false)
+
+        #expect(model.errorMessage == L("Live reads on \("Ledger") have an expiry that cannot be stored."))
+        #expect(box.writeCount == 0)
+        #expect(box.data == keyBefore)
+        #expect(try store.mcpProject(id: seeded.id) == projectBefore)
+        let verified = try #require(try store.verifiedMCPProject(id: seeded.id, key: box.key, now: Self.consentNow))
+        #expect(verified.liveReadProfileIDs == [ledger.id])
+    }
+
+    @Test func anUnlabeledProfileNeverCarriesAnExpiry() throws {
+        let (store, _, _) = try makeStore()
+        let local = ConnectionProfile(driverID: "sqlite", name: "Local", filePath: "/data/local.sqlite")
+        try store.save(local)
+        let box = KeyBox()
+        let model = makeModel(store, box, now: { Self.consentNow })
+
+        var draft = liveReadDraft(model, local)
+        draft.access[local.id]?.liveReadUntil = Self.consentNow.addingTimeInterval(3_600)
+        #expect(model.save(draft))
+
+        let verified = try #require(try store.verifiedMCPProject(id: draft.id, key: box.key))
+        #expect(verified.project.profiles.first?.liveReadUntil == nil)
+    }
+
+    @Test func renewingAProductionConsentNeedsTheAcknowledgment() throws {
+        let (store, _, _) = try makeStore()
+        let ledger = try productionLedger(store)
+        let box = KeyBox()
+        let stored = Self.consentNow.addingTimeInterval(3_600)
+        let seeded = try seedSealedProject(store, box, profiles: [
+            MCPProfileAccess(profileID: ledger.id, liveRead: true, liveReadUntil: stored),
+        ])
+        let model = makeModel(store, box, now: { Self.consentNow })
+
+        var draft = try #require(model.draft(for: seeded.id))
+        let renewed = Self.consentNow.addingTimeInterval(28_800)
+        draft.access[ledger.id]?.liveReadUntil = renewed
+        #expect(MCPProjectsSettingsModel.renewsProductionConsent(ledger.id, in: draft, editing: seeded))
+        #expect(model.save(draft) == false)
+        #expect(model.errorMessage == Self.productionConsentMissing("Ledger"))
+
+        draft.acknowledged = [.production(ledger.id)]
+        #expect(model.save(draft))
+        let verified = try #require(try store.verifiedMCPProject(id: seeded.id, key: box.key))
+        #expect(verified.project.profiles.first?.liveReadUntil == renewed)
+    }
+
+    @Test func theDraftShowsTheStoredExpiryAndSavingWithoutRenewingKeepsIt() throws {
+        let (store, _, _) = try makeStore()
+        let ledger = try productionLedger(store)
+        for offset in [-7_200.0, 3_600.0] {
+            let box = KeyBox()
+            let stored = Self.consentNow.addingTimeInterval(offset)
+            let seeded = try seedSealedProject(store, box, name: "P\(offset)", root: "/work/\(offset)", profiles: [
+                MCPProfileAccess(profileID: ledger.id, liveRead: true, liveReadUntil: stored),
+            ])
+            let model = makeModel(store, box, now: { Self.consentNow })
+
+            let draft = try #require(model.draft(for: seeded.id))
+            #expect(draft.access[ledger.id]?.liveReadUntil == stored)
+            #expect(model.save(draft))
+            let verified = try #require(try store.verifiedMCPProject(id: seeded.id, key: box.key))
+            #expect(verified.project.profiles.first?.liveReadUntil == stored)
+            try store.deleteMCPProject(id: seeded.id, sealingKey: SymmetricKey(size: .bits256), previousKey: box.key)
+        }
+    }
+
+    @Test func liveReadStatusReportsUntilAndExpired() throws {
+        let (store, _, _) = try makeStore()
+        let ledger = try productionLedger(store)
+        let model = makeModel(store, KeyBox(), now: { Self.consentNow })
+        var draft = model.draftForNewProject()
+        draft.profileIDs = [ledger.id]
+
+        #expect(model.liveReadStatus(for: ledger.id, in: draft) == .none)
+        draft.access[ledger.id] = .init(liveRead: true)
+        #expect(model.liveReadStatus(for: ledger.id, in: draft) == .none)
+        draft.access[ledger.id]?.liveReadUntil = Self.consentNow
+        #expect(model.liveReadStatus(for: ledger.id, in: draft) == .until(Self.consentNow))
+        let past = Self.consentNow.addingTimeInterval(-1)
+        draft.access[ledger.id]?.liveReadUntil = past
+        #expect(model.liveReadStatus(for: ledger.id, in: draft) == .expired(past))
+        draft.access[ledger.id]?.liveRead = false
+        #expect(model.liveReadStatus(for: ledger.id, in: draft) == .none)
+    }
+
     @Test func aDynamoDBConnectionCanTurnLiveReadsOnWithoutAPrivilegeCheck() throws {
         let (store, _, _) = try makeStore()
         let table = ConnectionProfile(driverID: "dynamodb", name: "Sessions")
@@ -1700,7 +1871,7 @@ struct MCPProjectsSettingsModelTests {
         ])
         try store.saveMCPProject(seeded, sealingKey: sealedKey, previousKey: nil)
         let stub = PrivilegeCheckStub(.success(["table_write"]))
-        let model = makeModel(store, box, privilegeChecker: stub.checker)
+        let model = makeModel(store, box, privilegeChecker: stub.checker, now: { Self.consentNow })
 
         var draft = try #require(model.draft(for: seeded.id))
         #expect(draft.access[orders.id] == .init(liveRead: true, redactedColumns: []))
@@ -1714,7 +1885,12 @@ struct MCPProjectsSettingsModelTests {
         let verified = try #require(try store.verifiedMCPProject(id: seeded.id, key: box.key))
         #expect(verified.liveReadProfileIDs == [orders.id, ledger.id])
         let saved = Dictionary(uniqueKeysWithValues: verified.project.profiles.map { ($0.profileID, $0) })
-        #expect(saved[ledger.id] == MCPProfileAccess(profileID: ledger.id, liveRead: true, redactedColumns: ["email", "ssn"]))
+        // A production row stored without an expiry receives the default one when
+        // its project is saved; turning nothing on, it needs no new privilege check.
+        #expect(saved[ledger.id] == MCPProfileAccess(
+            profileID: ledger.id, liveRead: true, redactedColumns: ["email", "ssn"],
+            liveReadUntil: Self.consentNow.addingTimeInterval(86_400)
+        ))
     }
 
     /// Only a row that verifies counts as already on. A row another process

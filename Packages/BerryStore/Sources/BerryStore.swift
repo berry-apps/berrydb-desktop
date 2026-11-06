@@ -1084,6 +1084,13 @@ public final class BerryStore: Sendable {
                 try db.execute(sql: "DROP TABLE IF EXISTS \(table)")
             }
         }
+        migrator.registerMigration("v37-mcp-profile-access-live-read-until") { db in
+            // NULL means the row has no expiry, which is what every row
+            // written before this migration meant.
+            try db.alter(table: "mcp_project_profile") { t in
+                t.add(column: "liveReadUntil", .datetime)
+            }
+        }
         return migrator
     }
 
@@ -1448,7 +1455,8 @@ public final class BerryStore: Sendable {
                 let normalizedAccess = MCPProfileAccess(
                     profileID: access.profileID,
                     liveRead: access.liveRead,
-                    redactedColumns: access.redactedColumns
+                    redactedColumns: access.redactedColumns,
+                    liveReadUntil: access.liveReadUntil
                 )
                 // The tag binds the row to the profile's endpoint and
                 // production label as stored right now; a missing profile
@@ -1470,7 +1478,8 @@ public final class BerryStore: Sendable {
                         decoding: try encoder.encode(normalizedAccess.redactedColumns),
                         as: UTF8.self
                     ),
-                    integrityTag: integrityTag
+                    integrityTag: integrityTag,
+                    liveReadUntil: normalizedAccess.liveReadUntil
                 ).insert(db)
             }
             try Self.reseal(
@@ -1505,12 +1514,19 @@ public final class BerryStore: Sendable {
             let rows = try MCPProjectProfileRecord.filter(Column("projectID") == other.id).fetchAll(db)
             var occurrences: [UUID: Int] = [:]
             for row in rows { occurrences[row.profileID, default: 0] += 1 }
-            for var row in rows {
-                row.integrityTag = Self.resealedProfileTag(
+            for row in rows {
+                let tag = Self.resealedProfileTag(
                     row, projectID: other.id, isDuplicated: occurrences[row.profileID] != 1,
                     sealingKey: sealingKey, previousKey: previousKey, decoder: decoder, db: db
                 )
-                try row.save(db)
+                // Only the tag column is written. Saving the whole record
+                // re-encodes the expiry from its decoded `Date`, and a value
+                // another process wrote that no date string can express
+                // (1e300) comes back as an empty string, after which every
+                // read of the project fails to decode.
+                try MCPProjectProfileRecord
+                    .filter(Column("projectID") == other.id && Column("profileID") == row.profileID)
+                    .updateAll(db, Column("integrityTag").set(to: tag))
             }
         }
     }
@@ -1554,7 +1570,10 @@ public final class BerryStore: Sendable {
             [String].self, from: Data(row.redactedColumnsJSON.utf8)
         ) else { return nil }
         guard let profile = try? ConnectionProfile.fetchOne(db, key: row.profileID) else { return nil }
-        let access = MCPProfileAccess(profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns)
+        let access = MCPProfileAccess(
+            profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns,
+            liveReadUntil: row.liveReadUntil
+        )
         guard let verified = try? MCPAccessIntegrity.verifiedProfilePayload(
             tag: row.integrityTag, projectID: projectID, access: access, profile: profile, key: previousKey
         ) else {
@@ -1593,8 +1612,11 @@ public final class BerryStore: Sendable {
     /// cross-wired row cannot borrow another row's payload: any profile ID
     /// that appears on more than one row is treated as tampered and rejected
     /// outright. A verified but disabled project always yields an empty
-    /// `liveReadProfileIDs`, and an empty `productionSealedProfileIDs` with it.
-    public func verifiedMCPProject(id: UUID, key: SymmetricKey?) throws -> MCPVerifiedProject? {
+    /// `liveReadProfileIDs`, and empty `productionSealedProfileIDs` and
+    /// `expiredLiveReadProfileIDs` with it. A verified row whose live-read
+    /// expiry is before `now` is reported in `expiredLiveReadProfileIDs`
+    /// instead of `liveReadProfileIDs`.
+    public func verifiedMCPProject(id: UUID, key: SymmetricKey?, now: Date = Date()) throws -> MCPVerifiedProject? {
         try read { db in
             guard let record = try MCPProjectRecord.fetchOne(db, key: id) else { return nil }
             let project = try Self.makeMCPProject(record: record, db: db)
@@ -1610,19 +1632,21 @@ public final class BerryStore: Sendable {
             }
 
             let rows = try MCPProjectProfileRecord.filter(Column("projectID") == id).fetchAll(db)
-            let verified = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, db: db)
+            let verified = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, now: now, db: db)
             return MCPVerifiedProject(
                 project: project,
                 liveReadProfileIDs: project.isEnabled ? verified.live : [],
                 rejectedLiveReadProfileIDs: verified.rejected,
-                productionSealedProfileIDs: project.isEnabled ? verified.production : []
+                productionSealedProfileIDs: project.isEnabled ? verified.production : [],
+                expiredLiveReadProfileIDs: project.isEnabled ? verified.expired : []
             )
         }
     }
 
     /// The only safe source for a `MCPProject` value passed back into
-    /// `saveMCPProject`: `liveRead` is forced false on every profile that is
-    /// not in `verifiedMCPProject(id:key:).liveReadProfileIDs`, and
+    /// `saveMCPProject`: `liveRead` is forced false, and `liveReadUntil` nil,
+    /// on every profile that is not in
+    /// `verifiedMCPProject(id:key:).liveReadProfileIDs`, and
     /// `isEnabled` is forced false when the project's own tag does not
     /// verify. One case is handled independently of `liveReadProfileIDs`:
     /// when the project tag verifies but the project is disabled,
@@ -1632,7 +1656,8 @@ public final class BerryStore: Sendable {
     /// disabled at edit time. Instead, a disabled-but-verified project keeps
     /// each row's own tag-verified `liveRead`, so re-enabling and saving the
     /// editing copy restores exactly what was there before, no more and no
-    /// less.
+    /// less. A row whose live-read expiry has passed keeps `liveRead` and
+    /// its expiry too, since renewing the grant starts from this copy.
     ///
     /// `key` must be the currently stored key — the `previousKey` read with
     /// `MCPAccessKeyStore.loadForRotation()` before `replace(with:)` — never
@@ -1656,14 +1681,22 @@ public final class BerryStore: Sendable {
 
             guard projectTagValid, let key else {
                 project.isEnabled = false
-                for index in project.profiles.indices { project.profiles[index].liveRead = false }
+                for index in project.profiles.indices {
+                    project.profiles[index].liveRead = false
+                    project.profiles[index].liveReadUntil = nil
+                }
                 return project
             }
 
             let rows = try MCPProjectProfileRecord.filter(Column("projectID") == id).fetchAll(db)
-            let live = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, db: db).live
-            for index in project.profiles.indices where !live.contains(project.profiles[index].profileID) {
+            let verified = try Self.verifiedProfileRows(projectID: id, rows: rows, key: key, now: Date(), db: db)
+            let sealed = verified.live.union(verified.expired)
+            // The expiry column is writable by any process of the same user,
+            // so an expiry on a row that does not verify is dropped with its
+            // `liveRead`: a draft built from this copy is sealed on save.
+            for index in project.profiles.indices where !sealed.contains(project.profiles[index].profileID) {
                 project.profiles[index].liveRead = false
+                project.profiles[index].liveReadUntil = nil
             }
             return project
         }
@@ -1674,7 +1707,9 @@ public final class BerryStore: Sendable {
     /// claim `liveRead` but fail verification or share a duplicated profile
     /// ID (`rejected`); `production` is the part of `live` sealed under the
     /// production label, or before the label was covered (see
-    /// `MCPAccessIntegrity.verifiedProfilePayload`). Deliberately does not
+    /// `MCPAccessIntegrity.verifiedProfilePayload`). A verified row whose
+    /// live-read expiry is before `now` goes to `expired` instead of `live`,
+    /// and so never into `production`. Deliberately does not
     /// apply the project's own `isEnabled` gate — `verifiedMCPProject`
     /// applies it afterward for its public `liveReadProfileIDs`, while
     /// `mcpProjectForEditing` needs the ungated result so editing a
@@ -1684,8 +1719,8 @@ public final class BerryStore: Sendable {
     /// decoded, or was pointed at another endpoint since sealing is
     /// rejected.
     private static func verifiedProfileRows(
-        projectID: UUID, rows: [MCPProjectProfileRecord], key: SymmetricKey, db: Database
-    ) throws -> (live: Set<UUID>, rejected: Set<UUID>, production: Set<UUID>) {
+        projectID: UUID, rows: [MCPProjectProfileRecord], key: SymmetricKey, now: Date, db: Database
+    ) throws -> (live: Set<UUID>, rejected: Set<UUID>, production: Set<UUID>, expired: Set<UUID>) {
         var occurrences: [UUID: Int] = [:]
         for row in rows { occurrences[row.profileID, default: 0] += 1 }
 
@@ -1693,6 +1728,7 @@ public final class BerryStore: Sendable {
         var live = Set<UUID>()
         var rejected = Set<UUID>()
         var production = Set<UUID>()
+        var expired = Set<UUID>()
         for row in rows where row.liveRead {
             let verified = try profileRowVerification(
                 row, isDuplicated: occurrences[row.profileID] != 1, projectID: projectID,
@@ -1702,10 +1738,14 @@ public final class BerryStore: Sendable {
                 rejected.insert(row.profileID)
                 continue
             }
+            if let until = verified.liveReadUntil, until < now {
+                expired.insert(row.profileID)
+                continue
+            }
             live.insert(row.profileID)
             if verified.production { production.insert(row.profileID) }
         }
-        return (live, rejected, production)
+        return (live, rejected, production, expired)
     }
 
     /// Profiles of project `projectID` whose access row does not verify
@@ -1736,21 +1776,28 @@ public final class BerryStore: Sendable {
     /// The bytes `row`'s tag verifies against under `key`, built from the
     /// row's own decoded fields with the endpoint of its profile as stored
     /// now, and whether they seal the production label (see
-    /// `MCPAccessIntegrity.verifiedProfilePayload`); nil when the row does
-    /// not verify. A duplicated profile ID, or a profile that is missing or
+    /// `MCPAccessIntegrity.verifiedProfilePayload`), with the expiry those
+    /// bytes cover; nil when the row does not verify. The expiry is the
+    /// stored one floored to whole seconds, as sealed: comparing the stored
+    /// column instead would let a fraction written next to a valid tag
+    /// extend the grant. A duplicated profile ID, or a profile that is missing or
     /// cannot be decoded, never verifies. Throws when `redactedColumnsJSON`
     /// cannot be decoded.
     private static func profileRowVerification(
         _ row: MCPProjectProfileRecord, isDuplicated: Bool, projectID: UUID, key: SymmetricKey,
         decoder: JSONDecoder, db: Database
-    ) throws -> (payload: Data, production: Bool)? {
+    ) throws -> (payload: Data, production: Bool, liveReadUntil: Date?)? {
         guard !isDuplicated else { return nil }
         let redactedColumns = try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8))
         guard let profile = try? ConnectionProfile.fetchOne(db, key: row.profileID) else { return nil }
-        let access = MCPProfileAccess(profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns)
-        return try MCPAccessIntegrity.verifiedProfilePayload(
-            tag: row.integrityTag, projectID: projectID, access: access, profile: profile, key: key
+        let access = MCPProfileAccess(
+            profileID: row.profileID, liveRead: row.liveRead, redactedColumns: redactedColumns,
+            liveReadUntil: row.liveReadUntil
         )
+        guard let verified = try MCPAccessIntegrity.verifiedProfilePayload(
+            tag: row.integrityTag, projectID: projectID, access: access, profile: profile, key: key
+        ) else { return nil }
+        return (verified.payload, verified.production, access.liveReadUntil)
     }
 
     /// The label the connection editor writes for a production connection;
@@ -1772,7 +1819,8 @@ public final class BerryStore: Sendable {
             MCPProfileAccess(
                 profileID: row.profileID,
                 liveRead: row.liveRead,
-                redactedColumns: try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8))
+                redactedColumns: try decoder.decode([String].self, from: Data(row.redactedColumnsJSON.utf8)),
+                liveReadUntil: row.liveReadUntil
             )
         }
         return MCPProject(

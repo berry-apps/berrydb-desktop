@@ -189,4 +189,49 @@ struct MCPProjectTests {
         #expect(throws: (any Error).self) { try rollbackMigrator.migrate(rollbackQueue) }
         #expect(try rollbackQueue.read { try !$0.tableExists("must_rollback") })
     }
+
+    @Test func v37AddsANullableExpiryColumnAndOldRowsReadBackNil() throws {
+        var configuration = Configuration()
+        configuration.prepareDatabase { db in try SQLiteVecExtension.install(into: db) }
+        let queue = try DatabaseQueue(path: ":memory:", configuration: configuration)
+        try BerryStore.migrator.migrate(queue, upTo: "v36-drop-per-node-graph-tables")
+        let profileID = UUID()
+        let projectID = UUID()
+        try queue.write { db in
+            try db.execute(
+                sql: "INSERT INTO connection_profile (id, driverID, name, sortOrder, createdAt, tlsMode, sshEnabled, historyEnabled, elasticsearchAPIKeyEnabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                arguments: [profileID, "sqlite", "Fixture", 0, Date(), "prefer", false, true, false]
+            )
+            try db.execute(
+                sql: "INSERT INTO mcp_project (id, name, isEnabled, workspaceRootsJSON, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)",
+                arguments: [projectID, "Old", true, "[]", Date(), Date()]
+            )
+            try db.execute(
+                sql: "INSERT INTO mcp_project_profile (projectID, profileID, liveRead, redactedColumnsJSON) VALUES (?, ?, ?, ?)",
+                arguments: [projectID, profileID, true, "[]"]
+            )
+        }
+        try BerryStore.migrator.migrate(queue)
+        #expect(try queue.read { try $0.columns(in: "mcp_project_profile").map(\.name).contains("liveReadUntil") })
+        let isNull = try queue.read {
+            try Bool.fetchOne($0, sql: "SELECT liveReadUntil IS NULL FROM mcp_project_profile WHERE projectID = ?", arguments: [projectID])
+        }
+        #expect(isNull == true)
+    }
+
+    @Test func anAccessExpiryRoundTripsInWholeSeconds() throws {
+        let store = try BerryStore(path: ":memory:")
+        let profile = ConnectionProfile(driverID: "postgres", name: "Expiring")
+        try store.save(profile)
+        let project = MCPProject(
+            name: "Project",
+            profiles: [MCPProfileAccess(
+                profileID: profile.id, liveRead: true,
+                liveReadUntil: Date(timeIntervalSince1970: 1_800_000_000.7)
+            )]
+        )
+        try store.saveMCPProject(project, sealingKey: SymmetricKey(size: .bits256), previousKey: nil)
+        let loaded = try store.mcpProject(id: project.id)
+        #expect(loaded?.profiles.first?.liveReadUntil == Date(timeIntervalSince1970: 1_800_000_000))
+    }
 }

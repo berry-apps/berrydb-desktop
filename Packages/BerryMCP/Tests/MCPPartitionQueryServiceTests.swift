@@ -482,9 +482,18 @@ struct MCPPartitionQueryServiceTests {
                 liveReadProfileIDs: liveRead ? [id] : []
             )
         }
+        let expiredProject: @Sendable (UUID) -> MCPVerifiedProject = { id in
+            MCPVerifiedProject(
+                project: MCPProject(name: "P", isEnabled: true, profiles: [MCPProfileAccess(profileID: id, liveRead: true)]),
+                liveReadProfileIDs: [], expiredLiveReadProfileIDs: [id]
+            )
+        }
         let cases: [(MCPPartitionQueryError, String, @Sendable (UUID) -> MCPProjectResolver)] = [
             (.liveReadNotEnabled, "Live reads are not turned on for this connection. The user can turn them on in BerryDB Settings → AI Agents.", { id in
                 MCPProjectResolver(loadProject: { project(id, false) }, profile: { profile($0) })
+            }),
+            (.liveReadExpired, "Live reads on this production connection have expired. The user can renew them in BerryDB Settings → AI Agents.", { id in
+                MCPProjectResolver(loadProject: { expiredProject(id) }, profile: { profile($0) })
             }),
             (.unknownConnection, "Unknown connection for this project", { id in
                 MCPProjectResolver(loadProject: { project(id, true) }, profile: { _ in nil })

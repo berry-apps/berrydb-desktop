@@ -24,8 +24,25 @@ enum MCPAccessIntegrity {
     /// It is a field of its own rather than part of the fingerprint so that
     /// a label change never makes the row unverifiable: verification tries
     /// both values and learns the sealed one, and the helper applies the
-    /// stricter of that and the profile's current label.
+    /// stricter of that and the profile's current label. `liveReadUntil`
+    /// seals the end of the live-read grant in whole seconds since 1970, so
+    /// a process that can write the store cannot extend or remove it; the
+    /// key is absent from the bytes when the grant has no end.
     private struct ProfilePayload: Encodable {
+        let domain = "berrydb.mcp.profile-access.v4"
+        let projectID: String
+        let profileID: String
+        let liveRead: Bool
+        let redactedColumns: [String]
+        let endpoint: EndpointFingerprint
+        let production: Bool
+        let liveReadUntil: Int?
+    }
+
+    /// The payload of rows sealed after the label was covered and before
+    /// the live-read expiry was. Such a row keeps verifying against these
+    /// bytes as long as it carries no expiry.
+    private struct LabelProfilePayload: Encodable {
         let domain = "berrydb.mcp.profile-access.v3"
         let projectID: String
         let profileID: String
@@ -121,12 +138,44 @@ enum MCPAccessIntegrity {
 
     /// Canonical bytes of one profile's access row within one project,
     /// bound to the endpoint of `profile` — the stored connection profile
-    /// the row refers to (see `EndpointFingerprint`) — and to `production`,
-    /// whether the profile carries the production label.
+    /// the row refers to (see `EndpointFingerprint`) — to `production`,
+    /// whether the profile carries the production label, and to the row's
+    /// live-read expiry.
+    /// Throws `MCPProjectError.liveReadUntilOutOfRange` when the expiry
+    /// cannot be sealed (see `sealedSeconds`).
     static func profilePayload(
         projectID: UUID, access: MCPProfileAccess, profile: ConnectionProfile, production: Bool
     ) throws -> Data {
-        try canonical(ProfilePayload(
+        var liveReadUntil: Int?
+        if let until = access.liveReadUntil {
+            guard let seconds = sealedSeconds(until) else { throw MCPProjectError.liveReadUntilOutOfRange }
+            liveReadUntil = seconds
+        }
+        return try canonical(ProfilePayload(
+            projectID: projectID.uuidString.lowercased(),
+            profileID: access.profileID.uuidString.lowercased(),
+            liveRead: access.liveRead,
+            redactedColumns: MCPProfileAccess.normalizedColumns(access.redactedColumns),
+            endpoint: EndpointFingerprint(profile),
+            production: production,
+            liveReadUntil: liveReadUntil
+        ))
+    }
+
+    /// Whole seconds since 1970 of `date`, or nil when that is infinite or
+    /// beyond `Int`. Any number in the store's expiry column decodes to a
+    /// `Date`, so a plain `Int` conversion would trap on a value written by
+    /// another process and take every read of the project down with it.
+    private static func sealedSeconds(_ date: Date) -> Int? {
+        Int(exactly: floor(date.timeIntervalSince1970))
+    }
+
+    /// Canonical bytes of the same row as sealed before the live-read
+    /// expiry was covered (see `LabelProfilePayload`).
+    static func labelProfilePayload(
+        projectID: UUID, access: MCPProfileAccess, profile: ConnectionProfile, production: Bool
+    ) throws -> Data {
+        try canonical(LabelProfilePayload(
             projectID: projectID.uuidString.lowercased(),
             profileID: access.profileID.uuidString.lowercased(),
             liveRead: access.liveRead,
@@ -152,16 +201,35 @@ enum MCPAccessIntegrity {
 
     /// The bytes `tag` verifies against under `key`, and whether they mark
     /// the profile production: the row's payload with the label, then
-    /// without it, then the payload of a row sealed before the label was
-    /// covered, which counts as production. Nil when none verifies. The
-    /// order does not matter for the answer, since one key never verifies
-    /// two different payloads with one tag.
+    /// without it; then, for a row without an expiry only, the payload of a
+    /// row sealed before the expiry was covered, with and without the
+    /// label, and the payload of a row sealed before the label was covered,
+    /// which counts as production. Nil when none verifies. The order does
+    /// not matter for the answer, since one key never verifies two
+    /// different payloads with one tag.
+    ///
+    /// The older payloads do not cover the expiry, so a row that carries
+    /// one next to an older tag has an expiry BerryDB never sealed; it
+    /// fails closed instead of verifying with the expiry ignored. A row
+    /// without an expiry keeps verifying against the older payloads, since
+    /// it grants exactly what it granted when it was sealed, and it moves
+    /// to the current payload the next time its project is saved.
     static func verifiedProfilePayload(
         tag: Data?, projectID: UUID, access: MCPProfileAccess, profile: ConnectionProfile, key: SymmetricKey
     ) throws -> (payload: Data, production: Bool)? {
         guard let tag else { return nil }
+        // No build can have sealed an expiry it cannot represent; such a
+        // row is rejected here rather than failing the whole project.
+        if let until = access.liveReadUntil, sealedSeconds(until) == nil { return nil }
         for production in [true, false] {
             let payload = try profilePayload(
+                projectID: projectID, access: access, profile: profile, production: production
+            )
+            if isValid(tag, payload: payload, key: key) { return (payload, production) }
+        }
+        guard access.liveReadUntil == nil else { return nil }
+        for production in [true, false] {
+            let payload = try labelProfilePayload(
                 projectID: projectID, access: access, profile: profile, production: production
             )
             if isValid(tag, payload: payload, key: key) { return (payload, production) }

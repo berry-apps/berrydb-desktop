@@ -59,6 +59,11 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         /// reads that stay on. `save` does not trust it and reads the
         /// editing copy again.
         public internal(set) var verifiedLiveReads: Set<UUID> = []
+        /// The live-read expiry each row had in the editing copy this draft
+        /// was made from, so the editor can tell a renewal from a row left
+        /// as it was. `save` does not trust it and reads the editing copy
+        /// again.
+        public internal(set) var storedLiveReadUntil: [UUID: Date] = [:]
     }
 
     /// One profile's live-read settings as the editor holds them. The store
@@ -66,6 +71,28 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     public struct AccessDraft: Equatable {
         public var liveRead: Bool = false
         public var redactedColumns: [String] = []
+        /// When a production profile's consent ends; nil for none.
+        public var liveReadUntil: Date?
+    }
+
+    /// The expiry choices offered for a production profile's live reads.
+    public static let productionConsentDurations: [(label: String, duration: Duration)] = [
+        (L("1 hour"), .seconds(3_600)),
+        (L("8 hours"), .seconds(28_800)),
+        (L("24 hours"), .seconds(86_400)),
+        (L("7 days"), .seconds(604_800)),
+    ]
+
+    /// The consent a production profile gets when its live reads are turned
+    /// on and the picker was never touched, so a consent is always bounded.
+    public static let defaultProductionConsent: Duration = .seconds(86_400)
+    private static let defaultSeconds = TimeInterval(defaultProductionConsent.components.seconds)
+
+    /// Where a draft's live reads stand against the clock.
+    public enum LiveReadStatus: Equatable {
+        case none
+        case until(Date)
+        case expired(Date)
     }
 
     /// A confirmation a save needs before it turns live reads on.
@@ -142,6 +169,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     private let privilegeChecker: @Sendable (ConnectionProfile) async throws -> [String]
     private let privilegeCheckLimit: Duration
     private let auditLogURL: URL
+    private let now: @Sendable () -> Date
     private var helperURL: URL? {
         guard case let .bundled(url) = helperLocation else { return nil }
         return url
@@ -169,14 +197,16 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         auditLogURL: URL = MCPAuditLog.defaultURL(),
         privilegeChecker: @escaping @Sendable (ConnectionProfile) async throws -> [String] = { _ in
             throw PrivilegeCheckUnavailable()
-        }
+        },
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.init(
             store: store, keyStore: keyStore, auditKeyStore: auditKeyStore,
             helperLocation: helperURL.map(MCPHelperLocation.bundled) ?? .notBundled,
             privilegeChecker: privilegeChecker,
             privilegeCheckLimit: privilegeCheckLimit,
-            auditLogURL: auditLogURL
+            auditLogURL: auditLogURL,
+            now: now
         )
     }
 
@@ -185,9 +215,11 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         helperLocation: MCPHelperLocation,
         privilegeChecker: @escaping @Sendable (ConnectionProfile) async throws -> [String],
         privilegeCheckLimit: Duration = defaultPrivilegeCheckLimit,
-        auditLogURL: URL = MCPAuditLog.defaultURL()
+        auditLogURL: URL = MCPAuditLog.defaultURL(),
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.auditLogURL = auditLogURL
+        self.now = now
         self.store = store
         self.keyStore = keyStore
         self.auditKeyStore = auditKeyStore
@@ -433,6 +465,42 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         draft.access[profileID]?.liveRead == true && !draft.verifiedLiveReads.contains(profileID)
     }
 
+    /// True when saving `draft` asks for the production consent of
+    /// `profileID`, provided the profile is production-labeled: the save
+    /// turns its live reads on, or they stay on with an expiry other than
+    /// the stored one. The editor shows the consent for exactly these.
+    nonisolated public static func needsProductionConsent(_ profileID: UUID, in draft: Draft) -> Bool {
+        guard let access = draft.access[profileID], access.liveRead else { return false }
+        return turnsLiveReadsOn(profileID, in: draft)
+            || (draft.verifiedLiveReads.contains(profileID)
+                && access.liveReadUntil != draft.storedLiveReadUntil[profileID])
+    }
+
+    /// True when `draft` changes the expiry of a production profile whose
+    /// live reads stay on against `editing`: a renewal extends a consent, so
+    /// it needs the same confirmation as turning the reads on.
+    nonisolated public static func renewsProductionConsent(
+        _ profileID: UUID, in draft: Draft, editing: MCPProject?
+    ) -> Bool {
+        guard let stored = editing?.profiles.first(where: { $0.profileID == profileID }), stored.liveRead,
+              let access = draft.access[profileID], access.liveRead
+        else { return false }
+        return access.liveReadUntil != stored.liveReadUntil
+    }
+
+    /// The current time as this model reads it, for the editor to show a
+    /// consent's remaining time against the same clock a save uses.
+    public func currentDate() -> Date { now() }
+
+    /// Where the live reads of `profileID` stand in `draft`. At the expiry
+    /// itself they are still on, as the store reads it.
+    public func liveReadStatus(for profileID: UUID, in draft: Draft) -> LiveReadStatus {
+        guard let access = draft.access[profileID], access.liveRead, let until = access.liveReadUntil else {
+            return .none
+        }
+        return until >= now() ? .until(until) : .expired(until)
+    }
+
     /// True when the editor starts the privilege check of `profile`: `draft`
     /// turns its live reads on, and its driver has database users to check.
     /// Switching off and on again live reads that were already on starts
@@ -578,7 +646,9 @@ public final class MCPProjectsSettingsModel: ObservableObject {
             let unverified = try store.unverifiedMCPProfileIDs(projectID: id, key: key)
             unverifiedProfileIDs[id] = unverified.isEmpty ? nil : unverified
             let access = project.profiles.map {
-                ($0.profileID, AccessDraft(liveRead: $0.liveRead, redactedColumns: $0.redactedColumns))
+                ($0.profileID, AccessDraft(
+                    liveRead: $0.liveRead, redactedColumns: $0.redactedColumns, liveReadUntil: $0.liveReadUntil
+                ))
             }
             return Draft(
                 id: project.id,
@@ -587,7 +657,11 @@ public final class MCPProjectsSettingsModel: ObservableObject {
                 workspaceRoots: project.workspaceRoots,
                 profileIDs: project.profiles.map(\.profileID),
                 access: Dictionary(access, uniquingKeysWith: { first, _ in first }),
-                verifiedLiveReads: Set(project.profiles.filter(\.liveRead).map(\.profileID))
+                verifiedLiveReads: Set(project.profiles.filter(\.liveRead).map(\.profileID)),
+                storedLiveReadUntil: Dictionary(
+                    project.profiles.compactMap { access in access.liveReadUntil.map { (access.profileID, $0) } },
+                    uniquingKeysWith: { first, _ in first }
+                )
             )
         } catch {
             errorMessage = L("MCP projects could not be loaded: \(error.localizedDescription)")
@@ -657,6 +731,18 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         }
         var draft = draft
         draft.profileIDs.removeAll { savedProfiles[$0] == nil }
+        // The store seals an expiry in whole seconds and throws for one an
+        // `Int` cannot hold. It would throw only after the key below had been
+        // replaced, leaving every project sealed under a key that is gone and
+        // so turning every project's live reads off.
+        for profile in draft.profileIDs.compactMap({ savedProfiles[$0] }) where profile.envColor == "production" {
+            guard let access = draft.access[profile.id], access.liveRead, let until = access.liveReadUntil else {
+                continue
+            }
+            if Int(exactly: floor(until.timeIntervalSince1970)) == nil {
+                return fail(L("Live reads on \(profile.name) have an expiry that cannot be stored."))
+            }
+        }
         let previousKey: SymmetricKey?
         do {
             previousKey = try keyStore.loadForRotation()
@@ -672,7 +758,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
         if let refusal = liveReadRefusal(for: draft, editing: editing, profiles: savedProfiles) {
             return fail(refusal)
         }
-        let project = editedProject(from: draft, editing: editing)
+        let project = editedProject(from: draft, editing: editing, profiles: savedProfiles)
         let sealingKey = SymmetricKey(size: .bits256)
         do {
             try keyStore.replace(with: sealingKey)
@@ -1028,20 +1114,42 @@ public final class MCPProjectsSettingsModel: ObservableObject {
                 return L("Live reads on \(profile.name) need a finished privilege check. Save again once it is done.")
             }
         }
+        // A renewal extends a consent already given, so it asks for the same
+        // confirmation as turning the reads on, but no privilege check: the
+        // reads stay as they were.
+        for profile in draft.profileIDs.compactMap({ profiles[$0] })
+        where profile.envColor == "production"
+            && Self.renewsProductionConsent(profile.id, in: draft, editing: editing)
+            && !draft.acknowledged.contains(.production(profile.id)) {
+            if profile.driver == .dynamodb {
+                return L("Live reads on \(profile.name) need your confirmation that you reviewed its redacted attributes and accept reads on this production database.")
+            }
+            return L("Live reads on \(profile.name) need your confirmation that you reviewed its redacted columns and accept reads on this production database.")
+        }
         return nil
     }
 
     /// The value to seal: the verified editing copy of a stored project, or
     /// a new project, with the draft applied, the draft's live-read settings
     /// included.
-    private func editedProject(from draft: Draft, editing: MCPProject?) -> MCPProject {
+    private func editedProject(
+        from draft: Draft, editing: MCPProject?, profiles: [UUID: ConnectionProfile]
+    ) -> MCPProject {
         var project = editing ?? MCPProject(id: draft.id, name: draft.name)
         project.name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         project.isEnabled = draft.isEnabled
         project.workspaceRoots = draft.workspaceRoots.map(Self.canonicalRoot)
         project.profiles = draft.profileIDs.map { id in
             let access = draft.access[id] ?? AccessDraft()
-            return MCPProfileAccess(profileID: id, liveRead: access.liveRead, redactedColumns: access.redactedColumns)
+            // Only a production consent expires. The default keeps a consent
+            // bounded even when the picker was never touched; an expiry in a
+            // draft for any other profile is dropped.
+            let expires = access.liveRead && profiles[id]?.envColor == "production"
+            let until = expires ? access.liveReadUntil ?? now().addingTimeInterval(Self.defaultSeconds) : nil
+            return MCPProfileAccess(
+                profileID: id, liveRead: access.liveRead, redactedColumns: access.redactedColumns,
+                liveReadUntil: until
+            )
         }
         project.updatedAt = Date()
         return project

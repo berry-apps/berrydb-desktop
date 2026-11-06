@@ -38,7 +38,7 @@ public struct MCPLiveReadResult: Encodable, Equatable, Sendable {
 }
 
 public enum MCPLiveReadError: Error, Equatable, Sendable, CustomStringConvertible {
-    case unknownConnection, liveReadNotEnabled, noProject, unsupportedDatabase
+    case unknownConnection, liveReadNotEnabled, liveReadExpired, noProject, unsupportedDatabase
     case policy(String), readOnlyUnavailable, connectionFailed, connectionLost, openTimedOut(seconds: Int)
     case timedOut(seconds: Int), queryFailed(String), resultTooLarge, tooManyConcurrentReads(limit: Int), openStillPending(retryAfterSeconds: Int)
 
@@ -46,6 +46,7 @@ public enum MCPLiveReadError: Error, Equatable, Sendable, CustomStringConvertibl
         switch self {
         case .unknownConnection: "Unknown connection for this project"
         case .liveReadNotEnabled: "Live reads are not turned on for this connection. The user can turn them on in BerryDB Settings → AI Agents."
+        case .liveReadExpired: "Live reads on this production connection have expired. The user can renew them in BerryDB Settings → AI Agents."
         case .noProject: "No BerryDB project is selected for this workspace. Call berrydb_status for details."
         case .unsupportedDatabase: "Live reads are available for PostgreSQL, MySQL, MariaDB and SQLite connections only."
         case .policy(let reason): "The query was refused before it ran: \(reason)"
@@ -72,6 +73,7 @@ extension MCPLiveReadError {
         switch self {
         case .unknownConnection: "unknown_connection"
         case .liveReadNotEnabled: "live_read_not_enabled"
+        case .liveReadExpired: "live_read_expired"
         case .noProject: "no_project"
         case .unsupportedDatabase: "unsupported_database"
         case .policy: "policy"
@@ -336,6 +338,7 @@ public struct MCPLiveReadService: Sendable {
             switch error {
             case .unauthorizedProfile, .missingProfile: return MCPLiveReadError.unknownConnection
             case .liveReadNotEnabled: return MCPLiveReadError.liveReadNotEnabled
+            case .liveReadExpired: return MCPLiveReadError.liveReadExpired
             case .projectNotFound, .projectDisabled: return MCPLiveReadError.noProject
             case .unsupportedDriver, .tunnelUnsupported: return MCPLiveReadError.unsupportedDatabase
             }

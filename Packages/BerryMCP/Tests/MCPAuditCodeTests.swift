@@ -10,10 +10,12 @@ struct MCPAuditCodeTests {
         #expect(MCPLiveReadError.openTimedOut(seconds: 1).auditCode == "open_timed_out")
         #expect(MCPLiveReadError.tooManyConcurrentReads(limit: 4).auditCode == "too_many_concurrent_reads")
         #expect(MCPLiveReadError.queryFailed("secret text").auditCode == "query_failed")
+        #expect(MCPLiveReadError.liveReadExpired.auditCode == "live_read_expired")
     }
 
     @Test func partitionQueryCodesAreSnakeCaseCaseNames() {
         #expect(MCPPartitionQueryError.tunnelUnsupported.auditCode == "tunnel_unsupported")
+        #expect(MCPPartitionQueryError.liveReadExpired.auditCode == "live_read_expired")
         #expect(MCPPartitionQueryError.invalidRequest("x").auditCode == "invalid_request")
         #expect(MCPPartitionQueryError.openStillPending(retryAfterSeconds: 3).auditCode == "open_still_pending")
     }

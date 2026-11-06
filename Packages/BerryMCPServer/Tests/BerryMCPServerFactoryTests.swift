@@ -78,11 +78,13 @@ struct BerryMCPServerFactoryTests {
     }
 
     /// The projects the resolver reads, whether reading them fails, and the
-    /// profiles whose live-read switch verifies.
+    /// profiles whose live-read switch verifies, less those whose expiry has
+    /// passed (`expired`), as the store reports them.
     struct Store: Sendable {
         var projects: [MCPProject]
         var unreadable = false
         var liveReads: Set<UUID> = []
+        var expired: Set<UUID> = []
     }
 
     fileprivate func resolver(_ store: Locked<Store>) -> MCPProjectContextResolver {
@@ -96,9 +98,11 @@ struct BerryMCPServerFactoryTests {
                 let current = store.value
                 if current.unreadable { throw StoreUnreadable() }
                 return current.projects.first { $0.id == id }.map { project in
-                    MCPVerifiedProject(
+                    let assigned = Set(project.profiles.map(\.profileID))
+                    return MCPVerifiedProject(
                         project: project,
-                        liveReadProfileIDs: current.liveReads.intersection(project.profiles.map(\.profileID))
+                        liveReadProfileIDs: current.liveReads.intersection(assigned).subtracting(current.expired),
+                        expiredLiveReadProfileIDs: current.expired.intersection(assigned)
                     )
                 }
             },
@@ -1098,6 +1102,47 @@ struct BerryMCPServerFactoryTests {
         #expect(records.map(\.tool) == [MCPToolName.executeReadQuery.rawValue, MCPToolName.status.rawValue])
         #expect(records.map(\.digest) == [nil, nil])
         #expect(diagnostics.value.filter { $0.contains("audit digest key unavailable") }.count == 1)
+    }
+
+    /// A production connection whose live-read expiry has passed is not
+    /// offered for live reads, still lists with its expiry, and a call for
+    /// it says so and is recorded under its own error code.
+    @Test func anExpiredProductionConnectionIsNotAdvertisedAndTheToolSaysExpired() async throws {
+        let dir = try Self.makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(MCPAuditLog.fileName)
+        let audit = self.audit(at: url)
+        let until = Date(timeIntervalSince1970: 1_700_000_000)
+        let expiredProject = MCPProject(
+            id: UUID(uuidString: "00000000-0000-0000-0000-00000000000E")!, name: "E", isEnabled: true,
+            workspaceRoots: ["/work/e"],
+            profiles: [MCPProfileAccess(profileID: billing.id, liveRead: true, liveReadUntil: until)]
+        )
+        let store = Locked(Store(projects: [projectA, expiredProject], liveReads: [billing.id], expired: [billing.id]))
+        let live = LiveReadHarness(connection: ScriptedReadOnlyConnection(events: []))
+        let billingID = billing.id
+        try await withSession(
+            store: store, roots: .declared(["file:///work/e"]), liveReads: live.liveReads, audit: audit
+        ) { client in
+            let tools = try await client.listTools().tools.map(\.name)
+            #expect(!tools.contains(MCPToolName.executeReadQuery.rawValue))
+
+            let connections = try await Self.call(client, .listConnections)
+            let first = try #require(
+                connections.structuredContent?.objectValue?["connections"]?.arrayValue?.first?.objectValue
+            )
+            #expect(first["id"]?.stringValue == billingID.uuidString)
+            #expect(first["live_read_until"]?.stringValue == "2023-11-14T22:13:20Z")
+            #expect(first["capabilities"] == ["schema", "graph"])
+
+            let status = try await Self.status(client)
+            #expect(status["live_reads"] == "not_available")
+
+            let result = try await client.send(Self.readCall(billingID, sql: "SELECT 1")).value
+            #expect(result.isError == true)
+            #expect(Self.text(result) == "Live reads on this production connection have expired. The user can renew them in BerryDB Settings → AI Agents.")
+        }
+        let record = try #require(MCPAuditLog.read(from: url).first { $0.tool == MCPToolName.executeReadQuery.rawValue })
+        #expect(record.error == "live_read_expired")
     }
 
     @Test func recordedDurationOfARefusedReadExcludesTheDigestsKeyRead() async throws {

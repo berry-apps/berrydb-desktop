@@ -49,10 +49,14 @@ public struct MCPConnectionDescriptor: Codable, Equatable, Sendable {
     /// `"selectSchemas"` when the catalog is too large to harvest whole and
     /// schemas should be selected in the app, else nil.
     public let hint: String?
+    /// The sealed production consent expiry of the connection's access row;
+    /// nil when the row carries none. Encoded as null in that case, so an
+    /// agent sees when a production connection's live reads lapse.
+    public var liveReadUntil: Date? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, name, driver, environment, capabilities, graphHarvestedAt, checkedAt, stale, staleReason, detailCoverage
-        case scope, hint
+        case scope, hint, liveReadUntil
     }
 
     /// Writes every optional field as null when it is nil; the synthesized
@@ -72,6 +76,7 @@ public struct MCPConnectionDescriptor: Codable, Equatable, Sendable {
         try container.encode(detailCoverage, forKey: .detailCoverage)
         try container.encode(scope, forKey: .scope)
         try container.encode(hint, forKey: .hint)
+        try container.encode(liveReadUntil, forKey: .liveReadUntil)
     }
 }
 
@@ -293,6 +298,10 @@ public struct MCPMetadataService: Sendable {
         let saved = try savedProfiles()
         let live = Self.liveReadConnectionIDs(in: project, saved: saved)
         let partition = Self.partitionQueryConnectionIDs(in: project, saved: saved)
+        // The expiry column is writable by any process of the same user; only
+        // a row whose tag verified, live or expired, has an expiry BerryDB
+        // sealed, so any other row reports none rather than a forged date.
+        let sealedExpiry = project.liveReadProfileIDs.union(project.expiredLiveReadProfileIDs)
         return try project.project.profiles.compactMap { access in
             guard let profile = saved[access.profileID] else { return nil }
             let state = try reader.state(profileID: profile.id)
@@ -310,7 +319,8 @@ public struct MCPMetadataService: Sendable {
                 staleReason: state.stale ? state.lastErrorCode.flatMap { HarvestErrorCode(rawValue: $0)?.rawValue } : nil,
                 detailCoverage: .init(detailed: state.detailedCount, total: state.objectCount),
                 scope: state.selectedSchemas,
-                hint: state.hint
+                hint: state.hint,
+                liveReadUntil: sealedExpiry.contains(profile.id) ? access.liveReadUntil : nil
             )
         }
     }

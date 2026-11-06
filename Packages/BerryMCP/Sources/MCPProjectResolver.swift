@@ -20,6 +20,7 @@ public enum MCPProjectResolutionError: Error, Equatable, Sendable {
     case projectDisabled
     case unauthorizedProfile(UUID)
     case liveReadNotEnabled(UUID)
+    case liveReadExpired(UUID)
     case missingProfile(UUID)
     case unsupportedDriver(String)
     /// A DynamoDB profile that connects over SSH; the helper opens no tunnel for it.
@@ -175,8 +176,17 @@ public struct MCPProjectResolver: Sendable {
         guard verified.project.profiles.contains(where: { $0.profileID == profileID }) else {
             throw MCPProjectResolutionError.unauthorizedProfile(profileID)
         }
-        if access == .liveRead, !verified.liveReadProfileIDs.contains(profileID) {
-            throw MCPProjectResolutionError.liveReadNotEnabled(profileID)
+        if access == .liveRead {
+            // An expired row is in neither the live nor the sealed set, so
+            // the expired set is asked first: otherwise it would read as
+            // "not enabled" and the user would not learn that renewing the
+            // consent is what restores the access.
+            if verified.expiredLiveReadProfileIDs.contains(profileID) {
+                throw MCPProjectResolutionError.liveReadExpired(profileID)
+            }
+            if !verified.liveReadProfileIDs.contains(profileID) {
+                throw MCPProjectResolutionError.liveReadNotEnabled(profileID)
+            }
         }
         guard let profile = try await loadProfile(profileID) else {
             throw MCPProjectResolutionError.missingProfile(profileID)

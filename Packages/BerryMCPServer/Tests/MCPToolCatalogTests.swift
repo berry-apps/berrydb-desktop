@@ -1127,6 +1127,10 @@ struct MCPToolCatalogTests {
         let required = schema.objectValue?["properties"]?.objectValue?["connections"]?.objectValue?["items"]?
             .objectValue?["required"]?.arrayValue?.compactMap(\.stringValue) ?? []
         #expect(required.contains("graph_harvested_at"))
+        let properties = schema.objectValue?["properties"]?.objectValue?["connections"]?.objectValue?["items"]?
+            .objectValue?["properties"]?.objectValue ?? [:]
+        #expect(properties["live_read_until"] == ["type": ["string", "null"], "format": "date-time"])
+        #expect(required.contains("live_read_until"))
     }
 
     @Test func getSchemaReturnsObjectsWithSnakeCaseKeys() throws {
