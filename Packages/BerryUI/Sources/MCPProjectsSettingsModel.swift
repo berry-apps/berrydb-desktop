@@ -857,6 +857,42 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// by " · ", and whether it carries the production label. A blank group
     /// name counts as none, and only the exact `production` label is flagged,
     /// the same test the sidebar applies.
+    /// Connections the editor can still add to `draft`: every saved profile
+    /// the draft does not have, narrowed by `query` against the name, host,
+    /// database, group and driver without regard to case. A blank query
+    /// keeps them all, in the order the profiles are listed.
+    nonisolated public static func assignableProfiles(
+        _ profiles: [ConnectionProfile], in draft: Draft, matching query: String
+    ) -> [ConnectionProfile] {
+        let assigned = Set(draft.profileIDs)
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return profiles.filter { profile in
+            guard !assigned.contains(profile.id) else { return false }
+            guard !needle.isEmpty else { return true }
+            let fields: [String?] = [profile.name, profile.host, profile.database, profile.groupName, profile.driverID]
+            return fields.compactMap { $0 }.contains {
+                $0.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+            }
+        }
+    }
+
+    /// The draft's connections in the order they were added, skipping any
+    /// whose profile no longer exists in the store.
+    nonisolated public static func assignedProfiles(_ profiles: [ConnectionProfile], in draft: Draft) -> [ConnectionProfile] {
+        let byID = Dictionary(profiles.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return draft.profileIDs.compactMap { byID[$0] }
+    }
+
+    /// `assignableProfiles` over the model's saved connections.
+    public func assignableProfiles(in draft: Draft, matching query: String) -> [ConnectionProfile] {
+        Self.assignableProfiles(profiles, in: draft, matching: query)
+    }
+
+    /// `assignedProfiles` over the model's saved connections.
+    public func assignedProfiles(in draft: Draft) -> [ConnectionProfile] {
+        Self.assignedProfiles(profiles, in: draft)
+    }
+
     nonisolated public static func connectionRowDetail(for profile: ConnectionProfile) -> ConnectionRowDetail {
         let group = profile.groupName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return ConnectionRowDetail(

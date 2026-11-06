@@ -8,8 +8,8 @@ import SwiftUI
 /// below the sheet fits in the running app and the footer buttons stay in
 /// view while the form scrolls.
 private enum MCPSettingsLayout {
-    static let paneWidth: CGFloat = 560
-    static let paneHeight: CGFloat = 560
+    static let paneWidth = SettingsPaneLayout.width
+    static let paneHeight = SettingsPaneLayout.height
     static let sheetWidth: CGFloat = 540
     static let sheetHeight: CGFloat = 500
 }
@@ -156,6 +156,9 @@ private struct MCPProjectEditorSheet: View {
     /// `productionConsentDurations`. Only a pick or a renewal writes it to
     /// the draft, so an untouched draft keeps the stored expiry.
     @State private var consentDurationIndex: [UUID: Int] = [:]
+    /// The "Add Connection…" popover and the text typed into its search field.
+    @State private var isPickingConnection = false
+    @State private var connectionQuery = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -276,14 +279,20 @@ private struct MCPProjectEditorSheet: View {
         }
     }
 
+    /// The project's connections, each with a remove button and its
+    /// live-read settings, and a picker that adds one more. Only the
+    /// assigned connections are listed, so the editor stays short however
+    /// many connections are saved; the picker searches the rest.
     private var connectionsSection: some View {
         Section(L("Connections")) {
-            if model.profiles.isEmpty {
-                Text(L("No saved connections yet.")).foregroundStyle(.secondary)
+            let assigned = model.assignedProfiles(in: draft)
+            if assigned.isEmpty {
+                Text(model.profiles.isEmpty ? L("No saved connections yet.") : L("No connections assigned yet."))
+                    .foregroundStyle(.secondary)
             }
-            ForEach(model.profiles) { profile in
+            ForEach(assigned) { profile in
                 let detail = MCPProjectsSettingsModel.connectionRowDetail(for: profile)
-                Toggle(isOn: membership(of: profile.id)) {
+                HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: 6) {
                             Text(profile.name)
@@ -293,14 +302,50 @@ private struct MCPProjectEditorSheet: View {
                         }
                         Text(detail.text).font(.caption).foregroundStyle(.secondary)
                     }
+                    Spacer()
+                    Button {
+                        membership(of: profile.id).wrappedValue = false
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help(L("Remove from this project"))
+                    .accessibilityLabel(L("Remove from this project"))
                 }
-                if draft.profileIDs.contains(profile.id), MCPProjectsSettingsModel.supportsLiveRead(profile) {
+                if MCPProjectsSettingsModel.supportsLiveRead(profile) {
                     liveReadSettings(for: profile, isProduction: detail.isProduction)
                 }
             }
+            connectionPicker
             Text(L("Schema and graph metadata of these connections, and the rows of live reads, become visible to coding agents you configure and to their model providers."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// One button that opens a searchable list of the connections the
+    /// project does not have yet; picking one adds it to the list above.
+    private var connectionPicker: some View {
+        let nothingLeft = !model.profiles.isEmpty && model.assignableProfiles(in: draft, matching: "").isEmpty
+        return HStack(spacing: 8) {
+            Button {
+                connectionQuery = ""
+                isPickingConnection = true
+            } label: {
+                Label(L("Add Connection…"), systemImage: "plus.circle")
+            }
+            .disabled(model.profiles.isEmpty || nothingLeft)
+            .popover(isPresented: $isPickingConnection, arrowEdge: .bottom) {
+                MCPConnectionPicker(model: model, draft: draft, query: $connectionQuery) { profile in
+                    membership(of: profile.id).wrappedValue = true
+                    isPickingConnection = false
+                }
+            }
+            if nothingLeft {
+                Text(L("Every saved connection is already in this project."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -608,5 +653,65 @@ private struct MCPProjectEditorSheet: View {
     private func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+/// The searchable list behind "Add Connection…": a filter field over the
+/// name, host, database, group and driver, and the matching connections.
+/// A click, or Return for the first match, adds the connection.
+private struct MCPConnectionPicker: View {
+    @ObservedObject var model: MCPProjectsSettingsModel
+    let draft: MCPProjectsSettingsModel.Draft
+    @Binding var query: String
+    let onPick: (ConnectionProfile) -> Void
+    @FocusState private var isSearchFocused: Bool
+
+    private var candidates: [ConnectionProfile] {
+        model.assignableProfiles(in: draft, matching: query)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField(L("Search connections"), text: $query)
+                .textFieldStyle(.roundedBorder)
+                .focused($isSearchFocused)
+                .onSubmit {
+                    if let first = candidates.first { onPick(first) }
+                }
+            if candidates.isEmpty {
+                Text(L("No connections match.")).font(.caption).foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(candidates) { profile in
+                            let detail = MCPProjectsSettingsModel.connectionRowDetail(for: profile)
+                            Button {
+                                onPick(profile)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    HStack(spacing: 6) {
+                                        Text(profile.name)
+                                        if detail.isProduction {
+                                            ProductionBadge()
+                                        }
+                                    }
+                                    Text([detail.text, profile.host].compactMap { $0 }.joined(separator: " · "))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 4)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxHeight: 240)
+            }
+        }
+        .padding(12)
+        .frame(width: 320)
+        .onAppear { isSearchFocused = true }
     }
 }

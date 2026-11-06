@@ -849,3 +849,9 @@
 "24 hours" = "24 giờ";
 "7 days" = "7 ngày";
 "Live reads on %@ have an expiry that cannot be stored." = "Đọc dữ liệu thật trên %@ có thời hạn không thể lưu.";
+"Add Connection…" = "Thêm kết nối…";
+"Search connections" = "Tìm kết nối";
+"No connections match." = "Không có kết nối nào khớp.";
+"Every saved connection is already in this project." = "Mọi kết nối đã lưu đều đã nằm trong dự án này.";
+"No connections assigned yet." = "Chưa gán kết nối nào.";
+"Remove from this project" = "Bỏ khỏi dự án này";

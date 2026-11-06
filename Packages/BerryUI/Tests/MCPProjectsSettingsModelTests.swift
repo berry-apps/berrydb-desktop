@@ -2013,6 +2013,41 @@ struct MCPProjectsSettingsModelTests {
         #expect(MCPProjectsSettingsModel.redactedColumns(from: "  ").isEmpty)
     }
 
+    /// The editor's picker offers only connections the project does not have
+    /// yet, narrowed by what the user typed against the name, host, database,
+    /// group and driver, without regard to case.
+    @Test func assignableProfilesExcludeTheProjectsConnectionsAndMatchNameHostDatabaseAndDriver() {
+        let orders = ConnectionProfile(driverID: "postgres", name: "Orders", host: "db-a.internal", database: "orders")
+        let billing = ConnectionProfile(driverID: "mysql", name: "Billing", groupName: "Finance", host: "db-b.internal", database: "billing")
+        let cache = ConnectionProfile(driverID: "redis", name: "Session cache", host: "cache.internal")
+        let profiles = [orders, billing, cache]
+        var draft = MCPProjectsSettingsModel.Draft(id: UUID(), name: "api", isEnabled: true, workspaceRoots: [], profileIDs: [orders.id])
+
+        #expect(MCPProjectsSettingsModel.assignableProfiles(profiles, in: draft, matching: "").map(\.id) == [billing.id, cache.id])
+        #expect(MCPProjectsSettingsModel.assignableProfiles(profiles, in: draft, matching: "   ").map(\.id) == [billing.id, cache.id])
+        #expect(MCPProjectsSettingsModel.assignableProfiles(profiles, in: draft, matching: "BILL").map(\.id) == [billing.id])
+        #expect(MCPProjectsSettingsModel.assignableProfiles(profiles, in: draft, matching: "db-b").map(\.id) == [billing.id])
+        #expect(MCPProjectsSettingsModel.assignableProfiles(profiles, in: draft, matching: "finance").map(\.id) == [billing.id])
+        #expect(MCPProjectsSettingsModel.assignableProfiles(profiles, in: draft, matching: "redis").map(\.id) == [cache.id])
+        #expect(MCPProjectsSettingsModel.assignableProfiles(profiles, in: draft, matching: "orders").isEmpty)
+        #expect(MCPProjectsSettingsModel.assignableProfiles(profiles, in: draft, matching: "nothing here").isEmpty)
+
+        draft.profileIDs = []
+        #expect(MCPProjectsSettingsModel.assignableProfiles(profiles, in: draft, matching: "orders").map(\.id) == [orders.id])
+    }
+
+    /// The editor lists the project's connections in the order they were
+    /// added; a connection deleted since the project was saved is skipped.
+    @Test func assignedProfilesFollowTheDraftOrderAndSkipDeletedConnections() {
+        let orders = ConnectionProfile(driverID: "postgres", name: "Orders", host: "db-a.internal", database: "orders")
+        let cache = ConnectionProfile(driverID: "redis", name: "Session cache", host: "cache.internal")
+        let draft = MCPProjectsSettingsModel.Draft(
+            id: UUID(), name: "api", isEnabled: true, workspaceRoots: [], profileIDs: [cache.id, UUID(), orders.id])
+
+        #expect(MCPProjectsSettingsModel.assignedProfiles([orders, cache], in: draft).map(\.id) == [cache.id, orders.id])
+        #expect(MCPProjectsSettingsModel.assignedProfiles([], in: draft).isEmpty)
+    }
+
     /// A saved project called `name`, as the editor opens it.
     private func savedDraft(named name: String, in model: MCPProjectsSettingsModel) throws -> MCPProjectsSettingsModel.Draft {
         var draft = model.draftForNewProject()

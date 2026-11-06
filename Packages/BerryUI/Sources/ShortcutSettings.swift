@@ -200,7 +200,7 @@ public struct ShortcutSettingsView: View {
             }
         }
         .padding(16)
-        .frame(width: 460, height: 560)
+        .frame(width: SettingsPaneLayout.width, height: SettingsPaneLayout.height)
         .onDisappear { stopRecording() }
         // Reading `revision` keeps this view refreshing on store changes.
         .id(revision)
