@@ -181,7 +181,9 @@ public struct ConnectionConfig: Sendable {
     }
 
     /// Copy of this config pointing at a different endpoint — used to swap in
- /// the local end of an SSH tunnel.
+    /// the local end of an SSH tunnel. Credentials travel with it, the AWS
+    /// SigV4 key, token and region included; `additionalHosts` and
+    /// `mongoReplicaSet` do not, because the tunnel reaches exactly one host.
     public func replacingEndpoint(host: String, port: Int) -> ConnectionConfig {
         ConnectionConfig(
             driver: driver, name: name, filePath: filePath,
@@ -189,6 +191,8 @@ public struct ConnectionConfig: Sendable {
             username: username, password: password, database: database,
             tlsMode: tlsMode, caCertPath: caCertPath,
             clientCertPath: clientCertPath, clientKeyPath: clientKeyPath, ssh: nil,
+            awsAccessKeyID: awsAccessKeyID, awsSecretAccessKey: awsSecretAccessKey,
+            awsSessionToken: awsSessionToken, awsRegion: awsRegion,
             elasticsearchAPIKey: elasticsearchAPIKey, applicationName: applicationName
         )
     }

@@ -79,6 +79,30 @@ struct ReadOnlyContractTests {
         #expect(tunneled.port == 61_000)
     }
 
+    /// A DynamoDB connection opened through an SSH tunnel still signs its
+    /// requests: the tunnel swaps the endpoint, not the credentials or the
+    /// region. Hosts beyond the tunnel are not carried over, since the tunnel
+    /// reaches exactly one endpoint.
+    @Test func theTunnelEndpointKeepsTheAWSCredentialsAndRegion() {
+        let config = ConnectionConfig(
+            driver: .dynamodb, name: "orders", filePath: nil, host: "dynamodb.internal", port: 8000,
+            username: nil, password: nil, database: nil, tlsMode: .disable,
+            caCertPath: nil, clientCertPath: nil, clientKeyPath: nil,
+            ssh: SSHConfig(host: "bastion", username: "ops"),
+            awsAccessKeyID: "AKIA", awsSecretAccessKey: "secret", awsSessionToken: "token", awsRegion: "ap-southeast-1",
+            additionalHosts: ["dynamodb-2.internal:8000"], mongoReplicaSet: "rs0"
+        )
+
+        let tunneled = config.replacingEndpoint(host: "127.0.0.1", port: 61_001)
+
+        #expect(tunneled.host == "127.0.0.1" && tunneled.port == 61_001 && tunneled.ssh == nil)
+        #expect(tunneled.awsAccessKeyID == "AKIA")
+        #expect(tunneled.awsSecretAccessKey == "secret")
+        #expect(tunneled.awsSessionToken == "token")
+        #expect(tunneled.awsRegion == "ap-southeast-1")
+        #expect(tunneled.additionalHosts == nil && tunneled.mongoReplicaSet == nil)
+    }
+
     @Test func namingAConnectionKeepsEveryOtherSetting() {
         let ssh = SSHConfig(host: "bastion", username: "ops")
         let config = ConnectionConfig(
