@@ -75,6 +75,38 @@ struct ProcessMCPServerConnectionTests {
         #expect(output.fileHandleForReading.readabilityHandler == nil)
     }
 
+    @Test func writeToServerWithClosedStdinThrowsInsteadOfTerminating() async throws {
+        let output = Pipe()
+        let stdinClosed = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: stdinClosed) }
+        // After the handshake the server closes its stdin, so the pipe has no
+        // reader, and keeps running, so callTool still passes its isRunning check.
+        let client = connection(script: #"""
+        IFS= read -r request
+        printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{}}'
+        IFS= read -r notification
+        IFS= read -r request
+        printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}'
+        exec 0<&-
+        : > "$1"
+        exec sleep 10
+        """#, output: output, arguments: [stdinClosed.path])
+        _ = try await client.start()
+        var closed = false
+        for _ in 0..<200 {
+            closed = FileManager.default.fileExists(atPath: stdinClosed.path)
+            if closed { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(closed)
+        let calledAt = ContinuousClock.now
+        await #expect(throws: (any Error).self) {
+            _ = try await client.callTool(name: "test", argumentsJSON: "{}")
+        }
+        #expect(ContinuousClock.now - calledAt < .seconds(5))
+        await client.shutdown()
+    }
+
     @Test func droppingConnectionDetachesReader() async throws {
         let output = Pipe()
         var client: ProcessMCPServerConnection? = connection(script: server, output: output)

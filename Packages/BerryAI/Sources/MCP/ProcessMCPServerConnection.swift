@@ -23,6 +23,13 @@ public actor ProcessMCPServerConnection: MCPServerConnection {
         serverID = manifest.id
         self.manifest = manifest
         outPipe = outputPipe
+        // Writing to a pipe that no process reads raises SIGPIPE, and the app
+        // keeps that signal's default action, which terminates it. A standalone
+        // check on macOS 26.6 exited with status 141 when it wrote to the stdin
+        // of a child that had already exited. With F_SETNOSIGPIPE (fcntl(2)) the
+        // write fails with EPIPE instead, and request(method:params:timeout:)
+        // reports that error for the one request.
+        _ = fcntl(inPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
     }
 
     deinit {
