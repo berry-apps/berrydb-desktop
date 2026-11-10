@@ -5,10 +5,10 @@ import Testing
 
 @Suite("MCP subprocess lifecycle", .serialized)
 struct ProcessMCPServerConnectionTests {
-    private func connection(script: String, output: Pipe) -> ProcessMCPServerConnection {
+    private func connection(script: String, output: Pipe, arguments: [String] = []) -> ProcessMCPServerConnection {
         ProcessMCPServerConnection(manifest: .init(
             id: "lifecycle-test", name: "Lifecycle test", description: "",
-            command: "/bin/sh", args: ["-c", script], enabledByDefault: false
+            command: "/bin/sh", args: ["-c", script, "mcp-lifecycle-test"] + arguments, enabledByDefault: false
         ), outputPipe: output)
     }
 
@@ -22,13 +22,24 @@ struct ProcessMCPServerConnectionTests {
 
     @Test func eofDuringInitializeDetachesReader() async {
         let output = Pipe()
-        let client = connection(script: "IFS= read -r request; exit 0", output: output)
+        let gate = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: gate) }
+        let client = connection(
+            script: #"IFS= read -r request; while [ ! -e "$1" ]; do sleep 0.01; done"#,
+            output: output, arguments: [gate.path]
+        )
         let start = Task { try await client.start() }
-        // The actor must install its reader before the EOF assertion starts.
+        // Keep stdout open until installation is observed, so an unstarted
+        // reader cannot be mistaken for one that detached after EOF.
+        var installed = false
         for _ in 0..<200 {
-            if output.fileHandleForReading.readabilityHandler != nil { break }
-            try? await Task.sleep(nanoseconds: 1_000_000)
+            installed = output.fileHandleForReading.readabilityHandler != nil
+            if installed { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
+        #expect(installed)
+        let released = FileManager.default.createFile(atPath: gate.path, contents: nil)
+        #expect(released)
         let detached = await waitForReaderToDetach(output)
         #expect(detached)
         await client.shutdown()

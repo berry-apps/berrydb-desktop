@@ -65,8 +65,9 @@ public actor ProcessMCPServerConnection: MCPServerConnection {
 
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            // EOF remains readable; leaving the handler installed repeatedly
-            // schedules empty reads after the subprocess closes stdout.
+            // Observed with sample on a running build: three FileHandle queues
+            // repeatedly read empty data at EOF, using about 237% process CPU.
+            // Removing the handler stops those repeated callbacks.
             guard !data.isEmpty else {
                 handle.readabilityHandler = nil
                 return
