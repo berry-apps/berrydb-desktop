@@ -3,16 +3,12 @@ import Foundation
 /// Drives one MCP server subprocess over stdio JSON-RPC:
 /// `initialize` + `tools/list` at start, `tools/call` per invocation. An actor so the
 /// pending-request map and pipe writes are race-free.
-///
-/// Not covered by unit tests — it needs a live server binary; the JSON-RPC codec
-/// and LineFramer it builds on ARE tested. Verify against a real allowlisted
-/// server before shipping (doc).
 public actor ProcessMCPServerConnection: MCPServerConnection {
     public nonisolated let serverID: String
     private let manifest: MCPServerManifest
     private let process = Process()
     private let inPipe = Pipe()
-    private let outPipe = Pipe()
+    private let outPipe: Pipe
     private let framer = LineFramer()
     private var nextID = 0
     private var pending: [Int: CheckedContinuation<JSONRPC.Response, Error>] = [:]
@@ -20,11 +16,17 @@ public actor ProcessMCPServerConnection: MCPServerConnection {
     private var started = false
 
     public init(manifest: MCPServerManifest) {
+        self.init(manifest: manifest, outputPipe: Pipe())
+    }
+
+    init(manifest: MCPServerManifest, outputPipe: Pipe) {
         serverID = manifest.id
         self.manifest = manifest
+        outPipe = outputPipe
     }
 
     deinit {
+        outPipe.fileHandleForReading.readabilityHandler = nil
         // If callers drop this connection without calling shutdown(), any pending
         // continuations must still be resumed. An un-resumed CheckedContinuation
         // that gets deallocated is a fatal Swift Concurrency error (aborts the
@@ -63,13 +65,21 @@ public actor ProcessMCPServerConnection: MCPServerConnection {
 
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            // Observed with sample on a running build: three FileHandle queues
+            // repeatedly read empty data at EOF, using about 237% process CPU.
+            // Removing the handler stops those repeated callbacks.
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                return
+            }
+            guard let text = String(data: data, encoding: .utf8) else { return }
             Task { await self?.ingest(text) }
         }
 
         do {
             try process.run()
         } catch {
+            outPipe.fileHandleForReading.readabilityHandler = nil
             started = false
             throw MCPError.launchFailed(error.localizedDescription)
         }
