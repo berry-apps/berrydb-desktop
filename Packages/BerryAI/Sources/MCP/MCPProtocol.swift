@@ -128,19 +128,31 @@ public enum JSONRPC {
     }
 }
 
-/// Incremental line framer for line-delimited JSON over stdio — same shape as
-/// SSEParser's buffering. Emits complete lines, dropping empties.
+/// Incremental line framer for line-delimited JSON over stdio. Emits complete
+/// lines, dropping empties. It frames bytes, not text: a pipe read can end
+/// inside a multi-byte UTF-8 character, so a line is decoded only once its
+/// newline has arrived.
 public final class LineFramer {
-    private var buffer = ""
+    private var buffer = Data()
     public init() {}
 
-    public func feed(_ chunk: String) -> [String] {
-        buffer += chunk
+    public func feed(_ chunk: Data) -> [String] {
+        // Bytes kept from earlier feeds contain no newline, so only the new
+        // bytes are searched; a long line arriving in many reads stays linear.
+        var searchFrom = buffer.endIndex
+        buffer.append(chunk)
+        var lineStart = buffer.startIndex
         var lines: [String] = []
-        while let newline = buffer.firstIndex(of: "\n") {
-            let line = String(buffer[..<newline])
-            buffer = String(buffer[buffer.index(after: newline)...])
-            if !line.isEmpty { lines.append(line) }
+        while let newline = buffer[searchFrom...].firstIndex(of: 0x0A) {
+            let line = buffer[lineStart..<newline]
+            if !line.isEmpty, let text = String(data: line, encoding: .utf8) {
+                lines.append(text)
+            }
+            lineStart = newline + 1
+            searchFrom = lineStart
+        }
+        if lineStart > buffer.startIndex {
+            buffer.removeSubrange(buffer.startIndex..<lineStart)
         }
         return lines
     }

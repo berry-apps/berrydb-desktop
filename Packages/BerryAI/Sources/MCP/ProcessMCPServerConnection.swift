@@ -14,6 +14,9 @@ public actor ProcessMCPServerConnection: MCPServerConnection {
     private var pending: [Int: CheckedContinuation<JSONRPC.Response, Error>] = [:]
     private var timeoutTasks: [Int: Task<Void, Never>] = [:]
     private var started = false
+    /// Set once stdout reaches EOF: no response can arrive after that.
+    private var outputClosed = false
+    private var outputReads: AsyncStream<Data>.Continuation?
 
     public init(manifest: MCPServerManifest) {
         self.init(manifest: manifest, outputPipe: Pipe())
@@ -27,6 +30,7 @@ public actor ProcessMCPServerConnection: MCPServerConnection {
 
     deinit {
         outPipe.fileHandleForReading.readabilityHandler = nil
+        outputReads?.finish()
         // If callers drop this connection without calling shutdown(), any pending
         // continuations must still be resumed. An un-resumed CheckedContinuation
         // that gets deallocated is a fatal Swift Concurrency error (aborts the
@@ -63,17 +67,19 @@ public actor ProcessMCPServerConnection: MCPServerConnection {
         process.standardOutput = outPipe
         process.standardError = FileHandle.nullDevice
 
-        outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        let (reads, readSink) = AsyncStream.makeStream(of: Data.self)
+        outputReads = readSink
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             // Observed with sample on a running build: three FileHandle queues
             // repeatedly read empty data at EOF, using about 237% process CPU.
             // Removing the handler stops those repeated callbacks.
             guard !data.isEmpty else {
                 handle.readabilityHandler = nil
+                readSink.finish()
                 return
             }
-            guard let text = String(data: data, encoding: .utf8) else { return }
-            Task { await self?.ingest(text) }
+            readSink.yield(data)
         }
 
         do {
@@ -82,6 +88,17 @@ public actor ProcessMCPServerConnection: MCPServerConnection {
             outPipe.fileHandleForReading.readabilityHandler = nil
             started = false
             throw MCPError.launchFailed(error.localizedDescription)
+        }
+
+        // One task drains the reads in order: with a task per read, the pieces of
+        // a 2000-piece response reached the actor reordered in every test run.
+        // EOF travels through the same stream, so it is handled only after every
+        // read that came before it.
+        Task { [weak self] in
+            for await data in reads {
+                await self?.ingest(data)
+            }
+            await self?.closeOutput()
         }
 
         _ = try await request(method: "initialize", params: [
@@ -104,18 +121,16 @@ public actor ProcessMCPServerConnection: MCPServerConnection {
 
     public func shutdown() {
         outPipe.fileHandleForReading.readabilityHandler = nil
+        outputReads?.finish()
         if process.isRunning { process.terminate() }
-        for (_, continuation) in pending { continuation.resume(throwing: MCPError.notRunning) }
-        pending.removeAll()
-        for (_, task) in timeoutTasks { task.cancel() }
-        timeoutTasks.removeAll()
+        failPending()
         started = false
     }
 
     // MARK: - JSON-RPC plumbing
 
-    private func ingest(_ text: String) {
-        for line in framer.feed(text) {
+    private func ingest(_ data: Data) {
+        for line in framer.feed(data) {
             guard let response = JSONRPC.decodeResponse(line), let id = response.id,
                   let continuation = pending.removeValue(forKey: id) else { continue }
             timeoutTasks.removeValue(forKey: id)?.cancel()
@@ -123,7 +138,20 @@ public actor ProcessMCPServerConnection: MCPServerConnection {
         }
     }
 
+    private func closeOutput() {
+        outputClosed = true
+        failPending()
+    }
+
+    private func failPending() {
+        for (_, continuation) in pending { continuation.resume(throwing: MCPError.notRunning) }
+        pending.removeAll()
+        for (_, task) in timeoutTasks { task.cancel() }
+        timeoutTasks.removeAll()
+    }
+
     private func request(method: String, params: [String: Any], timeout: Duration = .seconds(30)) async throws -> JSONRPC.Response {
+        guard !outputClosed else { throw MCPError.notRunning }
         nextID += 1
         let id = nextID
         let line = JSONRPC.encodeRequest(id: id, method: method, params: params) + "\n"
