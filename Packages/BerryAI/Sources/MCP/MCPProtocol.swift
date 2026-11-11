@@ -70,6 +70,17 @@ public enum MCPAllowlist {
               let servers = try? parseMCPAllowlist(data) else { return [] }
         return servers
     }
+
+    /// The enabled servers with at least one tool in `rejected`, in allowlist
+    /// order. Other refusals (`skill:` shortcuts, built-in tools outside the
+    /// account's plan) are left out: the user did not switch those on, and
+    /// the assistant still has `load_skill` or the plan's own tools.
+    public static func serversWithRejectedTools(
+        _ rejected: [AIRejectedCapability], in allowlist: [MCPServerManifest], enabled: Set<String>
+    ) -> [MCPServerManifest] {
+        let refusedServers = Set(rejected.compactMap { MCPToolExecutor.parseToolName($0.id)?.server })
+        return allowlist.filter { enabled.contains($0.id) && refusedServers.contains($0.id) }
+    }
 }
 
 /// One tool a server exposes via `tools/list`.

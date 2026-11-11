@@ -1,3 +1,4 @@
+import BerryCore
 import BerryStore
 import Foundation
 import Testing
@@ -2063,6 +2064,90 @@ private final class PausableExecutor: AIToolExecutor {
     #expect(session.capabilityErrorLocalizationKey
         == "The assistant's tools changed while it was answering. Send your message again.")
     #expect(session.lastError == nil)
+}
+
+/// A negotiated turn whose acceptance refuses one advertised MCP tool. The
+/// server segment is random so the diagnostic log line can be found even
+/// though every test in the process shares one log file.
+@MainActor
+private func sessionWithRejectedMCPTool() -> (AISession, MockTransport, AIRejectedCapability) {
+    let rejected = AIRejectedCapability(
+        id: "mcp:probe\(UInt32.random(in: 0...UInt32.max)):status",
+        code: "dynamic_capability_not_allowed"
+    )
+    let transport = MockTransport(
+        before: [
+            .capabilityMode(.negotiated),
+            .capabilitiesAccepted(AICapabilityAcceptance(
+                protocolVersion: 1, registryVersion: "r1", schemaVersion: "s1",
+                capabilitySetDigest: "digest",
+                accepted: [AIAcceptedCapability(
+                    id: "get_schema", toolVersion: "1.0.0", schemaVersion: "1",
+                    handlerVersion: "1.0.0", risk: "read", approval: "never"
+                )],
+                rejected: [rejected]
+            )),
+            .delta("Answer."),
+            .complete(totalTokens: 1),
+        ],
+        after: []
+    )
+    let local = CapabilityExecutor(toolSpecs: [
+        AIToolSpec(name: "get_schema", description: "Schema", parametersJSON: #"{"type":"object"}"#),
+        AIToolSpec(name: rejected.id, description: "Status", parametersJSON: #"{"type":"object"}"#),
+    ])
+    let session = AISession(
+        transport: transport,
+        executor: LocalCapabilityHost(executor: local),
+        dialect: "postgres", schemaDigest: "d", store: makeStore()
+    )
+    return (session, transport, rejected)
+}
+
+@MainActor
+@Test func negotiatedTurnKeepsAndLogsRejectedCapabilities() async throws {
+    let (session, _, rejected) = sessionWithRejectedMCPTool()
+
+    await session.send("hello")
+
+    #expect(session.transcript.last?.text == "Answer.")
+    #expect(session.rejectedCapabilities == [rejected])
+    DiagnosticLog.default.flush()
+    let log = try String(contentsOf: DiagnosticLog.default.fileURL, encoding: .utf8)
+    #expect(log.contains("capability rejected id=\(rejected.id) code=\(rejected.code)"))
+}
+
+@MainActor
+@Test func rejectedCapabilitiesClearWhenTheNextTurnStarts() async {
+    let (session, transport, rejected) = sessionWithRejectedMCPTool()
+    await session.send("hello")
+    #expect(session.rejectedCapabilities == [rejected])
+
+    // Hold the second turn's response before any event arrives: the mock
+    // replays the same acceptance, so only this window shows the reset.
+    let responseGate = AsyncGate()
+    transport.responseGate = responseGate
+    let secondTurn = Task { await session.send("again") }
+    await responseGate.waitUntilEntered()
+
+    #expect(session.isStreaming)
+    #expect(session.rejectedCapabilities.isEmpty)
+
+    await responseGate.release()
+    await secondTurn.value
+}
+
+/// Seen in a running build: switching an MCP server off and on again brought
+/// back the notice from the earlier turn before anything was sent.
+@MainActor
+@Test func rejectedCapabilitiesClearWhenTheToolSetChangesBetweenTurns() async {
+    let (session, _, rejected) = sessionWithRejectedMCPTool()
+    await session.send("hello")
+    #expect(session.rejectedCapabilities == [rejected])
+
+    session.clearRejectedCapabilities()
+
+    #expect(session.rejectedCapabilities.isEmpty)
 }
 
 @MainActor

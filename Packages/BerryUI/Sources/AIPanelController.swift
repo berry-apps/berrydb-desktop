@@ -639,6 +639,14 @@ public final class AIPanelController {
     public var controlDeliveryErrorLocalizationKey: String? {
         aiSession?.controlDeliveryErrorLocalizationKey
     }
+    /// Enabled MCP servers whose tools the AI service refused on the latest
+    /// turn. `setMCPServer` clears those refusals, so switching a server off
+    /// or on removes the notice without waiting for another turn.
+    public var mcpServersWithRejectedTools: [MCPServerManifest] {
+        MCPAllowlist.serversWithRejectedTools(
+            aiSession?.rejectedCapabilities ?? [], in: mcpAllowlist, enabled: enabledMCPServers
+        )
+    }
     public var runningTool: String? { aiSession?.runningTool }
     public var pendingReport: AISession.PendingReport? { aiSession?.pendingReport }
     public var pendingReportDraft: AISession.PendingReportDraft? {
@@ -1326,6 +1334,7 @@ public final class AIPanelController {
     public func setMCPServer(_ id: String, enabled: Bool) {
         if enabled { enabledMCPServers.insert(id) } else { enabledMCPServers.remove(id) }
         persistSettings()
+        aiSession?.clearRejectedCapabilities()
         guard let mcpExecutor else { return }
         let servers = enabledMCPServers
         Task {
