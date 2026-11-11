@@ -1032,6 +1032,8 @@ public final class AISession {
                 requiresClientUpdate = true
             } else if case AITransportError.capabilityNegotiationFailed = error {
                 requiresClientUpdate = true
+            } else if case LocalCapabilityError.snapshotInvalidated = error {
+                capabilityErrorLocalizationKey = Self.capabilitiesChangedMidTurnKey
             } else if error is LocalCapabilityError {
                 requiresClientUpdate = true
             }
@@ -2324,8 +2326,12 @@ public final class AISession {
             }
         } catch {
             capabilityHost?.abandonTurn()
-            requiresClientUpdate = error is LocalCapabilityError
-            lastError = Self.describe(error)
+            if case LocalCapabilityError.snapshotInvalidated = error {
+                capabilityErrorLocalizationKey = Self.capabilitiesChangedMidTurnKey
+            } else {
+                requiresClientUpdate = error is LocalCapabilityError
+                lastError = Self.describe(error)
+            }
             if transcript.count > transcriptCount {
                 transcript.removeLast(transcript.count - transcriptCount)
             }
@@ -3496,6 +3502,13 @@ public final class AISession {
         }
         return error.localizedDescription
     }
+
+    /// A turn whose local handler set changed after its snapshot fails closed,
+    /// for example when an MCP server finishes connecting mid-turn. Sending
+    /// again takes a fresh snapshot; updating BerryDB would not help, which is
+    /// what `requiresClientUpdate` tells the user.
+    static let capabilitiesChangedMidTurnKey =
+        "The assistant's tools changed while it was answering. Send your message again."
 
     private static func capabilityErrorLocalizationKey(for code: String) -> String {
         switch code {

@@ -720,6 +720,7 @@
 "Accept" = "Chấp nhận";
 "Decline" = "Từ chối";
 "Update BerryDB to continue using AI." = "Cập nhật BerryDB để tiếp tục sử dụng AI.";
+"The assistant's tools changed while it was answering. Send your message again." = "Công cụ của trợ lý đã thay đổi trong lúc trả lời. Hãy gửi lại tin nhắn.";
 "The local AI capability set is invalid." = "Bộ capability AI cục bộ không hợp lệ.";
 "An AI capability is not available." = "Một capability AI hiện không khả dụng.";
 "AI capability negotiation failed." = "Không thể thương lượng capability AI.";
