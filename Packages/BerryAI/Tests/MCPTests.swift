@@ -27,9 +27,12 @@ struct MCPTests {
         #expect(servers[0].enabledByDefault == false)
     }
 
-    @Test func loadsBundledAllowlist() {
-        let servers = MCPAllowlist.bundled()
-        #expect(servers.contains { $0.id == "codebase-memory" })
+    // The bundled list ships no servers. Its only entry, Codebase Memory,
+    // launched a command that had to be installed separately; when that
+    // command was missing or failed to start, MCPToolExecutor.connect skipped
+    // the server without telling the user, so the menu toggle did nothing.
+    @Test func bundledAllowlistShipsNoServers() {
+        #expect(MCPAllowlist.bundled().isEmpty)
     }
 
     @Test func parsesToolsListResult() {
