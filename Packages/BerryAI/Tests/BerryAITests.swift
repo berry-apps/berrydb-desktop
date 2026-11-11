@@ -2137,6 +2137,19 @@ private func sessionWithRejectedMCPTool() -> (AISession, MockTransport, AIReject
     await secondTurn.value
 }
 
+/// Seen in a running build: switching an MCP server off and on again brought
+/// back the notice from the earlier turn before anything was sent.
+@MainActor
+@Test func rejectedCapabilitiesClearWhenTheToolSetChangesBetweenTurns() async {
+    let (session, _, rejected) = sessionWithRejectedMCPTool()
+    await session.send("hello")
+    #expect(session.rejectedCapabilities == [rejected])
+
+    session.clearRejectedCapabilities()
+
+    #expect(session.rejectedCapabilities.isEmpty)
+}
+
 @MainActor
 @Test func preservesLocaleNeutralAgentStepLimitCodeForTheUI() async {
     let transport = MockTransport(

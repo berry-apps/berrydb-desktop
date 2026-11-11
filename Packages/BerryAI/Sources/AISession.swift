@@ -268,6 +268,13 @@ public final class AISession {
     /// tells the user that, for example, an enabled MCP server's tools never
     /// reached the model.
     public private(set) var rejectedCapabilities: [AIRejectedCapability] = []
+
+    /// Drops the latest turn's refusals once the local tool set has changed,
+    /// e.g. an MCP server was switched off and on again: until another turn
+    /// is negotiated, nothing is known about what the gateway will accept.
+    public func clearRejectedCapabilities() {
+        rejectedCapabilities = []
+    }
     /// Localization key for an ambiguous one-shot delivery. The corresponding
     /// control action is abandoned so the UI cannot replay it blindly.
     public private(set) var controlDeliveryErrorLocalizationKey: String?
