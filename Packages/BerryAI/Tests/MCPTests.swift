@@ -61,11 +61,20 @@ struct MCPTests {
 
     @Test func lineFramerEmitsCompleteLines() {
         let framer = LineFramer()
-        #expect(framer.feed("{\"a\":1}\n{\"b\"").isEmpty == false)
+        #expect(framer.feed(Data("{\"a\":1}\n{\"b\"".utf8)).isEmpty == false)
         // First feed yields the first complete line only.
         let first = LineFramer()
-        #expect(first.feed("{\"a\":1}\n{\"b\"") == ["{\"a\":1}"])
-        #expect(first.feed(":2}\n") == ["{\"b\":2}"])
+        #expect(first.feed(Data("{\"a\":1}\n{\"b\"".utf8)) == ["{\"a\":1}"])
+        #expect(first.feed(Data(":2}\n".utf8)) == ["{\"b\":2}"])
+    }
+
+    @Test func lineFramerJoinsACharacterSplitAcrossFeeds() {
+        // The euro sign is the bytes E2 82 AC; the first feed ends after E2.
+        let bytes = Array("{\"v\":\"\u{20AC}\"}\n".utf8)
+        let split = bytes.firstIndex(of: 0xE2)! + 1
+        let framer = LineFramer()
+        #expect(framer.feed(Data(bytes[..<split])) == [])
+        #expect(framer.feed(Data(bytes[split...])) == ["{\"v\":\"\u{20AC}\"}"])
     }
 
  // MARK: - Namespacing + routing
