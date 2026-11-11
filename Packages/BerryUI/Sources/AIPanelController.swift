@@ -639,6 +639,14 @@ public final class AIPanelController {
     public var controlDeliveryErrorLocalizationKey: String? {
         aiSession?.controlDeliveryErrorLocalizationKey
     }
+    /// Enabled MCP servers whose tools the AI service refused on the latest
+    /// turn. Filtering by the enabled set clears the notice as soon as the
+    /// user switches such a server off, without waiting for another turn.
+    public var mcpServersWithRejectedTools: [MCPServerManifest] {
+        MCPAllowlist.serversWithRejectedTools(
+            aiSession?.rejectedCapabilities ?? [], in: mcpAllowlist, enabled: enabledMCPServers
+        )
+    }
     public var runningTool: String? { aiSession?.runningTool }
     public var pendingReport: AISession.PendingReport? { aiSession?.pendingReport }
     public var pendingReportDraft: AISession.PendingReportDraft? {

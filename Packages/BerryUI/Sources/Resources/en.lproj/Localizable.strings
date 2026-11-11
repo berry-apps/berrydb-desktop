@@ -583,6 +583,7 @@
 "Step %lld" = "Step %lld";
 "MCP servers" = "MCP servers";
 "An MCP server wants to run a tool" = "An MCP server wants to run a tool";
+"The AI service did not accept the tools of %@, so the assistant cannot use them." = "The AI service did not accept the tools of %@, so the assistant cannot use them.";
 "Trust server" = "Trust server";
 "Sub-agent" = "Sub-agent";
 

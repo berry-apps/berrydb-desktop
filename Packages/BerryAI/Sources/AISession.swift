@@ -263,6 +263,11 @@ public final class AISession {
     /// Localization key for a bounded capability-protocol error. Raw backend
     /// prose and unknown codes are never surfaced to the user.
     public private(set) var capabilityErrorLocalizationKey: String?
+    /// Advertised capabilities the gateway refused for the current turn, with
+    /// its reason code. The turn still runs without them, so nothing else
+    /// tells the user that, for example, an enabled MCP server's tools never
+    /// reached the model.
+    public private(set) var rejectedCapabilities: [AIRejectedCapability] = []
     /// Localization key for an ambiguous one-shot delivery. The corresponding
     /// control action is abandoned so the UI cannot replay it blindly.
     public private(set) var controlDeliveryErrorLocalizationKey: String?
@@ -908,6 +913,7 @@ public final class AISession {
         requiresClientUpdate = false
         capabilityErrorLocalizationKey = nil
         controlDeliveryErrorLocalizationKey = nil
+        rejectedCapabilities = []
         transcript.append(AITurn(role: .assistant, text: ""))
         let assistant = transcript.count - 1
         isStreaming = true
@@ -1563,6 +1569,12 @@ public final class AISession {
             case let .capabilitiesAccepted(value):
                 guard isRoot, let host = executor as? LocalCapabilityHost else { break }
                 try host.accept(value)
+                rejectedCapabilities = value.rejected
+                for item in value.rejected {
+                    DiagnosticLog.default.event(
+                        "capability rejected", detail: "id=\(item.id) code=\(item.code)"
+                    )
+                }
             case let .delta(payload):
                 if isRoot {
                     let isNewRound = rootRoundCursor.startsNewRound(

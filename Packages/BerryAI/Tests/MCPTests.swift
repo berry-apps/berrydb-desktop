@@ -35,6 +35,48 @@ struct MCPTests {
         #expect(MCPAllowlist.bundled().isEmpty)
     }
 
+    private func server(_ id: String) -> MCPServerManifest {
+        MCPServerManifest(
+            id: id, name: id.capitalized, description: "", command: id, args: [], enabledByDefault: false
+        )
+    }
+
+    private func refused(_ id: String, _ code: String = "dynamic_capability_not_allowed") -> AIRejectedCapability {
+        AIRejectedCapability(id: id, code: code)
+    }
+
+    @Test func namesEnabledServersWhoseToolsWereRejected() {
+        let allowlist = ["alpha", "beta", "gamma", "delta"].map(server)
+        let rejected = [
+            refused("mcp:beta:read"),
+            refused("mcp:alpha:list"),
+            refused("mcp:alpha:get"),
+            refused("mcp:gamma:read"),
+        ]
+
+        let servers = MCPAllowlist.serversWithRejectedTools(
+            rejected, in: allowlist, enabled: ["alpha", "beta", "delta"]
+        )
+
+        // Allowlist order, each server once; gamma is not enabled and delta
+        // had nothing rejected.
+        #expect(servers.map(\.id) == ["alpha", "beta"])
+    }
+
+    @Test func ignoresRejectionsThatAreNotMCPServerTools() {
+        let rejected = [
+            refused("skill:indexing"),
+            refused("run_sql", "capability_tier_forbidden"),
+            refused("get_schema", "capability_disabled"),
+        ]
+
+        let servers = MCPAllowlist.serversWithRejectedTools(
+            rejected, in: [server("alpha")], enabled: ["alpha"]
+        )
+
+        #expect(servers.isEmpty)
+    }
+
     @Test func parsesToolsListResult() {
         let result = #"{"tools":[{"name":"search_graph","description":"Search.","inputSchema":{"type":"object"}}]}"#
         let tools = ProcessMCPServerConnection.parseTools(result)

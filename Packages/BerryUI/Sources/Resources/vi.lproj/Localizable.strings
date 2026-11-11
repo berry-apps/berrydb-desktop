@@ -583,6 +583,7 @@
 "Step %lld" = "Bước %lld";
 "MCP servers" = "Máy chủ MCP";
 "An MCP server wants to run a tool" = "Một MCP server muốn chạy một công cụ";
+"The AI service did not accept the tools of %@, so the assistant cannot use them." = "Dịch vụ AI không nhận các công cụ của %@, nên trợ lý không dùng được chúng.";
 "Trust server" = "Tin cậy máy chủ này";
 "Sub-agent" = "Tác nhân con";
 

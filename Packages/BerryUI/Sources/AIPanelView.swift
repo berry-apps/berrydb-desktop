@@ -282,6 +282,15 @@ struct AIPanelView: View {
             } else if let error = controller.lastError {
                 Divider()
                 errorBar(error)
+            } else if !controller.mcpServersWithRejectedTools.isEmpty {
+                // The turn itself succeeds without these tools, so without
+                // this bar a server's toggle stays checked while the model
+                // never sees its tools.
+                Divider()
+                errorBar(String(
+                    format: L("The AI service did not accept the tools of %@, so the assistant cannot use them."),
+                    controller.mcpServersWithRejectedTools.map(\.name).joined(separator: ", ")
+                ))
             } else if controller.balance?.isExhausted == true {
                 // Surfaced proactively (not just after a failed submit) so the
                 // user isn't left guessing why Send is disabled. Passes the
