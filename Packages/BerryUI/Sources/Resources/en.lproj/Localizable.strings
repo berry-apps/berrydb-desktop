@@ -720,6 +720,7 @@
 "Accept" = "Accept";
 "Decline" = "Decline";
 "Update BerryDB to continue using AI." = "Update BerryDB to continue using AI.";
+"The assistant's tools changed while it was answering. Send your message again." = "The assistant's tools changed while it was answering. Send your message again.";
 "The local AI capability set is invalid." = "The local AI capability set is invalid.";
 "An AI capability is not available." = "An AI capability is not available.";
 "AI capability negotiation failed." = "AI capability negotiation failed.";

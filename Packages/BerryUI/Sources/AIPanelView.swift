@@ -966,6 +966,8 @@ struct AIPanelView: View {
             return L("An AI capability is not available.")
         case "Update BerryDB to continue using AI.":
             return L("Update BerryDB to continue using AI.")
+        case "The assistant's tools changed while it was answering. Send your message again.":
+            return L("The assistant's tools changed while it was answering. Send your message again.")
         default:
             return L("AI capability negotiation failed.")
         }

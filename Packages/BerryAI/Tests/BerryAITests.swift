@@ -2019,6 +2019,52 @@ private final class PausableExecutor: AIToolExecutor {
     #expect(transport.receivedCapabilities?.handlers.map(\.id) == ["get_schema"])
 }
 
+/// Seen in a running build: an MCP server finished connecting while a turn was
+/// in flight, the turn failed closed as designed, and the panel told the user
+/// to update BerryDB, which cannot help.
+@MainActor
+@Test func capabilitiesChangingMidTurnAskToSendAgainInsteadOfUpdating() async {
+    let transport = MockTransport(
+        before: [
+            .capabilityMode(.negotiated),
+            .capabilitiesAccepted(AICapabilityAcceptance(
+                protocolVersion: 1, registryVersion: "r1", schemaVersion: "s1",
+                capabilitySetDigest: "digest",
+                accepted: [AIAcceptedCapability(
+                    id: "get_schema", toolVersion: "1.0.0", schemaVersion: "1",
+                    handlerVersion: "1.0.0", risk: "read", approval: "never"
+                )],
+                rejected: []
+            )),
+            .delta("Answer."),
+            .complete(totalTokens: 1),
+        ],
+        after: []
+    )
+    let local = CapabilityExecutor(toolSpecs: [
+        AIToolSpec(name: "get_schema", description: "Schema", parametersJSON: #"{"type":"object"}"#),
+    ])
+    let session = AISession(
+        transport: transport,
+        executor: LocalCapabilityHost(executor: local),
+        dialect: "postgres", schemaDigest: "d", store: makeStore()
+    )
+    let responseGate = AsyncGate()
+    transport.responseGate = responseGate
+    let turn = Task { await session.send("hello") }
+    await responseGate.waitUntilEntered()
+
+    // The turn's snapshot is taken; the local handler set now changes.
+    local.generation = "capability-executor:server-added"
+    await responseGate.release()
+    await turn.value
+
+    #expect(!session.requiresClientUpdate)
+    #expect(session.capabilityErrorLocalizationKey
+        == "The assistant's tools changed while it was answering. Send your message again.")
+    #expect(session.lastError == nil)
+}
+
 @MainActor
 @Test func preservesLocaleNeutralAgentStepLimitCodeForTheUI() async {
     let transport = MockTransport(
@@ -5833,8 +5879,10 @@ private func makeSessionWithConfirmedReport(
 
     #expect(executor.committedCalls == 0)
     #expect(session.transcript.last?.text == "what tables?")
-    #expect(session.requiresClientUpdate)
-    #expect(session.lastError != nil)
+    // Failing closed is the guard; the message must not send the user to an
+    // update that cannot help.
+    #expect(!session.requiresClientUpdate)
+    #expect(session.capabilityErrorLocalizationKey == AISession.capabilitiesChangedMidTurnKey)
 }
 
 /// The on-device model is offered as running entirely on the Mac, so a turn
