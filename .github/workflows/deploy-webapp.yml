@@ -72,31 +72,22 @@ jobs:
           # step had the right number. One generator, one answer.
           echo "✅ Version resolved: v$VERSION"
 
-      - name: "Deploy Nginx Configuration"
-        run: |
-          CONF_SRC="webapp/deploy/nginx.conf"
-          CONF_DST="/etc/nginx/sites-available/db.berryhub.app"
-          CONF_LINK="/etc/nginx/sites-enabled/db.berryhub.app"
-
-          if [ -f "$CONF_SRC" ]; then
-            echo "Deploying Nginx config from $CONF_SRC to $CONF_DST..."
-            sudo mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
-            sudo cp "$CONF_SRC" "$CONF_DST"
-
-            if [ ! -L "$CONF_LINK" ]; then
-              sudo ln -sf "$CONF_DST" "$CONF_LINK"
-              echo "Created symlink $CONF_LINK"
-            fi
-
-            # Test Nginx
-            sudo nginx -t
-            echo "✅ Nginx configuration syntax is valid."
-          fi
-
       - name: "Test version resolution"
         run: bash webapp/deploy/test-deploy-version.sh
 
       - name: "Deploy WebApp to Production Slot"
+        # deploy.sh also installs and checks webapp/deploy/nginx.conf, but only
+        # when the runner user can write /etc/nginx or has passwordless sudo;
+        # otherwise it skips that part and the server's Nginx site is managed
+        # on the host. A separate step here used to run the same commands with
+        # a bare `sudo`, which fails the whole deploy on a host where the
+        # runner user has no sudo rights, before any page is published.
+        # Passwordless sudo for `nginx -t` would not be a narrow grant either:
+        # `nginx -t` dlopen()s every `load_module` object named in the
+        # configuration it checks (verified with nginx 1.27.5: a config naming
+        # a missing object fails the test with "dlopen() ... failed"), so
+        # whoever writes that configuration runs code as root.
+        # The runner user needs write access to DEPLOY_PATH only.
         run: |
           chmod +x webapp/deploy/deploy.sh
           BERRYDB_VERSION="${{ steps.version_step.outputs.version }}" bash webapp/deploy/deploy.sh
