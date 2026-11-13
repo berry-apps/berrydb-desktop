@@ -15,8 +15,8 @@ public enum MCPPrivilegeCheck {
             return try postgresFindings(row: rows.first?.first)
         case .mysql:
             return try await mysqlFindings(on: connection)
-        case .sqlite:
-            // A SQLite database is a file with no accounts or roles.
+        case .sqlite, .libsql:
+            // SQLite and libSQL have no internal SQL GRANT accounts to check here.
             return []
         default:
             // An empty result means "verified read-only", so a driver the

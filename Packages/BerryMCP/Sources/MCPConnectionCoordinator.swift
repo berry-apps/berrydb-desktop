@@ -118,7 +118,7 @@ public struct MCPConnectionFactories: Sendable {
         profile: MCPConnectionProfile,
         connection: any DriverConnection
     ) async throws {
-        guard [.postgres, .mysql, .sqlite].contains(profile.driverID),
+        guard [.postgres, .mysql, .sqlite, .libsql].contains(profile.driverID),
               let readOnly = connection as? any ReadOnlyExecuting
         else {
             throw MCPConnectionCoordinatorError.sqlReadOnlyEnforcementUnavailable(profile.driverID)
@@ -147,7 +147,7 @@ public struct MCPConnectionFactories: Sendable {
         case .mongodb: 27017
         case .qdrant: 6333
         case .elasticsearch: 9200
-        case .dynamodb: 443
+        case .dynamodb, .libsql: 443
         case .sqlite: 0
         }
     }

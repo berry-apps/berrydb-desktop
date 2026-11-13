@@ -857,3 +857,7 @@
 "Every saved connection is already in this project." = "Mọi kết nối đã lưu đều đã nằm trong dự án này.";
 "No connections assigned yet." = "Chưa gán kết nối nào.";
 "Remove from this project" = "Bỏ khỏi dự án này";
+"Database URL or Host" = "URL cơ sở dữ liệu hoặc Máy chủ";
+"Auth Token" = "Token xác thực";
+"Optional for local sqld" = "Tùy chọn cho sqld cục bộ";
+"(keep saved token)" = "(giữ token đã lưu)";

@@ -2,6 +2,7 @@ import BerryDataSourceKit
 import BerryDriverDynamoDB
 import BerryDriverElasticsearch
 import BerryDriverKit
+import BerryDriverLibSQL
 import BerryDriverMongo
 import BerryDriverMySQL
 import BerryDriverPostgres
@@ -56,6 +57,7 @@ public enum BerryDriverBootstrap {
     ) -> BerryDriverRegistration {
         let sqlDrivers: [any DatabaseDriver.Type] = [
             SQLiteDriver.self,
+            LibSQLDriver.self,
             PostgresDriver.self,
             MySQLDriver.self,
             DynamoDBDriver.self,

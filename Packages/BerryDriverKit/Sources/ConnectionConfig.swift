@@ -180,6 +180,121 @@ public struct ConnectionConfig: Sendable {
         )
     }
 
+    public struct LibSQLEndpoint: Sendable, Equatable {
+        public let baseURL: URL
+        public let host: String
+        public let port: Int
+        public let useTLS: Bool
+
+        public init(baseURL: URL, host: String, port: Int, useTLS: Bool) {
+            self.baseURL = baseURL
+            self.host = host
+            self.port = port
+            self.useTLS = useTLS
+        }
+    }
+
+    /// Parses a libSQL endpoint from a URL (`libsql://`, `https://`, `http://`)
+    /// or bare hostname, applying `port` and `tlsMode` when not already pinned
+    /// by an explicit HTTP(S) scheme.
+    public static func parseLibSQLEndpoint(
+        host rawHost: String?,
+        port explicitPort: Int? = nil,
+        tlsMode: TLSMode = .require
+    ) -> LibSQLEndpoint? {
+        let trimmed = (rawHost ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let candidate: String
+        let explicitScheme: String?
+        if let range = trimmed.range(of: "://") {
+            let scheme = String(trimmed[..<range.lowerBound]).lowercased()
+            guard scheme == "libsql" || scheme == "https" || scheme == "http" else {
+                return nil
+            }
+            explicitScheme = scheme
+            let rest = String(trimmed[range.upperBound...])
+            let httpScheme: String
+            switch scheme {
+            case "http":
+                httpScheme = "http"
+            case "https":
+                httpScheme = "https"
+            default:
+                httpScheme = tlsMode == .disable ? "http" : "https"
+            }
+            candidate = "\(httpScheme)://\(rest)"
+        } else {
+            explicitScheme = nil
+            let httpScheme = tlsMode == .disable ? "http" : "https"
+            candidate = "\(httpScheme)://\(trimmed)"
+        }
+
+        guard var components = URLComponents(string: candidate),
+              let parsedHost = components.host, !parsedHost.isEmpty
+        else {
+            return nil
+        }
+
+        let useTLS: Bool
+        switch explicitScheme {
+        case "http":
+            useTLS = false
+        case "https":
+            useTLS = true
+        default:
+            useTLS = tlsMode != .disable
+        }
+
+        let resolvedPort: Int
+        if let urlPort = components.port {
+            resolvedPort = urlPort
+        } else if let explicitPort, explicitPort > 0 {
+            resolvedPort = explicitPort
+            let defaultPort = useTLS ? 443 : 80
+            if explicitPort != defaultPort {
+                components.port = explicitPort
+            }
+        } else {
+            resolvedPort = useTLS ? 443 : 80
+        }
+
+        // Normalize trailing slash on path while preserving any custom subpath.
+        if components.path == "/" {
+            components.path = ""
+        } else if components.path.hasSuffix("/") {
+            components.path = String(components.path.dropLast())
+        }
+        components.query = nil
+        components.fragment = nil
+
+        guard let baseURL = components.url else { return nil }
+        return LibSQLEndpoint(
+            baseURL: baseURL,
+            host: parsedHost,
+            port: resolvedPort,
+            useTLS: useTLS
+        )
+    }
+
+    public static func libsql(
+        host: String,
+        port: Int? = nil,
+        authToken: String? = nil,
+        tlsMode: TLSMode = .require,
+        name: String? = nil
+    ) -> ConnectionConfig {
+        let parsed = parseLibSQLEndpoint(host: host, port: port, tlsMode: tlsMode)
+        return ConnectionConfig(
+            driver: .libsql,
+            name: name ?? parsed?.host ?? host,
+            host: host,
+            port: port ?? parsed?.port ?? (tlsMode == .disable ? 80 : 443),
+            password: authToken,
+            tlsMode: parsed.map { $0.useTLS ? (tlsMode == .disable ? .require : tlsMode) : .disable } ?? tlsMode
+        )
+    }
+
     /// Copy of this config pointing at a different endpoint — used to swap in
     /// the local end of an SSH tunnel. Credentials travel with it, the AWS
     /// SigV4 key, token and region included; `additionalHosts` and

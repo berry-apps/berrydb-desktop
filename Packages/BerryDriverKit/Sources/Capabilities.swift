@@ -8,6 +8,7 @@
 /// instead of duplicating that plumbing per family.
 public enum DriverID: String, Sendable, Hashable, CaseIterable {
     case sqlite
+    case libsql
     case postgres
     case mysql
     case redis

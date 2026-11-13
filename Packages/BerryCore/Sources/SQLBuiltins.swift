@@ -62,7 +62,7 @@ public enum SQLBuiltins {
 
     public static func functions(for driver: DriverID) -> [String] {
         switch driver {
-        case .sqlite: return common + sqlite
+        case .sqlite, .libsql: return common + sqlite
         // pgvector + TimescaleDB are Postgres extensions; harmless to offer even
         // when not installed (they just won't resolve server-side).
         case .postgres: return common + postgres + pgvector + timescale

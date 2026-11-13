@@ -857,3 +857,7 @@
 "Every saved connection is already in this project." = "Every saved connection is already in this project.";
 "No connections assigned yet." = "No connections assigned yet.";
 "Remove from this project" = "Remove from this project";
+"Database URL or Host" = "Database URL or Host";
+"Auth Token" = "Auth Token";
+"Optional for local sqld" = "Optional for local sqld";
+"(keep saved token)" = "(keep saved token)";

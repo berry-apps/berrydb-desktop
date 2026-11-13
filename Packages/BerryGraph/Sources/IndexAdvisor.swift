@@ -61,7 +61,7 @@ public enum IndexAdvisor {
 
     private static func dropIndexSQL(_ index: String, table: String?, dialect: DriverID) -> String? {
         switch dialect {
-        case .postgres, .sqlite: "DROP INDEX \(index);"
+        case .postgres, .sqlite, .libsql: "DROP INDEX \(index);"
         case .mysql, .sqlserver: table.map { "DROP INDEX \(index) ON \($0);" }
         case .redis, .dynamodb, .mongodb, .qdrant, .elasticsearch: nil
         }

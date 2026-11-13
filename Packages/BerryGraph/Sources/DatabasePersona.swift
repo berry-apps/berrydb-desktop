@@ -32,7 +32,7 @@ public enum DatabasePersona: Sendable, Equatable {
 
     public static func persona(for dialect: DriverID) -> DatabasePersona {
         switch dialect {
-        case .postgres, .mysql, .sqlite, .sqlserver: .relational
+        case .postgres, .mysql, .sqlite, .libsql, .sqlserver: .relational
         case .mongodb, .dynamodb, .elasticsearch: .document
         case .redis: .keyValue
         case .qdrant: .vector
