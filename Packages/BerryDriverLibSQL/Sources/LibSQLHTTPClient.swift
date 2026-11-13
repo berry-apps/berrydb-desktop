@@ -85,7 +85,7 @@ extension HranaValue: Codable {
             self = .text(text)
         case "blob":
             let encoded = try container.decode(String.self, forKey: .base64)
-            guard let data = Data(base64Encoded: encoded) else {
+            guard let data = Self.decodeBase64Flexible(encoded) else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .base64,
                     in: container,
@@ -120,6 +120,19 @@ extension HranaValue: Codable {
             try container.encode("blob", forKey: .type)
             try container.encode(data.base64EncodedString(), forKey: .base64)
         }
+    }
+
+    /// sqld omits trailing '=' padding in Hrana JSON blob payloads (RFC 4648 unpadded base64),
+    /// whereas Foundation's `Data(base64Encoded:)` requires 4-character padding.
+    private static func decodeBase64Flexible(_ raw: String) -> Data? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let data = Data(base64Encoded: trimmed) {
+            return data
+        }
+        let remainder = trimmed.count % 4
+        guard remainder != 1 else { return nil }
+        let padded = remainder == 0 ? trimmed : trimmed + String(repeating: "=", count: 4 - remainder)
+        return Data(base64Encoded: padded)
     }
 }
 
@@ -208,26 +221,107 @@ struct HranaPipelineResponse: Decodable, Sendable {
     let results: [HranaStepOutcome]
 }
 
+private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        // Never follow HTTP redirects automatically so Bearer tokens cannot be forwarded off-origin.
+        completionHandler(nil)
+    }
+}
+
 final class LibSQLHTTPClient: Sendable {
+    static let defaultMaxResponseBytes = LibSQLDriver.defaultMaxResponseBytes
+    private static let noRedirectDelegate = NoRedirectDelegate()
+
     let baseURL: URL
     private let authToken: String?
+    private let tlsMode: TLSMode
     private let timeoutSeconds: TimeInterval
+    let maxResponseBytes: Int
     private let session: URLSession
     private let inFlightTask = OSAllocatedUnfairLock<URLSessionDataTask?>(initialState: nil)
 
     init(
         baseURL: URL,
         authToken: String?,
+        tlsMode: TLSMode,
         timeoutSeconds: TimeInterval,
+        maxResponseBytes: Int = LibSQLHTTPClient.defaultMaxResponseBytes,
         sessionConfiguration: URLSessionConfiguration? = nil
     ) {
         self.baseURL = baseURL
         self.authToken = authToken
+        self.tlsMode = tlsMode
         self.timeoutSeconds = timeoutSeconds
+        self.maxResponseBytes = max(1, maxResponseBytes)
         let config = sessionConfiguration ?? URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeoutSeconds
         config.timeoutIntervalForResource = max(timeoutSeconds * 2, 60)
-        self.session = URLSession(configuration: config)
+        self.session = URLSession(configuration: config, delegate: Self.noRedirectDelegate, delegateQueue: nil)
+    }
+
+    func validateStickyBaseURL(_ rawBaseURL: String) throws -> URL {
+        guard let candidate = URL(string: rawBaseURL),
+              let components = URLComponents(url: candidate, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host?.lowercased(), !host.isEmpty
+        else {
+            throw DriverError.connectionFailed("Rejected invalid base_url from libSQL server: \(rawBaseURL)")
+        }
+        if components.user != nil || components.password != nil
+            || components.query != nil || components.fragment != nil
+            || components.path.split(separator: "/").contains("..") {
+            throw DriverError.connectionFailed("Rejected unsafe base_url components from libSQL server: \(rawBaseURL)")
+        }
+        try validateTargetBaseURL(candidate)
+        return candidate
+    }
+
+    func validateTargetBaseURL(_ target: URL) throws {
+        let expectedScheme = baseURL.scheme?.lowercased()
+        let targetScheme = target.scheme?.lowercased()
+        guard targetScheme == "http" || targetScheme == "https" else {
+            throw DriverError.connectionFailed("Unsupported libSQL URL scheme '\(targetScheme ?? "nil")'")
+        }
+        if (tlsMode != .disable || expectedScheme == "https") && targetScheme != "https" {
+            throw DriverError.connectionFailed(
+                "Refusing to send libSQL request over insecure scheme '\(targetScheme ?? "nil")'"
+            )
+        }
+        guard targetScheme == expectedScheme else {
+            throw DriverError.connectionFailed(
+                "Rejected libSQL base_url scheme change from '\(expectedScheme ?? "")' to '\(targetScheme ?? "")'"
+            )
+        }
+        let expectedHost = baseURL.host?.lowercased()
+        let targetHost = target.host?.lowercased()
+        guard let expectedHost, !expectedHost.isEmpty, targetHost == expectedHost else {
+            throw DriverError.connectionFailed(
+                "Rejected cross-host libSQL base_url '\(targetHost ?? "")' (expected '\(expectedHost ?? "")')"
+            )
+        }
+        let expectedPort = Self.effectivePort(for: baseURL)
+        let targetPort = Self.effectivePort(for: target)
+        guard targetPort == expectedPort else {
+            throw DriverError.connectionFailed(
+                "Rejected cross-port libSQL base_url port \(targetPort ?? -1) (expected \(expectedPort ?? -1))"
+            )
+        }
+    }
+
+    private static func effectivePort(for url: URL) -> Int? {
+        if let port = url.port { return port }
+        switch url.scheme?.lowercased() {
+        case "https": return 443
+        case "http": return 80
+        default: return nil
+        }
     }
 
     func executePipeline(
@@ -237,6 +331,7 @@ final class LibSQLHTTPClient: Sendable {
         timeoutOverride: TimeInterval? = nil
     ) async throws -> HranaPipelineResponse {
         let targetBase = stickyBaseURL ?? baseURL
+        try validateTargetBaseURL(targetBase)
         let endpoint = targetBase
             .appendingPathComponent("v2")
             .appendingPathComponent("pipeline")
@@ -257,6 +352,12 @@ final class LibSQLHTTPClient: Sendable {
         guard let http = response as? HTTPURLResponse else {
             throw DriverError.connectionFailed("Invalid non-HTTP response from libSQL server")
         }
+        if (300...399).contains(http.statusCode) {
+            throw DriverError.connectionFailed("Refused HTTP \(http.statusCode) redirect from libSQL server")
+        }
+        if let responseURL = http.url {
+            try validateTargetBaseURL(responseURL)
+        }
 
         switch http.statusCode {
         case 200...299:
@@ -270,6 +371,13 @@ final class LibSQLHTTPClient: Sendable {
                 throw DriverError.connectionFailed("libSQL HTTP \(http.statusCode): \(detail)")
             }
             throw DriverError.queryFailed(message: "libSQL HTTP \(http.statusCode): \(detail)", code: nil)
+        }
+
+        if data.count > maxResponseBytes {
+            throw DriverError.queryFailed(
+                message: "libSQL response size (\(data.count) bytes) exceeds the \(maxResponseBytes)-byte safety limit. Add a LIMIT clause to paginate large result sets.",
+                code: nil
+            )
         }
 
         do {

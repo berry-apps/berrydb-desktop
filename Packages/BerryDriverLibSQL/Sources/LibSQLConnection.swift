@@ -16,13 +16,16 @@ public actor LibSQLConnection: DriverConnection, ReadOnlyExecuting {
         authToken: String?,
         tlsMode: TLSMode,
         timeoutSeconds: TimeInterval,
+        maxResponseBytes: Int = LibSQLHTTPClient.defaultMaxResponseBytes,
         sessionConfiguration: URLSessionConfiguration? = nil
     ) {
         self.tlsMode = tlsMode
         self.client = LibSQLHTTPClient(
             baseURL: baseURL,
             authToken: authToken,
+            tlsMode: tlsMode,
             timeoutSeconds: timeoutSeconds,
+            maxResponseBytes: maxResponseBytes,
             sessionConfiguration: sessionConfiguration
         )
     }
@@ -74,16 +77,27 @@ public actor LibSQLConnection: DriverConnection, ReadOnlyExecuting {
                 .connectionFailed("Incomplete response while enabling libSQL read-only mode.")
             )
         }
+        var pragmaSetUnsupported = false
         if let err = response.results[0].error {
-            throw DriverError.readOnlySetupFailure(LibSQLHTTPClient.mapHranaError(err))
+            if Self.isUnsupportedQueryOnlyPragma(err) {
+                // sqld's SQL parser rejects PRAGMA query_only = ON; read-only safety falls back
+                // to ReadOnlyAllowlist, single-statement checks, and placeholder validation.
+                pragmaSetUnsupported = true
+            } else {
+                throw DriverError.readOnlySetupFailure(LibSQLHTTPClient.mapHranaError(err))
+            }
         }
         if let err = response.results[1].error {
             throw DriverError.readOnlySetupFailure(LibSQLHTTPClient.mapHranaError(err))
         }
         guard case .execute(let checkResult) = response.results[1].response,
-              let firstValue = checkResult.rows.first?.first,
-              firstValue == .integer(1) || firstValue == .text("1")
+              let firstValue = checkResult.rows.first?.first
         else {
+            throw DriverError.readOnlySetupFailure(
+                .queryFailed(message: "PRAGMA query_only did not return a readable state.", code: nil)
+            )
+        }
+        if !pragmaSetUnsupported, firstValue != .integer(1), firstValue != .text("1") {
             throw DriverError.readOnlySetupFailure(
                 .queryFailed(message: "PRAGMA query_only did not activate read-only mode.", code: nil)
             )
@@ -223,9 +237,22 @@ public actor LibSQLConnection: DriverConnection, ReadOnlyExecuting {
                 stickyBaseURL: stickyBaseURL
             )
 
+            let validatedStickyURL: URL?
+            if let rawBaseURL = response.base_url {
+                do {
+                    validatedStickyURL = try client.validateStickyBaseURL(rawBaseURL)
+                } catch {
+                    activeBaton = nil
+                    stickyBaseURL = nil
+                    throw error
+                }
+            } else {
+                validatedStickyURL = stickyBaseURL
+            }
+
             if keepStreamOpen {
                 activeBaton = response.baton
-                stickyBaseURL = response.base_url.flatMap(URL.init(string:)) ?? stickyBaseURL
+                stickyBaseURL = validatedStickyURL
             } else {
                 activeBaton = nil
                 stickyBaseURL = nil
@@ -243,16 +270,17 @@ public actor LibSQLConnection: DriverConnection, ReadOnlyExecuting {
                     return
                 }
                 if case .execute(let result) = outcome.response {
-                    await Self.yieldExecuteResult(
+                    let completed = await Self.yieldExecuteResult(
                         result,
                         duration: clock.now - started,
                         continuation: continuation
                     )
+                    if !completed { return }
                 }
             }
             continuation.finish()
         } catch {
-            if !keepStreamOpen {
+            if !keepStreamOpen || activeBaton == nil {
                 activeBaton = nil
                 stickyBaseURL = nil
             }
@@ -334,7 +362,8 @@ public actor LibSQLConnection: DriverConnection, ReadOnlyExecuting {
                 ))
                 return
             }
-            if response.results[0].type == "error", let err = response.results[0].error {
+            if response.results[0].type == "error", let err = response.results[0].error,
+               !Self.isUnsupportedQueryOnlyPragma(err) {
                 continuation.finish(throwing: DriverError.readOnlySetupFailure(LibSQLHTTPClient.mapHranaError(err)))
                 return
             }
@@ -344,11 +373,12 @@ public actor LibSQLConnection: DriverConnection, ReadOnlyExecuting {
                 return
             }
             if case .execute(let result) = queryOutcome.response {
-                await Self.yieldExecuteResult(
+                let completed = await Self.yieldExecuteResult(
                     result,
                     duration: clock.now - started,
                     continuation: continuation
                 )
+                if !completed { return }
             }
             continuation.finish()
         } catch {
@@ -356,11 +386,14 @@ public actor LibSQLConnection: DriverConnection, ReadOnlyExecuting {
         }
     }
 
+    /// Hrana v2 HTTP pipeline buffers and decodes each response body in memory
+    /// (bounded by `LibSQLHTTPClient.maxResponseBytes`) before yielding rows to
+    /// callers in `batchSize` chunks so UI/stream consumers process incremental batches.
     private static func yieldExecuteResult(
         _ result: HranaExecuteResult,
         duration: Duration,
         continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation
-    ) async {
+    ) async -> Bool {
         let columnCount = result.cols.count
         if columnCount > 0 {
             let metas = result.cols.enumerated().map { idx, col in
@@ -372,6 +405,10 @@ public actor LibSQLConnection: DriverConnection, ReadOnlyExecuting {
             continuation.yield(.columns(metas))
 
             for start in stride(from: 0, to: result.rows.count, by: batchSize) {
+                if Task.isCancelled {
+                    continuation.finish(throwing: DriverError.cancelled)
+                    return false
+                }
                 let end = min(start + batchSize, result.rows.count)
                 let batch = result.rows[start..<end].map { row in
                     row.map { $0.toBerryValue() }
@@ -383,6 +420,15 @@ public actor LibSQLConnection: DriverConnection, ReadOnlyExecuting {
 
         let affected: Int64? = columnCount == 0 ? (result.affected_row_count ?? 0) : nil
         continuation.yield(.complete(QueryStats(rowsAffected: affected, duration: duration)))
+        return true
+    }
+
+    private static func isUnsupportedQueryOnlyPragma(_ error: HranaErrorPayload) -> Bool {
+        let code = error.code?.uppercased() ?? ""
+        let message = error.message.lowercased()
+        return code == "SQL_PARSE_ERROR"
+            && message.contains("unsupported statement")
+            && message.contains("query_only")
     }
 
     private static func seconds(from duration: Duration) -> TimeInterval {

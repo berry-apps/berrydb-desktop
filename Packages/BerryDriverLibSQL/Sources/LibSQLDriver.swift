@@ -4,6 +4,7 @@ import Foundation
 public struct LibSQLDriver: DatabaseDriver {
     public static let id: DriverID = .libsql
     public static let displayName = "libSQL"
+    public static let defaultMaxResponseBytes = 64 * 1024 * 1024
 
     public static let capabilities = Capabilities(
         transactions: true,
@@ -26,7 +27,8 @@ public struct LibSQLDriver: DatabaseDriver {
 
     public static func connect(
         _ config: ConnectionConfig,
-        sessionConfiguration: URLSessionConfiguration? = nil
+        sessionConfiguration: URLSessionConfiguration? = nil,
+        maxResponseBytes: Int = LibSQLDriver.defaultMaxResponseBytes
     ) async throws -> LibSQLConnection {
         guard let endpoint = ConnectionConfig.parseLibSQLEndpoint(
             host: config.host,
@@ -42,6 +44,7 @@ public struct LibSQLDriver: DatabaseDriver {
             authToken: (token?.isEmpty == false) ? token : nil,
             tlsMode: endpoint.useTLS ? config.tlsMode : .disable,
             timeoutSeconds: 30,
+            maxResponseBytes: maxResponseBytes,
             sessionConfiguration: sessionConfiguration
         )
         do {

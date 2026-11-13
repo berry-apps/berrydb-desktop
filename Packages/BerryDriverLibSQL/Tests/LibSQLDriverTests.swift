@@ -8,8 +8,12 @@ import Testing
 struct LibSQLDriverTests {
     // MARK: - Helpers
 
-    private func makeHTTPResponse(url: URL, statusCode: Int = 200) -> HTTPURLResponse {
-        HTTPURLResponse(url: url, statusCode: statusCode, httpVersion: "HTTP/1.1", headerFields: nil)!
+    private func makeHTTPResponse(
+        url: URL,
+        statusCode: Int = 200,
+        headers: [String: String]? = nil
+    ) -> HTTPURLResponse {
+        HTTPURLResponse(url: url, statusCode: statusCode, httpVersion: "HTTP/1.1", headerFields: headers)!
     }
 
     private func jsonData(_ object: Any) throws -> Data {
@@ -622,6 +626,144 @@ struct LibSQLDriverTests {
                 Issue.record("Expected DriverError.cancelled, got \(error)")
                 return
             }
+        }
+    }
+
+    // MARK: - Transport & Token Target Security
+
+    @Test("rejects cross-host, scheme-downgraded, cross-port, and redirected sticky base_url without leaking token")
+    func stickyBaseURLAndRedirectSecurity() async throws {
+        let host = "primary-\(UUID().uuidString).test"
+        let attackerHost = "attacker-\(UUID().uuidString).test"
+        defer {
+            LibSQLStubURLProtocol.unregister(host: host)
+            LibSQLStubURLProtocol.unregister(host: attackerHost)
+        }
+
+        let attackerRequests = OSAllocatedUnfairLock<Int>(initialState: 0)
+        LibSQLStubURLProtocol.register(host: attackerHost) { request, _ in
+            attackerRequests.withLock { $0 += 1 }
+            guard let url = request.url else { throw URLError(.badURL) }
+            return (makeHTTPResponse(url: url), try jsonData(["results": [okExecuteResult(), okCloseResult()]]))
+        }
+
+        let mode = OSAllocatedUnfairLock<String>(initialState: "cross-host")
+        LibSQLStubURLProtocol.register(host: host) { request, data in
+            guard let url = request.url else { throw URLError(.badURL) }
+            let (_, reqs) = try parsePipelineRequest(data)
+            let sql = (reqs.first?["stmt"] as? [String: Any])?["sql"] as? String ?? ""
+            if sql == "SELECT 1" {
+                return (
+                    makeHTTPResponse(url: url),
+                    try jsonData(["results": [okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]]), okCloseResult()]])
+                )
+            }
+            let currentMode = mode.withLock { $0 }
+            if currentMode == "redirect" {
+                return (
+                    makeHTTPResponse(
+                        url: url,
+                        statusCode: 302,
+                        headers: ["Location": "https://\(attackerHost)/v2/pipeline"]
+                    ),
+                    Data()
+                )
+            }
+            let injectedBaseURL: String
+            switch currentMode {
+            case "cross-host":
+                injectedBaseURL = "https://\(attackerHost)"
+            case "downgrade":
+                injectedBaseURL = "http://\(host)"
+            case "cross-port":
+                injectedBaseURL = "https://\(host):8443"
+            case "credentials":
+                injectedBaseURL = "https://user:pass@\(host)"
+            default:
+                injectedBaseURL = "https://\(host)"
+            }
+            return (
+                makeHTTPResponse(url: url),
+                try jsonData([
+                    "baton": "baton-hijack",
+                    "base_url": injectedBaseURL,
+                    "results": [okExecuteResult()],
+                ])
+            )
+        }
+
+        let conn = try await LibSQLDriver.connect(
+            .libsql(host: "https://\(host)", authToken: "super-secret-bearer"),
+            sessionConfiguration: LibSQLStubURLProtocol.sessionConfiguration()
+        )
+        defer { Task { await conn.close() } }
+
+        for testMode in ["cross-host", "downgrade", "cross-port", "credentials", "redirect"] {
+            mode.withLock { $0 = testMode }
+            do {
+                _ = try await collect(conn.execute("BEGIN"))
+                Issue.record("Expected \(testMode) base_url/redirect to be rejected")
+            } catch let error as DriverError {
+                guard case .connectionFailed = error else {
+                    Issue.record("Expected connectionFailed for \(testMode), got \(error)")
+                    return
+                }
+            }
+            // Verify subsequent request still targets primary host cleanly rather than the rejected URL.
+            let probe = try await collect(conn.execute("SELECT 1"))
+            #expect(!probe.isEmpty)
+        }
+
+        #expect(attackerRequests.withLock { $0 } == 0)
+    }
+
+    @Test("enforces maxResponseBytes safety limit on large pipeline payloads")
+    func responseSizeLimit() async throws {
+        let host = "limit-\(UUID().uuidString).test"
+        defer { LibSQLStubURLProtocol.unregister(host: host) }
+
+        LibSQLStubURLProtocol.register(host: host) { request, data in
+            guard let url = request.url else { throw URLError(.badURL) }
+            let (_, reqs) = try parsePipelineRequest(data)
+            let sql = (reqs.first?["stmt"] as? [String: Any])?["sql"] as? String ?? ""
+            if sql == "SELECT 1" {
+                return (
+                    makeHTTPResponse(url: url),
+                    try jsonData(["results": [okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]]), okCloseResult()]])
+                )
+            }
+            let bigText = String(repeating: "x", count: 1024)
+            return (
+                makeHTTPResponse(url: url),
+                try jsonData([
+                    "results": [
+                        okExecuteResult(
+                            cols: [["name": "payload", "decltype": "TEXT"]],
+                            rows: [[["type": "text", "value": bigText]]]
+                        ),
+                        okCloseResult(),
+                    ],
+                ])
+            )
+        }
+
+        let conn = try await LibSQLDriver.connect(
+            .libsql(host: "https://\(host)"),
+            sessionConfiguration: LibSQLStubURLProtocol.sessionConfiguration(),
+            maxResponseBytes: 512
+        )
+        defer { Task { await conn.close() } }
+
+        do {
+            _ = try await collect(conn.execute("SELECT payload FROM huge_table"))
+            Issue.record("Expected maxResponseBytes error")
+        } catch let error as DriverError {
+            guard case .queryFailed(let message, nil) = error else {
+                Issue.record("Expected queryFailed, got \(error)")
+                return
+            }
+            #expect(message.contains("512-byte safety limit"))
+            #expect(message.contains("LIMIT"))
         }
     }
 }

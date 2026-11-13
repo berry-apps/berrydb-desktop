@@ -137,3 +137,22 @@ public struct ElasticsearchTestServer: Sendable {
 
     public static let elasticsearch = fromEnv("BERRYDB_TEST_ELASTICSEARCH")
 }
+
+/// Self-hosted libSQL / sqld conformance target parsed from `BERRYDB_TEST_LIBSQL`.
+///
+/// Format: `HOST:PORT[:TOKEN]`
+public struct LibSQLTestServer: Sendable {
+    public let host: String
+    public let port: Int
+    public let authToken: String?
+
+    public static func fromEnv(_ variable: String) -> LibSQLTestServer? {
+        guard let raw = ProcessInfo.processInfo.environment[variable] else { return nil }
+        let parts = raw.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 2, let port = Int(parts[1]) else { return nil }
+        let token = parts.count >= 3 && !parts[2].isEmpty ? parts[2] : nil
+        return LibSQLTestServer(host: parts[0], port: port, authToken: token)
+    }
+
+    public static let libsql = fromEnv("BERRYDB_TEST_LIBSQL")
+}
