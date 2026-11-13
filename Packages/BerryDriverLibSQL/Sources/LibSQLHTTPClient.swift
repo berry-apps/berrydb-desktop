@@ -221,7 +221,32 @@ struct HranaPipelineResponse: Decodable, Sendable {
     let results: [HranaStepOutcome]
 }
 
-private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+private struct TaskTransferState: @unchecked Sendable {
+    let maxBytes: Int
+    var buffer = Data()
+    var response: URLResponse?
+    var exceededLimitError: DriverError?
+    let continuation: CheckedContinuation<(Data, URLResponse), Error>
+    let onComplete: @Sendable () -> Void
+}
+
+private final class PipelineSessionDelegate: NSObject, URLSessionDataDelegate, Sendable {
+    private let transfers = OSAllocatedUnfairLock<[Int: TaskTransferState]>(initialState: [:])
+
+    func register(
+        taskID: Int,
+        maxBytes: Int,
+        continuation: CheckedContinuation<(Data, URLResponse), Error>,
+        onComplete: @escaping @Sendable () -> Void
+    ) {
+        let state = TaskTransferState(
+            maxBytes: maxBytes,
+            continuation: continuation,
+            onComplete: onComplete
+        )
+        transfers.withLock { $0[taskID] = state }
+    }
+
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -232,17 +257,110 @@ private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendab
         // Never follow HTTP redirects automatically so Bearer tokens cannot be forwarded off-origin.
         completionHandler(nil)
     }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void
+    ) {
+        let disposition: URLSession.ResponseDisposition = transfers.withLock { dict in
+            guard var state = dict[dataTask.taskIdentifier] else {
+                return .cancel
+            }
+            state.response = response
+            if response.expectedContentLength > Int64(state.maxBytes) {
+                state.exceededLimitError = Self.limitExceededError(
+                    byteCount: response.expectedContentLength,
+                    maxBytes: state.maxBytes
+                )
+                state.buffer.removeAll(keepingCapacity: false)
+                dict[dataTask.taskIdentifier] = state
+                return .cancel
+            }
+            dict[dataTask.taskIdentifier] = state
+            return .allow
+        }
+        completionHandler(disposition)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive data: Data
+    ) {
+        let shouldCancel = transfers.withLock { dict -> Bool in
+            guard var state = dict[dataTask.taskIdentifier], state.exceededLimitError == nil else {
+                return false
+            }
+            if data.count > state.maxBytes || state.buffer.count > state.maxBytes - data.count {
+                let observedBytes = Int64(state.buffer.count) + Int64(data.count)
+                state.exceededLimitError = Self.limitExceededError(
+                    byteCount: observedBytes,
+                    maxBytes: state.maxBytes
+                )
+                state.buffer.removeAll(keepingCapacity: false)
+                dict[dataTask.taskIdentifier] = state
+                return true
+            }
+            state.buffer.append(data)
+            dict[dataTask.taskIdentifier] = state
+            return false
+        }
+        if shouldCancel {
+            dataTask.cancel()
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: (any Error)?
+    ) {
+        guard let state = transfers.withLock({ $0.removeValue(forKey: task.taskIdentifier) }) else {
+            return
+        }
+        state.onComplete()
+
+        if let limitError = state.exceededLimitError {
+            state.continuation.resume(throwing: limitError)
+            return
+        }
+        if let error {
+            if let urlError = error as? URLError, urlError.code == .cancelled {
+                state.continuation.resume(throwing: DriverError.cancelled)
+            } else if (error as NSError).domain == NSURLErrorDomain,
+                      (error as NSError).code == NSURLErrorCancelled {
+                state.continuation.resume(throwing: DriverError.cancelled)
+            } else {
+                state.continuation.resume(throwing: DriverError.connectionFailed(error.localizedDescription))
+            }
+            return
+        }
+        guard let response = state.response ?? task.response else {
+            state.continuation.resume(throwing: DriverError.connectionFailed("Empty response from libSQL server"))
+            return
+        }
+        state.continuation.resume(returning: (state.buffer, response))
+    }
+
+    private static func limitExceededError(byteCount: Int64, maxBytes: Int) -> DriverError {
+        DriverError.queryFailed(
+            message: "libSQL response size (\(byteCount) bytes) exceeds the \(maxBytes)-byte safety limit. Add a LIMIT clause to paginate large result sets.",
+            code: nil
+        )
+    }
 }
 
 final class LibSQLHTTPClient: Sendable {
     static let defaultMaxResponseBytes = LibSQLDriver.defaultMaxResponseBytes
-    private static let noRedirectDelegate = NoRedirectDelegate()
 
     let baseURL: URL
     private let authToken: String?
     private let tlsMode: TLSMode
     private let timeoutSeconds: TimeInterval
     let maxResponseBytes: Int
+    private let delegate: PipelineSessionDelegate
     private let session: URLSession
     private let inFlightTask = OSAllocatedUnfairLock<URLSessionDataTask?>(initialState: nil)
 
@@ -259,10 +377,12 @@ final class LibSQLHTTPClient: Sendable {
         self.tlsMode = tlsMode
         self.timeoutSeconds = timeoutSeconds
         self.maxResponseBytes = max(1, maxResponseBytes)
+        let delegate = PipelineSessionDelegate()
+        self.delegate = delegate
         let config = sessionConfiguration ?? URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeoutSeconds
         config.timeoutIntervalForResource = max(timeoutSeconds * 2, 60)
-        self.session = URLSession(configuration: config, delegate: Self.noRedirectDelegate, delegateQueue: nil)
+        self.session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
     }
 
     func validateStickyBaseURL(_ rawBaseURL: String) throws -> URL {
@@ -419,31 +539,27 @@ final class LibSQLHTTPClient: Sendable {
     private func performDataRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                let task = session.dataTask(with: request) { [weak self] data, response, error in
-                    self?.inFlightTask.withLock { current in
-                        current = nil
-                    }
-                    if let error {
-                        if let urlError = error as? URLError, urlError.code == .cancelled {
-                            continuation.resume(throwing: DriverError.cancelled)
-                        } else if (error as NSError).domain == NSURLErrorDomain,
-                                  (error as NSError).code == NSURLErrorCancelled {
-                            continuation.resume(throwing: DriverError.cancelled)
-                        } else {
-                            continuation.resume(throwing: DriverError.connectionFailed(error.localizedDescription))
+                let task = session.dataTask(with: request)
+                let taskID = task.taskIdentifier
+                delegate.register(
+                    taskID: taskID,
+                    maxBytes: maxResponseBytes,
+                    continuation: continuation,
+                    onComplete: { [weak self] in
+                        self?.inFlightTask.withLock { current in
+                            if current?.taskIdentifier == taskID {
+                                current = nil
+                            }
                         }
-                        return
                     }
-                    guard let data, let response else {
-                        continuation.resume(throwing: DriverError.connectionFailed("Empty response from libSQL server"))
-                        return
-                    }
-                    continuation.resume(returning: (data, response))
-                }
+                )
                 inFlightTask.withLock { current in
                     current = task
                 }
                 task.resume()
+                if Task.isCancelled {
+                    task.cancel()
+                }
             }
         } onCancel: {
             cancelCurrentRequest()

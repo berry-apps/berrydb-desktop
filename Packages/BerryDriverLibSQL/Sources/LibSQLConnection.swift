@@ -63,29 +63,25 @@ public actor LibSQLConnection: DriverConnection, ReadOnlyExecuting {
 
     public func prepareReadOnly() async throws {
         guard !isClosed else { throw DriverError.notConnected }
-        let response = try await client.executePipeline(
-            [
-                .execute(HranaStatement(sql: "PRAGMA query_only = ON", args: nil, want_rows: false)),
-                .execute(HranaStatement(sql: "PRAGMA query_only", args: nil, want_rows: true)),
-                .close,
-            ],
-            baton: nil,
-            stickyBaseURL: nil
-        )
-        guard response.results.count >= 2 else {
-            throw DriverError.readOnlySetupFailure(
-                .connectionFailed("Incomplete response while enabling libSQL read-only mode.")
+        let response: HranaPipelineResponse
+        do {
+            response = try await client.executePipeline(
+                [
+                    .execute(HranaStatement(sql: "PRAGMA query_only = ON", args: nil, want_rows: false)),
+                    .execute(HranaStatement(sql: "PRAGMA query_only", args: nil, want_rows: true)),
+                    .close,
+                ],
+                baton: nil,
+                stickyBaseURL: nil
             )
+        } catch let error as DriverError {
+            throw DriverError.readOnlySetupFailure(error)
         }
-        var pragmaSetUnsupported = false
+        guard response.results.count >= 2 else {
+            throw DriverError.readOnlyUnavailable("Incomplete response while enabling libSQL read-only mode.")
+        }
         if let err = response.results[0].error {
-            if Self.isUnsupportedQueryOnlyPragma(err) {
-                // sqld's SQL parser rejects PRAGMA query_only = ON; read-only safety falls back
-                // to ReadOnlyAllowlist, single-statement checks, and placeholder validation.
-                pragmaSetUnsupported = true
-            } else {
-                throw DriverError.readOnlySetupFailure(LibSQLHTTPClient.mapHranaError(err))
-            }
+            throw DriverError.readOnlySetupFailure(LibSQLHTTPClient.mapHranaError(err))
         }
         if let err = response.results[1].error {
             throw DriverError.readOnlySetupFailure(LibSQLHTTPClient.mapHranaError(err))
@@ -93,14 +89,10 @@ public actor LibSQLConnection: DriverConnection, ReadOnlyExecuting {
         guard case .execute(let checkResult) = response.results[1].response,
               let firstValue = checkResult.rows.first?.first
         else {
-            throw DriverError.readOnlySetupFailure(
-                .queryFailed(message: "PRAGMA query_only did not return a readable state.", code: nil)
-            )
+            throw DriverError.readOnlyUnavailable("PRAGMA query_only did not return a readable state.")
         }
-        if !pragmaSetUnsupported, firstValue != .integer(1), firstValue != .text("1") {
-            throw DriverError.readOnlySetupFailure(
-                .queryFailed(message: "PRAGMA query_only did not activate read-only mode.", code: nil)
-            )
+        guard firstValue == .integer(1) || firstValue == .text("1") else {
+            throw DriverError.readOnlyUnavailable("PRAGMA query_only did not activate read-only mode on the libSQL server.")
         }
     }
 
@@ -344,30 +336,39 @@ public actor LibSQLConnection: DriverConnection, ReadOnlyExecuting {
 
         let clock = ContinuousClock()
         let started = clock.now
+        var verifiedStream: (baton: String, stickyBaseURL: URL?)?
         do {
-            // Enforce query_only on the same ephemeral Hrana stream immediately before the read.
-            let response = try await client.executePipeline(
+            // Establish and verify PRAGMA query_only = ON in a dedicated pipeline request
+            // before ever sending the user's statement to the server.
+            let stream = try await establishReadOnlyStream(timeoutOverride: timeoutOverride)
+            verifiedStream = stream
+
+            if Task.isCancelled {
+                await closeReadOnlyStreamBestEffort(baton: stream.baton, stickyBaseURL: stream.stickyBaseURL)
+                continuation.finish(throwing: DriverError.cancelled)
+                return
+            }
+
+            let step2Timeout = timeoutOverride.map { total in
+                max(0.001, total - Self.seconds(from: clock.now - started))
+            }
+            let queryResponse = try await client.executePipeline(
                 [
-                    .execute(HranaStatement(sql: "PRAGMA query_only = ON", args: nil, want_rows: false)),
                     .execute(HranaStatement(sql: statement, args: hranaArgs, want_rows: true)),
                     .close,
                 ],
-                baton: nil,
-                stickyBaseURL: nil,
-                timeoutOverride: timeoutOverride
+                baton: stream.baton,
+                stickyBaseURL: stream.stickyBaseURL,
+                timeoutOverride: step2Timeout
             )
-            guard response.results.count >= 2 else {
-                continuation.finish(throwing: DriverError.readOnlySetupFailure(
-                    .connectionFailed("Incomplete response during libSQL read-only execution.")
+            verifiedStream = nil
+
+            guard let queryOutcome = queryResponse.results.first else {
+                continuation.finish(throwing: DriverError.connectionFailed(
+                    "Incomplete response during libSQL read-only execution."
                 ))
                 return
             }
-            if response.results[0].type == "error", let err = response.results[0].error,
-               !Self.isUnsupportedQueryOnlyPragma(err) {
-                continuation.finish(throwing: DriverError.readOnlySetupFailure(LibSQLHTTPClient.mapHranaError(err)))
-                return
-            }
-            let queryOutcome = response.results[1]
             if queryOutcome.type == "error", let err = queryOutcome.error {
                 continuation.finish(throwing: LibSQLHTTPClient.mapHranaError(err))
                 return
@@ -382,8 +383,69 @@ public actor LibSQLConnection: DriverConnection, ReadOnlyExecuting {
             }
             continuation.finish()
         } catch {
+            if let stream = verifiedStream {
+                await closeReadOnlyStreamBestEffort(baton: stream.baton, stickyBaseURL: stream.stickyBaseURL)
+            }
             continuation.finish(throwing: error)
         }
+    }
+
+    private func establishReadOnlyStream(
+        timeoutOverride: TimeInterval?
+    ) async throws -> (baton: String, stickyBaseURL: URL?) {
+        let setupResponse: HranaPipelineResponse
+        do {
+            setupResponse = try await client.executePipeline(
+                [
+                    .execute(HranaStatement(sql: "PRAGMA query_only = ON", args: nil, want_rows: false)),
+                    .execute(HranaStatement(sql: "PRAGMA query_only", args: nil, want_rows: true)),
+                ],
+                baton: nil,
+                stickyBaseURL: nil,
+                timeoutOverride: timeoutOverride
+            )
+        } catch let error as DriverError {
+            throw DriverError.readOnlySetupFailure(error)
+        }
+
+        let validatedStickyURL: URL?
+        if let rawBaseURL = setupResponse.base_url {
+            validatedStickyURL = try client.validateStickyBaseURL(rawBaseURL)
+        } else {
+            validatedStickyURL = nil
+        }
+
+        guard setupResponse.results.count >= 2 else {
+            await closeReadOnlyStreamBestEffort(baton: setupResponse.baton, stickyBaseURL: validatedStickyURL)
+            throw DriverError.readOnlyUnavailable("Incomplete response while enabling libSQL read-only mode.")
+        }
+        if let err = setupResponse.results[0].error {
+            await closeReadOnlyStreamBestEffort(baton: setupResponse.baton, stickyBaseURL: validatedStickyURL)
+            throw DriverError.readOnlySetupFailure(LibSQLHTTPClient.mapHranaError(err))
+        }
+        if let err = setupResponse.results[1].error {
+            await closeReadOnlyStreamBestEffort(baton: setupResponse.baton, stickyBaseURL: validatedStickyURL)
+            throw DriverError.readOnlySetupFailure(LibSQLHTTPClient.mapHranaError(err))
+        }
+        guard case .execute(let checkResult) = setupResponse.results[1].response,
+              let firstValue = checkResult.rows.first?.first
+        else {
+            await closeReadOnlyStreamBestEffort(baton: setupResponse.baton, stickyBaseURL: validatedStickyURL)
+            throw DriverError.readOnlyUnavailable("PRAGMA query_only did not return a readable state.")
+        }
+        guard firstValue == .integer(1) || firstValue == .text("1") else {
+            await closeReadOnlyStreamBestEffort(baton: setupResponse.baton, stickyBaseURL: validatedStickyURL)
+            throw DriverError.readOnlyUnavailable("PRAGMA query_only did not activate read-only mode on the libSQL server.")
+        }
+        guard let baton = setupResponse.baton, !baton.isEmpty else {
+            throw DriverError.readOnlyUnavailable("libSQL server did not return a stream baton to preserve PRAGMA query_only mode.")
+        }
+        return (baton, validatedStickyURL)
+    }
+
+    private func closeReadOnlyStreamBestEffort(baton: String?, stickyBaseURL: URL?) async {
+        guard let baton, !baton.isEmpty else { return }
+        _ = try? await client.executePipeline([.close], baton: baton, stickyBaseURL: stickyBaseURL)
     }
 
     /// Hrana v2 HTTP pipeline buffers and decodes each response body in memory
@@ -421,14 +483,6 @@ public actor LibSQLConnection: DriverConnection, ReadOnlyExecuting {
         let affected: Int64? = columnCount == 0 ? (result.affected_row_count ?? 0) : nil
         continuation.yield(.complete(QueryStats(rowsAffected: affected, duration: duration)))
         return true
-    }
-
-    private static func isUnsupportedQueryOnlyPragma(_ error: HranaErrorPayload) -> Bool {
-        let code = error.code?.uppercased() ?? ""
-        let message = error.message.lowercased()
-        return code == "SQL_PARSE_ERROR"
-            && message.contains("unsupported statement")
-            && message.contains("query_only")
     }
 
     private static func seconds(from duration: Duration) -> TimeInterval {

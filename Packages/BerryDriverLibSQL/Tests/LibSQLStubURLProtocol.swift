@@ -4,14 +4,26 @@ import os
 final class LibSQLStubURLProtocol: URLProtocol, @unchecked Sendable {
     typealias Handler = @Sendable (URLRequest, Data?) throws -> (HTTPURLResponse, Data)
 
+    private static let chunkSize = 256
     private static let handlers = OSAllocatedUnfairLock<[String: Handler]>(initialState: [:])
+    private static let loadedBytesByHost = OSAllocatedUnfairLock<[String: Int]>(initialState: [:])
 
     static func register(host: String, handler: @escaping Handler) {
         handlers.withLock { $0[host] = handler }
+        loadedBytesByHost.withLock { $0[host] = 0 }
     }
 
     static func unregister(host: String) {
         handlers.withLock { $0.removeValue(forKey: host) }
+        loadedBytesByHost.withLock { $0.removeValue(forKey: host) }
+    }
+
+    static func resetLoadedBytes(host: String) {
+        loadedBytesByHost.withLock { $0[host] = 0 }
+    }
+
+    static func loadedBytes(host: String) -> Int {
+        loadedBytesByHost.withLock { $0[host] ?? 0 }
     }
 
     static func sessionConfiguration() -> URLSessionConfiguration {
@@ -47,7 +59,23 @@ final class LibSQLStubURLProtocol: URLProtocol, @unchecked Sendable {
                 let (response, data) = try handler(currentRequest, body)
                 guard !self.cancelled.withLock({ $0 }) else { return }
                 self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-                self.client?.urlProtocol(self, didLoad: data)
+                if !data.isEmpty {
+                    var offset = 0
+                    while offset < data.count {
+                        guard !self.cancelled.withLock({ $0 }) else { return }
+                        let end = min(offset + Self.chunkSize, data.count)
+                        let chunk = data.subdata(in: offset..<end)
+                        self.client?.urlProtocol(self, didLoad: chunk)
+                        Self.loadedBytesByHost.withLock { counts in
+                            counts[host, default: 0] += chunk.count
+                        }
+                        offset = end
+                        if offset < data.count {
+                            Thread.sleep(forTimeInterval: 0.002)
+                        }
+                    }
+                }
+                guard !self.cancelled.withLock({ $0 }) else { return }
                 self.client?.urlProtocolDidFinishLoading(self)
             } catch {
                 guard !self.cancelled.withLock({ $0 }) else { return }

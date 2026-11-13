@@ -109,16 +109,34 @@ struct LibSQLConformanceTests {
             "INSERT INTO \(table) VALUES (1, 'alpha'), (2, 'beta')",
         ])
         do {
-            try await conn.prepareReadOnly()
-            let readResult = try await harness.drain(
-                conn.executeReadOnly("SELECT label FROM \(table) WHERE id = ?", parameters: [.int(2)])
-            )
-            #expect(readResult.rows == [[.text("beta")]])
+            let serverSupportsQueryOnly: Bool
+            do {
+                try await conn.prepareReadOnly()
+                serverSupportsQueryOnly = true
+            } catch DriverError.readOnlyUnavailable {
+                // sqld 0.24 rejects PRAGMA query_only = ON; verify executeReadOnly refuses to run rather than falling back.
+                serverSupportsQueryOnly = false
+                do {
+                    _ = try await harness.drain(
+                        conn.executeReadOnly("SELECT label FROM \(table) WHERE id = ?", parameters: [.int(2)])
+                    )
+                    Issue.record("Expected executeReadOnly to throw readOnlyUnavailable when PRAGMA query_only = ON is unsupported")
+                } catch DriverError.readOnlyUnavailable {
+                    // Expected
+                }
+            }
 
-            await #expect(throws: DriverError.self) {
-                _ = try await harness.drain(
-                    conn.executeReadOnly("DELETE FROM \(table)", parameters: [])
+            if serverSupportsQueryOnly {
+                let readResult = try await harness.drain(
+                    conn.executeReadOnly("SELECT label FROM \(table) WHERE id = ?", parameters: [.int(2)])
                 )
+                #expect(readResult.rows == [[.text("beta")]])
+
+                await #expect(throws: DriverError.self) {
+                    _ = try await harness.drain(
+                        conn.executeReadOnly("DELETE FROM \(table)", parameters: [])
+                    )
+                }
             }
         } catch {
             _ = try? await harness.exec(conn, ["DROP TABLE IF EXISTS \(table)"])

@@ -305,15 +305,18 @@ struct LibSQLDriverTests {
 
     // MARK: - ReadOnlyExecuting Contract
 
-    @Test("read-only execution enforces allowlist, ?/?NNN placeholders, PRAGMA query_only, and SQLITE_READONLY")
+    @Test("read-only execution enforces allowlist, ?/?NNN placeholders, two-step PRAGMA query_only stream, and SQLITE_READONLY")
     func readOnlyContract() async throws {
         let host = "ro-\(UUID().uuidString).test"
         defer { LibSQLStubURLProtocol.unregister(host: host) }
 
+        let seenRequests = OSAllocatedUnfairLock<[(baton: String?, sqls: [String], hasClose: Bool)]>(initialState: [])
+
         LibSQLStubURLProtocol.register(host: host) { request, data in
             guard let url = request.url else { throw URLError(.badURL) }
-            let (_, reqs) = try parsePipelineRequest(data)
+            let (baton, reqs) = try parsePipelineRequest(data)
             let sqls = reqs.compactMap { ($0["stmt"] as? [String: Any])?["sql"] as? String }
+            let hasClose = reqs.contains { ($0["type"] as? String) == "close" }
 
             if sqls == ["SELECT 1"] {
                 return (
@@ -321,26 +324,31 @@ struct LibSQLDriverTests {
                     try jsonData(["results": [okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]]), okCloseResult()]])
                 )
             }
+
+            seenRequests.withLock { $0.append((baton: baton, sqls: sqls, hasClose: hasClose)) }
+
             if sqls == ["PRAGMA query_only = ON", "PRAGMA query_only"] {
+                var results: [[String: Any]] = [
+                    okExecuteResult(),
+                    okExecuteResult(cols: [["name": "query_only"]], rows: [[["type": "integer", "value": "1"]]]),
+                ]
+                if hasClose {
+                    results.append(okCloseResult())
+                    return (makeHTTPResponse(url: url), try jsonData(["results": results]))
+                }
                 return (
                     makeHTTPResponse(url: url),
-                    try jsonData([
-                        "results": [
-                            okExecuteResult(),
-                            okExecuteResult(cols: [["name": "query_only"]], rows: [[["type": "integer", "value": "1"]]]),
-                            okCloseResult(),
-                        ],
-                    ])
+                    try jsonData(["baton": "ro-baton-1", "results": results])
                 )
             }
-            if sqls.count == 2, sqls[0] == "PRAGMA query_only = ON" {
-                let args = (reqs[1]["stmt"] as? [String: Any])?["args"] as? [[String: Any]] ?? []
-                if sqls[1].contains("readonly_trigger") {
+
+            if baton == "ro-baton-1", sqls.count == 1, hasClose {
+                let args = (reqs[0]["stmt"] as? [String: Any])?["args"] as? [[String: Any]] ?? []
+                if sqls[0].contains("readonly_trigger") {
                     return (
                         makeHTTPResponse(url: url),
                         try jsonData([
                             "results": [
-                                okExecuteResult(),
                                 ["type": "error", "error": ["message": "attempt to write a readonly database", "code": "SQLITE_READONLY"]],
                                 okCloseResult(),
                             ],
@@ -352,7 +360,6 @@ struct LibSQLDriverTests {
                     makeHTTPResponse(url: url),
                     try jsonData([
                         "results": [
-                            okExecuteResult(),
                             okExecuteResult(
                                 cols: [["name": "v", "decltype": "TEXT"]],
                                 rows: [[["type": "text", "value": firstArg]]]
@@ -378,6 +385,13 @@ struct LibSQLDriverTests {
 
         let validEvents = try await collect(conn.executeReadOnly("SELECT ? AS v", parameters: [.text("ok")]))
         #expect(validEvents.contains { if case .rows(let r) = $0 { return r == [[.text("ok")]] }; return false })
+
+        let log = seenRequests.withLock { $0 }
+        #expect(log.count == 5)
+        #expect(log[1].baton == nil && !log[1].hasClose)
+        #expect(log[2].baton == "ro-baton-1" && log[2].sqls == ["SELECT 1 AS v"] && log[2].hasClose)
+        #expect(log[3].baton == nil && !log[3].hasClose)
+        #expect(log[4].baton == "ro-baton-1" && log[4].sqls == ["SELECT ? AS v"] && log[4].hasClose)
 
         // Multiple statements rejected locally
         do {
@@ -444,6 +458,121 @@ struct LibSQLDriverTests {
             }
             #expect(code == 8)
         }
+    }
+
+    @Test("read-only mode refuses without running query when PRAGMA query_only fails, reads 0, or lacks baton")
+    func readOnlyRefusesWhenPragmaUnsupportedOrZero() async throws {
+        let host = "ro-refuse-\(UUID().uuidString).test"
+        defer { LibSQLStubURLProtocol.unregister(host: host) }
+
+        let mode = OSAllocatedUnfairLock<String>(initialState: "unsupported")
+        let seenSQL = OSAllocatedUnfairLock<[String]>(initialState: [])
+        let closedBatons = OSAllocatedUnfairLock<[String]>(initialState: [])
+
+        LibSQLStubURLProtocol.register(host: host) { request, data in
+            guard let url = request.url else { throw URLError(.badURL) }
+            let (baton, reqs) = try parsePipelineRequest(data)
+            let sqls = reqs.compactMap { ($0["stmt"] as? [String: Any])?["sql"] as? String }
+            let hasClose = reqs.contains { ($0["type"] as? String) == "close" }
+
+            if sqls == ["SELECT 1"] {
+                return (
+                    makeHTTPResponse(url: url),
+                    try jsonData(["results": [okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]]), okCloseResult()]])
+                )
+            }
+
+            if sqls.isEmpty, hasClose, let baton {
+                closedBatons.withLock { $0.append(baton) }
+                return (makeHTTPResponse(url: url), try jsonData(["results": [okCloseResult()]]))
+            }
+
+            seenSQL.withLock { $0.append(contentsOf: sqls) }
+
+            let currentMode = mode.withLock { $0 }
+            if sqls == ["PRAGMA query_only = ON", "PRAGMA query_only"] {
+                switch currentMode {
+                case "unsupported":
+                    var results: [[String: Any]] = [
+                        ["type": "error", "error": ["message": "SQL string could not be parsed: unsupported statement: PRAGMA query_only = ON", "code": "SQL_PARSE_ERROR"]],
+                        okExecuteResult(cols: [["name": "query_only"]], rows: [[["type": "integer", "value": "0"]]]),
+                    ]
+                    if hasClose { results.append(okCloseResult()) }
+                    return (
+                        makeHTTPResponse(url: url),
+                        try jsonData(["baton": hasClose ? NSNull() as Any : "ro-bad-1" as Any, "results": results])
+                    )
+                case "zero":
+                    var results: [[String: Any]] = [
+                        okExecuteResult(),
+                        okExecuteResult(cols: [["name": "query_only"]], rows: [[["type": "integer", "value": "0"]]]),
+                    ]
+                    if hasClose { results.append(okCloseResult()) }
+                    return (
+                        makeHTTPResponse(url: url),
+                        try jsonData(["baton": hasClose ? NSNull() as Any : "ro-zero-1" as Any, "results": results])
+                    )
+                default:
+                    return (
+                        makeHTTPResponse(url: url),
+                        try jsonData([
+                            "baton": NSNull(),
+                            "results": [
+                                okExecuteResult(),
+                                okExecuteResult(cols: [["name": "query_only"]], rows: [[["type": "integer", "value": "1"]]]),
+                            ],
+                        ])
+                    )
+                }
+            }
+
+            Issue.record("Statement should never be forwarded to server when read-only setup fails: \(sqls)")
+            return (makeHTTPResponse(url: url), try jsonData(["results": [okExecuteResult(), okCloseResult()]]))
+        }
+
+        let conn = try await LibSQLDriver.connect(
+            .libsql(host: "https://\(host)"),
+            sessionConfiguration: LibSQLStubURLProtocol.sessionConfiguration()
+        )
+        defer { Task { await conn.close() } }
+
+        for testMode in ["unsupported", "zero"] {
+            mode.withLock { $0 = testMode }
+            do {
+                try await conn.prepareReadOnly()
+                Issue.record("Expected prepareReadOnly() to throw readOnlyUnavailable in mode \(testMode)")
+            } catch let err as DriverError {
+                guard case .readOnlyUnavailable = err else {
+                    Issue.record("Expected readOnlyUnavailable, got \(err)")
+                    return
+                }
+            }
+
+            do {
+                _ = try await collect(conn.executeReadOnly("SELECT secret FROM vaults", parameters: []))
+                Issue.record("Expected executeReadOnly() to throw readOnlyUnavailable in mode \(testMode)")
+            } catch let err as DriverError {
+                guard case .readOnlyUnavailable = err else {
+                    Issue.record("Expected readOnlyUnavailable, got \(err)")
+                    return
+                }
+            }
+        }
+
+        mode.withLock { $0 = "no-baton" }
+        do {
+            _ = try await collect(conn.executeReadOnly("SELECT secret FROM vaults", parameters: []))
+            Issue.record("Expected executeReadOnly() to throw readOnlyUnavailable when baton is missing")
+        } catch let err as DriverError {
+            guard case .readOnlyUnavailable = err else {
+                Issue.record("Expected readOnlyUnavailable, got \(err)")
+                return
+            }
+        }
+
+        let forwarded = seenSQL.withLock { $0 }
+        #expect(!forwarded.contains("SELECT secret FROM vaults"))
+        #expect(closedBatons.withLock { $0 } == ["ro-bad-1", "ro-zero-1"])
     }
 
     // MARK: - Introspection
@@ -717,10 +846,13 @@ struct LibSQLDriverTests {
         #expect(attackerRequests.withLock { $0 } == 0)
     }
 
-    @Test("enforces maxResponseBytes safety limit on large pipeline payloads")
+    @Test("enforces maxResponseBytes safety limit during download streaming and via Content-Length")
     func responseSizeLimit() async throws {
         let host = "limit-\(UUID().uuidString).test"
         defer { LibSQLStubURLProtocol.unregister(host: host) }
+
+        let sendContentLength = OSAllocatedUnfairLock<Bool>(initialState: false)
+        let totalPayloadBytes = OSAllocatedUnfairLock<Int>(initialState: 0)
 
         LibSQLStubURLProtocol.register(host: host) { request, data in
             guard let url = request.url else { throw URLError(.badURL) }
@@ -732,19 +864,21 @@ struct LibSQLDriverTests {
                     try jsonData(["results": [okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]]), okCloseResult()]])
                 )
             }
-            let bigText = String(repeating: "x", count: 1024)
-            return (
-                makeHTTPResponse(url: url),
-                try jsonData([
-                    "results": [
-                        okExecuteResult(
-                            cols: [["name": "payload", "decltype": "TEXT"]],
-                            rows: [[["type": "text", "value": bigText]]]
-                        ),
-                        okCloseResult(),
-                    ],
-                ])
-            )
+            let bigText = String(repeating: "x", count: 4096)
+            let payload = try jsonData([
+                "results": [
+                    okExecuteResult(
+                        cols: [["name": "payload", "decltype": "TEXT"]],
+                        rows: [[["type": "text", "value": bigText]]]
+                    ),
+                    okCloseResult(),
+                ],
+            ])
+            totalPayloadBytes.withLock { $0 = payload.count }
+            let headers = sendContentLength.withLock { $0 }
+                ? ["Content-Length": "\(payload.count)"]
+                : nil
+            return (makeHTTPResponse(url: url, headers: headers), payload)
         }
 
         let conn = try await LibSQLDriver.connect(
@@ -754,9 +888,12 @@ struct LibSQLDriverTests {
         )
         defer { Task { await conn.close() } }
 
+        // 1. Streaming body without Content-Length cancels mid-download before loading the full body.
+        LibSQLStubURLProtocol.resetLoadedBytes(host: host)
+        sendContentLength.withLock { $0 = false }
         do {
             _ = try await collect(conn.execute("SELECT payload FROM huge_table"))
-            Issue.record("Expected maxResponseBytes error")
+            Issue.record("Expected maxResponseBytes error on chunked download")
         } catch let error as DriverError {
             guard case .queryFailed(let message, nil) = error else {
                 Issue.record("Expected queryFailed, got \(error)")
@@ -765,5 +902,24 @@ struct LibSQLDriverTests {
             #expect(message.contains("512-byte safety limit"))
             #expect(message.contains("LIMIT"))
         }
+        let streamedBytes = LibSQLStubURLProtocol.loadedBytes(host: host)
+        let fullPayloadCount = totalPayloadBytes.withLock { $0 }
+        #expect(streamedBytes > 0)
+        #expect(streamedBytes < fullPayloadCount)
+
+        // 2. An oversized Content-Length is rejected without downloading the complete body.
+        LibSQLStubURLProtocol.resetLoadedBytes(host: host)
+        sendContentLength.withLock { $0 = true }
+        do {
+            _ = try await collect(conn.execute("SELECT payload FROM huge_table"))
+            Issue.record("Expected maxResponseBytes error on Content-Length")
+        } catch let error as DriverError {
+            guard case .queryFailed(let message, nil) = error else {
+                Issue.record("Expected queryFailed, got \(error)")
+                return
+            }
+            #expect(message.contains("512-byte safety limit"))
+        }
+        #expect(LibSQLStubURLProtocol.loadedBytes(host: host) < fullPayloadCount)
     }
 }
