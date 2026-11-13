@@ -452,7 +452,7 @@ public final class MCPProjectsSettingsModel: ObservableObject {
     /// these, and `save` refuses to turn them on for any other.
     nonisolated public static func supportsLiveRead(_ profile: ConnectionProfile) -> Bool {
         switch profile.driver {
-        case .postgres, .mysql, .sqlite, .libsql, .dynamodb: true
+        case .postgres, .mysql, .sqlite, .dynamodb: true
         default: false
         }
     }

@@ -236,7 +236,7 @@ public struct MCPMetadataService: Sendable {
     static let maximumCentralityEntries = 50
     /// The saved driver IDs a live read runs on, with the dialect the read
     /// policy checks their statements in. MariaDB profiles use `mysql`.
-    static let liveReadDialects: [String: MCPSQLDialect] = ["postgres": .postgresql, "mysql": .mysql, "sqlite": .sqlite, "libsql": .sqlite]
+    static let liveReadDialects: [String: MCPSQLDialect] = ["postgres": .postgresql, "mysql": .mysql, "sqlite": .sqlite]
     /// The saved driver ID a DynamoDB query runs on.
     static let partitionQueryDriver = "dynamodb"
 

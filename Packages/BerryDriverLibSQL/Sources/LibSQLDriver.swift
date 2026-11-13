@@ -5,10 +5,11 @@ public struct LibSQLDriver: DatabaseDriver {
     public static let id: DriverID = .libsql
     public static let displayName = "libSQL"
     public static let defaultMaxResponseBytes = 64 * 1024 * 1024
+    public static let defaultTimeoutSeconds: TimeInterval = 300
 
     public static let capabilities = Capabilities(
         transactions: true,
-        cancelQuery: true,
+        cancelQuery: false,
         multipleDatabases: false,
         schemas: false,
         explain: true,
@@ -17,7 +18,7 @@ public struct LibSQLDriver: DatabaseDriver {
         keyValueBrowser: false
     )
 
-    public static let dialect: any SQLDialect = LibSQLDialect()
+    public static let dialect: any SQLDialect = SQLiteDialect()
 
     public init() {}
 
@@ -28,7 +29,8 @@ public struct LibSQLDriver: DatabaseDriver {
     public static func connect(
         _ config: ConnectionConfig,
         sessionConfiguration: URLSessionConfiguration? = nil,
-        maxResponseBytes: Int = LibSQLDriver.defaultMaxResponseBytes
+        maxResponseBytes: Int = LibSQLDriver.defaultMaxResponseBytes,
+        timeoutSeconds: TimeInterval = LibSQLDriver.defaultTimeoutSeconds
     ) async throws -> LibSQLConnection {
         guard let endpoint = ConnectionConfig.parseLibSQLEndpoint(
             host: config.host,
@@ -39,11 +41,14 @@ public struct LibSQLDriver: DatabaseDriver {
         }
 
         let token = config.password?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTLSMode: TLSMode = endpoint.useTLS
+            ? (config.tlsMode == .disable ? .require : config.tlsMode)
+            : .disable
         let connection = LibSQLConnection(
             baseURL: endpoint.baseURL,
             authToken: (token?.isEmpty == false) ? token : nil,
-            tlsMode: endpoint.useTLS ? config.tlsMode : .disable,
-            timeoutSeconds: 30,
+            tlsMode: resolvedTLSMode,
+            timeoutSeconds: max(1, timeoutSeconds),
             maxResponseBytes: maxResponseBytes,
             sessionConfiguration: sessionConfiguration
         )
@@ -57,21 +62,4 @@ public struct LibSQLDriver: DatabaseDriver {
     }
 }
 
-public struct LibSQLDialect: SQLDialect {
-    public init() {}
-
-    public func quoteIdentifier(_ identifier: String) -> String {
-        let escaped = identifier.replacingOccurrences(of: "\"", with: "\"\"")
-        return "\"\(escaped)\""
-    }
-
-    public var systemSchemas: Set<String> { [] }
-    public var explainPrefix: String? { "EXPLAIN QUERY PLAN " }
-    public var supportsDropColumn: Bool { true }
-    public var supportsTransactions: Bool { true }
-    public var requiresQualifiedIdentifiers: Bool { false }
-
-    public func limitClause(_ limit: Int) -> String {
-        "LIMIT \(limit)"
-    }
-}
+public typealias LibSQLDialect = SQLiteDialect

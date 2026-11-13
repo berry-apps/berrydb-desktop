@@ -127,7 +127,7 @@ public struct MCPProjectResolver: Sendable {
     /// The drivers the helper opens a read-only session for: SQL drivers
     /// through `MCPConnectionFactories.enforceSQLReadOnly`, DynamoDB through
     /// partition queries. The helper reads secrets for no other.
-    private static let liveReadDrivers: Set<DriverID> = [.postgres, .mysql, .sqlite, .libsql, .dynamodb]
+    private static let liveReadDrivers: Set<DriverID> = [.postgres, .mysql, .sqlite, .dynamodb]
 
     /// Loads a saved profile and its secrets from `store`; nil when no such
     /// profile exists. `isProduction` follows the profile's environment

@@ -118,7 +118,7 @@ public struct MCPConnectionFactories: Sendable {
         profile: MCPConnectionProfile,
         connection: any DriverConnection
     ) async throws {
-        guard [.postgres, .mysql, .sqlite, .libsql].contains(profile.driverID),
+        guard [.postgres, .mysql, .sqlite].contains(profile.driverID),
               let readOnly = connection as? any ReadOnlyExecuting
         else {
             throw MCPConnectionCoordinatorError.sqlReadOnlyEnforcementUnavailable(profile.driverID)

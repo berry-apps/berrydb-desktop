@@ -3,7 +3,9 @@ import Foundation
 
 struct LibSQLIntrospector: Introspector {
     private let connection: LibSQLConnection
-    private let dialect = LibSQLDialect()
+    private let dialect = SQLiteDialect()
+
+    var bulkIntrospection: Bool { true }
 
     init(connection: LibSQLConnection) {
         self.connection = connection
@@ -80,33 +82,73 @@ struct LibSQLIntrospector: Introspector {
     }
 
     func foreignKeys(scope: SchemaScope) async throws -> [ForeignKeyRelation] {
-        let tables = try await connection.queryAll(
+        let tableRows = try await connection.queryAll(
             """
             SELECT name FROM sqlite_master
             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
             ORDER BY name
             """
         )
+        let tableNames = tableRows.compactMap { $0.first?.textValue }
+        guard !tableNames.isEmpty else { return [] }
+
+        let listedNames = Dictionary(
+            tableNames.map { (Self.asciiFolded($0), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        let fkQueries: [(sql: String, binds: [SQLParameter])] = tableNames.map { tableName in
+            (sql: "PRAGMA foreign_key_list(\(dialect.quoteIdentifier(tableName)))", binds: [])
+        }
+        let fkResults = try await connection.queryBatch(fkQueries)
+
+        var parsedPairs: [(source: String, id: Int64, seq: Int64, table: String, from: String, to: String?)] = []
+        var parentsNeedingPK: [String: String] = [:]
+
+        for (index, tableName) in tableNames.enumerated() {
+            guard index < fkResults.count else { continue }
+            let tablePairs = Self.parseForeignKeyRows(fkResults[index])
+            for pair in tablePairs {
+                parsedPairs.append((
+                    source: tableName,
+                    id: pair.id,
+                    seq: pair.seq,
+                    table: pair.table,
+                    from: pair.from,
+                    to: pair.to
+                ))
+                if pair.to == nil {
+                    let folded = Self.asciiFolded(pair.table)
+                    if parentsNeedingPK[folded] == nil {
+                        parentsNeedingPK[folded] = listedNames[folded] ?? pair.table
+                    }
+                }
+            }
+        }
+
+        let parentPKs = try await fetchPrimaryKeyColumns(for: parentsNeedingPK)
 
         var relations: [ForeignKeyRelation] = []
-        for row in tables {
-            guard let tableName = row.first?.textValue else { continue }
-            let fkRows = try await connection.queryAll("PRAGMA foreign_key_list(\(dialect.quoteIdentifier(tableName)))")
-            for fk in fkRows {
-                // PRAGMA foreign_key_list columns: id(0), seq(1), table(2), from(3), to(4), on_update(5), on_delete(6), match(7)
-                guard fk.count >= 5,
-                      let targetTable = fk[2].textValue,
-                      let column = fk[3].textValue,
-                      let referencedColumn = fk[4].textValue
-                else { continue }
-                relations.append(ForeignKeyRelation(
-                    source: TableRef(database: nil, name: tableName),
-                    column: column,
-                    target: TableRef(database: nil, name: targetTable),
-                    referencedColumn: referencedColumn,
-                    constraintName: nil
-                ))
+        relations.reserveCapacity(parsedPairs.count)
+        for pair in parsedPairs {
+            let referenced: String?
+            if let explicit = pair.to {
+                referenced = explicit
+            } else if let pkCols = parentPKs[Self.asciiFolded(pair.table)],
+                      pkCols.indices.contains(Int(pair.seq)) {
+                referenced = pkCols[Int(pair.seq)]
+            } else {
+                referenced = nil
             }
+            guard let referenced else { continue }
+            let targetName = listedNames[Self.asciiFolded(pair.table)] ?? pair.table
+            relations.append(ForeignKeyRelation(
+                source: TableRef(database: nil, name: pair.source),
+                column: pair.from,
+                target: TableRef(database: nil, name: targetName),
+                referencedColumn: referenced,
+                constraintName: nil
+            ))
         }
         return relations
     }
@@ -114,7 +156,15 @@ struct LibSQLIntrospector: Introspector {
     func tableDetail(_ table: TableRef) async throws -> TableDetail {
         let quoted = dialect.quoteIdentifier(table.name)
 
-        let colRows = try await connection.queryAll("PRAGMA table_info(\(quoted))")
+        let baseResults = try await connection.queryBatch([
+            (sql: "PRAGMA table_info(\(quoted))", binds: []),
+            (sql: "PRAGMA index_list(\(quoted))", binds: []),
+            (sql: "PRAGMA foreign_key_list(\(quoted))", binds: []),
+        ])
+        let colRows = baseResults.indices.contains(0) ? baseResults[0] : []
+        let indexListRows = baseResults.indices.contains(1) ? baseResults[1] : []
+        let fkRows = baseResults.indices.contains(2) ? baseResults[2] : []
+
         let columns: [ColumnInfo] = colRows.compactMap { row in
             // PRAGMA table_info: cid(0), name(1), type(2), notnull(3), dflt_value(4), pk(5)
             guard row.count >= 6, let name = row[1].textValue else { return nil }
@@ -131,29 +181,84 @@ struct LibSQLIntrospector: Introspector {
             )
         }
 
-        let indexListRows = try await connection.queryAll("PRAGMA index_list(\(quoted))")
-        var indexes: [IndexInfo] = []
-        for row in indexListRows {
+        let parsedIndexes: [(name: String, isUnique: Bool)] = indexListRows.compactMap { row in
             // PRAGMA index_list: seq(0), name(1), unique(2), origin(3), partial(4)
-            guard row.count >= 3, let indexName = row[1].textValue else { continue }
+            guard row.count >= 3, let indexName = row[1].textValue else { return nil }
             let isUnique = (row[2].numericValue ?? 0) != 0
-            let infoRows = try await connection.queryAll("PRAGMA index_info(\(dialect.quoteIdentifier(indexName)))")
-            let indexCols = infoRows.compactMap { $0.count >= 3 ? $0[2].textValue : nil }
-            indexes.append(IndexInfo(name: indexName, isUnique: isUnique, columns: indexCols))
+            return (name: indexName, isUnique: isUnique)
         }
 
-        let fkRows = try await connection.queryAll("PRAGMA foreign_key_list(\(quoted))")
-        let foreignKeys: [ForeignKeyInfo] = fkRows.compactMap { row in
-            guard row.count >= 5,
-                  let targetTable = row[2].textValue,
-                  let fromCol = row[3].textValue,
-                  let toCol = row[4].textValue
-            else { return nil }
+        let parsedFKs = Self.parseForeignKeyRows(fkRows)
+        var parentsNeedingPK: [String: String] = [:]
+        for pair in parsedFKs where pair.to == nil {
+            let folded = Self.asciiFolded(pair.table)
+            if parentsNeedingPK[folded] == nil {
+                parentsNeedingPK[folded] = pair.table
+            }
+        }
+        let sortedParentKeys = parentsNeedingPK.sorted { $0.key < $1.key }
+
+        var followUpQueries: [(sql: String, binds: [SQLParameter])] = parsedIndexes.map { item in
+            (sql: "PRAGMA index_info(\(dialect.quoteIdentifier(item.name)))", binds: [])
+        }
+        for (_, parentTable) in sortedParentKeys {
+            followUpQueries.append((
+                sql: "PRAGMA table_info(\(dialect.quoteIdentifier(parentTable)))",
+                binds: []
+            ))
+        }
+        let hasImplicitFKs = !sortedParentKeys.isEmpty
+        if hasImplicitFKs {
+            followUpQueries.append((
+                sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+                binds: []
+            ))
+        }
+
+        let followUpResults = followUpQueries.isEmpty ? [] : try await connection.queryBatch(followUpQueries)
+
+        var indexes: [IndexInfo] = []
+        indexes.reserveCapacity(parsedIndexes.count)
+        for (idx, item) in parsedIndexes.enumerated() {
+            let infoRows = followUpResults.indices.contains(idx) ? followUpResults[idx] : []
+            let indexCols = infoRows.compactMap { $0.count >= 3 ? $0[2].textValue : nil }
+            indexes.append(IndexInfo(name: item.name, isUnique: item.isUnique, columns: indexCols))
+        }
+
+        var parentPKs: [String: [String]] = [:]
+        for (offset, entry) in sortedParentKeys.enumerated() {
+            let resultIdx = parsedIndexes.count + offset
+            let rows = followUpResults.indices.contains(resultIdx) ? followUpResults[resultIdx] : []
+            parentPKs[entry.key] = Self.extractPrimaryKeyColumns(from: rows)
+        }
+
+        var listedNames: [String: String] = [:]
+        if hasImplicitFKs {
+            let namesIdx = parsedIndexes.count + sortedParentKeys.count
+            let nameRows = followUpResults.indices.contains(namesIdx) ? followUpResults[namesIdx] : []
+            listedNames = Dictionary(
+                nameRows.compactMap { $0.first?.textValue }.map { (Self.asciiFolded($0), $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }
+
+        let foreignKeys: [ForeignKeyInfo] = parsedFKs.compactMap { pair in
+            let referenced: String?
+            if let explicit = pair.to {
+                referenced = explicit
+            } else if let pkCols = parentPKs[Self.asciiFolded(pair.table)],
+                      pkCols.indices.contains(Int(pair.seq)) {
+                referenced = pkCols[Int(pair.seq)]
+            } else {
+                referenced = nil
+            }
+            guard let referenced else { return nil }
+            let targetName = listedNames[Self.asciiFolded(pair.table)] ?? pair.table
             return ForeignKeyInfo(
-                column: fromCol,
+                column: pair.from,
                 referencedSchema: nil,
-                referencedTable: targetTable,
-                referencedColumn: toCol
+                referencedTable: targetName,
+                referencedColumn: referenced
             )
         }
 
@@ -163,6 +268,64 @@ struct LibSQLIntrospector: Introspector {
             indexes: indexes,
             foreignKeys: foreignKeys
         )
+    }
+
+    private func fetchPrimaryKeyColumns(for parentsByFoldedName: [String: String]) async throws -> [String: [String]] {
+        guard !parentsByFoldedName.isEmpty else { return [:] }
+        let ordered = parentsByFoldedName.sorted { $0.key < $1.key }
+        let queries: [(sql: String, binds: [SQLParameter])] = ordered.map { _, tableName in
+            (sql: "PRAGMA table_info(\(dialect.quoteIdentifier(tableName)))", binds: [])
+        }
+        let results = try await connection.queryBatch(queries)
+        var output: [String: [String]] = [:]
+        for (idx, entry) in ordered.enumerated() {
+            let rows = results.indices.contains(idx) ? results[idx] : []
+            output[entry.key] = Self.extractPrimaryKeyColumns(from: rows)
+        }
+        return output
+    }
+
+    private static func parseForeignKeyRows(
+        _ rows: [[BerryValue]]
+    ) -> [(id: Int64, seq: Int64, table: String, from: String, to: String?)] {
+        rows.compactMap { row -> (id: Int64, seq: Int64, table: String, from: String, to: String?)? in
+            // PRAGMA foreign_key_list: id(0), seq(1), table(2), from(3), to(4), on_update(5), on_delete(6), match(7)
+            guard row.count >= 5,
+                  let id = int64Value(row[0]),
+                  let seq = int64Value(row[1]),
+                  let targetTable = row[2].textValue,
+                  let fromCol = row[3].textValue
+            else { return nil }
+            let toCol = row[4].textValue
+            return (id: id, seq: seq, table: targetTable, from: fromCol, to: toCol)
+        }
+        .sorted { ($0.id, $0.seq) < ($1.id, $1.seq) }
+    }
+
+    private static func extractPrimaryKeyColumns(from rows: [[BerryValue]]) -> [String] {
+        rows.compactMap { row -> (position: Int64, name: String)? in
+            guard row.count >= 6,
+                  let name = row[1].textValue,
+                  let position = int64Value(row[5]),
+                  position > 0
+            else { return nil }
+            return (position: position, name: name)
+        }
+        .sorted { $0.position < $1.position }
+        .map(\.name)
+    }
+
+    private static func int64Value(_ value: BerryValue) -> Int64? {
+        switch value {
+        case .int(let n): n
+        case .double(let d): Int64(d)
+        case .text(let s): Int64(s)
+        default: nil
+        }
+    }
+
+    private static func asciiFolded(_ name: String) -> String {
+        String(decoding: name.utf8.map { (0x41...0x5A).contains($0) ? $0 + 0x20 : $0 }, as: UTF8.self)
     }
 
     func tableStats(_ table: TableRef) async throws -> TableStats {

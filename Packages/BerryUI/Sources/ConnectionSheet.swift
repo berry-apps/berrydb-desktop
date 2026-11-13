@@ -273,8 +273,10 @@ public struct ConnectionSheet: View {
                                 let lower = newValue.trimmingCharacters(in: .whitespaces).lowercased()
                                 if lower.hasPrefix("http://") {
                                     tlsMode = .disable
-                                } else if lower.hasPrefix("https://") && tlsMode == .disable {
-                                    tlsMode = .require
+                                } else if lower.hasPrefix("libsql://") || lower.hasPrefix("https://") {
+                                    if tlsMode == .disable {
+                                        tlsMode = .require
+                                    }
                                 }
                             }
                             TextField(L("Port"), text: $port, prompt: Text(verbatim: "\(defaultPort)"))

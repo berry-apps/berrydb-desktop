@@ -30,6 +30,16 @@ struct LibSQLDriverTests {
         return (json["baton"] as? String, requests)
     }
 
+    private func okAutocommitResult(_ isAutocommit: Bool) -> [String: Any] {
+        [
+            "type": "ok",
+            "response": [
+                "type": "get_autocommit",
+                "is_autocommit": isAutocommit,
+            ],
+        ]
+    }
+
     private func okExecuteResult(
         cols: [[String: String]] = [],
         rows: [[[String: Any]]] = [],
@@ -66,20 +76,27 @@ struct LibSQLDriverTests {
 
     // MARK: - URL & Config Parsing
 
-    @Test("parseLibSQLEndpoint normalizes libsql, https, http, and bare hosts")
+    @Test("parseLibSQLEndpoint derives TLS from libsql/https schemes and http/bare-host fallback")
     func endpointParsing() {
         let turso = ConnectionConfig.parseLibSQLEndpoint(host: "libsql://my-db-org.turso.io")
         #expect(turso?.baseURL.absoluteString == "https://my-db-org.turso.io")
         #expect(turso?.useTLS == true)
         #expect(turso?.port == 443)
 
-        let localDisable = ConnectionConfig.parseLibSQLEndpoint(
-            host: "libsql://127.0.0.1:8080",
+        let libsqlSchemeIgnoresDisable = ConnectionConfig.parseLibSQLEndpoint(
+            host: "libsql://my-db-org.turso.io",
             tlsMode: .disable
         )
-        #expect(localDisable?.baseURL.absoluteString == "http://127.0.0.1:8080")
-        #expect(localDisable?.useTLS == false)
-        #expect(localDisable?.port == 8080)
+        #expect(libsqlSchemeIgnoresDisable?.baseURL.absoluteString == "https://my-db-org.turso.io")
+        #expect(libsqlSchemeIgnoresDisable?.useTLS == true)
+
+        let localBareDisable = ConnectionConfig.parseLibSQLEndpoint(
+            host: "127.0.0.1:8080",
+            tlsMode: .disable
+        )
+        #expect(localBareDisable?.baseURL.absoluteString == "http://127.0.0.1:8080")
+        #expect(localBareDisable?.useTLS == false)
+        #expect(localBareDisable?.port == 8080)
 
         let bareWithPort = ConnectionConfig.parseLibSQLEndpoint(
             host: "sqld.internal",
@@ -98,6 +115,19 @@ struct LibSQLDriverTests {
 
         #expect(ConnectionConfig.parseLibSQLEndpoint(host: "") == nil)
         #expect(ConnectionConfig.parseLibSQLEndpoint(host: "ftp://example.com") == nil)
+    }
+
+    @Test("driver capabilities report cancelQuery false and reuse SQLiteDialect")
+    func capabilitiesAndDialect() {
+        #expect(LibSQLDriver.capabilities.transactions == true)
+        #expect(LibSQLDriver.capabilities.cancelQuery == false)
+        #expect(LibSQLDriver.capabilities.explain == true)
+
+        #expect(LibSQLDriver.dialect.explainPrefix(analyze: false) == "EXPLAIN QUERY PLAN")
+        #expect(LibSQLDriver.dialect.explainPrefix(analyze: true) == "EXPLAIN QUERY PLAN")
+        #expect(LibSQLDriver.dialect.truncateSQL(TableRef(name: "orders")) == "DELETE FROM \"orders\";")
+        #expect(LibSQLDriver.dialect.boolLiteral(true) == "1")
+        #expect(LibSQLDriver.dialect.boolLiteral(false) == "0")
     }
 
     // MARK: - Auth & Handshake
@@ -240,26 +270,38 @@ struct LibSQLDriverTests {
         #expect(stats.rowsAffected == 3)
     }
 
-    // MARK: - Stateful Transactions via Baton
+    // MARK: - Stateful Transactions via Baton & get_autocommit
 
-    @Test("BEGIN keeps baton across execute calls and COMMIT closes the stream")
+    @Test("BEGIN and SAVEPOINT track baton via get_autocommit and COMMIT/ROLLBACK close it")
     func transactionBatonLifecycle() async throws {
         let host = "tx-\(UUID().uuidString).test"
         defer { LibSQLStubURLProtocol.unregister(host: host) }
 
         let recordedBatons = OSAllocatedUnfairLock<[String?]>(initialState: [])
-        let recordedCloses = OSAllocatedUnfairLock<[Bool]>(initialState: [])
+        let recordedRequests = OSAllocatedUnfairLock<[[String]]>(initialState: [])
 
         LibSQLStubURLProtocol.register(host: host) { request, data in
             guard let url = request.url else { throw URLError(.badURL) }
+            #expect(url.path.hasSuffix("/v3/pipeline"))
             let (baton, reqs) = try parsePipelineRequest(data)
+            let types = reqs.compactMap { $0["type"] as? String }
             let sql = (reqs.first?["stmt"] as? [String: Any])?["sql"] as? String ?? ""
-            let hasClose = reqs.contains { ($0["type"] as? String) == "close" }
 
-            if sql != "SELECT 1" {
-                recordedBatons.withLock { $0.append(baton) }
-                recordedCloses.withLock { $0.append(hasClose) }
+            if sql == "SELECT 1" {
+                return (
+                    makeHTTPResponse(url: url),
+                    try jsonData(["results": [okExecuteResult(), okCloseResult()]])
+                )
             }
+
+            if types == ["close"] {
+                recordedBatons.withLock { $0.append(baton) }
+                recordedRequests.withLock { $0.append(types) }
+                return (makeHTTPResponse(url: url), try jsonData(["results": [okCloseResult()]]))
+            }
+
+            recordedBatons.withLock { $0.append(baton) }
+            recordedRequests.withLock { $0.append(types) }
 
             if sql == "BEGIN" {
                 return (
@@ -267,7 +309,7 @@ struct LibSQLDriverTests {
                     try jsonData([
                         "baton": "baton-123",
                         "base_url": "https://\(host)",
-                        "results": [okExecuteResult()],
+                        "results": [okExecuteResult(), okAutocommitResult(false)],
                     ])
                 )
             }
@@ -276,7 +318,16 @@ struct LibSQLDriverTests {
                     makeHTTPResponse(url: url),
                     try jsonData([
                         "baton": "baton-123",
-                        "results": [okExecuteResult(affectedRowCount: 1)],
+                        "results": [okExecuteResult(affectedRowCount: 1), okAutocommitResult(false)],
+                    ])
+                )
+            }
+            if sql == "ROLLBACK TRANSACTION TO SAVEPOINT sp1" {
+                return (
+                    makeHTTPResponse(url: url),
+                    try jsonData([
+                        "baton": "baton-123",
+                        "results": [okExecuteResult(), okAutocommitResult(false)],
                     ])
                 )
             }
@@ -284,7 +335,88 @@ struct LibSQLDriverTests {
                 makeHTTPResponse(url: url),
                 try jsonData([
                     "baton": NSNull(),
-                    "results": [okExecuteResult(), okCloseResult()],
+                    "results": [okExecuteResult(), okAutocommitResult(true)],
+                ])
+            )
+        }
+
+        let conn = try await LibSQLDriver.connect(
+            .libsql(host: "https://\(host)"),
+            sessionConfiguration: LibSQLStubURLProtocol.sessionConfiguration()
+        )
+        defer { Task { await conn.close() } }
+        #expect(!((conn as Any) is any ReadOnlyExecuting))
+
+        _ = try await collect(conn.execute("BEGIN"))
+        _ = try await collect(conn.execute("INSERT INTO t VALUES (1)"))
+        _ = try await collect(conn.execute("ROLLBACK TRANSACTION TO SAVEPOINT sp1"))
+        _ = try await collect(conn.execute("COMMIT"))
+
+        #expect(recordedBatons.withLock { $0 } == [nil, "baton-123", "baton-123", "baton-123"])
+        #expect(recordedRequests.withLock { $0 } == [
+            ["execute", "get_autocommit"],
+            ["execute", "get_autocommit"],
+            ["execute", "get_autocommit"],
+            ["execute", "get_autocommit"],
+        ])
+    }
+
+    @Test("multi-statement scripts use conditional batch steps and stop on first error")
+    func conditionalBatchStopsOnFirstError() async throws {
+        struct RecordedStep: Sendable {
+            let condType: String?
+            let condStep: Int?
+        }
+        let host = "batch-\(UUID().uuidString).test"
+        defer { LibSQLStubURLProtocol.unregister(host: host) }
+
+        let seenBatchSteps = OSAllocatedUnfairLock<[RecordedStep]>(initialState: [])
+
+        LibSQLStubURLProtocol.register(host: host) { request, data in
+            guard let url = request.url else { throw URLError(.badURL) }
+            let (_, reqs) = try parsePipelineRequest(data)
+            if let sql = (reqs.first?["stmt"] as? [String: Any])?["sql"] as? String, sql == "SELECT 1" {
+                return (makeHTTPResponse(url: url), try jsonData(["results": [okExecuteResult(), okCloseResult()]]))
+            }
+
+            #expect(reqs.first?["type"] as? String == "batch")
+            let batch = reqs.first?["batch"] as? [String: Any]
+            let rawSteps = batch?["steps"] as? [[String: Any]] ?? []
+            let recorded = rawSteps.map { step in
+                let cond = step["condition"] as? [String: Any]
+                return RecordedStep(condType: cond?["type"] as? String, condStep: cond?["step"] as? Int)
+            }
+            seenBatchSteps.withLock { $0 = recorded }
+
+            return (
+                makeHTTPResponse(url: url),
+                try jsonData([
+                    "results": [
+                        [
+                            "type": "ok",
+                            "response": [
+                                "type": "batch",
+                                "result": [
+                                    "step_results": [
+                                        [
+                                            "cols": [],
+                                            "rows": [],
+                                            "affected_row_count": 1,
+                                            "last_insert_rowid": NSNull(),
+                                        ],
+                                        NSNull(),
+                                        NSNull(),
+                                    ],
+                                    "step_errors": [
+                                        NSNull(),
+                                        ["message": "no such table: missing_tbl", "code": "SQLITE_ERROR"],
+                                        NSNull(),
+                                    ],
+                                ],
+                            ],
+                        ],
+                        okCloseResult(),
+                    ],
                 ])
             )
         }
@@ -295,239 +427,59 @@ struct LibSQLDriverTests {
         )
         defer { Task { await conn.close() } }
 
-        _ = try await collect(conn.execute("BEGIN"))
-        _ = try await collect(conn.execute("INSERT INTO t VALUES (1)"))
-        _ = try await collect(conn.execute("COMMIT"))
+        do {
+            _ = try await collect(conn.execute("INSERT INTO t VALUES (1); SELECT * FROM missing_tbl; SELECT 99"))
+            Issue.record("Expected step 1 error to halt script")
+        } catch let error as DriverError {
+            guard case .queryFailed(let message, _) = error else {
+                Issue.record("Expected queryFailed, got \(error)")
+                return
+            }
+            #expect(message.contains("no such table: missing_tbl"))
+        }
 
-        #expect(recordedBatons.withLock { $0 } == [nil, "baton-123", "baton-123"])
-        #expect(recordedCloses.withLock { $0 } == [false, false, true])
+        let steps = seenBatchSteps.withLock { $0 }
+        #expect(steps.count == 3)
+        #expect(steps[0].condType == nil)
+        #expect(steps[0].condStep == nil)
+        #expect(steps[1].condType == "ok")
+        #expect(steps[1].condStep == 0)
+        #expect(steps[2].condType == "ok")
+        #expect(steps[2].condStep == 1)
     }
 
-    // MARK: - ReadOnlyExecuting Contract
-
-    @Test("read-only execution enforces allowlist, ?/?NNN placeholders, two-step PRAGMA query_only stream, and SQLITE_READONLY")
-    func readOnlyContract() async throws {
-        let host = "ro-\(UUID().uuidString).test"
+    @Test("STREAM_EXPIRED clears dead baton and surfaces inactivity message")
+    func streamExpiredRecovery() async throws {
+        let host = "expired-\(UUID().uuidString).test"
         defer { LibSQLStubURLProtocol.unregister(host: host) }
 
-        let seenRequests = OSAllocatedUnfairLock<[(baton: String?, sqls: [String], hasClose: Bool)]>(initialState: [])
+        let seenBatons = OSAllocatedUnfairLock<[String?]>(initialState: [])
 
         LibSQLStubURLProtocol.register(host: host) { request, data in
             guard let url = request.url else { throw URLError(.badURL) }
             let (baton, reqs) = try parsePipelineRequest(data)
-            let sqls = reqs.compactMap { ($0["stmt"] as? [String: Any])?["sql"] as? String }
-            let hasClose = reqs.contains { ($0["type"] as? String) == "close" }
+            let sql = (reqs.first?["stmt"] as? [String: Any])?["sql"] as? String ?? ""
 
-            if sqls == ["SELECT 1"] {
-                return (
-                    makeHTTPResponse(url: url),
-                    try jsonData(["results": [okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]]), okCloseResult()]])
-                )
-            }
-
-            seenRequests.withLock { $0.append((baton: baton, sqls: sqls, hasClose: hasClose)) }
-
-            if sqls == ["PRAGMA query_only = ON", "PRAGMA query_only"] {
-                var results: [[String: Any]] = [
-                    okExecuteResult(),
-                    okExecuteResult(cols: [["name": "query_only"]], rows: [[["type": "integer", "value": "1"]]]),
-                ]
-                if hasClose {
-                    results.append(okCloseResult())
-                    return (makeHTTPResponse(url: url), try jsonData(["results": results]))
-                }
-                return (
-                    makeHTTPResponse(url: url),
-                    try jsonData(["baton": "ro-baton-1", "results": results])
-                )
-            }
-
-            if baton == "ro-baton-1", sqls.count == 1, hasClose {
-                let args = (reqs[0]["stmt"] as? [String: Any])?["args"] as? [[String: Any]] ?? []
-                if sqls[0].contains("readonly_trigger") {
-                    return (
-                        makeHTTPResponse(url: url),
-                        try jsonData([
-                            "results": [
-                                ["type": "error", "error": ["message": "attempt to write a readonly database", "code": "SQLITE_READONLY"]],
-                                okCloseResult(),
-                            ],
-                        ])
-                    )
-                }
-                let firstArg = (args.first?["value"] as? String) ?? ""
+            if sql == "BEGIN" {
                 return (
                     makeHTTPResponse(url: url),
                     try jsonData([
-                        "results": [
-                            okExecuteResult(
-                                cols: [["name": "v", "decltype": "TEXT"]],
-                                rows: [[["type": "text", "value": firstArg]]]
-                            ),
-                            okCloseResult(),
-                        ],
+                        "baton": "baton-stale",
+                        "results": [okExecuteResult(), okAutocommitResult(false)],
                     ])
                 )
             }
-            return (makeHTTPResponse(url: url), try jsonData(["results": [okExecuteResult(), okCloseResult()]]))
-        }
-
-        let conn = try await LibSQLDriver.connect(
-            .libsql(host: "https://\(host)"),
-            sessionConfiguration: LibSQLStubURLProtocol.sessionConfiguration()
-        )
-        defer { Task { await conn.close() } }
-
-        try await conn.prepareReadOnly()
-
-        let timeoutEvents = try await collect(conn.executeReadOnly("SELECT 1 AS v", timeout: .seconds(5)))
-        _ = timeoutEvents
-
-        let validEvents = try await collect(conn.executeReadOnly("SELECT ? AS v", parameters: [.text("ok")]))
-        #expect(validEvents.contains { if case .rows(let r) = $0 { return r == [[.text("ok")]] }; return false })
-
-        let log = seenRequests.withLock { $0 }
-        #expect(log.count == 5)
-        #expect(log[1].baton == nil && !log[1].hasClose)
-        #expect(log[2].baton == "ro-baton-1" && log[2].sqls == ["SELECT 1 AS v"] && log[2].hasClose)
-        #expect(log[3].baton == nil && !log[3].hasClose)
-        #expect(log[4].baton == "ro-baton-1" && log[4].sqls == ["SELECT ? AS v"] && log[4].hasClose)
-
-        // Multiple statements rejected locally
-        do {
-            _ = try await collect(conn.executeReadOnly("SELECT 1; SELECT 2", parameters: []))
-            Issue.record("Expected multi-statement rejection")
-        } catch let err as DriverError {
-            guard case .queryFailed(let msg, nil) = err else {
-                Issue.record("Unexpected error: \(err)")
-                return
-            }
-            #expect(msg.contains("one statement"))
-        }
-
-        // Write statement rejected locally by allowlist
-        do {
-            _ = try await collect(conn.executeReadOnly("DELETE FROM users", parameters: []))
-            Issue.record("Expected write refusal")
-        } catch let err as DriverError {
-            guard case .queryFailed = err else {
-                Issue.record("Unexpected error: \(err)")
-                return
-            }
-        }
-
-        // Named placeholder rejected
-        do {
-            _ = try await collect(conn.executeReadOnly("SELECT :id", parameters: [.int(1)]))
-            Issue.record("Expected named placeholder refusal")
-        } catch let err as DriverError {
-            guard case .queryFailed = err else {
-                Issue.record("Unexpected error: \(err)")
-                return
-            }
-        }
-
-        // Mixed ? and ?1 rejected
-        do {
-            _ = try await collect(conn.executeReadOnly("SELECT ?, ?1", parameters: [.int(1)]))
-            Issue.record("Expected mixed placeholder refusal")
-        } catch let err as DriverError {
-            guard case .queryFailed = err else {
-                Issue.record("Unexpected error: \(err)")
-                return
-            }
-        }
-
-        // Parameter count mismatch rejected
-        do {
-            _ = try await collect(conn.executeReadOnly("SELECT ?1, ?2", parameters: [.int(1)]))
-            Issue.record("Expected placeholderCountMismatch")
-        } catch let err as DriverError {
-            let expected = DriverError.placeholderCountMismatch(placeholders: 2, parameters: 1)
-            #expect(err.detail == expected.detail)
-        }
-
-        // Server SQLITE_READONLY mapped to code 8
-        do {
-            _ = try await collect(conn.executeReadOnly("SELECT readonly_trigger FROM dual", parameters: []))
-            Issue.record("Expected SQLITE_READONLY error")
-        } catch let err as DriverError {
-            guard case .queryFailed(_, let code) = err else {
-                Issue.record("Unexpected error: \(err)")
-                return
-            }
-            #expect(code == 8)
-        }
-    }
-
-    @Test("read-only mode refuses without running query when PRAGMA query_only fails, reads 0, or lacks baton")
-    func readOnlyRefusesWhenPragmaUnsupportedOrZero() async throws {
-        let host = "ro-refuse-\(UUID().uuidString).test"
-        defer { LibSQLStubURLProtocol.unregister(host: host) }
-
-        let mode = OSAllocatedUnfairLock<String>(initialState: "unsupported")
-        let seenSQL = OSAllocatedUnfairLock<[String]>(initialState: [])
-        let closedBatons = OSAllocatedUnfairLock<[String]>(initialState: [])
-
-        LibSQLStubURLProtocol.register(host: host) { request, data in
-            guard let url = request.url else { throw URLError(.badURL) }
-            let (baton, reqs) = try parsePipelineRequest(data)
-            let sqls = reqs.compactMap { ($0["stmt"] as? [String: Any])?["sql"] as? String }
-            let hasClose = reqs.contains { ($0["type"] as? String) == "close" }
-
-            if sqls == ["SELECT 1"] {
+            if baton == "baton-stale" {
                 return (
-                    makeHTTPResponse(url: url),
-                    try jsonData(["results": [okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]]), okCloseResult()]])
+                    makeHTTPResponse(url: url, statusCode: 400),
+                    try jsonData(["message": "The stream has expired due to inactivity", "code": "STREAM_EXPIRED"])
                 )
             }
-
-            if sqls.isEmpty, hasClose, let baton {
-                closedBatons.withLock { $0.append(baton) }
-                return (makeHTTPResponse(url: url), try jsonData(["results": [okCloseResult()]]))
-            }
-
-            seenSQL.withLock { $0.append(contentsOf: sqls) }
-
-            let currentMode = mode.withLock { $0 }
-            if sqls == ["PRAGMA query_only = ON", "PRAGMA query_only"] {
-                switch currentMode {
-                case "unsupported":
-                    var results: [[String: Any]] = [
-                        ["type": "error", "error": ["message": "SQL string could not be parsed: unsupported statement: PRAGMA query_only = ON", "code": "SQL_PARSE_ERROR"]],
-                        okExecuteResult(cols: [["name": "query_only"]], rows: [[["type": "integer", "value": "0"]]]),
-                    ]
-                    if hasClose { results.append(okCloseResult()) }
-                    return (
-                        makeHTTPResponse(url: url),
-                        try jsonData(["baton": hasClose ? NSNull() as Any : "ro-bad-1" as Any, "results": results])
-                    )
-                case "zero":
-                    var results: [[String: Any]] = [
-                        okExecuteResult(),
-                        okExecuteResult(cols: [["name": "query_only"]], rows: [[["type": "integer", "value": "0"]]]),
-                    ]
-                    if hasClose { results.append(okCloseResult()) }
-                    return (
-                        makeHTTPResponse(url: url),
-                        try jsonData(["baton": hasClose ? NSNull() as Any : "ro-zero-1" as Any, "results": results])
-                    )
-                default:
-                    return (
-                        makeHTTPResponse(url: url),
-                        try jsonData([
-                            "baton": NSNull(),
-                            "results": [
-                                okExecuteResult(),
-                                okExecuteResult(cols: [["name": "query_only"]], rows: [[["type": "integer", "value": "1"]]]),
-                            ],
-                        ])
-                    )
-                }
-            }
-
-            Issue.record("Statement should never be forwarded to server when read-only setup fails: \(sqls)")
-            return (makeHTTPResponse(url: url), try jsonData(["results": [okExecuteResult(), okCloseResult()]]))
+            seenBatons.withLock { $0.append(baton) }
+            return (
+                makeHTTPResponse(url: url),
+                try jsonData(["results": [okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]]), okCloseResult()]])
+            )
         }
 
         let conn = try await LibSQLDriver.connect(
@@ -536,43 +488,40 @@ struct LibSQLDriverTests {
         )
         defer { Task { await conn.close() } }
 
-        for testMode in ["unsupported", "zero"] {
-            mode.withLock { $0 = testMode }
-            do {
-                try await conn.prepareReadOnly()
-                Issue.record("Expected prepareReadOnly() to throw readOnlyUnavailable in mode \(testMode)")
-            } catch let err as DriverError {
-                guard case .readOnlyUnavailable = err else {
-                    Issue.record("Expected readOnlyUnavailable, got \(err)")
-                    return
-                }
-            }
+        _ = try await collect(conn.execute("BEGIN"))
 
-            do {
-                _ = try await collect(conn.executeReadOnly("SELECT secret FROM vaults", parameters: []))
-                Issue.record("Expected executeReadOnly() to throw readOnlyUnavailable in mode \(testMode)")
-            } catch let err as DriverError {
-                guard case .readOnlyUnavailable = err else {
-                    Issue.record("Expected readOnlyUnavailable, got \(err)")
-                    return
-                }
-            }
-        }
-
-        mode.withLock { $0 = "no-baton" }
         do {
-            _ = try await collect(conn.executeReadOnly("SELECT secret FROM vaults", parameters: []))
-            Issue.record("Expected executeReadOnly() to throw readOnlyUnavailable when baton is missing")
-        } catch let err as DriverError {
-            guard case .readOnlyUnavailable = err else {
-                Issue.record("Expected readOnlyUnavailable, got \(err)")
+            _ = try await collect(conn.execute("SELECT 42"))
+            Issue.record("Expected expired transaction error")
+        } catch let error as DriverError {
+            guard case .queryFailed(let message, _) = error else {
+                Issue.record("Expected queryFailed, got \(error)")
                 return
             }
+            #expect(message.lowercased().contains("expired due to inactivity"))
         }
 
-        let forwarded = seenSQL.withLock { $0 }
-        #expect(!forwarded.contains("SELECT secret FROM vaults"))
-        #expect(closedBatons.withLock { $0 } == ["ro-bad-1", "ro-zero-1"])
+        // Subsequent query must start fresh without the dead baton.
+        seenBatons.withLock { $0.removeAll() }
+        let events = try await collect(conn.execute("SELECT 1"))
+        #expect(!events.isEmpty)
+        #expect(seenBatons.withLock { $0 } == [nil])
+    }
+
+    @Test("splitStatements preserves CASE ... END inside CREATE TRIGGER bodies")
+    func triggerCaseEndSplitting() {
+        let script = """
+        CREATE TRIGGER tr_items AFTER INSERT ON items BEGIN
+            UPDATE audit SET tag = CASE WHEN NEW.v > 0 THEN 'pos' ELSE 'neg' END;
+            INSERT INTO log VALUES (NEW.v);
+        END;
+        SELECT COUNT(*) FROM log;
+        """
+        let statements = LibSQLSQLLexer.splitStatements(script)
+        #expect(statements.count == 2)
+        #expect(statements[0].hasPrefix("CREATE TRIGGER tr_items"))
+        #expect(statements[0].hasSuffix("END"))
+        #expect(statements[1] == "SELECT COUNT(*) FROM log")
     }
 
     // MARK: - Introspection
@@ -585,94 +534,98 @@ struct LibSQLDriverTests {
         LibSQLStubURLProtocol.register(host: host) { request, data in
             guard let url = request.url else { throw URLError(.badURL) }
             let (_, reqs) = try parsePipelineRequest(data)
-            let sql = (reqs.first?["stmt"] as? [String: Any])?["sql"] as? String ?? ""
 
-            let result: [String: Any]
-            if sql == "SELECT 1" {
-                result = okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]])
-            } else if sql == "PRAGMA schema_version" {
-                result = okExecuteResult(cols: [["name": "schema_version"]], rows: [[["type": "integer", "value": "42"]]])
-            } else if sql.contains("FROM sqlite_master") && sql.contains("tbl_name = ?") {
-                result = okExecuteResult(
-                    cols: [["name": "sql"]],
-                    rows: [[["type": "text", "value": "CREATE TABLE \"orders\" (\"id\" INTEGER PRIMARY KEY)"]]]
-                )
-            } else if sql.contains("FROM sqlite_master") && sql.contains("tbl_name") {
-                result = okExecuteResult(
-                    cols: [["name": "type"], ["name": "name"], ["name": "tbl_name"], ["name": "sql"]],
-                    rows: [[
-                        ["type": "text", "value": "table"],
-                        ["type": "text", "value": "orders"],
-                        ["type": "text", "value": "orders"],
-                        ["type": "text", "value": "CREATE TABLE orders (id INTEGER PRIMARY KEY)"],
-                    ]]
-                )
-            } else if sql.contains("FROM sqlite_master") && sql.contains("type = 'table'") {
-                result = okExecuteResult(cols: [["name": "name"]], rows: [[["type": "text", "value": "orders"]]])
-            } else if sql.contains("FROM sqlite_master") {
-                result = okExecuteResult(
-                    cols: [["name": "type"], ["name": "name"]],
-                    rows: [[["type": "text", "value": "table"], ["type": "text", "value": "orders"]]]
-                )
-            } else if sql.hasPrefix("PRAGMA table_info") {
-                result = okExecuteResult(
-                    cols: [["name": "cid"], ["name": "name"], ["name": "type"], ["name": "notnull"], ["name": "dflt_value"], ["name": "pk"]],
-                    rows: [
-                        [
+            let results: [[String: Any]] = reqs.map { req in
+                if req["type"] as? String == "close" {
+                    return okCloseResult()
+                }
+                let sql = (req["stmt"] as? [String: Any])?["sql"] as? String ?? ""
+                if sql == "SELECT 1" {
+                    return okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]])
+                } else if sql == "PRAGMA schema_version" {
+                    return okExecuteResult(cols: [["name": "schema_version"]], rows: [[["type": "integer", "value": "42"]]])
+                } else if sql.contains("FROM sqlite_master") && sql.contains("tbl_name = ?") {
+                    return okExecuteResult(
+                        cols: [["name": "sql"]],
+                        rows: [[["type": "text", "value": "CREATE TABLE \"orders\" (\"id\" INTEGER PRIMARY KEY)"]]]
+                    )
+                } else if sql.contains("FROM sqlite_master") && sql.contains("tbl_name") {
+                    return okExecuteResult(
+                        cols: [["name": "type"], ["name": "name"], ["name": "tbl_name"], ["name": "sql"]],
+                        rows: [[
+                            ["type": "text", "value": "table"],
+                            ["type": "text", "value": "orders"],
+                            ["type": "text", "value": "orders"],
+                            ["type": "text", "value": "CREATE TABLE orders (id INTEGER PRIMARY KEY)"],
+                        ]]
+                    )
+                } else if sql.contains("FROM sqlite_master") && sql.contains("type = 'table'") {
+                    return okExecuteResult(cols: [["name": "name"]], rows: [[["type": "text", "value": "orders"]]])
+                } else if sql.contains("FROM sqlite_master") {
+                    return okExecuteResult(
+                        cols: [["name": "type"], ["name": "name"]],
+                        rows: [[["type": "text", "value": "table"], ["type": "text", "value": "orders"]]]
+                    )
+                } else if sql.hasPrefix("PRAGMA table_info") {
+                    return okExecuteResult(
+                        cols: [["name": "cid"], ["name": "name"], ["name": "type"], ["name": "notnull"], ["name": "dflt_value"], ["name": "pk"]],
+                        rows: [
+                            [
+                                ["type": "integer", "value": "0"],
+                                ["type": "text", "value": "id"],
+                                ["type": "text", "value": "INTEGER"],
+                                ["type": "integer", "value": "1"],
+                                ["type": "null"],
+                                ["type": "integer", "value": "1"],
+                            ],
+                            [
+                                ["type": "integer", "value": "1"],
+                                ["type": "text", "value": "user_id"],
+                                ["type": "text", "value": "INTEGER"],
+                                ["type": "integer", "value": "0"],
+                                ["type": "null"],
+                                ["type": "integer", "value": "0"],
+                            ],
+                        ]
+                    )
+                } else if sql.hasPrefix("PRAGMA index_list") {
+                    return okExecuteResult(
+                        cols: [["name": "seq"], ["name": "name"], ["name": "unique"], ["name": "origin"], ["name": "partial"]],
+                        rows: [[
                             ["type": "integer", "value": "0"],
-                            ["type": "text", "value": "id"],
-                            ["type": "text", "value": "INTEGER"],
-                            ["type": "integer", "value": "1"],
-                            ["type": "null"],
-                            ["type": "integer", "value": "1"],
-                        ],
-                        [
+                            ["type": "text", "value": "idx_orders_user"],
+                            ["type": "integer", "value": "0"],
+                            ["type": "text", "value": "c"],
+                            ["type": "integer", "value": "0"],
+                        ]]
+                    )
+                } else if sql.hasPrefix("PRAGMA index_info") {
+                    return okExecuteResult(
+                        cols: [["name": "seqno"], ["name": "cid"], ["name": "name"]],
+                        rows: [[
+                            ["type": "integer", "value": "0"],
                             ["type": "integer", "value": "1"],
                             ["type": "text", "value": "user_id"],
-                            ["type": "text", "value": "INTEGER"],
+                        ]]
+                    )
+                } else if sql.hasPrefix("PRAGMA foreign_key_list") {
+                    return okExecuteResult(
+                        cols: [["name": "id"], ["name": "seq"], ["name": "table"], ["name": "from"], ["name": "to"]],
+                        rows: [[
                             ["type": "integer", "value": "0"],
-                            ["type": "null"],
                             ["type": "integer", "value": "0"],
-                        ],
-                    ]
-                )
-            } else if sql.hasPrefix("PRAGMA index_list") {
-                result = okExecuteResult(
-                    cols: [["name": "seq"], ["name": "name"], ["name": "unique"], ["name": "origin"], ["name": "partial"]],
-                    rows: [[
-                        ["type": "integer", "value": "0"],
-                        ["type": "text", "value": "idx_orders_user"],
-                        ["type": "integer", "value": "0"],
-                        ["type": "text", "value": "c"],
-                        ["type": "integer", "value": "0"],
-                    ]]
-                )
-            } else if sql.hasPrefix("PRAGMA index_info") {
-                result = okExecuteResult(
-                    cols: [["name": "seqno"], ["name": "cid"], ["name": "name"]],
-                    rows: [[
-                        ["type": "integer", "value": "0"],
-                        ["type": "integer", "value": "1"],
-                        ["type": "text", "value": "user_id"],
-                    ]]
-                )
-            } else if sql.hasPrefix("PRAGMA foreign_key_list") {
-                result = okExecuteResult(
-                    cols: [["name": "id"], ["name": "seq"], ["name": "table"], ["name": "from"], ["name": "to"]],
-                    rows: [[
-                        ["type": "integer", "value": "0"],
-                        ["type": "integer", "value": "0"],
-                        ["type": "text", "value": "users"],
-                        ["type": "text", "value": "user_id"],
-                        ["type": "text", "value": "id"],
-                    ]]
-                )
-            } else if sql.hasPrefix("SELECT COUNT(*)") {
-                result = okExecuteResult(cols: [["name": "COUNT(*)"]], rows: [[["type": "integer", "value": "17"]]])
-            } else {
-                result = okExecuteResult()
+                            ["type": "text", "value": "users"],
+                            ["type": "text", "value": "user_id"],
+                            ["type": "text", "value": "id"],
+                        ]]
+                    )
+                } else if sql.hasPrefix("SELECT COUNT(*)") {
+                    return okExecuteResult(cols: [["name": "COUNT(*)"]], rows: [[["type": "integer", "value": "17"]]])
+                } else {
+                    return okExecuteResult()
+                }
             }
-            return (makeHTTPResponse(url: url), try jsonData(["results": [result, okCloseResult()]]))
+            return (makeHTTPResponse(url: url), try jsonData(["results": results]))
         }
 
         let conn = try await LibSQLDriver.connect(
@@ -712,6 +665,113 @@ struct LibSQLDriverTests {
 
         let ddl = try await inspector.ddl(of: SchemaObject(kind: .table, name: "orders"))
         #expect(ddl == "CREATE TABLE \"orders\" (\"id\" INTEGER PRIMARY KEY);")
+    }
+
+    @Test("introspector resolves implicit foreign keys (NULL to) in batched round trips")
+    func implicitForeignKeysAndBatching() async throws {
+        let host = "implicit-fk-\(UUID().uuidString).test"
+        defer { LibSQLStubURLProtocol.unregister(host: host) }
+
+        let roundTrips = OSAllocatedUnfairLock<Int>(initialState: 0)
+
+        LibSQLStubURLProtocol.register(host: host) { request, data in
+            guard let url = request.url else { throw URLError(.badURL) }
+            let (_, reqs) = try parsePipelineRequest(data)
+            let firstSQL = (reqs.first?["stmt"] as? [String: Any])?["sql"] as? String ?? ""
+            if firstSQL != "SELECT 1" {
+                roundTrips.withLock { $0 += 1 }
+            }
+
+            let results: [[String: Any]] = reqs.map { req in
+                if req["type"] as? String == "close" { return okCloseResult() }
+                let sql = (req["stmt"] as? [String: Any])?["sql"] as? String ?? ""
+                if sql == "SELECT 1" {
+                    return okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]])
+                } else if sql.contains("FROM sqlite_master") {
+                    return okExecuteResult(
+                        cols: [["name": "name"]],
+                        rows: [[["type": "text", "value": "Orders"]], [["type": "text", "value": "Users"]]]
+                    )
+                } else if sql == "PRAGMA foreign_key_list(\"Orders\")" {
+                    return okExecuteResult(
+                        cols: [["name": "id"], ["name": "seq"], ["name": "table"], ["name": "from"], ["name": "to"]],
+                        rows: [[
+                            ["type": "integer", "value": "0"],
+                            ["type": "integer", "value": "0"],
+                            ["type": "text", "value": "users"],
+                            ["type": "text", "value": "user_id"],
+                            ["type": "null"],
+                        ]]
+                    )
+                } else if sql == "PRAGMA foreign_key_list(\"Users\")" {
+                    return okExecuteResult()
+                } else if sql == "PRAGMA table_info(\"Users\")" || sql == "PRAGMA table_info(\"users\")" {
+                    return okExecuteResult(
+                        cols: [["name": "cid"], ["name": "name"], ["name": "type"], ["name": "notnull"], ["name": "dflt_value"], ["name": "pk"]],
+                        rows: [[
+                            ["type": "integer", "value": "0"],
+                            ["type": "text", "value": "user_pk"],
+                            ["type": "text", "value": "INTEGER"],
+                            ["type": "integer", "value": "1"],
+                            ["type": "null"],
+                            ["type": "integer", "value": "1"],
+                        ]]
+                    )
+                } else if sql == "PRAGMA table_info(\"Orders\")" {
+                    return okExecuteResult(
+                        cols: [["name": "cid"], ["name": "name"], ["name": "type"], ["name": "notnull"], ["name": "dflt_value"], ["name": "pk"]],
+                        rows: [
+                            [
+                                ["type": "integer", "value": "0"],
+                                ["type": "text", "value": "id"],
+                                ["type": "text", "value": "INTEGER"],
+                                ["type": "integer", "value": "1"],
+                                ["type": "null"],
+                                ["type": "integer", "value": "1"],
+                            ],
+                            [
+                                ["type": "integer", "value": "1"],
+                                ["type": "text", "value": "user_id"],
+                                ["type": "text", "value": "INTEGER"],
+                                ["type": "integer", "value": "0"],
+                                ["type": "null"],
+                                ["type": "integer", "value": "0"],
+                            ],
+                        ]
+                    )
+                } else {
+                    return okExecuteResult()
+                }
+            }
+            return (makeHTTPResponse(url: url), try jsonData(["results": results]))
+        }
+
+        let conn = try await LibSQLDriver.connect(
+            .libsql(host: "https://\(host)"),
+            sessionConfiguration: LibSQLStubURLProtocol.sessionConfiguration()
+        )
+        defer { Task { await conn.close() } }
+
+        let inspector = conn.introspector
+        let fks = try await inspector.foreignKeys(scope: .allUserSchemas)
+        #expect(fks == [ForeignKeyRelation(
+            source: TableRef(name: "Orders"),
+            column: "user_id",
+            target: TableRef(name: "Users"),
+            referencedColumn: "user_pk"
+        )])
+        // 1: table list, 2: batched PRAGMA foreign_key_list for all tables, 3: batched PRAGMA table_info for implicit FK parents.
+        #expect(roundTrips.withLock { $0 } == 3)
+
+        roundTrips.withLock { $0 = 0 }
+        let detail = try await inspector.tableDetail(TableRef(name: "Orders"))
+        #expect(detail.foreignKeys == [ForeignKeyInfo(
+            column: "user_id",
+            referencedSchema: nil,
+            referencedTable: "Users",
+            referencedColumn: "user_pk"
+        )])
+        #expect(roundTrips.withLock { $0 } == 2)
     }
 
     // MARK: - Cancellation
@@ -921,5 +981,45 @@ struct LibSQLDriverTests {
             #expect(message.contains("512-byte safety limit"))
         }
         #expect(LibSQLStubURLProtocol.loadedBytes(host: host) < fullPayloadCount)
+    }
+
+    @Test("refuses sending auth token over plain HTTP to non-loopback host while allowing loopback")
+    func plainHTTPAuthTokenRefusal() async throws {
+        let remoteHost = "remote-\(UUID().uuidString).example.com"
+        let requestCount = OSAllocatedUnfairLock<Int>(initialState: 0)
+        LibSQLStubURLProtocol.register(host: remoteHost) { request, _ in
+            requestCount.withLock { $0 += 1 }
+            guard let url = request.url else { throw URLError(.badURL) }
+            return (makeHTTPResponse(url: url), try jsonData(["results": [okExecuteResult(), okCloseResult()]]))
+        }
+        defer { LibSQLStubURLProtocol.unregister(host: remoteHost) }
+
+        do {
+            _ = try await LibSQLDriver.connect(
+                .libsql(host: "http://\(remoteHost):8080", authToken: "secret-token", tlsMode: .disable),
+                sessionConfiguration: LibSQLStubURLProtocol.sessionConfiguration()
+            )
+            Issue.record("Expected connectionFailed when sending auth token over plain HTTP to non-loopback host")
+        } catch let error as DriverError {
+            guard case .connectionFailed(let msg) = error else {
+                Issue.record("Expected connectionFailed, got \(error)")
+                return
+            }
+            #expect(msg.contains("non-loopback"))
+        }
+        #expect(requestCount.withLock { $0 } == 0)
+
+        let loopbackHost = "localhost"
+        LibSQLStubURLProtocol.register(host: loopbackHost) { request, _ in
+            guard let url = request.url else { throw URLError(.badURL) }
+            return (makeHTTPResponse(url: url), try jsonData(["results": [okExecuteResult(), okCloseResult()]]))
+        }
+        defer { LibSQLStubURLProtocol.unregister(host: loopbackHost) }
+
+        let localConn = try await LibSQLDriver.connect(
+            .libsql(host: "http://localhost:8080", authToken: "local-dev-token", tlsMode: .disable),
+            sessionConfiguration: LibSQLStubURLProtocol.sessionConfiguration()
+        )
+        await localConn.close()
     }
 }

@@ -99,7 +99,7 @@ let package = Package(
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
 
-        // MARK: libSQL driver (URLSession Hrana v2 HTTP pipeline — zero vendor dependencies)
+        // MARK: libSQL driver (URLSession Hrana v3 HTTP pipeline — zero vendor dependencies)
         .target(
             name: "BerryDriverLibSQL",
             dependencies: ["BerryDriverKit"],

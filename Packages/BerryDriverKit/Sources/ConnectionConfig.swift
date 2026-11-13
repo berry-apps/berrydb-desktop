@@ -196,7 +196,7 @@ public struct ConnectionConfig: Sendable {
 
     /// Parses a libSQL endpoint from a URL (`libsql://`, `https://`, `http://`)
     /// or bare hostname, applying `port` and `tlsMode` when not already pinned
-    /// by an explicit HTTP(S) scheme.
+    /// by an explicit scheme (`libsql://` and `https://` always enable TLS).
     public static func parseLibSQLEndpoint(
         host rawHost: String?,
         port explicitPort: Int? = nil,
@@ -214,15 +214,7 @@ public struct ConnectionConfig: Sendable {
             }
             explicitScheme = scheme
             let rest = String(trimmed[range.upperBound...])
-            let httpScheme: String
-            switch scheme {
-            case "http":
-                httpScheme = "http"
-            case "https":
-                httpScheme = "https"
-            default:
-                httpScheme = tlsMode == .disable ? "http" : "https"
-            }
+            let httpScheme = (scheme == "http") ? "http" : "https"
             candidate = "\(httpScheme)://\(rest)"
         } else {
             explicitScheme = nil
@@ -240,7 +232,7 @@ public struct ConnectionConfig: Sendable {
         switch explicitScheme {
         case "http":
             useTLS = false
-        case "https":
+        case "https", "libsql":
             useTLS = true
         default:
             useTLS = tlsMode != .disable

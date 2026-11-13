@@ -142,13 +142,30 @@ struct HranaStatement: Encodable, Sendable {
     let want_rows: Bool?
 }
 
+struct HranaBatchCondition: Encodable, Sendable {
+    let type: String
+    let step: Int?
+}
+
+struct HranaBatchStep: Encodable, Sendable {
+    let condition: HranaBatchCondition?
+    let stmt: HranaStatement
+}
+
+struct HranaBatch: Encodable, Sendable {
+    let steps: [HranaBatchStep]
+}
+
 enum HranaStreamRequest: Encodable, Sendable {
     case execute(HranaStatement)
+    case batch(HranaBatch)
+    case getAutocommit
     case close
 
     private enum CodingKeys: String, CodingKey {
         case type
         case stmt
+        case batch
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -157,6 +174,11 @@ enum HranaStreamRequest: Encodable, Sendable {
         case .execute(let stmt):
             try container.encode("execute", forKey: .type)
             try container.encode(stmt, forKey: .stmt)
+        case .batch(let batch):
+            try container.encode("batch", forKey: .type)
+            try container.encode(batch, forKey: .batch)
+        case .getAutocommit:
+            try container.encode("get_autocommit", forKey: .type)
         case .close:
             try container.encode("close", forKey: .type)
         }
@@ -180,6 +202,11 @@ struct HranaExecuteResult: Decodable, Sendable {
     let last_insert_rowid: String?
 }
 
+struct HranaBatchResult: Decodable, Sendable {
+    let step_results: [HranaExecuteResult?]
+    let step_errors: [HranaErrorPayload?]
+}
+
 struct HranaErrorPayload: Decodable, Sendable {
     let message: String
     let code: String?
@@ -187,11 +214,14 @@ struct HranaErrorPayload: Decodable, Sendable {
 
 enum HranaStepResponse: Decodable, Sendable {
     case execute(HranaExecuteResult)
+    case batch(HranaBatchResult)
+    case getAutocommit(Bool)
     case close
 
     private enum CodingKeys: String, CodingKey {
         case type
         case result
+        case is_autocommit
     }
 
     init(from decoder: any Decoder) throws {
@@ -201,6 +231,12 @@ enum HranaStepResponse: Decodable, Sendable {
         case "execute":
             let result = try container.decode(HranaExecuteResult.self, forKey: .result)
             self = .execute(result)
+        case "batch":
+            let result = try container.decode(HranaBatchResult.self, forKey: .result)
+            self = .batch(result)
+        case "get_autocommit":
+            let isAutocommit = try container.decode(Bool.self, forKey: .is_autocommit)
+            self = .getAutocommit(isAutocommit)
         case "close":
             self = .close
         default:
@@ -352,6 +388,29 @@ private final class PipelineSessionDelegate: NSObject, URLSessionDataDelegate, S
     }
 }
 
+private struct InFlightTaskState: @unchecked Sendable {
+    var isInvalidated = false
+    var tasksByID: [Int: URLSessionDataTask] = [:]
+    var userQueryTaskIDs: Set<Int> = []
+}
+
+private final class RequestCancellationBox: @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock<URLSessionDataTask?>(initialState: nil)
+
+    func set(_ task: URLSessionDataTask) {
+        lock.withLock { $0 = task }
+    }
+
+    func cancel() {
+        let task = lock.withLock { current -> URLSessionDataTask? in
+            let active = current
+            current = nil
+            return active
+        }
+        task?.cancel()
+    }
+}
+
 final class LibSQLHTTPClient: Sendable {
     static let defaultMaxResponseBytes = LibSQLDriver.defaultMaxResponseBytes
 
@@ -362,7 +421,7 @@ final class LibSQLHTTPClient: Sendable {
     let maxResponseBytes: Int
     private let delegate: PipelineSessionDelegate
     private let session: URLSession
-    private let inFlightTask = OSAllocatedUnfairLock<URLSessionDataTask?>(initialState: nil)
+    private let taskState = OSAllocatedUnfairLock<InFlightTaskState>(initialState: InFlightTaskState())
 
     init(
         baseURL: URL,
@@ -381,7 +440,7 @@ final class LibSQLHTTPClient: Sendable {
         self.delegate = delegate
         let config = sessionConfiguration ?? URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeoutSeconds
-        config.timeoutIntervalForResource = max(timeoutSeconds * 2, 60)
+        config.timeoutIntervalForResource = max(timeoutSeconds * 4, 3600)
         self.session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
     }
 
@@ -433,6 +492,22 @@ final class LibSQLHTTPClient: Sendable {
                 "Rejected cross-port libSQL base_url port \(targetPort ?? -1) (expected \(expectedPort ?? -1))"
             )
         }
+        if let authToken, !authToken.isEmpty, targetScheme == "http" {
+            guard Self.isLoopbackHost(targetHost ?? "") else {
+                throw DriverError.connectionFailed(
+                    "Refusing to send libSQL auth token over plain HTTP to non-loopback host '\(targetHost ?? "")'"
+                )
+            }
+        }
+    }
+
+    static func isLoopbackHost(_ rawHost: String) -> Bool {
+        let host = rawHost.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        return host == "localhost"
+            || host == "::1"
+            || host == "0:0:0:0:0:0:0:1"
+            || host == "127.0.0.1"
+            || host.hasPrefix("127.")
     }
 
     private static func effectivePort(for url: URL) -> Int? {
@@ -448,12 +523,13 @@ final class LibSQLHTTPClient: Sendable {
         _ requests: [HranaStreamRequest],
         baton: String?,
         stickyBaseURL: URL?,
-        timeoutOverride: TimeInterval? = nil
+        timeoutOverride: TimeInterval? = nil,
+        isUserQuery: Bool = false
     ) async throws -> HranaPipelineResponse {
         let targetBase = stickyBaseURL ?? baseURL
         try validateTargetBaseURL(targetBase)
         let endpoint = targetBase
-            .appendingPathComponent("v2")
+            .appendingPathComponent("v3")
             .appendingPathComponent("pipeline")
 
         var urlRequest = URLRequest(url: endpoint)
@@ -468,7 +544,7 @@ final class LibSQLHTTPClient: Sendable {
         let payload = HranaPipelineRequest(baton: baton, requests: requests)
         urlRequest.httpBody = try JSONEncoder().encode(payload)
 
-        let (data, response) = try await performDataRequest(urlRequest)
+        let (data, response) = try await performDataRequest(urlRequest, isUserQuery: isUserQuery)
         guard let http = response as? HTTPURLResponse else {
             throw DriverError.connectionFailed("Invalid non-HTTP response from libSQL server")
         }
@@ -483,10 +559,14 @@ final class LibSQLHTTPClient: Sendable {
         case 200...299:
             break
         case 401, 403:
-            let detail = extractServerMessage(from: data) ?? "HTTP \(http.statusCode) Unauthorized"
+            let detail = extractErrorEnvelope(from: data)?.message ?? extractRawMessage(from: data) ?? "HTTP \(http.statusCode) Unauthorized"
             throw DriverError.connectionFailed("Authentication failed (HTTP \(http.statusCode)): \(detail)")
         default:
-            let detail = extractServerMessage(from: data) ?? "HTTP \(http.statusCode)"
+            let envelope = extractErrorEnvelope(from: data)
+            let detail = envelope?.message ?? extractRawMessage(from: data) ?? "HTTP \(http.statusCode)"
+            if Self.isStreamExpiredError(code: envelope?.code, message: detail) {
+                throw Self.streamExpiredError()
+            }
             if http.statusCode == 404 || http.statusCode >= 500 {
                 throw DriverError.connectionFailed("libSQL HTTP \(http.statusCode): \(detail)")
             }
@@ -508,20 +588,34 @@ final class LibSQLHTTPClient: Sendable {
     }
 
     func cancelCurrentRequest() {
-        let task = inFlightTask.withLock { current -> URLSessionDataTask? in
-            let active = current
-            current = nil
-            return active
+        let tasks = taskState.withLock { state -> [URLSessionDataTask] in
+            let ids = state.userQueryTaskIDs
+            state.userQueryTaskIDs.removeAll()
+            return ids.compactMap { state.tasksByID[$0] }
         }
-        task?.cancel()
+        for task in tasks {
+            task.cancel()
+        }
     }
 
     func invalidate() {
-        cancelCurrentRequest()
+        let tasks = taskState.withLock { state -> [URLSessionDataTask] in
+            state.isInvalidated = true
+            let active = Array(state.tasksByID.values)
+            state.tasksByID.removeAll()
+            state.userQueryTaskIDs.removeAll()
+            return active
+        }
+        for task in tasks {
+            task.cancel()
+        }
         session.invalidateAndCancel()
     }
 
     static func mapHranaError(_ payload: HranaErrorPayload) -> DriverError {
+        if isStreamExpiredError(code: payload.code, message: payload.message) {
+            return streamExpiredError()
+        }
         let rawCode = payload.code?.uppercased() ?? ""
         let lowerMsg = payload.message.lowercased()
         if rawCode.contains("READONLY")
@@ -536,40 +630,71 @@ final class LibSQLHTTPClient: Sendable {
         return .queryFailed(message: payload.message, code: nil)
     }
 
-    private func performDataRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
-        try await withTaskCancellationHandler {
+    private static func isStreamExpiredError(code: String?, message: String) -> Bool {
+        let rawCode = code?.uppercased() ?? ""
+        let lowerMsg = message.lowercased()
+        return rawCode == "STREAM_EXPIRED"
+            || lowerMsg.contains("stream has expired")
+            || lowerMsg.contains("invalid baton")
+    }
+
+    private static func streamExpiredError() -> DriverError {
+        .queryFailed(
+            message: "Interactive libSQL transaction expired due to inactivity and was rolled back by the server. Re-run the transaction or execute it in a single statement.",
+            code: nil
+        )
+    }
+
+    private func performDataRequest(_ request: URLRequest, isUserQuery: Bool) async throws -> (Data, URLResponse) {
+        let cancellationBox = RequestCancellationBox()
+        return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                let task = session.dataTask(with: request)
-                let taskID = task.taskIdentifier
+                let registeredTask: (task: URLSessionDataTask, id: Int)? = taskState.withLock { state in
+                    guard !state.isInvalidated else { return nil }
+                    let task = session.dataTask(with: request)
+                    let taskID = task.taskIdentifier
+                    state.tasksByID[taskID] = task
+                    if isUserQuery {
+                        state.userQueryTaskIDs.insert(taskID)
+                    }
+                    return (task, taskID)
+                }
+                guard let (task, taskID) = registeredTask else {
+                    continuation.resume(throwing: DriverError.notConnected)
+                    return
+                }
+
+                cancellationBox.set(task)
                 delegate.register(
                     taskID: taskID,
                     maxBytes: maxResponseBytes,
                     continuation: continuation,
                     onComplete: { [weak self] in
-                        self?.inFlightTask.withLock { current in
-                            if current?.taskIdentifier == taskID {
-                                current = nil
-                            }
+                        self?.taskState.withLock { state in
+                            state.tasksByID.removeValue(forKey: taskID)
+                            state.userQueryTaskIDs.remove(taskID)
                         }
                     }
                 )
-                inFlightTask.withLock { current in
-                    current = task
-                }
                 task.resume()
                 if Task.isCancelled {
-                    task.cancel()
+                    cancellationBox.cancel()
                 }
             }
         } onCancel: {
-            cancelCurrentRequest()
+            cancellationBox.cancel()
         }
     }
 
-    private func extractServerMessage(from data: Data) -> String? {
-        if let envelope = try? JSONDecoder().decode(HranaErrorEnvelope.self, from: data) {
-            return envelope.error ?? envelope.message
+    private func extractErrorEnvelope(from data: Data) -> (message: String?, code: String?)? {
+        guard let envelope = try? JSONDecoder().decode(HranaErrorEnvelope.self, from: data) else {
+            return nil
         }
+        let msg = envelope.error ?? envelope.message
+        return (msg, envelope.code)
+    }
+
+    private func extractRawMessage(from data: Data) -> String? {
         let raw = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return (raw?.isEmpty == false) ? raw : nil
@@ -578,5 +703,6 @@ final class LibSQLHTTPClient: Sendable {
     private struct HranaErrorEnvelope: Decodable {
         let error: String?
         let message: String?
+        let code: String?
     }
 }

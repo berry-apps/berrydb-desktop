@@ -135,7 +135,7 @@ public struct MCPLiveReadService: Sendable {
                 profileID: request.profileID, slots: slots, openBudget: openBudget,
                 statementBudget: MCPResultLimits.liveRead.maximumElapsed,
                 check: { profile in
-                    guard Self.allowedDriverIDs(for: request.dialect).contains(profile.driverID) else {
+                    guard profile.driverID == Self.driverID(for: request.dialect) else {
                         throw MCPLiveReadError.unsupportedDatabase
                     }
                 },
@@ -388,11 +388,11 @@ public struct MCPLiveReadService: Sendable {
         return String(line.prefix(499)) + "…"
     }
 
-    private static func allowedDriverIDs(for dialect: MCPSQLDialect) -> Set<DriverID> {
+    private static func driverID(for dialect: MCPSQLDialect) -> DriverID {
         switch dialect {
-        case .postgresql: [.postgres]
-        case .mysql: [.mysql]
-        case .sqlite: [.sqlite, .libsql]
+        case .postgresql: .postgres
+        case .mysql: .mysql
+        case .sqlite: .sqlite
         }
     }
 
