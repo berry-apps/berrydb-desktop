@@ -40,13 +40,14 @@ public struct LibSQLDriver: DatabaseDriver {
             throw DriverError.connectionFailed("Missing or invalid libSQL URL / hostname")
         }
 
-        let token = config.password?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let configuredToken = config.password?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedToken = (configuredToken?.isEmpty == false) ? configuredToken : endpoint.authToken
         let resolvedTLSMode: TLSMode = endpoint.useTLS
             ? (config.tlsMode == .disable ? .require : config.tlsMode)
             : .disable
         let connection = LibSQLConnection(
             baseURL: endpoint.baseURL,
-            authToken: (token?.isEmpty == false) ? token : nil,
+            authToken: (resolvedToken?.isEmpty == false) ? resolvedToken : nil,
             tlsMode: resolvedTLSMode,
             timeoutSeconds: max(1, timeoutSeconds),
             maxResponseBytes: maxResponseBytes,
@@ -61,5 +62,3 @@ public struct LibSQLDriver: DatabaseDriver {
         }
     }
 }
-
-public typealias LibSQLDialect = SQLiteDialect

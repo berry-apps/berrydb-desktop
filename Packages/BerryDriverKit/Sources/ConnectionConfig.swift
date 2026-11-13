@@ -182,12 +182,23 @@ public struct ConnectionConfig: Sendable {
 
     public struct LibSQLEndpoint: Sendable, Equatable {
         public let baseURL: URL
+        public let sanitizedHost: String
+        public let authToken: String?
         public let host: String
         public let port: Int
         public let useTLS: Bool
 
-        public init(baseURL: URL, host: String, port: Int, useTLS: Bool) {
+        public init(
+            baseURL: URL,
+            sanitizedHost: String? = nil,
+            authToken: String? = nil,
+            host: String,
+            port: Int,
+            useTLS: Bool
+        ) {
             self.baseURL = baseURL
+            self.sanitizedHost = sanitizedHost ?? baseURL.absoluteString
+            self.authToken = authToken
             self.host = host
             self.port = port
             self.useTLS = useTLS
@@ -197,6 +208,8 @@ public struct ConnectionConfig: Sendable {
     /// Parses a libSQL endpoint from a URL (`libsql://`, `https://`, `http://`)
     /// or bare hostname, applying `port` and `tlsMode` when not already pinned
     /// by an explicit scheme (`libsql://` and `https://` always enable TLS).
+    /// Extracts any `authToken` / `auth_token` / `jwt` query parameter and strips
+    /// query/fragment/userinfo from both `baseURL` and `sanitizedHost`.
     public static func parseLibSQLEndpoint(
         host rawHost: String?,
         port explicitPort: Int? = nil,
@@ -228,6 +241,39 @@ public struct ConnectionConfig: Sendable {
             return nil
         }
 
+        let extractedAuthToken: String? = components.queryItems?
+            .first { item in
+                let key = item.name.lowercased()
+                return (key == "authtoken" || key == "auth_token" || key == "jwt")
+                    && !(item.value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            }?
+            .value?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Normalize trailing slash on path while preserving any custom subpath.
+        if components.path == "/" {
+            components.path = ""
+        } else if components.path.hasSuffix("/") {
+            components.path = String(components.path.dropLast())
+        }
+        components.user = nil
+        components.password = nil
+        components.query = nil
+        components.fragment = nil
+
+        let sanitizedHost: String
+        if let explicitScheme {
+            var sanitizedComponents = components
+            sanitizedComponents.scheme = explicitScheme
+            sanitizedHost = sanitizedComponents.string ?? parsedHost
+        } else if components.path.isEmpty {
+            sanitizedHost = parsedHost
+        } else {
+            var pathOnly = parsedHost
+            pathOnly += components.path
+            sanitizedHost = pathOnly
+        }
+
         let useTLS: Bool
         switch explicitScheme {
         case "http":
@@ -251,18 +297,11 @@ public struct ConnectionConfig: Sendable {
             resolvedPort = useTLS ? 443 : 80
         }
 
-        // Normalize trailing slash on path while preserving any custom subpath.
-        if components.path == "/" {
-            components.path = ""
-        } else if components.path.hasSuffix("/") {
-            components.path = String(components.path.dropLast())
-        }
-        components.query = nil
-        components.fragment = nil
-
         guard let baseURL = components.url else { return nil }
         return LibSQLEndpoint(
             baseURL: baseURL,
+            sanitizedHost: sanitizedHost,
+            authToken: extractedAuthToken,
             host: parsedHost,
             port: resolvedPort,
             useTLS: useTLS
@@ -277,12 +316,14 @@ public struct ConnectionConfig: Sendable {
         name: String? = nil
     ) -> ConnectionConfig {
         let parsed = parseLibSQLEndpoint(host: host, port: port, tlsMode: tlsMode)
+        let explicitToken = authToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedToken = (explicitToken?.isEmpty == false) ? explicitToken : parsed?.authToken
         return ConnectionConfig(
             driver: .libsql,
             name: name ?? parsed?.host ?? host,
-            host: host,
+            host: parsed?.sanitizedHost ?? host,
             port: port ?? parsed?.port ?? (tlsMode == .disable ? 80 : 443),
-            password: authToken,
+            password: resolvedToken,
             tlsMode: parsed.map { $0.useTLS ? (tlsMode == .disable ? .require : tlsMode) : .disable } ?? tlsMode
         )
     }

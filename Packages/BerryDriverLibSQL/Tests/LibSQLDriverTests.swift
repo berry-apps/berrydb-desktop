@@ -115,6 +115,21 @@ struct LibSQLDriverTests {
 
         #expect(ConnectionConfig.parseLibSQLEndpoint(host: "") == nil)
         #expect(ConnectionConfig.parseLibSQLEndpoint(host: "ftp://example.com") == nil)
+
+        let withQueryToken = ConnectionConfig.parseLibSQLEndpoint(host: "libsql://my-db-org.turso.io?authToken=tok_123")
+        #expect(withQueryToken?.baseURL.absoluteString == "https://my-db-org.turso.io")
+        #expect(withQueryToken?.sanitizedHost == "libsql://my-db-org.turso.io")
+        #expect(withQueryToken?.authToken == "tok_123")
+        #expect(withQueryToken?.useTLS == true)
+
+        let withSnakeToken = ConnectionConfig.parseLibSQLEndpoint(host: "https://my-db.turso.io/sub/?auth_token=tok_abc&foo=bar")
+        #expect(withSnakeToken?.sanitizedHost == "https://my-db.turso.io/sub")
+        #expect(withSnakeToken?.authToken == "tok_abc")
+
+        let libsqlFactory = ConnectionConfig.libsql(host: "libsql://my-db-org.turso.io?authToken=secret_jwt")
+        #expect(libsqlFactory.host == "libsql://my-db-org.turso.io")
+        #expect(libsqlFactory.password == "secret_jwt")
+        #expect(libsqlFactory.tlsMode == .require)
     }
 
     @Test("driver capabilities report cancelQuery false and reuse SQLiteDialect")
@@ -820,12 +835,14 @@ struct LibSQLDriverTests {
 
     // MARK: - Transport & Token Target Security
 
-    @Test("rejects cross-host, scheme-downgraded, cross-port, and redirected sticky base_url without leaking token")
+    @Test("ignores base_url when baton is not kept, follows sticky HTTPS hosts, and refuses HTTPS downgrade and redirects")
     func stickyBaseURLAndRedirectSecurity() async throws {
         let host = "primary-\(UUID().uuidString).test"
+        let stickyHost = "sticky-node-1-\(UUID().uuidString).test"
         let attackerHost = "attacker-\(UUID().uuidString).test"
         defer {
             LibSQLStubURLProtocol.unregister(host: host)
+            LibSQLStubURLProtocol.unregister(host: stickyHost)
             LibSQLStubURLProtocol.unregister(host: attackerHost)
         }
 
@@ -836,7 +853,23 @@ struct LibSQLDriverTests {
             return (makeHTTPResponse(url: url), try jsonData(["results": [okExecuteResult(), okCloseResult()]]))
         }
 
-        let mode = OSAllocatedUnfairLock<String>(initialState: "cross-host")
+        let stickyRequests = OSAllocatedUnfairLock<[String]>(initialState: [])
+        LibSQLStubURLProtocol.register(host: stickyHost) { request, data in
+            guard let url = request.url else { throw URLError(.badURL) }
+            let (_, reqs) = try parsePipelineRequest(data)
+            let sql = (reqs.first?["stmt"] as? [String: Any])?["sql"] as? String ?? ""
+            stickyRequests.withLock { $0.append(sql) }
+            return (
+                makeHTTPResponse(url: url),
+                try jsonData([
+                    "baton": NSNull(),
+                    "base_url": "https://\(stickyHost):8443",
+                    "results": [okExecuteResult(), okAutocommitResult(true)],
+                ])
+            )
+        }
+
+        let mode = OSAllocatedUnfairLock<String>(initialState: "autocommit-self-url")
         LibSQLStubURLProtocol.register(host: host) { request, data in
             guard let url = request.url else { throw URLError(.badURL) }
             let (_, reqs) = try parsePipelineRequest(data)
@@ -844,10 +877,34 @@ struct LibSQLDriverTests {
             if sql == "SELECT 1" {
                 return (
                     makeHTTPResponse(url: url),
-                    try jsonData(["results": [okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]]), okCloseResult()]])
+                    try jsonData([
+                        "baton": NSNull(),
+                        "base_url": "http://sqld-node-1.internal:8080",
+                        "results": [okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]]), okCloseResult()],
+                    ])
                 )
             }
             let currentMode = mode.withLock { $0 }
+            if currentMode == "autocommit-self-url" {
+                return (
+                    makeHTTPResponse(url: url),
+                    try jsonData([
+                        "baton": NSNull(),
+                        "base_url": "http://sqld-node-1.internal:8080",
+                        "results": [okExecuteResult(affectedRowCount: 1), okCloseResult()],
+                    ])
+                )
+            }
+            if currentMode == "sticky-cross-host" {
+                return (
+                    makeHTTPResponse(url: url),
+                    try jsonData([
+                        "baton": "baton-sticky-1",
+                        "base_url": "https://\(stickyHost):8443",
+                        "results": [okExecuteResult(), okAutocommitResult(false)],
+                    ])
+                )
+            }
             if currentMode == "redirect" {
                 return (
                     makeHTTPResponse(
@@ -860,12 +917,8 @@ struct LibSQLDriverTests {
             }
             let injectedBaseURL: String
             switch currentMode {
-            case "cross-host":
-                injectedBaseURL = "https://\(attackerHost)"
             case "downgrade":
                 injectedBaseURL = "http://\(host)"
-            case "cross-port":
-                injectedBaseURL = "https://\(host):8443"
             case "credentials":
                 injectedBaseURL = "https://user:pass@\(host)"
             default:
@@ -876,7 +929,7 @@ struct LibSQLDriverTests {
                 try jsonData([
                     "baton": "baton-hijack",
                     "base_url": injectedBaseURL,
-                    "results": [okExecuteResult()],
+                    "results": [okExecuteResult(), okAutocommitResult(false)],
                 ])
             )
         }
@@ -887,7 +940,23 @@ struct LibSQLDriverTests {
         )
         defer { Task { await conn.close() } }
 
-        for testMode in ["cross-host", "downgrade", "cross-port", "credentials", "redirect"] {
+        // 1. Autocommit responses with SQLD_HTTP_SELF_URL (including different host/http) succeed and deliver results.
+        mode.withLock { $0 = "autocommit-self-url" }
+        let insertEvents = try await collect(conn.execute("INSERT INTO t VALUES (1)"))
+        guard case .complete(let stats) = insertEvents.last else {
+            Issue.record("Expected .complete for autocommit INSERT with self base_url")
+            return
+        }
+        #expect(stats.rowsAffected == 1)
+
+        // 2. Sticky HTTPS host/port on a kept baton routes the next in-transaction statement to stickyHost.
+        mode.withLock { $0 = "sticky-cross-host" }
+        _ = try await collect(conn.execute("BEGIN"))
+        _ = try await collect(conn.execute("COMMIT"))
+        #expect(stickyRequests.withLock { $0 } == ["COMMIT"])
+
+        // 3. Downgrade (https -> http), credentialed base_url, and HTTP redirects are rejected.
+        for testMode in ["downgrade", "credentials", "redirect"] {
             mode.withLock { $0 = testMode }
             do {
                 _ = try await collect(conn.execute("BEGIN"))
@@ -898,12 +967,265 @@ struct LibSQLDriverTests {
                     return
                 }
             }
-            // Verify subsequent request still targets primary host cleanly rather than the rejected URL.
             let probe = try await collect(conn.execute("SELECT 1"))
             #expect(!probe.isEmpty)
         }
 
         #expect(attackerRequests.withLock { $0 } == 0)
+    }
+
+    @Test("serializes concurrent execute calls, keeps baton on SQL error, and closes dropped baton on transport failure")
+    func serializesExecutionAndClosesDroppedBaton() async throws {
+        let host = "serialize-\(UUID().uuidString).test"
+        defer { LibSQLStubURLProtocol.unregister(host: host) }
+
+        let inFlight = OSAllocatedUnfairLock<Int>(initialState: 0)
+        let maxInFlight = OSAllocatedUnfairLock<Int>(initialState: 0)
+        let recorded = OSAllocatedUnfairLock<[(baton: String?, types: [String], sql: String)]>(initialState: [])
+        let failNextWrite = OSAllocatedUnfairLock<Bool>(initialState: false)
+
+        LibSQLStubURLProtocol.register(host: host) { request, data in
+            guard let url = request.url else { throw URLError(.badURL) }
+            let (baton, reqs) = try parsePipelineRequest(data)
+            let types = reqs.compactMap { $0["type"] as? String }
+            let sql = (reqs.first?["stmt"] as? [String: Any])?["sql"] as? String ?? ""
+
+            if sql == "SELECT 1" {
+                return (
+                    makeHTTPResponse(url: url),
+                    try jsonData(["results": [okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]]), okCloseResult()]])
+                )
+            }
+
+            if types == ["close"] {
+                recorded.withLock { $0.append((baton, types, "")) }
+                return (makeHTTPResponse(url: url), try jsonData(["results": [okCloseResult()]]))
+            }
+
+            let concurrentNow = inFlight.withLock { count -> Int in
+                count += 1
+                return count
+            }
+            maxInFlight.withLock { $0 = max($0, concurrentNow) }
+            defer { inFlight.withLock { $0 -= 1 } }
+
+            recorded.withLock { $0.append((baton, types, sql)) }
+
+            if sql.contains("SLOW") {
+                Thread.sleep(forTimeInterval: 0.08)
+            }
+            if failNextWrite.withLock({ $0 }) && sql.contains("DROP_FAIL") {
+                failNextWrite.withLock { $0 = false }
+                throw URLError(.networkConnectionLost)
+            }
+            if sql.contains("BAD_SQL") {
+                return (
+                    makeHTTPResponse(url: url),
+                    try jsonData([
+                        "baton": "baton-after-sql-error",
+                        "results": [
+                            ["type": "error", "error": ["message": "no such table: missing", "code": "SQLITE_ERROR"]],
+                            okAutocommitResult(false),
+                        ],
+                    ])
+                )
+            }
+            if sql == "COMMIT" {
+                return (
+                    makeHTTPResponse(url: url),
+                    try jsonData([
+                        "baton": NSNull(),
+                        "results": [okExecuteResult(), okAutocommitResult(true)],
+                    ])
+                )
+            }
+            let nextBaton = sql == "BEGIN" ? "baton-1" : "baton-2"
+            return (
+                makeHTTPResponse(url: url),
+                try jsonData([
+                    "baton": nextBaton,
+                    "results": [okExecuteResult(), okAutocommitResult(false)],
+                ])
+            )
+        }
+
+        let conn = try await LibSQLDriver.connect(
+            .libsql(host: "https://\(host)"),
+            sessionConfiguration: LibSQLStubURLProtocol.sessionConfiguration()
+        )
+        defer { Task { await conn.close() } }
+
+        _ = try await collect(conn.execute("BEGIN"))
+
+        // Fire two overlapping statements simultaneously inside the transaction.
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { _ = try await collect(conn.execute("INSERT INTO t VALUES (1) /* SLOW */")) }
+            group.addTask { _ = try await collect(conn.execute("INSERT INTO t VALUES (2) /* SECOND */")) }
+            try await group.waitForAll()
+        }
+        #expect(maxInFlight.withLock { $0 } == 1)
+
+        // SQL error inside transaction keeps the baton.
+        do {
+            _ = try await collect(conn.execute("SELECT * FROM BAD_SQL"))
+            Issue.record("Expected SQL error")
+        } catch let error as DriverError {
+            guard case .queryFailed = error else {
+                Issue.record("Expected queryFailed, got \(error)")
+                return
+            }
+        }
+
+        // Transport error clears baton and sends best-effort close.
+        failNextWrite.withLock { $0 = true }
+        do {
+            _ = try await collect(conn.execute("INSERT INTO t VALUES (3) /* DROP_FAIL */"))
+            Issue.record("Expected transport error")
+        } catch let error as DriverError {
+            guard case .connectionFailed = error else {
+                Issue.record("Expected connectionFailed, got \(error)")
+                return
+            }
+        }
+
+        let trace = recorded.withLock { $0 }
+        let sqlTrace = trace.filter { $0.types != ["close"] }
+        #expect(sqlTrace.map(\.baton) == [nil, "baton-1", "baton-2", "baton-2", "baton-after-sql-error"])
+        #expect(trace.last?.types == ["close"])
+        #expect(trace.last?.baton == "baton-after-sql-error")
+    }
+
+    @Test("isLoopbackHost requires strict loopback names or 127.0.0.0/8 IPv4 literals")
+    func strictLoopbackValidation() {
+        #expect(LibSQLHTTPClient.isLoopbackHost("localhost") == true)
+        #expect(LibSQLHTTPClient.isLoopbackHost("127.0.0.1") == true)
+        #expect(LibSQLHTTPClient.isLoopbackHost("127.255.0.1") == true)
+        #expect(LibSQLHTTPClient.isLoopbackHost("::1") == true)
+        #expect(LibSQLHTTPClient.isLoopbackHost("[::1]") == true)
+
+        #expect(LibSQLHTTPClient.isLoopbackHost("127.attacker.example") == false)
+        #expect(LibSQLHTTPClient.isLoopbackHost("127.0.0.256") == false)
+        #expect(LibSQLHTTPClient.isLoopbackHost("127.1") == false)
+        #expect(LibSQLHTTPClient.isLoopbackHost("example.com") == false)
+    }
+
+    @Test("introspector hashes resolved view columns in objectSummaries and batches tableDetails")
+    func viewFingerprintsAndBulkTableDetails() async throws {
+        let host = "bulk-intro-\(UUID().uuidString).test"
+        defer { LibSQLStubURLProtocol.unregister(host: host) }
+
+        let viewHasExtraColumn = OSAllocatedUnfairLock<Bool>(initialState: false)
+        let roundTrips = OSAllocatedUnfairLock<Int>(initialState: 0)
+
+        LibSQLStubURLProtocol.register(host: host) { request, data in
+            guard let url = request.url else { throw URLError(.badURL) }
+            let (_, reqs) = try parsePipelineRequest(data)
+            let firstSQL = (reqs.first?["stmt"] as? [String: Any])?["sql"] as? String ?? ""
+            if firstSQL != "SELECT 1" {
+                roundTrips.withLock { $0 += 1 }
+            }
+
+            let results: [[String: Any]] = reqs.map { req in
+                if req["type"] as? String == "close" { return okCloseResult() }
+                let sql = (req["stmt"] as? [String: Any])?["sql"] as? String ?? ""
+                if sql == "SELECT 1" {
+                    return okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]])
+                } else if sql.contains("SELECT type, name, tbl_name, sql FROM sqlite_master") {
+                    return okExecuteResult(
+                        cols: [["name": "type"], ["name": "name"], ["name": "tbl_name"], ["name": "sql"]],
+                        rows: [
+                            [
+                                ["type": "text", "value": "table"],
+                                ["type": "text", "value": "t1"],
+                                ["type": "text", "value": "t1"],
+                                ["type": "text", "value": "CREATE TABLE t1 (a INTEGER)"],
+                            ],
+                            [
+                                ["type": "text", "value": "view"],
+                                ["type": "text", "value": "v1"],
+                                ["type": "text", "value": "v1"],
+                                ["type": "text", "value": "CREATE VIEW v1 AS SELECT * FROM t1"],
+                            ],
+                        ]
+                    )
+                } else if sql == "PRAGMA table_info(\"v1\")" {
+                    var rows: [[[String: Any]]] = [[
+                        ["type": "integer", "value": "0"],
+                        ["type": "text", "value": "a"],
+                        ["type": "text", "value": "INTEGER"],
+                        ["type": "integer", "value": "0"],
+                        ["type": "null"],
+                        ["type": "integer", "value": "0"],
+                    ]]
+                    if viewHasExtraColumn.withLock({ $0 }) {
+                        rows.append([
+                            ["type": "integer", "value": "1"],
+                            ["type": "text", "value": "b"],
+                            ["type": "text", "value": "TEXT"],
+                            ["type": "integer", "value": "0"],
+                            ["type": "null"],
+                            ["type": "integer", "value": "0"],
+                        ])
+                    }
+                    return okExecuteResult(
+                        cols: [["name": "cid"], ["name": "name"], ["name": "type"], ["name": "notnull"], ["name": "dflt_value"], ["name": "pk"]],
+                        rows: rows
+                    )
+                } else if sql == "PRAGMA table_info(\"t1\")" || sql == "PRAGMA table_info(\"t2\")" {
+                    return okExecuteResult(
+                        cols: [["name": "cid"], ["name": "name"], ["name": "type"], ["name": "notnull"], ["name": "dflt_value"], ["name": "pk"]],
+                        rows: [[
+                            ["type": "integer", "value": "0"],
+                            ["type": "text", "value": "id"],
+                            ["type": "text", "value": "INTEGER"],
+                            ["type": "integer", "value": "1"],
+                            ["type": "null"],
+                            ["type": "integer", "value": "1"],
+                        ]]
+                    )
+                } else if sql == "PRAGMA table_info(\"broken_view\")" {
+                    return ["type": "error", "error": ["message": "no such table: missing_base", "code": "SQLITE_ERROR"]]
+                } else if sql.hasPrefix("PRAGMA index_list") {
+                    return okExecuteResult(
+                        cols: [["name": "seq"], ["name": "name"], ["name": "unique"], ["name": "origin"], ["name": "partial"]],
+                        rows: []
+                    )
+                } else if sql.hasPrefix("PRAGMA foreign_key_list") {
+                    return okExecuteResult(
+                        cols: [["name": "id"], ["name": "seq"], ["name": "table"], ["name": "from"], ["name": "to"]],
+                        rows: []
+                    )
+                } else {
+                    return okExecuteResult()
+                }
+            }
+            return (makeHTTPResponse(url: url), try jsonData(["results": results]))
+        }
+
+        let conn = try await LibSQLDriver.connect(
+            .libsql(host: "https://\(host)"),
+            sessionConfiguration: LibSQLStubURLProtocol.sessionConfiguration()
+        )
+        defer { Task { await conn.close() } }
+
+        let before = try await conn.introspector.objectSummaries(scope: .allUserSchemas)
+        viewHasExtraColumn.withLock { $0 = true }
+        let after = try await conn.introspector.objectSummaries(scope: .allUserSchemas)
+
+        let beforeView = before.first { $0.ref.name == "v1" }
+        let afterView = after.first { $0.ref.name == "v1" }
+        #expect(beforeView?.fingerprint != nil)
+        #expect(beforeView?.fingerprint != afterView?.fingerprint)
+
+        roundTrips.withLock { $0 = 0 }
+        let details = try await conn.introspector.tableDetails([
+            TableRef(name: "t1"),
+            TableRef(name: "t2"),
+            TableRef(name: "broken_view"),
+        ])
+        #expect(details.map(\.ref.name) == ["t1", "t2"])
+        // One batched round trip when no follow-up index_info or implicit FK lookups are needed.
+        #expect(roundTrips.withLock { $0 } == 1)
     }
 
     @Test("enforces maxResponseBytes safety limit during download streaming and via Content-Length")

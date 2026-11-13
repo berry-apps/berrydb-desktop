@@ -16,7 +16,7 @@ struct MCPDriverRegistrationTests {
 
         let registered = BerryDBMCPComposition.registerDrivers(using: registrar)
 
-        #expect(sql == ["sqlite", "postgres", "mysql", "dynamodb", "sqlserver"])
+        #expect(sql == ["sqlite", "libsql", "postgres", "mysql", "dynamodb", "sqlserver"])
         #expect(dataSource == ["qdrant", "mongodb", "elasticsearch"])
         #expect(keyValue == ["redis"])
         #expect(registered.sql.map(\.rawValue) == sql)

@@ -70,8 +70,34 @@ struct LibSQLIntrospector: Introspector {
             }
         }
 
+        let viewNames = objects.filter { $0.kind == .view }.map(\.name)
+        var resolvedViewColumns: [String: String] = [:]
+        if !viewNames.isEmpty {
+            let viewQueries: [(sql: String, binds: [SQLParameter])] = viewNames.map { viewName in
+                (sql: "PRAGMA table_info(\(dialect.quoteIdentifier(viewName)))", binds: [])
+            }
+            let viewResults = try await connection.queryBatchAllowingStepErrors(viewQueries)
+            for (idx, viewName) in viewNames.enumerated() {
+                guard idx < viewResults.count else { continue }
+                switch viewResults[idx] {
+                case .success(let colRows):
+                    resolvedViewColumns[viewName] = Self.formatResolvedViewColumns(colRows)
+                case .failure(let error):
+                    if case .queryFailed = error {
+                        resolvedViewColumns[viewName] = "unresolved"
+                    } else {
+                        throw error
+                    }
+                }
+            }
+        }
+
         return objects.map { obj in
-            let combined = (ddlPartsByTable[obj.name] ?? []).joined(separator: "\n")
+            var parts = ddlPartsByTable[obj.name] ?? []
+            if obj.kind == .view, let resolved = resolvedViewColumns[obj.name] {
+                parts.append(resolved)
+            }
+            let combined = parts.joined(separator: "\n")
             let hash = combined.isEmpty ? nil : ContentHash.fnv1a64(combined)
             return SchemaObjectSummary(
                 ref: TableRef(database: nil, name: obj.name),
@@ -79,6 +105,10 @@ struct LibSQLIntrospector: Introspector {
                 fingerprint: hash
             )
         }
+    }
+
+    private static func formatResolvedViewColumns(_ rows: [[BerryValue]]) -> String {
+        rows.map { $0.map { $0.displayString.map { "=" + $0 } ?? "" }.joined(separator: ":") }.joined(separator: ",")
     }
 
     func foreignKeys(scope: SchemaScope) async throws -> [ForeignKeyRelation] {
@@ -165,30 +195,146 @@ struct LibSQLIntrospector: Introspector {
         let indexListRows = baseResults.indices.contains(1) ? baseResults[1] : []
         let fkRows = baseResults.indices.contains(2) ? baseResults[2] : []
 
-        let columns: [ColumnInfo] = colRows.compactMap { row in
-            // PRAGMA table_info: cid(0), name(1), type(2), notnull(3), dflt_value(4), pk(5)
-            guard row.count >= 6, let name = row[1].textValue else { return nil }
-            let declaredType = row[2].textValue ?? ""
-            let notNull = (row[3].numericValue ?? 0) != 0
-            let defaultValue: String? = row[4] == .null ? nil : row[4].displayString
-            let isPK = (row[5].numericValue ?? 0) != 0
-            return ColumnInfo(
-                name: name,
-                declaredType: declaredType,
-                isNullable: !notNull,
-                defaultValue: defaultValue,
-                isPrimaryKey: isPK
+        let columns = Self.parseColumnRows(colRows)
+        let parsedIndexes = Self.parseIndexListRows(indexListRows)
+        let parsedFKs = Self.parseForeignKeyRows(fkRows)
+
+        let (indexColsByName, parentPKs, listedNames) = try await fetchFollowUpMetadata(
+            indexNames: parsedIndexes.map(\.name),
+            parsedFKs: parsedFKs
+        )
+
+        let indexes = parsedIndexes.map { item in
+            IndexInfo(name: item.name, isUnique: item.isUnique, columns: indexColsByName[item.name] ?? [])
+        }
+        let foreignKeys = Self.assembleForeignKeys(
+            parsedFKs: parsedFKs,
+            parentPKs: parentPKs,
+            listedNames: listedNames
+        )
+
+        return TableDetail(
+            ref: table,
+            columns: columns,
+            indexes: indexes,
+            foreignKeys: foreignKeys
+        )
+    }
+
+    func tableDetails(_ refs: [TableRef]) async throws -> [TableDetail] {
+        guard !refs.isEmpty else { return [] }
+        try Task.checkCancellation()
+
+        var baseQueries: [(sql: String, binds: [SQLParameter])] = []
+        baseQueries.reserveCapacity(refs.count * 3)
+        for ref in refs {
+            let quoted = dialect.quoteIdentifier(ref.name)
+            baseQueries.append((sql: "PRAGMA table_info(\(quoted))", binds: []))
+            baseQueries.append((sql: "PRAGMA index_list(\(quoted))", binds: []))
+            baseQueries.append((sql: "PRAGMA foreign_key_list(\(quoted))", binds: []))
+        }
+
+        let baseResults = try await connection.queryBatchAllowingStepErrors(baseQueries)
+
+        struct ParsedTableEntry {
+            let ref: TableRef
+            let columns: [ColumnInfo]
+            let parsedIndexes: [(name: String, isUnique: Bool)]
+            let parsedFKs: [(id: Int64, seq: Int64, table: String, from: String, to: String?)]
+        }
+
+        var surviving: [ParsedTableEntry] = []
+        surviving.reserveCapacity(refs.count)
+        var allIndexNames: [String] = []
+        var seenIndexNames: Set<String> = []
+        var allParsedFKs: [(id: Int64, seq: Int64, table: String, from: String, to: String?)] = []
+
+        for (index, ref) in refs.enumerated() {
+            try Task.checkCancellation()
+            let baseOffset = index * 3
+            guard baseOffset < baseResults.count else { continue }
+            let colRows: [[BerryValue]]
+            switch baseResults[baseOffset] {
+            case .success(let rows):
+                colRows = rows
+            case .failure(let error):
+                if case .queryFailed = error {
+                    continue
+                }
+                throw error
+            }
+            let columns = Self.parseColumnRows(colRows)
+            guard !columns.isEmpty else { continue }
+
+            let indexListRows: [[BerryValue]]
+            if baseOffset + 1 < baseResults.count {
+                switch baseResults[baseOffset + 1] {
+                case .success(let rows): indexListRows = rows
+                case .failure(let error):
+                    if case .queryFailed = error { indexListRows = [] } else { throw error }
+                }
+            } else {
+                indexListRows = []
+            }
+
+            let fkRows: [[BerryValue]]
+            if baseOffset + 2 < baseResults.count {
+                switch baseResults[baseOffset + 2] {
+                case .success(let rows): fkRows = rows
+                case .failure(let error):
+                    if case .queryFailed = error { fkRows = [] } else { throw error }
+                }
+            } else {
+                fkRows = []
+            }
+
+            let parsedIndexes = Self.parseIndexListRows(indexListRows)
+            for idxItem in parsedIndexes where seenIndexNames.insert(idxItem.name).inserted {
+                allIndexNames.append(idxItem.name)
+            }
+            let parsedFKs = Self.parseForeignKeyRows(fkRows)
+            allParsedFKs.append(contentsOf: parsedFKs)
+            surviving.append(ParsedTableEntry(
+                ref: ref,
+                columns: columns,
+                parsedIndexes: parsedIndexes,
+                parsedFKs: parsedFKs
+            ))
+        }
+
+        guard !surviving.isEmpty else { return [] }
+
+        let (indexColsByName, parentPKs, listedNames) = try await fetchFollowUpMetadata(
+            indexNames: allIndexNames,
+            parsedFKs: allParsedFKs
+        )
+
+        return surviving.map { entry in
+            let indexes = entry.parsedIndexes.map { item in
+                IndexInfo(name: item.name, isUnique: item.isUnique, columns: indexColsByName[item.name] ?? [])
+            }
+            let foreignKeys = Self.assembleForeignKeys(
+                parsedFKs: entry.parsedFKs,
+                parentPKs: parentPKs,
+                listedNames: listedNames
+            )
+            return TableDetail(
+                ref: entry.ref,
+                columns: entry.columns,
+                indexes: indexes,
+                foreignKeys: foreignKeys
             )
         }
+    }
 
-        let parsedIndexes: [(name: String, isUnique: Bool)] = indexListRows.compactMap { row in
-            // PRAGMA index_list: seq(0), name(1), unique(2), origin(3), partial(4)
-            guard row.count >= 3, let indexName = row[1].textValue else { return nil }
-            let isUnique = (row[2].numericValue ?? 0) != 0
-            return (name: indexName, isUnique: isUnique)
-        }
-
-        let parsedFKs = Self.parseForeignKeyRows(fkRows)
+    private func fetchFollowUpMetadata(
+        indexNames: [String],
+        parsedFKs: [(id: Int64, seq: Int64, table: String, from: String, to: String?)]
+    ) async throws -> (
+        indexColsByName: [String: [String]],
+        parentPKs: [String: [String]],
+        listedNames: [String: String]
+    ) {
         var parentsNeedingPK: [String: String] = [:]
         for pair in parsedFKs where pair.to == nil {
             let folded = Self.asciiFolded(pair.table)
@@ -198,8 +344,8 @@ struct LibSQLIntrospector: Introspector {
         }
         let sortedParentKeys = parentsNeedingPK.sorted { $0.key < $1.key }
 
-        var followUpQueries: [(sql: String, binds: [SQLParameter])] = parsedIndexes.map { item in
-            (sql: "PRAGMA index_info(\(dialect.quoteIdentifier(item.name)))", binds: [])
+        var followUpQueries: [(sql: String, binds: [SQLParameter])] = indexNames.map { indexName in
+            (sql: "PRAGMA index_info(\(dialect.quoteIdentifier(indexName)))", binds: [])
         }
         for (_, parentTable) in sortedParentKeys {
             followUpQueries.append((
@@ -215,45 +361,81 @@ struct LibSQLIntrospector: Introspector {
             ))
         }
 
-        let followUpResults = followUpQueries.isEmpty ? [] : try await connection.queryBatch(followUpQueries)
+        let followUpResults = followUpQueries.isEmpty
+            ? []
+            : try await connection.queryBatchAllowingStepErrors(followUpQueries)
 
-        var indexes: [IndexInfo] = []
-        indexes.reserveCapacity(parsedIndexes.count)
-        for (idx, item) in parsedIndexes.enumerated() {
-            let infoRows = followUpResults.indices.contains(idx) ? followUpResults[idx] : []
-            let indexCols = infoRows.compactMap { $0.count >= 3 ? $0[2].textValue : nil }
-            indexes.append(IndexInfo(name: item.name, isUnique: item.isUnique, columns: indexCols))
+        var indexColsByName: [String: [String]] = [:]
+        indexColsByName.reserveCapacity(indexNames.count)
+        for (idx, indexName) in indexNames.enumerated() {
+            let infoRows = (followUpResults.indices.contains(idx) ? (try? followUpResults[idx].get()) : nil) ?? []
+            indexColsByName[indexName] = infoRows.compactMap { $0.count >= 3 ? $0[2].textValue : nil }
         }
 
         var parentPKs: [String: [String]] = [:]
         for (offset, entry) in sortedParentKeys.enumerated() {
-            let resultIdx = parsedIndexes.count + offset
-            let rows = followUpResults.indices.contains(resultIdx) ? followUpResults[resultIdx] : []
+            let resultIdx = indexNames.count + offset
+            let rows = (followUpResults.indices.contains(resultIdx) ? (try? followUpResults[resultIdx].get()) : nil) ?? []
             parentPKs[entry.key] = Self.extractPrimaryKeyColumns(from: rows)
         }
 
         var listedNames: [String: String] = [:]
         if hasImplicitFKs {
-            let namesIdx = parsedIndexes.count + sortedParentKeys.count
-            let nameRows = followUpResults.indices.contains(namesIdx) ? followUpResults[namesIdx] : []
+            let namesIdx = indexNames.count + sortedParentKeys.count
+            let nameRows = (followUpResults.indices.contains(namesIdx) ? (try? followUpResults[namesIdx].get()) : nil) ?? []
             listedNames = Dictionary(
                 nameRows.compactMap { $0.first?.textValue }.map { (Self.asciiFolded($0), $0) },
                 uniquingKeysWith: { first, _ in first }
             )
         }
 
-        let foreignKeys: [ForeignKeyInfo] = parsedFKs.compactMap { pair in
+        return (indexColsByName, parentPKs, listedNames)
+    }
+
+    private static func parseColumnRows(_ rows: [[BerryValue]]) -> [ColumnInfo] {
+        rows.compactMap { row in
+            // PRAGMA table_info: cid(0), name(1), type(2), notnull(3), dflt_value(4), pk(5)
+            guard row.count >= 6, let name = row[1].textValue else { return nil }
+            let declaredType = row[2].textValue ?? ""
+            let notNull = (row[3].numericValue ?? 0) != 0
+            let defaultValue: String? = row[4] == .null ? nil : row[4].displayString
+            let isPK = (row[5].numericValue ?? 0) != 0
+            return ColumnInfo(
+                name: name,
+                declaredType: declaredType,
+                isNullable: !notNull,
+                defaultValue: defaultValue,
+                isPrimaryKey: isPK
+            )
+        }
+    }
+
+    private static func parseIndexListRows(_ rows: [[BerryValue]]) -> [(name: String, isUnique: Bool)] {
+        rows.compactMap { row in
+            // PRAGMA index_list: seq(0), name(1), unique(2), origin(3), partial(4)
+            guard row.count >= 3, let indexName = row[1].textValue else { return nil }
+            let isUnique = (row[2].numericValue ?? 0) != 0
+            return (name: indexName, isUnique: isUnique)
+        }
+    }
+
+    private static func assembleForeignKeys(
+        parsedFKs: [(id: Int64, seq: Int64, table: String, from: String, to: String?)],
+        parentPKs: [String: [String]],
+        listedNames: [String: String]
+    ) -> [ForeignKeyInfo] {
+        parsedFKs.compactMap { pair in
             let referenced: String?
             if let explicit = pair.to {
                 referenced = explicit
-            } else if let pkCols = parentPKs[Self.asciiFolded(pair.table)],
+            } else if let pkCols = parentPKs[asciiFolded(pair.table)],
                       pkCols.indices.contains(Int(pair.seq)) {
                 referenced = pkCols[Int(pair.seq)]
             } else {
                 referenced = nil
             }
             guard let referenced else { return nil }
-            let targetName = listedNames[Self.asciiFolded(pair.table)] ?? pair.table
+            let targetName = listedNames[asciiFolded(pair.table)] ?? pair.table
             return ForeignKeyInfo(
                 column: pair.from,
                 referencedSchema: nil,
@@ -261,13 +443,6 @@ struct LibSQLIntrospector: Introspector {
                 referencedColumn: referenced
             )
         }
-
-        return TableDetail(
-            ref: table,
-            columns: columns,
-            indexes: indexes,
-            foreignKeys: foreignKeys
-        )
     }
 
     private func fetchPrimaryKeyColumns(for parentsByFoldedName: [String: String]) async throws -> [String: [String]] {

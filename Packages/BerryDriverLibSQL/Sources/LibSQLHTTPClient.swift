@@ -301,20 +301,19 @@ private final class PipelineSessionDelegate: NSObject, URLSessionDataDelegate, S
         completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void
     ) {
         let disposition: URLSession.ResponseDisposition = transfers.withLock { dict in
-            guard var state = dict[dataTask.taskIdentifier] else {
+            let id = dataTask.taskIdentifier
+            guard let maxBytes = dict[id]?.maxBytes else {
                 return .cancel
             }
-            state.response = response
-            if response.expectedContentLength > Int64(state.maxBytes) {
-                state.exceededLimitError = Self.limitExceededError(
+            dict[id]?.response = response
+            if response.expectedContentLength > Int64(maxBytes) {
+                dict[id]?.exceededLimitError = Self.limitExceededError(
                     byteCount: response.expectedContentLength,
-                    maxBytes: state.maxBytes
+                    maxBytes: maxBytes
                 )
-                state.buffer.removeAll(keepingCapacity: false)
-                dict[dataTask.taskIdentifier] = state
+                dict[id]?.buffer.removeAll(keepingCapacity: false)
                 return .cancel
             }
-            dict[dataTask.taskIdentifier] = state
             return .allow
         }
         completionHandler(disposition)
@@ -326,21 +325,23 @@ private final class PipelineSessionDelegate: NSObject, URLSessionDataDelegate, S
         didReceive data: Data
     ) {
         let shouldCancel = transfers.withLock { dict -> Bool in
-            guard var state = dict[dataTask.taskIdentifier], state.exceededLimitError == nil else {
+            let id = dataTask.taskIdentifier
+            guard let currentCount = dict[id]?.buffer.count,
+                  let maxBytes = dict[id]?.maxBytes,
+                  dict[id]?.exceededLimitError == nil
+            else {
                 return false
             }
-            if data.count > state.maxBytes || state.buffer.count > state.maxBytes - data.count {
-                let observedBytes = Int64(state.buffer.count) + Int64(data.count)
-                state.exceededLimitError = Self.limitExceededError(
+            if data.count > maxBytes || currentCount > maxBytes - data.count {
+                let observedBytes = Int64(currentCount) + Int64(data.count)
+                dict[id]?.exceededLimitError = Self.limitExceededError(
                     byteCount: observedBytes,
-                    maxBytes: state.maxBytes
+                    maxBytes: maxBytes
                 )
-                state.buffer.removeAll(keepingCapacity: false)
-                dict[dataTask.taskIdentifier] = state
+                dict[id]?.buffer.removeAll(keepingCapacity: false)
                 return true
             }
-            state.buffer.append(data)
-            dict[dataTask.taskIdentifier] = state
+            dict[id]?.buffer.append(data)
             return false
         }
         if shouldCancel {
@@ -411,6 +412,10 @@ private final class RequestCancellationBox: @unchecked Sendable {
     }
 }
 
+struct LibSQLWrappedStreamError: Error {
+    let underlying: DriverError
+}
+
 final class LibSQLHTTPClient: Sendable {
     static let defaultMaxResponseBytes = LibSQLDriver.defaultMaxResponseBytes
 
@@ -468,34 +473,18 @@ final class LibSQLHTTPClient: Sendable {
         guard targetScheme == "http" || targetScheme == "https" else {
             throw DriverError.connectionFailed("Unsupported libSQL URL scheme '\(targetScheme ?? "nil")'")
         }
+        guard let targetHost = target.host?.lowercased(), !targetHost.isEmpty else {
+            throw DriverError.connectionFailed("Invalid libSQL target URL host")
+        }
         if (tlsMode != .disable || expectedScheme == "https") && targetScheme != "https" {
             throw DriverError.connectionFailed(
-                "Refusing to send libSQL request over insecure scheme '\(targetScheme ?? "nil")'"
-            )
-        }
-        guard targetScheme == expectedScheme else {
-            throw DriverError.connectionFailed(
-                "Rejected libSQL base_url scheme change from '\(expectedScheme ?? "")' to '\(targetScheme ?? "")'"
-            )
-        }
-        let expectedHost = baseURL.host?.lowercased()
-        let targetHost = target.host?.lowercased()
-        guard let expectedHost, !expectedHost.isEmpty, targetHost == expectedHost else {
-            throw DriverError.connectionFailed(
-                "Rejected cross-host libSQL base_url '\(targetHost ?? "")' (expected '\(expectedHost ?? "")')"
-            )
-        }
-        let expectedPort = Self.effectivePort(for: baseURL)
-        let targetPort = Self.effectivePort(for: target)
-        guard targetPort == expectedPort else {
-            throw DriverError.connectionFailed(
-                "Rejected cross-port libSQL base_url port \(targetPort ?? -1) (expected \(expectedPort ?? -1))"
+                "Refusing to downgrade libSQL target URL to insecure scheme '\(targetScheme ?? "nil")'"
             )
         }
         if let authToken, !authToken.isEmpty, targetScheme == "http" {
-            guard Self.isLoopbackHost(targetHost ?? "") else {
+            guard Self.isLoopbackHost(targetHost) else {
                 throw DriverError.connectionFailed(
-                    "Refusing to send libSQL auth token over plain HTTP to non-loopback host '\(targetHost ?? "")'"
+                    "Refusing to send libSQL auth token over plain HTTP to non-loopback host '\(targetHost)'"
                 )
             }
         }
@@ -503,20 +492,23 @@ final class LibSQLHTTPClient: Sendable {
 
     static func isLoopbackHost(_ rawHost: String) -> Bool {
         let host = rawHost.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        return host == "localhost"
-            || host == "::1"
-            || host == "0:0:0:0:0:0:0:1"
-            || host == "127.0.0.1"
-            || host.hasPrefix("127.")
-    }
-
-    private static func effectivePort(for url: URL) -> Int? {
-        if let port = url.port { return port }
-        switch url.scheme?.lowercased() {
-        case "https": return 443
-        case "http": return 80
-        default: return nil
+        if host == "localhost" || host == "::1" || host == "0:0:0:0:0:0:0:1" {
+            return true
         }
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return false }
+        var octets: [UInt8] = []
+        octets.reserveCapacity(4)
+        for part in parts {
+            guard !part.isEmpty,
+                  part.utf8.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") }),
+                  let value = UInt8(part)
+            else {
+                return false
+            }
+            octets.append(value)
+        }
+        return octets[0] == 127
     }
 
     func executePipeline(
@@ -524,7 +516,8 @@ final class LibSQLHTTPClient: Sendable {
         baton: String?,
         stickyBaseURL: URL?,
         timeoutOverride: TimeInterval? = nil,
-        isUserQuery: Bool = false
+        isUserQuery: Bool = false,
+        ignoreTaskCancellation: Bool = false
     ) async throws -> HranaPipelineResponse {
         let targetBase = stickyBaseURL ?? baseURL
         try validateTargetBaseURL(targetBase)
@@ -544,7 +537,11 @@ final class LibSQLHTTPClient: Sendable {
         let payload = HranaPipelineRequest(baton: baton, requests: requests)
         urlRequest.httpBody = try JSONEncoder().encode(payload)
 
-        let (data, response) = try await performDataRequest(urlRequest, isUserQuery: isUserQuery)
+        let (data, response) = try await performDataRequest(
+            urlRequest,
+            isUserQuery: isUserQuery,
+            ignoreTaskCancellation: ignoreTaskCancellation
+        )
         guard let http = response as? HTTPURLResponse else {
             throw DriverError.connectionFailed("Invalid non-HTTP response from libSQL server")
         }
@@ -564,8 +561,13 @@ final class LibSQLHTTPClient: Sendable {
         default:
             let envelope = extractErrorEnvelope(from: data)
             let detail = envelope?.message ?? extractRawMessage(from: data) ?? "HTTP \(http.statusCode)"
-            if Self.isStreamExpiredError(code: envelope?.code, message: detail) {
-                throw Self.streamExpiredError()
+            if Self.isStreamError(code: envelope?.code, message: detail) {
+                if Self.isStreamExpiredError(code: envelope?.code, message: detail) {
+                    throw LibSQLWrappedStreamError(underlying: Self.streamExpiredError())
+                }
+                throw LibSQLWrappedStreamError(
+                    underlying: DriverError.queryFailed(message: "libSQL HTTP \(http.statusCode): \(detail)", code: nil)
+                )
             }
             if http.statusCode == 404 || http.statusCode >= 500 {
                 throw DriverError.connectionFailed("libSQL HTTP \(http.statusCode): \(detail)")
@@ -630,6 +632,16 @@ final class LibSQLHTTPClient: Sendable {
         return .queryFailed(message: payload.message, code: nil)
     }
 
+    static func isStreamError(code: String?, message: String) -> Bool {
+        if isStreamExpiredError(code: code, message: message) {
+            return true
+        }
+        let lowerMsg = message.lowercased()
+        return lowerMsg.contains("baton that has already been used")
+            || lowerMsg.contains("stream does not exist")
+            || lowerMsg.contains("stream not found")
+    }
+
     private static func isStreamExpiredError(code: String?, message: String) -> Bool {
         let rawCode = code?.uppercased() ?? ""
         let lowerMsg = message.lowercased()
@@ -645,44 +657,70 @@ final class LibSQLHTTPClient: Sendable {
         )
     }
 
-    private func performDataRequest(_ request: URLRequest, isUserQuery: Bool) async throws -> (Data, URLResponse) {
+    private func performDataRequest(
+        _ request: URLRequest,
+        isUserQuery: Bool,
+        ignoreTaskCancellation: Bool
+    ) async throws -> (Data, URLResponse) {
         let cancellationBox = RequestCancellationBox()
+        if ignoreTaskCancellation {
+            return try await startDataTask(
+                request,
+                isUserQuery: isUserQuery,
+                ignoreTaskCancellation: true,
+                cancellationBox: cancellationBox
+            )
+        }
         return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                let registeredTask: (task: URLSessionDataTask, id: Int)? = taskState.withLock { state in
-                    guard !state.isInvalidated else { return nil }
-                    let task = session.dataTask(with: request)
-                    let taskID = task.taskIdentifier
-                    state.tasksByID[taskID] = task
-                    if isUserQuery {
-                        state.userQueryTaskIDs.insert(taskID)
-                    }
-                    return (task, taskID)
-                }
-                guard let (task, taskID) = registeredTask else {
-                    continuation.resume(throwing: DriverError.notConnected)
-                    return
-                }
-
-                cancellationBox.set(task)
-                delegate.register(
-                    taskID: taskID,
-                    maxBytes: maxResponseBytes,
-                    continuation: continuation,
-                    onComplete: { [weak self] in
-                        self?.taskState.withLock { state in
-                            state.tasksByID.removeValue(forKey: taskID)
-                            state.userQueryTaskIDs.remove(taskID)
-                        }
-                    }
-                )
-                task.resume()
-                if Task.isCancelled {
-                    cancellationBox.cancel()
-                }
-            }
+            try await startDataTask(
+                request,
+                isUserQuery: isUserQuery,
+                ignoreTaskCancellation: false,
+                cancellationBox: cancellationBox
+            )
         } onCancel: {
             cancellationBox.cancel()
+        }
+    }
+
+    private func startDataTask(
+        _ request: URLRequest,
+        isUserQuery: Bool,
+        ignoreTaskCancellation: Bool,
+        cancellationBox: RequestCancellationBox
+    ) async throws -> (Data, URLResponse) {
+        try await withCheckedThrowingContinuation { continuation in
+            let registeredTask: (task: URLSessionDataTask, id: Int)? = taskState.withLock { state in
+                guard !state.isInvalidated else { return nil }
+                let task = session.dataTask(with: request)
+                let taskID = task.taskIdentifier
+                state.tasksByID[taskID] = task
+                if isUserQuery {
+                    state.userQueryTaskIDs.insert(taskID)
+                }
+                return (task, taskID)
+            }
+            guard let (task, taskID) = registeredTask else {
+                continuation.resume(throwing: DriverError.notConnected)
+                return
+            }
+
+            cancellationBox.set(task)
+            delegate.register(
+                taskID: taskID,
+                maxBytes: maxResponseBytes,
+                continuation: continuation,
+                onComplete: { [weak self] in
+                    self?.taskState.withLock { state in
+                        state.tasksByID.removeValue(forKey: taskID)
+                        state.userQueryTaskIDs.remove(taskID)
+                    }
+                }
+            )
+            task.resume()
+            if !ignoreTaskCancellation && Task.isCancelled {
+                cancellationBox.cancel()
+            }
         }
     }
 

@@ -270,13 +270,19 @@ public struct ConnectionSheet: View {
                                 prompt: Text(verbatim: "libsql://your-db.turso.io")
                             )
                             .onChange(of: host) { _, newValue in
-                                let lower = newValue.trimmingCharacters(in: .whitespaces).lowercased()
+                                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                                let lower = trimmed.lowercased()
                                 if lower.hasPrefix("http://") {
                                     tlsMode = .disable
                                 } else if lower.hasPrefix("libsql://") || lower.hasPrefix("https://") {
                                     if tlsMode == .disable {
                                         tlsMode = .require
                                     }
+                                }
+                                if let parsed = ConnectionConfig.parseLibSQLEndpoint(host: trimmed, tlsMode: tlsMode),
+                                   let tokenFromURL = parsed.authToken, !tokenFromURL.isEmpty {
+                                    password = tokenFromURL
+                                    host = parsed.sanitizedHost
                                 }
                             }
                             TextField(L("Port"), text: $port, prompt: Text(verbatim: "\(defaultPort)"))
@@ -425,7 +431,7 @@ public struct ConnectionSheet: View {
                 .formStyle(.grouped)
                 .tabItem { Text(L("Advanced")) }
 
-                if !isFileBased {
+                if !isFileBased && driverID != .libsql {
  // Split out of General (sheets never scroll) — the
                     // TLS block alone can run to 7 rows once Verify
                     // Certificate is picked (mode + warning + CA row + CA
@@ -552,7 +558,7 @@ public struct ConnectionSheet: View {
         } else if host.isEmpty {
             return false
         }
-        if sshEnabled && (sshHost.isEmpty || sshUsername.isEmpty) { return false }
+        if driverID != .libsql && sshEnabled && (sshHost.isEmpty || sshUsername.isEmpty) { return false }
         return true
     }
 
@@ -661,11 +667,14 @@ public struct ConnectionSheet: View {
         // HTTP-based drivers (Dynamo/Qdrant) with an opaque "Invalid
         // host/port". Split it apart here so that mistake just works.
         let trimmedHostInput = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let libsqlEndpoint = driverID == .libsql
+            ? ConnectionConfig.parseLibSQLEndpoint(host: trimmedHostInput, tlsMode: tlsMode)
+            : nil
         let normalizedHost: String
         let embeddedPort: Int?
-        if driverID == .libsql && trimmedHostInput.contains("://") {
-            normalizedHost = trimmedHostInput
-            embeddedPort = ConnectionConfig.parseLibSQLEndpoint(host: trimmedHostInput, tlsMode: tlsMode)?.port
+        if driverID == .libsql {
+            normalizedHost = libsqlEndpoint?.sanitizedHost ?? Self.splitHostPort(host).host
+            embeddedPort = libsqlEndpoint?.port
         } else {
             (normalizedHost, embeddedPort) = Self.splitHostPort(host)
         }
@@ -678,31 +687,51 @@ public struct ConnectionSheet: View {
         let trimmedDatabase = database.trimmingCharacters(in: .whitespaces)
         profile.username = isFileBased ? nil : (trimmedUsername.isEmpty ? nil : trimmedUsername)
         profile.database = isFileBased ? nil : (trimmedDatabase.isEmpty ? nil : trimmedDatabase)
-        profile.tlsMode = tlsMode.rawValue
-        profile.tlsCACertPath = (tlsMode.verifiesCertificate && !tlsCACertPath.isEmpty)
-            ? tlsCACertPath : nil
-        profile.tlsClientCertPath = (tlsMode != .disable && !tlsClientCertPath.isEmpty)
-            ? tlsClientCertPath : nil
-        profile.tlsClientKeyPath = (tlsMode != .disable && !tlsClientKeyPath.isEmpty)
-            ? tlsClientKeyPath : nil
+        if driverID == .libsql {
+            let libsqlTLSMode: TLSMode = (libsqlEndpoint?.useTLS == false) ? .disable : .require
+            profile.tlsMode = libsqlTLSMode.rawValue
+            profile.tlsCACertPath = nil
+            profile.tlsClientCertPath = nil
+            profile.tlsClientKeyPath = nil
+        } else {
+            profile.tlsMode = tlsMode.rawValue
+            profile.tlsCACertPath = (tlsMode.verifiesCertificate && !tlsCACertPath.isEmpty)
+                ? tlsCACertPath : nil
+            profile.tlsClientCertPath = (tlsMode != .disable && !tlsClientCertPath.isEmpty)
+                ? tlsClientCertPath : nil
+            profile.tlsClientKeyPath = (tlsMode != .disable && !tlsClientKeyPath.isEmpty)
+                ? tlsClientKeyPath : nil
+        }
         let trimmedAdditionalHosts = mongoAdditionalHosts.trimmingCharacters(in: .whitespaces)
         let trimmedReplicaSet = mongoReplicaSetName.trimmingCharacters(in: .whitespaces)
         profile.mongoAdditionalHosts = (driverID == .mongodb && !trimmedAdditionalHosts.isEmpty) ? trimmedAdditionalHosts : nil
         profile.mongoReplicaSet = (driverID == .mongodb && !trimmedReplicaSet.isEmpty) ? trimmedReplicaSet : nil
         profile.elasticsearchAPIKeyEnabled = driverID == .elasticsearch && elasticsearchAuthMode == .apiKey
-        profile.sshEnabled = !isFileBased && sshEnabled
-        profile.sshHost = sshEnabled ? sshHost : nil
-        profile.sshPort = sshEnabled ? (Int(sshPort) ?? 22) : nil
-        profile.sshUsername = sshEnabled ? sshUsername : nil
-        profile.sshKeyPath = sshEnabled && !sshKeyPath.isEmpty ? sshKeyPath : nil
+        let allowsSSH = !isFileBased && driverID != .libsql && sshEnabled
+        profile.sshEnabled = allowsSSH
+        profile.sshHost = allowsSSH ? sshHost : nil
+        profile.sshPort = allowsSSH ? (Int(sshPort) ?? 22) : nil
+        profile.sshUsername = allowsSSH ? sshUsername : nil
+        profile.sshKeyPath = allowsSSH && !sshKeyPath.isEmpty ? sshKeyPath : nil
         return profile
     }
 
+    private var effectivePassword: String {
+        if !password.isEmpty { return password }
+        if driverID == .libsql,
+           let tokenFromURL = ConnectionConfig.parseLibSQLEndpoint(host: host, tlsMode: tlsMode)?.authToken {
+            return tokenFromURL
+        }
+        return ""
+    }
+
     private func typedSecrets() -> ConnectionSecrets {
-        ConnectionSecrets(
-            dbPassword: password.isEmpty ? nil : password,
-            sshPassword: sshPassword.isEmpty ? nil : sshPassword,
-            sshPassphrase: sshPassphrase.isEmpty ? nil : sshPassphrase,
+        let dbSecret = effectivePassword
+        let allowsSSH = !isFileBased && driverID != .libsql && sshEnabled
+        return ConnectionSecrets(
+            dbPassword: dbSecret.isEmpty ? nil : dbSecret,
+            sshPassword: (allowsSSH && !sshPassword.isEmpty) ? sshPassword : nil,
+            sshPassphrase: (allowsSSH && !sshPassphrase.isEmpty) ? sshPassphrase : nil,
             elasticsearchAPIKey: elasticsearchAPIKey.isEmpty ? nil : elasticsearchAPIKey
         )
     }
@@ -720,7 +749,7 @@ public struct ConnectionSheet: View {
         // `SSHConfig` on `sshEnabled` — switching back to Basic actually
         // stops sending a previously stored key, not just hiding the field.
         return builtProfile().makeConfig(
-            password: effective(password, .database),
+            password: effective(effectivePassword, .database),
             sshPassword: effective(sshPassword, .ssh),
             sshPassphrase: effective(sshPassphrase, .sshPassphrase),
             elasticsearchAPIKey: effective(elasticsearchAPIKey, .elasticsearchAPIKey)

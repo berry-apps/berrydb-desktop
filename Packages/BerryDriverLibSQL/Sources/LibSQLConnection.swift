@@ -4,7 +4,7 @@ import Foundation
 public actor LibSQLConnection: DriverConnection {
     public nonisolated let id = UUID()
     private nonisolated let client: LibSQLHTTPClient
-    private let tlsMode: TLSMode
+    private let turn = ConnectionTurn()
     private var isClosed = false
     private var activeBaton: String?
     private var stickyBaseURL: URL?
@@ -19,7 +19,6 @@ public actor LibSQLConnection: DriverConnection {
         maxResponseBytes: Int = LibSQLHTTPClient.defaultMaxResponseBytes,
         sessionConfiguration: URLSessionConfiguration? = nil
     ) {
-        self.tlsMode = tlsMode
         self.client = LibSQLHTTPClient(
             baseURL: baseURL,
             authToken: authToken,
@@ -85,11 +84,12 @@ public actor LibSQLConnection: DriverConnection {
     public func close() async {
         guard !isClosed else { return }
         isClosed = true
-        if let baton = activeBaton {
-            let sticky = stickyBaseURL
-            activeBaton = nil
-            stickyBaseURL = nil
-            _ = try? await client.executePipeline([.close], baton: baton, stickyBaseURL: sticky)
+        let baton = activeBaton
+        let sticky = stickyBaseURL
+        activeBaton = nil
+        stickyBaseURL = nil
+        if let baton {
+            await closeBatonBestEffort(baton: baton, stickyBaseURL: sticky)
         }
         client.invalidate()
     }
@@ -101,6 +101,13 @@ public actor LibSQLConnection: DriverConnection {
     }
 
     func queryBatch(_ queries: [(sql: String, binds: [SQLParameter])]) async throws -> [[[BerryValue]]] {
+        let results = try await queryBatchAllowingStepErrors(queries)
+        return try results.map { try $0.get() }
+    }
+
+    func queryBatchAllowingStepErrors(
+        _ queries: [(sql: String, binds: [SQLParameter])]
+    ) async throws -> [Result<[[BerryValue]], DriverError>] {
         guard !isClosed else { throw DriverError.notConnected }
         guard !queries.isEmpty else { return [] }
         var requests: [HranaStreamRequest] = try queries.map { item in
@@ -114,21 +121,22 @@ public actor LibSQLConnection: DriverConnection {
             stickyBaseURL: nil,
             isUserQuery: false
         )
-        var allRows: [[[BerryValue]]] = []
+        var allRows: [Result<[[BerryValue]], DriverError>] = []
         allRows.reserveCapacity(queries.count)
         for idx in 0..<queries.count {
             guard idx < response.results.count else {
-                allRows.append([])
+                allRows.append(.success([]))
                 continue
             }
             let outcome = response.results[idx]
             if let err = outcome.error {
-                throw LibSQLHTTPClient.mapHranaError(err)
+                allRows.append(.failure(LibSQLHTTPClient.mapHranaError(err)))
+                continue
             }
             if case .execute(let result) = outcome.response {
-                allRows.append(result.rows.map { row in row.map { $0.toBerryValue() } })
+                allRows.append(.success(result.rows.map { row in row.map { $0.toBerryValue() } }))
             } else {
-                allRows.append([])
+                allRows.append(.success([]))
             }
         }
         return allRows
@@ -137,6 +145,13 @@ public actor LibSQLConnection: DriverConnection {
     // MARK: - Execution
 
     private func run(sql: String, continuation: AsyncThrowingStream<ResultEvent, Error>.Continuation) async {
+        await turn.take()
+        defer { turn.give() }
+
+        if Task.isCancelled {
+            continuation.finish(throwing: DriverError.cancelled)
+            return
+        }
         guard !isClosed else {
             continuation.finish(throwing: DriverError.notConnected)
             return
@@ -148,7 +163,9 @@ public actor LibSQLConnection: DriverConnection {
             return
         }
 
-        let startedInTransaction = activeBaton != nil
+        let previousBaton = activeBaton
+        let previousStickyURL = stickyBaseURL
+        let startedInTransaction = previousBaton != nil
         let mightStayInTransaction = startedInTransaction || Self.mayStartTransaction(statements)
 
         let primaryRequest: HranaStreamRequest
@@ -174,17 +191,10 @@ public actor LibSQLConnection: DriverConnection {
         do {
             let response = try await client.executePipeline(
                 requests,
-                baton: activeBaton,
-                stickyBaseURL: stickyBaseURL,
+                baton: previousBaton,
+                stickyBaseURL: previousStickyURL,
                 isUserQuery: true
             )
-
-            let validatedStickyURL: URL?
-            if let rawBaseURL = response.base_url {
-                validatedStickyURL = try client.validateStickyBaseURL(rawBaseURL)
-            } else {
-                validatedStickyURL = stickyBaseURL
-            }
 
             let keepStreamOpen: Bool
             if mightStayInTransaction,
@@ -200,27 +210,48 @@ public actor LibSQLConnection: DriverConnection {
                 keepStreamOpen = false
             }
 
-            if keepStreamOpen {
-                activeBaton = response.baton
-                stickyBaseURL = validatedStickyURL
+            // Only apply `base_url` while keeping a baton open; autocommit and ended
+            // streams never send follow-up requests against that URL.
+            var postDeliveryError: Error?
+            let nextBaton = response.baton.flatMap { $0.isEmpty ? nil : $0 }
+            if keepStreamOpen, let nextBaton {
+                if let rawBaseURL = response.base_url {
+                    do {
+                        let validatedStickyURL = try client.validateStickyBaseURL(rawBaseURL)
+                        activeBaton = nextBaton
+                        stickyBaseURL = validatedStickyURL
+                    } catch {
+                        activeBaton = nil
+                        stickyBaseURL = nil
+                        await closeBatonBestEffort(baton: nextBaton, stickyBaseURL: previousStickyURL)
+                        postDeliveryError = error
+                    }
+                } else {
+                    activeBaton = nextBaton
+                    stickyBaseURL = previousStickyURL
+                }
             } else {
-                let endedBaton = mightStayInTransaction ? response.baton : nil
                 activeBaton = nil
                 stickyBaseURL = nil
-                if let endedBaton, !endedBaton.isEmpty {
-                    _ = try? await client.executePipeline(
-                        [.close],
-                        baton: endedBaton,
-                        stickyBaseURL: validatedStickyURL
-                    )
+                if mightStayInTransaction, let endedBaton = nextBaton {
+                    let closeStickyURL = response.base_url.flatMap { try? client.validateStickyBaseURL($0) } ?? previousStickyURL
+                    await closeBatonBestEffort(baton: endedBaton, stickyBaseURL: closeStickyURL)
                 }
             }
 
             guard let outcome = response.results.first else {
-                continuation.finish()
+                if let postDeliveryError {
+                    continuation.finish(throwing: postDeliveryError)
+                } else {
+                    continuation.finish()
+                }
                 return
             }
             if outcome.type == "error", let err = outcome.error {
+                if LibSQLHTTPClient.isStreamError(code: err.code, message: err.message) {
+                    activeBaton = nil
+                    stickyBaseURL = nil
+                }
                 continuation.finish(throwing: LibSQLHTTPClient.mapHranaError(err))
                 return
             }
@@ -256,13 +287,37 @@ public actor LibSQLConnection: DriverConnection {
             case .getAutocommit, .close, nil:
                 break
             }
-            continuation.finish()
-        } catch {
-            // Clear any cached stream baton on error so a dead or expired stream is never reused.
+            if let postDeliveryError {
+                continuation.finish(throwing: postDeliveryError)
+            } else {
+                continuation.finish()
+            }
+        } catch let streamError as LibSQLWrappedStreamError {
+            // Stream is expired or invalid on the server; clear without sending close.
             activeBaton = nil
             stickyBaseURL = nil
+            continuation.finish(throwing: streamError.underlying)
+        } catch {
+            // Drop and close any open baton on transport, cancellation, or unknown failures so
+            // server-side transaction locks are released promptly instead of timing out.
+            if activeBaton == previousBaton, let baton = previousBaton {
+                activeBaton = nil
+                stickyBaseURL = nil
+                await closeBatonBestEffort(baton: baton, stickyBaseURL: previousStickyURL)
+            }
             continuation.finish(throwing: error)
         }
+    }
+
+    private func closeBatonBestEffort(baton: String, stickyBaseURL: URL?) async {
+        guard !baton.isEmpty else { return }
+        _ = try? await client.executePipeline(
+            [.close],
+            baton: baton,
+            stickyBaseURL: stickyBaseURL,
+            timeoutOverride: 5,
+            ignoreTaskCancellation: true
+        )
     }
 
     /// Hrana v3 HTTP pipeline buffers and decodes each response body in memory

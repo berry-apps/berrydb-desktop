@@ -241,10 +241,55 @@ struct LibSQLConformanceTests {
 
             let ddl = try await inspector.ddl(of: SchemaObject(kind: .table, name: parent))
             #expect(ddl.contains("CREATE TABLE"))
+
+            // Bulk tableDetails
+            let bulkDetails = try await inspector.tableDetails([TableRef(name: parent), TableRef(name: child)])
+            #expect(bulkDetails.map(\.ref.name) == [parent, child])
         } catch {
             _ = try? await harness.exec(conn, ["DROP TABLE IF EXISTS \(child)", "DROP TABLE IF EXISTS \(parent)"])
             throw error
         }
         try await harness.exec(conn, ["DROP TABLE IF EXISTS \(child)", "DROP TABLE IF EXISTS \(parent)"])
+    }
+
+    @Test func viewFingerprintUpdatesAndConcurrentExecution() async throws {
+        let suffix = String(UUID().uuidString.prefix(8)).lowercased()
+        let baseTable = "berry_vbase_\(suffix)"
+        let viewName = "berry_vview_\(suffix)"
+        let conn = try await harness.makeConnection()
+        defer { Task { await conn.close() } }
+
+        try await harness.exec(conn, [
+            "CREATE TABLE \(baseTable) (id INTEGER PRIMARY KEY, a TEXT)",
+            "CREATE VIEW \(viewName) AS SELECT * FROM \(baseTable)",
+        ])
+        do {
+            let beforeSummaries = try await conn.introspector.objectSummaries(scope: .allUserSchemas)
+            let beforeFP = beforeSummaries.first { $0.ref.name == viewName }?.fingerprint
+
+            try await harness.exec(conn, ["ALTER TABLE \(baseTable) ADD COLUMN b INTEGER"])
+            let afterSummaries = try await conn.introspector.objectSummaries(scope: .allUserSchemas)
+            let afterFP = afterSummaries.first { $0.ref.name == viewName }?.fingerprint
+            #expect(beforeFP != nil)
+            #expect(afterFP != nil)
+            #expect(beforeFP != afterFP)
+
+            // Overlapping execute calls inside an open transaction must be serialized cleanly without baton reuse errors.
+            try await harness.exec(conn, ["BEGIN"])
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask { _ = try await self.harness.drain(conn.execute("INSERT INTO \(baseTable) VALUES (1, 'one', 10)")) }
+                group.addTask { _ = try await self.harness.drain(conn.execute("INSERT INTO \(baseTable) VALUES (2, 'two', 20)")) }
+                try await group.waitForAll()
+            }
+            try await harness.exec(conn, ["COMMIT"])
+
+            let rows = try await harness.drain(conn.execute("SELECT COUNT(*) FROM \(baseTable)"))
+            #expect(rows.rows == [[.int(2)]])
+        } catch {
+            _ = try? await harness.exec(conn, ["ROLLBACK"])
+            _ = try? await harness.exec(conn, ["DROP VIEW IF EXISTS \(viewName)", "DROP TABLE IF EXISTS \(baseTable)"])
+            throw error
+        }
+        try await harness.exec(conn, ["DROP VIEW IF EXISTS \(viewName)", "DROP TABLE IF EXISTS \(baseTable)"])
     }
 }
