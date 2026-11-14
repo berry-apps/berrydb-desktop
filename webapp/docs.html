@@ -81,8 +81,11 @@
       --fg-muted: #475569;
       --fg-code: #0F172A;
 
-      --border-subtle: rgba(15, 23, 42, 0.11);
-      --border-strong: rgba(15, 23, 42, 0.24);
+      --border-subtle: rgba(15, 23, 42, 0.08);
+      --border-strong: rgba(15, 23, 42, 0.16);
+      --border-table-head: rgba(15, 23, 42, 0.08);
+      --border-table-row: rgba(15, 23, 42, 0.05);
+      --row-hover: rgba(15, 23, 42, 0.025);
 
       --accent: #0055B3;
       --accent-hover: #00418A;
@@ -119,8 +122,11 @@
       --fg-muted: #94A3B8;
       --fg-code: #E2E8F0;
 
-      --border-subtle: rgba(255, 255, 255, 0.09);
-      --border-strong: rgba(255, 255, 255, 0.21);
+      --border-subtle: rgba(255, 255, 255, 0.07);
+      --border-strong: rgba(255, 255, 255, 0.14);
+      --border-table-head: rgba(255, 255, 255, 0.07);
+      --border-table-row: rgba(255, 255, 255, 0.042);
+      --row-hover: rgba(255, 255, 255, 0.024);
 
       --accent: #0A84FF;
       --accent-hover: #3B9EFF;
@@ -169,8 +175,19 @@
     .t-danger    { color: var(--danger); }
     .t-amber     { color: var(--amber); }
 
-    .b-subtle { border-color: var(--border-subtle); }
-    .b-strong { border-color: var(--border-strong); }
+    *, ::before, ::after { border-color: var(--border-subtle); }
+    .b-subtle { border-color: var(--border-subtle) !important; }
+    .b-strong { border-color: var(--border-strong) !important; }
+    .divide-y > :not([hidden]) ~ :not([hidden]),
+    .divide-x > :not([hidden]) ~ :not([hidden]) {
+      border-color: var(--border-table-row) !important;
+    }
+    table { border-collapse: collapse; }
+    table thead, table thead tr { border-bottom: 1px solid var(--border-table-head) !important; }
+    table tbody tr + tr { border-top: 1px solid var(--border-table-row) !important; }
+    table th, table td { border-color: var(--border-table-row) !important; }
+    table tbody tr { transition: background-color 140ms ease; }
+    table tbody tr:hover { background-color: var(--row-hover); }
 
     .hover\:s-elevated:hover { background-color: var(--bg-elevated); }
     .hover\:t-primary:hover  { color: var(--fg-primary); }
