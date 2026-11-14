@@ -8,6 +8,7 @@ public actor LibSQLConnection: DriverConnection {
     private var isClosed = false
     private var activeBaton: String?
     private var stickyBaseURL: URL?
+    private var hasLostTransaction = false
 
     static let batchSize = 500
 
@@ -84,6 +85,7 @@ public actor LibSQLConnection: DriverConnection {
     public func close() async {
         guard !isClosed else { return }
         isClosed = true
+        hasLostTransaction = false
         let baton = activeBaton
         let sticky = stickyBaseURL
         activeBaton = nil
@@ -163,6 +165,17 @@ public actor LibSQLConnection: DriverConnection {
             return
         }
 
+        if hasLostTransaction {
+            if statements.count == 1 && Self.isFullRollback(statements[0]) {
+                hasLostTransaction = false
+                continuation.yield(.complete(QueryStats(rowsAffected: 0, duration: .zero)))
+                continuation.finish()
+                return
+            }
+            continuation.finish(throwing: Self.lostTransactionBlockedError())
+            return
+        }
+
         let previousBaton = activeBaton
         let previousStickyURL = stickyBaseURL
         let startedInTransaction = previousBaton != nil
@@ -224,7 +237,12 @@ public actor LibSQLConnection: DriverConnection {
                         activeBaton = nil
                         stickyBaseURL = nil
                         await closeBatonBestEffort(baton: nextBaton, stickyBaseURL: previousStickyURL)
-                        postDeliveryError = error
+                        if startedInTransaction {
+                            hasLostTransaction = true
+                            postDeliveryError = Self.withRollbackNotice(error)
+                        } else {
+                            postDeliveryError = error
+                        }
                     }
                 } else {
                     activeBaton = nextBaton
@@ -237,6 +255,10 @@ public actor LibSQLConnection: DriverConnection {
                     let closeStickyURL = response.base_url.flatMap { try? client.validateStickyBaseURL($0) } ?? previousStickyURL
                     await closeBatonBestEffort(baton: endedBaton, stickyBaseURL: closeStickyURL)
                 }
+                if keepStreamOpen, startedInTransaction {
+                    hasLostTransaction = true
+                    postDeliveryError = Self.lostTransactionBlockedError()
+                }
             }
 
             guard let outcome = response.results.first else {
@@ -248,11 +270,18 @@ public actor LibSQLConnection: DriverConnection {
                 return
             }
             if outcome.type == "error", let err = outcome.error {
-                if LibSQLHTTPClient.isStreamError(code: err.code, message: err.message) {
+                let mapped = LibSQLHTTPClient.mapHranaError(err)
+                let droppedStream = LibSQLHTTPClient.isStreamError(code: err.code, message: err.message)
+                if droppedStream {
                     activeBaton = nil
                     stickyBaseURL = nil
                 }
-                continuation.finish(throwing: LibSQLHTTPClient.mapHranaError(err))
+                if startedInTransaction && (droppedStream || activeBaton == nil) {
+                    hasLostTransaction = true
+                    continuation.finish(throwing: Self.withRollbackNotice(mapped))
+                    return
+                }
+                continuation.finish(throwing: mapped)
                 return
             }
 
@@ -272,7 +301,8 @@ public actor LibSQLConnection: DriverConnection {
                         return
                     }
                     if idx < batchResult.step_errors.count, let err = batchResult.step_errors[idx] {
-                        continuation.finish(throwing: LibSQLHTTPClient.mapHranaError(err))
+                        let mapped = LibSQLHTTPClient.mapHranaError(err)
+                        continuation.finish(throwing: hasLostTransaction ? Self.withRollbackNotice(mapped) : mapped)
                         return
                     }
                     if idx < batchResult.step_results.count, let res = batchResult.step_results[idx] {
@@ -296,14 +326,22 @@ public actor LibSQLConnection: DriverConnection {
             // Stream is expired or invalid on the server; clear without sending close.
             activeBaton = nil
             stickyBaseURL = nil
-            continuation.finish(throwing: streamError.underlying)
+            if startedInTransaction {
+                hasLostTransaction = true
+                continuation.finish(throwing: Self.withRollbackNotice(streamError.underlying))
+            } else {
+                continuation.finish(throwing: streamError.underlying)
+            }
         } catch {
             // Drop and close any open baton on transport, cancellation, or unknown failures so
             // server-side transaction locks are released promptly instead of timing out.
             if activeBaton == previousBaton, let baton = previousBaton {
                 activeBaton = nil
                 stickyBaseURL = nil
+                hasLostTransaction = true
                 await closeBatonBestEffort(baton: baton, stickyBaseURL: previousStickyURL)
+                continuation.finish(throwing: Self.withRollbackNotice(error))
+                return
             }
             continuation.finish(throwing: error)
         }
@@ -369,22 +407,54 @@ public actor LibSQLConnection: DriverConnection {
         return false
     }
 
+    private static func isFullRollback(_ statement: String) -> Bool {
+        let words = LibSQLSQLLexer.leadingKeywords(of: statement, maxCount: 3)
+        guard words.first == "ROLLBACK" else { return false }
+        let second = words.count > 1 ? words[1] : ""
+        let third = words.count > 2 ? words[2] : ""
+        return !(second == "TO" || (second == "TRANSACTION" && third == "TO"))
+    }
+
+    private static func lostTransactionBlockedError() -> DriverError {
+        .queryFailed(
+            message: "Current libSQL transaction was rolled back after the stream ended; execute ROLLBACK before running more statements.",
+            code: nil
+        )
+    }
+
+    private static func withRollbackNotice(_ error: Error) -> DriverError {
+        let notice = "The active libSQL transaction was rolled back; execute ROLLBACK to reset the transaction."
+        if let driverError = error as? DriverError {
+            switch driverError {
+            case .queryFailed(let message, let code):
+                if message.localizedCaseInsensitiveContains("rolled back") {
+                    return .queryFailed(message: "\(message) Execute ROLLBACK to reset the transaction.", code: code)
+                }
+                return .queryFailed(message: "\(message) \(notice)", code: code)
+            case .connectionLost(let detail):
+                return .connectionLost("\(detail) \(notice)")
+            case .connectionFailed(let detail):
+                return .connectionFailed("\(detail) \(notice)")
+            case .cancelled:
+                return .queryFailed(message: "Query cancelled. \(notice)", code: nil)
+            case .unsupported(let detail):
+                return .unsupported("\(detail) \(notice)")
+            case .notConnected, .sshHostKeyChanged, .readOnlyUnavailable:
+                return .queryFailed(message: "\(driverError.detail) \(notice)", code: nil)
+            }
+        }
+        return .queryFailed(message: "\(error.localizedDescription) \(notice)", code: nil)
+    }
+
     private static func shouldKeepStreamOpen(statements: [String], initiallyInTransaction: Bool) -> Bool {
         var inTransaction = initiallyInTransaction
         for statement in statements {
-            let words = LibSQLSQLLexer.leadingKeywords(of: statement, maxCount: 3)
+            let words = LibSQLSQLLexer.leadingKeywords(of: statement, maxCount: 1)
             guard let first = words.first else { continue }
             if first == "BEGIN" || first == "SAVEPOINT" {
                 inTransaction = true
-            } else if first == "COMMIT" || first == "END" {
+            } else if first == "COMMIT" || first == "END" || isFullRollback(statement) {
                 inTransaction = false
-            } else if first == "ROLLBACK" {
-                let second = words.count > 1 ? words[1] : ""
-                let third = words.count > 2 ? words[2] : ""
-                let isRollbackToSavepoint = second == "TO" || (second == "TRANSACTION" && third == "TO")
-                if !isRollbackToSavepoint {
-                    inTransaction = false
-                }
             }
         }
         return inTransaction

@@ -516,8 +516,21 @@ struct LibSQLDriverTests {
             #expect(message.lowercased().contains("expired due to inactivity"))
         }
 
-        // Subsequent query must start fresh without the dead baton.
+        // Lost transaction blocks follow-up statements until ROLLBACK clears it, then starts fresh without the dead baton.
         seenBatons.withLock { $0.removeAll() }
+        do {
+            _ = try await collect(conn.execute("SELECT 1"))
+            Issue.record("Expected SELECT 1 to be rejected until ROLLBACK clears lost transaction")
+        } catch let error as DriverError {
+            guard case .queryFailed(let message, _) = error else {
+                Issue.record("Expected queryFailed, got \(error)")
+                return
+            }
+            #expect(message.localizedCaseInsensitiveContains("rolled back"))
+        }
+        #expect(seenBatons.withLock { $0 }.isEmpty)
+
+        _ = try await collect(conn.execute("ROLLBACK"))
         let events = try await collect(conn.execute("SELECT 1"))
         #expect(!events.isEmpty)
         #expect(seenBatons.withLock { $0 } == [nil])
@@ -1076,23 +1089,182 @@ struct LibSQLDriverTests {
             }
         }
 
-        // Transport error clears baton and sends best-effort close.
+        // Transport error clears baton, sends best-effort close, and marks transaction lost until ROLLBACK.
         failNextWrite.withLock { $0 = true }
         do {
             _ = try await collect(conn.execute("INSERT INTO t VALUES (3) /* DROP_FAIL */"))
             Issue.record("Expected transport error")
         } catch let error as DriverError {
-            guard case .connectionFailed = error else {
+            guard case .connectionFailed(let message) = error else {
                 Issue.record("Expected connectionFailed, got \(error)")
                 return
             }
+            #expect(message.contains("rolled back"))
         }
+
+        let requestsBeforeBlocked = recorded.withLock { $0.count }
+        for blockedSQL in ["INSERT INTO t VALUES (4)", "COMMIT", "ROLLBACK TO sp1"] {
+            do {
+                _ = try await collect(conn.execute(blockedSQL))
+                Issue.record("Expected lost-transaction rejection for \(blockedSQL)")
+            } catch let error as DriverError {
+                guard case .queryFailed(let message, nil) = error else {
+                    Issue.record("Expected queryFailed for \(blockedSQL), got \(error)")
+                    return
+                }
+                #expect(message.contains("rolled back"))
+            }
+        }
+        #expect(recorded.withLock { $0.count } == requestsBeforeBlocked)
+
+        // Standalone ROLLBACK clears the lost-transaction state locally without hitting the server.
+        let rollbackEvents = try await collect(conn.execute("ROLLBACK"))
+        guard case .complete = rollbackEvents.last else {
+            Issue.record("Expected local ROLLBACK to complete cleanly")
+            return
+        }
+        #expect(recorded.withLock { $0.count } == requestsBeforeBlocked)
+
+        // Fresh statements succeed again after ROLLBACK.
+        _ = try await collect(conn.execute("INSERT INTO t VALUES (5)"))
 
         let trace = recorded.withLock { $0 }
         let sqlTrace = trace.filter { $0.types != ["close"] }
-        #expect(sqlTrace.map(\.baton) == [nil, "baton-1", "baton-2", "baton-2", "baton-after-sql-error"])
-        #expect(trace.last?.types == ["close"])
-        #expect(trace.last?.baton == "baton-after-sql-error")
+        #expect(sqlTrace.map(\.baton) == [nil, "baton-1", "baton-2", "baton-2", "baton-after-sql-error", nil])
+        let closeTrace = trace.filter { $0.types == ["close"] }
+        #expect(closeTrace.last?.baton == "baton-after-sql-error")
+    }
+
+    @Test("dropped baton inside transaction blocks statements across size limit, cancel, and stream expiry until ROLLBACK")
+    func lostTransactionAcrossAllDropPaths() async throws {
+        let host = "lost-tx-\(UUID().uuidString).test"
+        defer { LibSQLStubURLProtocol.unregister(host: host) }
+
+        let scenario = OSAllocatedUnfairLock<String>(initialState: "normal")
+        let serverWrites = OSAllocatedUnfairLock<[String]>(initialState: [])
+
+        LibSQLStubURLProtocol.register(host: host) { request, data in
+            guard let url = request.url else { throw URLError(.badURL) }
+            let (_, reqs) = try parsePipelineRequest(data)
+            let types = reqs.compactMap { $0["type"] as? String }
+            if types == ["close"] {
+                return (makeHTTPResponse(url: url), try jsonData(["results": [okCloseResult()]]))
+            }
+            let sql = (reqs.first?["stmt"] as? [String: Any])?["sql"] as? String ?? ""
+            if sql == "SELECT 1" {
+                return (
+                    makeHTTPResponse(url: url),
+                    try jsonData(["results": [okExecuteResult(cols: [["name": "1"]], rows: [[["type": "integer", "value": "1"]]]), okCloseResult()]])
+                )
+            }
+
+            serverWrites.withLock { $0.append(sql) }
+            let currentScenario = scenario.withLock { $0 }
+            if sql == "SELECT huge_payload()" && currentScenario == "oversize" {
+                let payload = try jsonData([
+                    "baton": "baton-oversize",
+                    "results": [
+                        okExecuteResult(
+                            cols: [["name": "v", "decltype": "TEXT"]],
+                            rows: [[["type": "text", "value": String(repeating: "a", count: 2048)]]]
+                        ),
+                        okAutocommitResult(false),
+                    ],
+                ])
+                return (makeHTTPResponse(url: url, headers: ["Content-Length": "\(payload.count)"]), payload)
+            }
+            if sql == "SELECT slow_in_tx()" && currentScenario == "cancel" {
+                Thread.sleep(forTimeInterval: 0.25)
+            }
+            if sql == "INSERT INTO t VALUES ('expired')" && currentScenario == "expired" {
+                return (
+                    makeHTTPResponse(url: url, statusCode: 400),
+                    try jsonData(["error": "stream has expired", "code": "STREAM_EXPIRED"])
+                )
+            }
+
+            if sql == "COMMIT" || sql == "ROLLBACK" {
+                return (
+                    makeHTTPResponse(url: url),
+                    try jsonData(["baton": NSNull(), "results": [okExecuteResult(), okAutocommitResult(true)]])
+                )
+            }
+            return (
+                makeHTTPResponse(url: url),
+                try jsonData(["baton": "baton-tx", "results": [okExecuteResult(), okAutocommitResult(false)]])
+            )
+        }
+
+        let conn = try await LibSQLDriver.connect(
+            .libsql(host: "https://\(host)"),
+            sessionConfiguration: LibSQLStubURLProtocol.sessionConfiguration(),
+            maxResponseBytes: 512
+        )
+        defer { Task { await conn.close() } }
+
+        func verifyBlockedUntilRollback(blockedSQL: String) async throws {
+            let countBefore = serverWrites.withLock { $0.count }
+            do {
+                _ = try await collect(conn.execute(blockedSQL))
+                Issue.record("Expected \(blockedSQL) to fail after transaction loss")
+            } catch let error as DriverError {
+                guard case .queryFailed(let message, _) = error else {
+                    Issue.record("Expected queryFailed, got \(error)")
+                    return
+                }
+                #expect(message.localizedCaseInsensitiveContains("rolled back"))
+            }
+            #expect(serverWrites.withLock { $0.count } == countBefore)
+
+            _ = try await collect(conn.execute("-- clear\nROLLBACK;"))
+            #expect(serverWrites.withLock { $0.count } == countBefore)
+        }
+
+        // 1. Response size limit exceeded inside an open transaction.
+        scenario.withLock { $0 = "oversize" }
+        _ = try await collect(conn.execute("BEGIN"))
+        _ = try await collect(conn.execute("INSERT INTO t VALUES ('row1')"))
+        do {
+            _ = try await collect(conn.execute("SELECT huge_payload()"))
+            Issue.record("Expected oversize failure")
+        } catch let error as DriverError {
+            #expect(error.localizedDescription.localizedCaseInsensitiveContains("rolled back"))
+        }
+        try await verifyBlockedUntilRollback(blockedSQL: "INSERT INTO t VALUES ('after-oversize')")
+
+        // 2. Cancelling a running query inside an open transaction.
+        scenario.withLock { $0 = "cancel" }
+        _ = try await collect(conn.execute("BEGIN"))
+        let cancelTrigger = Task {
+            try? await Task.sleep(for: .milliseconds(30))
+            conn.cancelCurrentQuery()
+        }
+        do {
+            _ = try await collect(conn.execute("SELECT slow_in_tx()"))
+            Issue.record("Expected cancelled query in transaction to fail")
+        } catch let error as DriverError {
+            guard case .queryFailed(let message, _) = error else {
+                Issue.record("Expected queryFailed noticing rollback on cancel, got \(error)")
+                cancelTrigger.cancel()
+                return
+            }
+            #expect(message.localizedCaseInsensitiveContains("cancel"))
+            #expect(message.localizedCaseInsensitiveContains("rolled back"))
+        }
+        cancelTrigger.cancel()
+        try await verifyBlockedUntilRollback(blockedSQL: "INSERT INTO t VALUES ('after-cancel')")
+
+        // 3. Stream expired inside an open transaction.
+        scenario.withLock { $0 = "expired" }
+        _ = try await collect(conn.execute("BEGIN"))
+        do {
+            _ = try await collect(conn.execute("INSERT INTO t VALUES ('expired')"))
+            Issue.record("Expected stream expiration error")
+        } catch let error as DriverError {
+            #expect(error.localizedDescription.localizedCaseInsensitiveContains("rolled back"))
+            #expect(error.localizedDescription.contains("ROLLBACK"))
+        }
+        try await verifyBlockedUntilRollback(blockedSQL: "INSERT INTO t VALUES ('after-expired')")
     }
 
     @Test("isLoopbackHost requires strict loopback names or 127.0.0.0/8 IPv4 literals")

@@ -292,4 +292,86 @@ struct LibSQLConformanceTests {
         }
         try await harness.exec(conn, ["DROP VIEW IF EXISTS \(viewName)", "DROP TABLE IF EXISTS \(baseTable)"])
     }
+
+    @Test func lostTransactionPreventsAutocommitAndAllowsLocalRollback() async throws {
+        let suffix = String(UUID().uuidString.prefix(8)).lowercased()
+        let table = "berry_lost_tx_\(suffix)"
+        let observer = try await harness.makeConnection()
+        let limitedConn = try await LibSQLDriver.connect(makeConfig(), maxResponseBytes: 512)
+        defer {
+            Task {
+                await limitedConn.close()
+                _ = try? await harness.exec(observer, ["DROP TABLE IF EXISTS \(table)"])
+                await observer.close()
+            }
+        }
+
+        try await harness.exec(observer, ["CREATE TABLE \(table) (id INTEGER PRIMARY KEY, label TEXT)"])
+
+        // 1. Oversize response inside a transaction drops baton; follow-up writes are refused until ROLLBACK.
+        try await harness.exec(limitedConn, [
+            "BEGIN",
+            "INSERT INTO \(table) VALUES (1, 'from-tx')",
+        ])
+        do {
+            _ = try await harness.drain(limitedConn.execute("SELECT printf('%01024d', 1)"))
+            Issue.record("Expected maxResponseBytes error on oversized result")
+        } catch let error as DriverError {
+            #expect(error.localizedDescription.localizedCaseInsensitiveContains("rolled back"))
+        }
+
+        do {
+            _ = try await harness.drain(limitedConn.execute("INSERT INTO \(table) VALUES (2, 'would-autocommit')"))
+            Issue.record("Expected follow-up INSERT to be refused after lost transaction")
+        } catch let error as DriverError {
+            #expect(error.localizedDescription.localizedCaseInsensitiveContains("rolled back"))
+        }
+
+        try await harness.exec(limitedConn, ["ROLLBACK"])
+        let countAfterOversize = try await harness.drain(observer.execute("SELECT COUNT(*) FROM \(table)"))
+        #expect(countAfterOversize.rows == [[.int(0)]])
+
+        // 2. Cancelling an in-flight query inside a transaction reports rollback and blocks autocommit until ROLLBACK.
+        let cancelConn = try await harness.makeConnection()
+        defer { Task { await cancelConn.close() } }
+        try await harness.exec(cancelConn, [
+            "BEGIN",
+            "INSERT INTO \(table) VALUES (3, 'cancel-tx')",
+        ])
+
+        let cancelTask = Task {
+            try? await Task.sleep(for: .milliseconds(30))
+            cancelConn.cancelCurrentQuery()
+        }
+        defer { cancelTask.cancel() }
+
+        do {
+            _ = try await harness.drain(cancelConn.execute("""
+            WITH RECURSIVE cnt(x) AS (
+                SELECT 1
+                UNION ALL
+                SELECT x + 1 FROM cnt WHERE x < 3000000
+            )
+            SELECT COUNT(*) FROM cnt
+            """))
+            Issue.record("Expected cancelled query error inside transaction")
+        } catch let error as DriverError {
+            guard case .queryFailed(let message, _) = error else {
+                Issue.record("Expected queryFailed with rollback notice, got \(error)")
+                return
+            }
+            #expect(message.localizedCaseInsensitiveContains("rolled back"))
+        }
+
+        do {
+            _ = try await harness.drain(cancelConn.execute("INSERT INTO \(table) VALUES (4, 'after-cancel')"))
+            Issue.record("Expected follow-up INSERT to be refused after cancelled transaction query")
+        } catch let error as DriverError {
+            #expect(error.localizedDescription.localizedCaseInsensitiveContains("rolled back"))
+        }
+
+        try await harness.exec(cancelConn, ["ROLLBACK"])
+        let countAfterCancel = try await harness.drain(observer.execute("SELECT COUNT(*) FROM \(table)"))
+        #expect(countAfterCancel.rows == [[.int(0)]])
+    }
 }
