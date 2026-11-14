@@ -42,7 +42,7 @@ public struct TableAlteration {
         if !removedFKs.isEmpty {
             result.append("Dropping foreign keys isn't supported yet")
         }
-        if driver == .sqlite {
+        if driver == .sqlite || driver == .libsql {
             let addedFKs = edited.foreignKeys.filter { fk in
                 !original.foreignKeys.contains {
                     $0.column.caseInsensitiveCompare(fk.column) == .orderedSame
@@ -123,8 +123,8 @@ public struct TableAlteration {
             )
         }
 
-        // Added foreign keys — not on SQLite (no ALTER … ADD FOREIGN KEY).
-        if driver != .sqlite {
+        // Added foreign keys — not on SQLite or libSQL (no ALTER … ADD FOREIGN KEY).
+        if driver != .sqlite && driver != .libsql {
             for fk in edited.foreignKeys
             where ![fk.column, fk.referencedTable, fk.referencedColumn]
                 .contains(where: { $0.trimmingCharacters(in: .whitespaces).isEmpty })

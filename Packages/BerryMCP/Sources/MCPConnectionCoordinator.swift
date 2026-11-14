@@ -147,7 +147,7 @@ public struct MCPConnectionFactories: Sendable {
         case .mongodb: 27017
         case .qdrant: 6333
         case .elasticsearch: 9200
-        case .dynamodb: 443
+        case .dynamodb, .libsql: 443
         case .sqlite: 0
         }
     }

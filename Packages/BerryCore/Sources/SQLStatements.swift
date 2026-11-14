@@ -7,7 +7,7 @@ import BerryDriverKit
 public enum SQLStatements {
     public static func statements(for driver: DriverID) -> [String] {
         switch driver {
-        case .sqlite: sqlite
+        case .sqlite, .libsql: sqlite
         case .postgres: postgres
         case .mysql: mysql
         default: []

@@ -180,6 +180,154 @@ public struct ConnectionConfig: Sendable {
         )
     }
 
+    public struct LibSQLEndpoint: Sendable, Equatable {
+        public let baseURL: URL
+        public let sanitizedHost: String
+        public let authToken: String?
+        public let host: String
+        public let port: Int
+        public let useTLS: Bool
+
+        public init(
+            baseURL: URL,
+            sanitizedHost: String? = nil,
+            authToken: String? = nil,
+            host: String,
+            port: Int,
+            useTLS: Bool
+        ) {
+            self.baseURL = baseURL
+            self.sanitizedHost = sanitizedHost ?? baseURL.absoluteString
+            self.authToken = authToken
+            self.host = host
+            self.port = port
+            self.useTLS = useTLS
+        }
+    }
+
+    /// Parses a libSQL endpoint from a URL (`libsql://`, `https://`, `http://`)
+    /// or bare hostname, applying `port` and `tlsMode` when not already pinned
+    /// by an explicit scheme (`libsql://` and `https://` always enable TLS).
+    /// Extracts any `authToken` / `auth_token` / `jwt` query parameter and strips
+    /// query/fragment/userinfo from both `baseURL` and `sanitizedHost`.
+    public static func parseLibSQLEndpoint(
+        host rawHost: String?,
+        port explicitPort: Int? = nil,
+        tlsMode: TLSMode = .require
+    ) -> LibSQLEndpoint? {
+        let trimmed = (rawHost ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let candidate: String
+        let explicitScheme: String?
+        if let range = trimmed.range(of: "://") {
+            let scheme = String(trimmed[..<range.lowerBound]).lowercased()
+            guard scheme == "libsql" || scheme == "https" || scheme == "http" else {
+                return nil
+            }
+            explicitScheme = scheme
+            let rest = String(trimmed[range.upperBound...])
+            let httpScheme = (scheme == "http") ? "http" : "https"
+            candidate = "\(httpScheme)://\(rest)"
+        } else {
+            explicitScheme = nil
+            let httpScheme = tlsMode == .disable ? "http" : "https"
+            candidate = "\(httpScheme)://\(trimmed)"
+        }
+
+        guard var components = URLComponents(string: candidate),
+              let parsedHost = components.host, !parsedHost.isEmpty
+        else {
+            return nil
+        }
+
+        let extractedAuthToken: String? = components.queryItems?
+            .first { item in
+                let key = item.name.lowercased()
+                return (key == "authtoken" || key == "auth_token" || key == "jwt")
+                    && !(item.value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            }?
+            .value?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Normalize trailing slash on path while preserving any custom subpath.
+        if components.path == "/" {
+            components.path = ""
+        } else if components.path.hasSuffix("/") {
+            components.path = String(components.path.dropLast())
+        }
+        components.user = nil
+        components.password = nil
+        components.query = nil
+        components.fragment = nil
+
+        let sanitizedHost: String
+        if let explicitScheme {
+            var sanitizedComponents = components
+            sanitizedComponents.scheme = explicitScheme
+            sanitizedHost = sanitizedComponents.string ?? parsedHost
+        } else if components.path.isEmpty {
+            sanitizedHost = parsedHost
+        } else {
+            var pathOnly = parsedHost
+            pathOnly += components.path
+            sanitizedHost = pathOnly
+        }
+
+        let useTLS: Bool
+        switch explicitScheme {
+        case "http":
+            useTLS = false
+        case "https", "libsql":
+            useTLS = true
+        default:
+            useTLS = tlsMode != .disable
+        }
+
+        let resolvedPort: Int
+        if let urlPort = components.port {
+            resolvedPort = urlPort
+        } else if let explicitPort, explicitPort > 0 {
+            resolvedPort = explicitPort
+            let defaultPort = useTLS ? 443 : 80
+            if explicitPort != defaultPort {
+                components.port = explicitPort
+            }
+        } else {
+            resolvedPort = useTLS ? 443 : 80
+        }
+
+        guard let baseURL = components.url else { return nil }
+        return LibSQLEndpoint(
+            baseURL: baseURL,
+            sanitizedHost: sanitizedHost,
+            authToken: extractedAuthToken,
+            host: parsedHost,
+            port: resolvedPort,
+            useTLS: useTLS
+        )
+    }
+
+    public static func libsql(
+        host: String,
+        port: Int? = nil,
+        authToken: String? = nil,
+        tlsMode: TLSMode = .require,
+        name: String? = nil
+    ) -> ConnectionConfig {
+        let parsed = parseLibSQLEndpoint(host: host, port: port, tlsMode: tlsMode)
+        let explicitToken = authToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedToken = (explicitToken?.isEmpty == false) ? explicitToken : parsed?.authToken
+        return ConnectionConfig(
+            driver: .libsql,
+            name: name ?? parsed?.host ?? host,
+            host: parsed?.sanitizedHost ?? host,
+            port: port ?? parsed?.port ?? (tlsMode == .disable ? 80 : 443),
+            password: resolvedToken,
+            tlsMode: parsed.map { $0.useTLS ? (tlsMode == .disable ? .require : tlsMode) : .disable } ?? tlsMode
+        )
+    }
+
     /// Copy of this config pointing at a different endpoint — used to swap in
     /// the local end of an SSH tunnel. Credentials travel with it, the AWS
     /// SigV4 key, token and region included; `additionalHosts` and

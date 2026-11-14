@@ -28,31 +28,3 @@ public struct SQLiteDriver: DatabaseDriver {
         return try SQLiteConnection(path: path)
     }
 }
-
-public struct SQLiteDialect: SQLDialect {
-    public init() {}
-
-    public func quoteIdentifier(_ identifier: String) -> String {
-        "\"" + identifier.replacingOccurrences(of: "\"", with: "\"\"") + "\""
-    }
-
-    public func limitClause(_ limit: Int) -> String {
-        "LIMIT \(limit)"
-    }
-
-    public func boolLiteral(_ value: Bool) -> String {
-        value ? "1" : "0"
-    }
-
-    /// SQLite's readable plan variant; plain EXPLAIN dumps VM opcodes.
-    public func explainPrefix(analyze: Bool) -> String {
-        "EXPLAIN QUERY PLAN"
-    }
-
-    /// SQLite has no `TRUNCATE TABLE` statement — `DELETE FROM` with no
-    /// WHERE clause is its equivalent (SQLite's own query planner already
-    /// takes the fast "truncate optimization" path for this exact shape).
-    public func truncateSQL(_ table: TableRef) -> String {
-        "DELETE FROM \(quoteIdentifier(table.name));"
-    }
-}

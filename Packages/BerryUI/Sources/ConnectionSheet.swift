@@ -140,7 +140,7 @@ public struct ConnectionSheet: View {
         case .mongodb: 27017
         case .qdrant: 6333
         case .elasticsearch: 9200
-        case .dynamodb: 443
+        case .dynamodb, .libsql: 443
         case .sqlite: 0
         }
     }
@@ -175,6 +175,10 @@ public struct ConnectionSheet: View {
                         // Redis (below) — seed a valid selection so it
                         // doesn't render on an unmatched "" tag.
                         if id == .redis && database.isEmpty { database = "0" }
+                        if id == .libsql {
+                            tlsMode = .require
+                            if host == "localhost" { host = "" }
+                        }
                         step = .configure
                     } label: {
                         VStack(spacing: 8) {
@@ -259,80 +263,111 @@ public struct ConnectionSheet: View {
                     }
                 } else {
                     Section(L("Server")) {
-                        // Paste a mongodb:// URI to fill the fields below in
-                        // one shot — unidirectional, not a live sync.
-                        if driverID == .mongodb {
-                            HStack {
-                                TextField(
-                                    L("Connection URI"), text: $mongoURIInput,
-                                    prompt: Text(verbatim: "mongodb://user:pass@host:port/database")
-                                )
-                                Button(L("Parse")) { parseMongoURI() }
-                                    .disabled(mongoURIInput.trimmingCharacters(in: .whitespaces).isEmpty)
-                            }
-                            if let mongoURIError {
-                                Label(mongoURIError, systemImage: "exclamationmark.triangle")
-                                    .font(.caption)
-                                    .foregroundStyle(.red)
-                            }
-                        }
-                        TextField(L("Host"), text: $host)
-                        TextField(L("Port"), text: $port, prompt: Text(verbatim: "\(defaultPort)"))
-                        // Elasticsearch genuinely needs a mode switch, not a
-                        // password-reuse hack: self-hosted defaults to Basic,
-                        // Elastic Cloud/Serverless pushes/requires API keys
- //
-                        if driverID == .elasticsearch {
-                            Picker(L("Authentication"), selection: $elasticsearchAuthMode) {
-                                Text(L("Username & Password")).tag(ElasticsearchAuthMode.basic)
-                                Text(L("API Key")).tag(ElasticsearchAuthMode.apiKey)
-                            }
-                            .pickerStyle(.segmented)
-                        }
-                        if driverID == .elasticsearch && elasticsearchAuthMode == .apiKey {
-                            SecureField(
-                                L("API Key"), text: $elasticsearchAPIKey,
-                                prompt: existing == nil ? nil : Text(L("(keep saved API key)"))
+                        if driverID == .libsql {
+                            TextField(
+                                L("Database URL or Host"),
+                                text: $host,
+                                prompt: Text(verbatim: "libsql://your-db.turso.io")
                             )
-                            Label(
-                                L("An already-encoded key, e.g. the \"encoded\" field from Elastic's Create API key response — sent as \"Authorization: ApiKey <value>\"."),
-                                systemImage: "info.circle"
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        } else {
-                            // DynamoDB has no username/password/database — reuses these
-                            // same three fields (relabeled) for AWS SigV4 credentials
-                            // instead of adding a parallel set of Keychain/profile
- // columns just for one driver
-                            // ConnectionProfile.makeConfig does the field mapping).
-                            TextField(driverID == .dynamodb ? L("Access Key ID") : L("Username"), text: $username)
-                            // Qdrant auth is a single API-key header, not a
-                            // user/password pair — reuses the Password field
-                            // (relabeled) rather than adding a parallel secret
- // shape for one driver
-                            // `QdrantHTTPClient` reads `config.password` as the key).
-                            SecureField(
-                                driverID == .dynamodb ? L("Secret Access Key")
-                                    : (driverID == .qdrant ? L("API Key") : L("Password")),
-                                text: $password,
-                                prompt: existing == nil ? nil : Text(L("(keep saved password)"))
-                            )
-                        }
-                        // Redis has no free-text database name — a numbered
- // index 0-15. Still just the
-                        // `database` String field underneath (`RedisConnection`
-                        // already parses it as `Int`) — only the control
-                        // differs, matching the relabel-not-duplicate pattern
-                        // this file already uses for DynamoDB/Qdrant.
-                        if driverID == .redis {
-                            Picker(L("Database"), selection: $database) {
-                                ForEach(0..<16, id: \.self) { index in
-                                    Text(verbatim: "\(index)").tag(String(index))
+                            .onChange(of: host) { _, newValue in
+                                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                                let lower = trimmed.lowercased()
+                                if lower.hasPrefix("http://") {
+                                    tlsMode = .disable
+                                } else if lower.hasPrefix("libsql://") || lower.hasPrefix("https://") {
+                                    if tlsMode == .disable {
+                                        tlsMode = .require
+                                    }
+                                }
+                                if let parsed = ConnectionConfig.parseLibSQLEndpoint(host: trimmed, tlsMode: tlsMode),
+                                   let tokenFromURL = parsed.authToken, !tokenFromURL.isEmpty {
+                                    password = tokenFromURL
+                                    host = parsed.sanitizedHost
                                 }
                             }
+                            TextField(L("Port"), text: $port, prompt: Text(verbatim: "\(defaultPort)"))
+                            SecureField(
+                                L("Auth Token"),
+                                text: $password,
+                                prompt: existing == nil
+                                    ? Text(L("Optional for local sqld"))
+                                    : Text(L("(keep saved token)"))
+                            )
                         } else {
-                            TextField(driverID == .dynamodb ? L("Region (optional, default us-east-1)") : L("Database"), text: $database)
+                            // Paste a mongodb:// URI to fill the fields below in
+                            // one shot — unidirectional, not a live sync.
+                            if driverID == .mongodb {
+                                HStack {
+                                    TextField(
+                                        L("Connection URI"), text: $mongoURIInput,
+                                        prompt: Text(verbatim: "mongodb://user:pass@host:port/database")
+                                    )
+                                    Button(L("Parse")) { parseMongoURI() }
+                                        .disabled(mongoURIInput.trimmingCharacters(in: .whitespaces).isEmpty)
+                                }
+                                if let mongoURIError {
+                                    Label(mongoURIError, systemImage: "exclamationmark.triangle")
+                                        .font(.caption)
+                                        .foregroundStyle(.red)
+                                }
+                            }
+                            TextField(L("Host"), text: $host)
+                            TextField(L("Port"), text: $port, prompt: Text(verbatim: "\(defaultPort)"))
+                            // Elasticsearch genuinely needs a mode switch, not a
+                            // password-reuse hack: self-hosted defaults to Basic,
+                            // Elastic Cloud/Serverless pushes/requires API keys
+                            if driverID == .elasticsearch {
+                                Picker(L("Authentication"), selection: $elasticsearchAuthMode) {
+                                    Text(L("Username & Password")).tag(ElasticsearchAuthMode.basic)
+                                    Text(L("API Key")).tag(ElasticsearchAuthMode.apiKey)
+                                }
+                                .pickerStyle(.segmented)
+                            }
+                            if driverID == .elasticsearch && elasticsearchAuthMode == .apiKey {
+                                SecureField(
+                                    L("API Key"), text: $elasticsearchAPIKey,
+                                    prompt: existing == nil ? nil : Text(L("(keep saved API key)"))
+                                )
+                                Label(
+                                    L("An already-encoded key, e.g. the \"encoded\" field from Elastic's Create API key response — sent as \"Authorization: ApiKey <value>\"."),
+                                    systemImage: "info.circle"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            } else {
+                                // DynamoDB has no username/password/database — reuses these
+                                // same three fields (relabeled) for AWS SigV4 credentials
+                                // instead of adding a parallel set of Keychain/profile
+                                // columns just for one driver
+                                // ConnectionProfile.makeConfig does the field mapping).
+                                TextField(driverID == .dynamodb ? L("Access Key ID") : L("Username"), text: $username)
+                                // Qdrant auth is a single API-key header, not a
+                                // user/password pair — reuses the Password field
+                                // (relabeled) rather than adding a parallel secret
+                                // shape for one driver
+                                // `QdrantHTTPClient` reads `config.password` as the key).
+                                SecureField(
+                                    driverID == .dynamodb ? L("Secret Access Key")
+                                        : (driverID == .qdrant ? L("API Key") : L("Password")),
+                                    text: $password,
+                                    prompt: existing == nil ? nil : Text(L("(keep saved password)"))
+                                )
+                            }
+                            // Redis has no free-text database name — a numbered
+                            // index 0-15. Still just the
+                            // `database` String field underneath (`RedisConnection`
+                            // already parses it as `Int`) — only the control
+                            // differs, matching the relabel-not-duplicate pattern
+                            // this file already uses for DynamoDB/Qdrant.
+                            if driverID == .redis {
+                                Picker(L("Database"), selection: $database) {
+                                    ForEach(0..<16, id: \.self) { index in
+                                        Text(verbatim: "\(index)").tag(String(index))
+                                    }
+                                }
+                            } else {
+                                TextField(driverID == .dynamodb ? L("Region (optional, default us-east-1)") : L("Database"), text: $database)
+                            }
                         }
                         if driverID == .dynamodb {
                             Label(
@@ -396,7 +431,7 @@ public struct ConnectionSheet: View {
                 .formStyle(.grouped)
                 .tabItem { Text(L("Advanced")) }
 
-                if !isFileBased {
+                if !isFileBased && driverID != .libsql {
  // Split out of General (sheets never scroll) — the
                     // TLS block alone can run to 7 rows once Verify
                     // Certificate is picked (mode + warning + CA row + CA
@@ -515,8 +550,15 @@ public struct ConnectionSheet: View {
 
     private var isValid: Bool {
         if isFileBased { return !filePath.isEmpty }
-        if host.isEmpty { return false }
-        if sshEnabled && (sshHost.isEmpty || sshUsername.isEmpty) { return false }
+        if driverID == .libsql {
+            let explicitPort = Int(port.trimmingCharacters(in: .whitespaces))
+            if ConnectionConfig.parseLibSQLEndpoint(host: host, port: explicitPort, tlsMode: tlsMode) == nil {
+                return false
+            }
+        } else if host.isEmpty {
+            return false
+        }
+        if driverID != .libsql && sshEnabled && (sshHost.isEmpty || sshUsername.isEmpty) { return false }
         return true
     }
 
@@ -524,12 +566,17 @@ public struct ConnectionSheet: View {
         if isFileBased {
             return filePath.isEmpty ? L("New connection") : (filePath as NSString).lastPathComponent
         }
+        if driverID == .libsql,
+           let parsed = ConnectionConfig.parseLibSQLEndpoint(host: host, tlsMode: tlsMode) {
+            return parsed.host
+        }
         return host.isEmpty ? L("New connection") : "\(username.isEmpty ? "" : "\(username)@")\(host)"
     }
 
     private func displayName(for id: DriverID) -> String {
         switch id {
         case .sqlite: "SQLite"
+        case .libsql: "libSQL"
         case .postgres: "PostgreSQL"
         case .mysql: "MySQL / MariaDB"
         case .redis: "Redis"
@@ -544,6 +591,7 @@ public struct ConnectionSheet: View {
     private func shortName(for id: DriverID) -> String {
         switch id {
         case .sqlite: "SQLite"
+        case .libsql: "libSQL"
         case .postgres: "PostgreSQL"
         case .mysql: "MySQL"
         case .redis: "Redis"
@@ -558,6 +606,7 @@ public struct ConnectionSheet: View {
     private func systemImage(for id: DriverID) -> String {
         switch id {
         case .sqlite: "internaldrive"
+        case .libsql: "network"
         case .postgres: "cylinder.split.1x2"
         case .mysql: "cylinder"
         case .redis: "memorychip"
@@ -617,7 +666,18 @@ public struct ConnectionSheet: View {
         // format) isn't a valid hostname — it breaks URL construction in the
         // HTTP-based drivers (Dynamo/Qdrant) with an opaque "Invalid
         // host/port". Split it apart here so that mistake just works.
-        let (normalizedHost, embeddedPort) = Self.splitHostPort(host)
+        let trimmedHostInput = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let libsqlEndpoint = driverID == .libsql
+            ? ConnectionConfig.parseLibSQLEndpoint(host: trimmedHostInput, tlsMode: tlsMode)
+            : nil
+        let normalizedHost: String
+        let embeddedPort: Int?
+        if driverID == .libsql {
+            normalizedHost = libsqlEndpoint?.sanitizedHost ?? Self.splitHostPort(host).host
+            embeddedPort = libsqlEndpoint?.port
+        } else {
+            (normalizedHost, embeddedPort) = Self.splitHostPort(host)
+        }
         profile.host = isFileBased ? nil : normalizedHost
         profile.port = isFileBased ? nil : (Int(port.trimmingCharacters(in: .whitespaces)) ?? embeddedPort ?? defaultPort)
         // Trimmed: these are structural fields (identifiers/region), never
@@ -627,31 +687,51 @@ public struct ConnectionSheet: View {
         let trimmedDatabase = database.trimmingCharacters(in: .whitespaces)
         profile.username = isFileBased ? nil : (trimmedUsername.isEmpty ? nil : trimmedUsername)
         profile.database = isFileBased ? nil : (trimmedDatabase.isEmpty ? nil : trimmedDatabase)
-        profile.tlsMode = tlsMode.rawValue
-        profile.tlsCACertPath = (tlsMode.verifiesCertificate && !tlsCACertPath.isEmpty)
-            ? tlsCACertPath : nil
-        profile.tlsClientCertPath = (tlsMode != .disable && !tlsClientCertPath.isEmpty)
-            ? tlsClientCertPath : nil
-        profile.tlsClientKeyPath = (tlsMode != .disable && !tlsClientKeyPath.isEmpty)
-            ? tlsClientKeyPath : nil
+        if driverID == .libsql {
+            let libsqlTLSMode: TLSMode = (libsqlEndpoint?.useTLS == false) ? .disable : .require
+            profile.tlsMode = libsqlTLSMode.rawValue
+            profile.tlsCACertPath = nil
+            profile.tlsClientCertPath = nil
+            profile.tlsClientKeyPath = nil
+        } else {
+            profile.tlsMode = tlsMode.rawValue
+            profile.tlsCACertPath = (tlsMode.verifiesCertificate && !tlsCACertPath.isEmpty)
+                ? tlsCACertPath : nil
+            profile.tlsClientCertPath = (tlsMode != .disable && !tlsClientCertPath.isEmpty)
+                ? tlsClientCertPath : nil
+            profile.tlsClientKeyPath = (tlsMode != .disable && !tlsClientKeyPath.isEmpty)
+                ? tlsClientKeyPath : nil
+        }
         let trimmedAdditionalHosts = mongoAdditionalHosts.trimmingCharacters(in: .whitespaces)
         let trimmedReplicaSet = mongoReplicaSetName.trimmingCharacters(in: .whitespaces)
         profile.mongoAdditionalHosts = (driverID == .mongodb && !trimmedAdditionalHosts.isEmpty) ? trimmedAdditionalHosts : nil
         profile.mongoReplicaSet = (driverID == .mongodb && !trimmedReplicaSet.isEmpty) ? trimmedReplicaSet : nil
         profile.elasticsearchAPIKeyEnabled = driverID == .elasticsearch && elasticsearchAuthMode == .apiKey
-        profile.sshEnabled = !isFileBased && sshEnabled
-        profile.sshHost = sshEnabled ? sshHost : nil
-        profile.sshPort = sshEnabled ? (Int(sshPort) ?? 22) : nil
-        profile.sshUsername = sshEnabled ? sshUsername : nil
-        profile.sshKeyPath = sshEnabled && !sshKeyPath.isEmpty ? sshKeyPath : nil
+        let allowsSSH = !isFileBased && driverID != .libsql && sshEnabled
+        profile.sshEnabled = allowsSSH
+        profile.sshHost = allowsSSH ? sshHost : nil
+        profile.sshPort = allowsSSH ? (Int(sshPort) ?? 22) : nil
+        profile.sshUsername = allowsSSH ? sshUsername : nil
+        profile.sshKeyPath = allowsSSH && !sshKeyPath.isEmpty ? sshKeyPath : nil
         return profile
     }
 
+    private var effectivePassword: String {
+        if !password.isEmpty { return password }
+        if driverID == .libsql,
+           let tokenFromURL = ConnectionConfig.parseLibSQLEndpoint(host: host, tlsMode: tlsMode)?.authToken {
+            return tokenFromURL
+        }
+        return ""
+    }
+
     private func typedSecrets() -> ConnectionSecrets {
-        ConnectionSecrets(
-            dbPassword: password.isEmpty ? nil : password,
-            sshPassword: sshPassword.isEmpty ? nil : sshPassword,
-            sshPassphrase: sshPassphrase.isEmpty ? nil : sshPassphrase,
+        let dbSecret = effectivePassword
+        let allowsSSH = !isFileBased && driverID != .libsql && sshEnabled
+        return ConnectionSecrets(
+            dbPassword: dbSecret.isEmpty ? nil : dbSecret,
+            sshPassword: (allowsSSH && !sshPassword.isEmpty) ? sshPassword : nil,
+            sshPassphrase: (allowsSSH && !sshPassphrase.isEmpty) ? sshPassphrase : nil,
             elasticsearchAPIKey: elasticsearchAPIKey.isEmpty ? nil : elasticsearchAPIKey
         )
     }
@@ -669,7 +749,7 @@ public struct ConnectionSheet: View {
         // `SSHConfig` on `sshEnabled` — switching back to Basic actually
         // stops sending a previously stored key, not just hiding the field.
         return builtProfile().makeConfig(
-            password: effective(password, .database),
+            password: effective(effectivePassword, .database),
             sshPassword: effective(sshPassword, .ssh),
             sshPassphrase: effective(sshPassphrase, .sshPassphrase),
             elasticsearchAPIKey: effective(elasticsearchAPIKey, .elasticsearchAPIKey)

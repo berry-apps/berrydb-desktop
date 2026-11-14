@@ -99,6 +99,13 @@ let package = Package(
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
 
+        // MARK: libSQL driver (URLSession Hrana v3 HTTP pipeline — zero vendor dependencies)
+        .target(
+            name: "BerryDriverLibSQL",
+            dependencies: ["BerryDriverKit"],
+            path: "Packages/BerryDriverLibSQL/Sources"
+        ),
+
         // MARK: PostgreSQL driver (PostgresNIO, pure Swift)
         .target(
             name: "BerryDriverPostgres",
@@ -214,7 +221,7 @@ let package = Package(
             name: "BerryDriverBootstrap",
             dependencies: [
                 "BerryDriverKit", "BerryDataSourceKit", "BerryKeyValueKit",
-                "BerryDriverSQLite", "BerryDriverPostgres", "BerryDriverMySQL",
+                "BerryDriverSQLite", "BerryDriverLibSQL", "BerryDriverPostgres", "BerryDriverMySQL",
                 "BerryDriverSQLServer", "BerryDriverDynamoDB",
                 "BerryDriverQdrant", "BerryDriverMongo", "BerryDriverElasticsearch",
                 // BerryDriverRedis is @available(macOS 15, *) throughout; the
@@ -409,6 +416,11 @@ let package = Package(
             name: "BerryDriverSQLiteTests",
             dependencies: ["BerryDriverSQLite", "BerryDriverKit", "BerryDriverTestKit"],
             path: "Packages/BerryDriverSQLite/Tests"
+        ),
+        .testTarget(
+            name: "BerryDriverLibSQLTests",
+            dependencies: ["BerryDriverLibSQL", "BerryDriverKit", "BerryDriverTestKit"],
+            path: "Packages/BerryDriverLibSQL/Tests"
         ),
         .testTarget(
             name: "BerryDriverPostgresTests",

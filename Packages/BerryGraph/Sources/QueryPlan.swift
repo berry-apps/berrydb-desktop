@@ -46,7 +46,7 @@ public enum QueryPlanParser {
         switch dialect {
         case .postgres: parsePostgres(rows)
         case .mysql: parseMySQL(rows)
-        case .sqlite: parseSQLite(rows)
+        case .sqlite, .libsql: parseSQLite(rows)
         case .sqlserver, .redis, .dynamodb, .mongodb, .qdrant, .elasticsearch: QueryPlan(scans: [])
         }
     }
