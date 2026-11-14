@@ -3,17 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BerryDB Documentation 🫐 — Complete Architecture, Drivers & Feature Guide</title>
-  <meta name="description" content="Official developer and user documentation for BerryDB: macOS native database client with Swift 6, AppKit DataGrid, PostgreSQL, MySQL 8.4, SQLite, Redis, SSH Tunnels, and AI SQL Copilot." />
-  <meta name="keywords" content="BerryDB Docs, macOS Postgres client tutorial, SQLite viewer Mac guide, SSH tunnel database, AppKit DataGrid" />
+  <title>BerryDB v1.1.0 Documentation — Native macOS Database Client &amp; MCP Server</title>
+  <meta name="description" content="Official BerryDB v1.1.0 technical manual. Install on macOS via Homebrew Cask or DMG, connect PostgreSQL, MySQL 8.4, MariaDB, SQLite, SQL Server, Redis, Valkey, MongoDB, DynamoDB, Elasticsearch, and Qdrant over Citadel SSH tunnels, run Apple Intelligence or Cloud AI SQL Copilot, and configure Model Context Protocol (MCP) schema caching and opt-in read-only live queries for Claude Code, Codex, and Antigravity." />
+  <meta name="keywords" content="BerryDB documentation, BerryDB v1.1.0, MCP, Model Context Protocol, berrydb-mcp, Claude Code, Codex, Antigravity, PostgreSQL, MySQL 8.4, MariaDB, SQLite, SQL Server, Redis, Valkey, MongoDB, DynamoDB, Qdrant, Elasticsearch, Citadel SSH tunnel, Apple Intelligence SQL Copilot, macOS Keychain, Swift 6 AppKit" />
   <meta name="author" content="Berry Apps" />
-  <meta name="theme-color" content="#080B13" />
+  <meta name="theme-color" content="#05070B" />
 
-  <!-- Favicon -->
   <link rel="icon" type="image/png" href="public/images/favicon.png" />
   <link rel="apple-touch-icon" href="public/images/berrydb-logo.png" />
+  <link rel="canonical" href="https://db.berryhub.app/docs.html" />
 
-  <!-- Anti-FOUC Theme Script: Default to DARK MODE -->
+  <!-- Restore saved Light/Dark theme before first paint (matches index.html) -->
   <script>
     (function() {
       const theme = localStorage.getItem('berry_theme');
@@ -25,962 +25,1243 @@
     })();
   </script>
 
-  <!-- Canonical URL -->
-  <link rel="canonical" href="https://db.berryhub.app/docs.html" />
-
   <!-- OpenGraph -->
   <meta property="og:type" content="article" />
   <meta property="og:url" content="https://db.berryhub.app/docs.html" />
-  <meta property="og:site_name" content="BerryHub Documentation" />
-  <meta property="og:title" content="BerryDB Documentation 🫐 — Complete User & Architecture Manual" />
-  <meta property="og:description" content="Detailed guide on AppKit DataGrid, database drivers (PostgreSQL, MySQL, SQLite, Redis), SSH tunnels, and AI SQL Copilot." />
+  <meta property="og:site_name" content="BerryHub — Native macOS Apps" />
+  <meta property="og:title" content="BerryDB v1.1.0 Documentation — Architecture, Drivers &amp; MCP Guardrails" />
+  <meta property="og:description" content="Complete reference for 9 database engines, Keychain security, Citadel SSH tunnels, Apple Intelligence on-device SQL Copilot, and opt-in MCP live reads." />
   <meta property="og:image" content="https://db.berryhub.app/public/images/og-preview.png" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="BerryDB Native macOS Database Client &amp; MCP Architecture" />
   <meta property="og:locale" content="en_US" />
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="BerryDB Documentation 🫐 — Complete Manual" />
-  <meta name="twitter:description" content="Official documentation for BerryDB: Native macOS database management with Swift 6 & AppKit." />
+  <meta name="twitter:url" content="https://db.berryhub.app/docs.html" />
+  <meta name="twitter:title" content="BerryDB v1.1.0 Documentation — Database Client &amp; MCP Server" />
+  <meta name="twitter:description" content="Homebrew setup, 9 database engines, Citadel SSH tunnels, Apple Intelligence SQL Copilot, and guarded Model Context Protocol live queries." />
   <meta name="twitter:image" content="https://db.berryhub.app/public/images/og-preview.png" />
 
-  <!-- Google Fonts -->
+  <!-- Typography -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet" />
 
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com/3.4.17"></script>
-  <!-- Lucide Icons -->
-  <script src="https://cdn.jsdelivr.net/npm/lucide@1.46.0/dist/umd/lucide.min.js"></script>
-
   <script>
     tailwind.config = {
       darkMode: 'class',
       theme: {
         extend: {
           fontFamily: {
-            sans: ['Inter', 'sans-serif'],
-            display: ['"Plus Jakarta Sans"', 'sans-serif'],
-            mono: ['"JetBrains Mono"', 'monospace'],
-          },
-          colors: {
-            berry: {
-              50: '#fff1f2',
-              100: '#ffe4e6',
-              200: '#fecdd3',
-              300: '#fda4af',
-              400: '#fb7185',
-              500: '#f43f5e',
-              600: '#e11d48',
-              700: '#be123c',
-              800: '#9f1239',
-              900: '#881337',
-              950: '#4c0519',
-            },
-            accent: {
-              50: '#ecfdf5',
-              100: '#d1fae5',
-              500: '#10b981',
-              600: '#059669',
-              700: '#047857',
-            },
-            dark: {
-              bg: '#080B13',
-              surface: '#0D121F',
-              card: '#0E1424',
-              cardHover: '#141C30',
-              border: '#1E293B',
-              muted: '#94A3B8',
-            }
-          },
-          boxShadow: {
-            'glow-berry': '0 0 40px -10px rgba(225, 29, 72, 0.45)',
-            'glow-berry-lg': '0 0 60px -15px rgba(225, 29, 72, 0.55)',
-            'glow-emerald': '0 0 40px -10px rgba(16, 185, 129, 0.4)',
-            'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.08)',
-            'glass-dark': '0 8px 32px 0 rgba(0, 0, 0, 0.55)',
+            sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+            display: ['"Plus Jakarta Sans"', '-apple-system', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
           }
         }
       }
-    }
+    };
   </script>
 
   <style>
-    .glass-nav {
-      background: rgba(255, 255, 255, 0.88);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
+    /* Machined Titanium & Single-Hue Optical Cobalt Design System */
+    :root {
+      --bg-canvas: #F4F6FA;
+      --bg-surface: #FFFFFF;
+      --bg-elevated: #EAEFF6;
+      --bg-recessed: #E2E8F2;
+      --bg-nav: rgba(244, 246, 250, 0.90);
+      --bg-code: #EFF3F9;
+
+      --fg-primary: #090D16;
+      --fg-secondary: #1E293B;
+      --fg-muted: #475569;
+      --fg-code: #0F172A;
+
+      --border-subtle: rgba(15, 23, 42, 0.11);
+      --border-strong: rgba(15, 23, 42, 0.24);
+
+      --accent: #0055B3;
+      --accent-hover: #00418A;
+      --accent-soft: rgba(0, 85, 179, 0.09);
+      --accent-border: rgba(0, 85, 179, 0.28);
+
+      --emerald: #047857;
+      --emerald-soft: rgba(4, 120, 87, 0.10);
+      --emerald-border: rgba(4, 120, 87, 0.28);
+
+      --danger: #B91C1C;
+      --danger-soft: rgba(185, 28, 28, 0.10);
+      --danger-border: rgba(185, 28, 28, 0.28);
+
+      --amber: #B45309;
+      --amber-soft: rgba(180, 83, 9, 0.10);
+      --amber-border: rgba(180, 83, 9, 0.28);
+
+      --grid-line: rgba(15, 23, 42, 0.055);
+      --shadow-card: 0 4px 20px -4px rgba(15, 23, 42, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.90);
+      --shadow-window: 0 24px 64px -16px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(15, 23, 42, 0.10);
     }
-    .dark .glass-nav {
-      background: rgba(8, 11, 19, 0.92);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
+
+    html.dark {
+      --bg-canvas: #05070B;
+      --bg-surface: #0B0F17;
+      --bg-elevated: #121824;
+      --bg-recessed: #080B11;
+      --bg-nav: rgba(5, 7, 11, 0.88);
+      --bg-code: #070A10;
+
+      --fg-primary: #F8FAFC;
+      --fg-secondary: #CBD5E1;
+      --fg-muted: #94A3B8;
+      --fg-code: #E2E8F0;
+
+      --border-subtle: rgba(255, 255, 255, 0.09);
+      --border-strong: rgba(255, 255, 255, 0.21);
+
+      --accent: #0A84FF;
+      --accent-hover: #3B9EFF;
+      --accent-soft: rgba(10, 132, 255, 0.14);
+      --accent-border: rgba(10, 132, 255, 0.34);
+
+      --emerald: #34D399;
+      --emerald-soft: rgba(16, 185, 129, 0.14);
+      --emerald-border: rgba(16, 185, 129, 0.34);
+
+      --danger: #F87171;
+      --danger-soft: rgba(239, 68, 68, 0.14);
+      --danger-border: rgba(239, 68, 68, 0.34);
+
+      --amber: #FBBF24;
+      --amber-soft: rgba(245, 158, 11, 0.14);
+      --amber-border: rgba(245, 158, 11, 0.34);
+
+      --grid-line: rgba(148, 163, 184, 0.055);
+      --shadow-card: 0 12px 32px -10px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      --shadow-window: 0 36px 90px -20px rgba(0, 0, 0, 0.88), 0 0 0 1px rgba(255, 255, 255, 0.10);
     }
-    .kbd-tag {
-      box-shadow: 0 2px 0 rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.4);
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background-color: var(--bg-canvas);
+      color: var(--fg-primary);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      transition: background-color 220ms ease, color 220ms ease;
+      overflow-x: hidden;
     }
-    .dark .kbd-tag {
-      box-shadow: 0 2px 0 rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.15);
+
+    .s-card     { background-color: var(--bg-surface); border: 1px solid var(--border-subtle); box-shadow: var(--shadow-card); }
+    .s-elevated { background-color: var(--bg-elevated); border: 1px solid var(--border-subtle); }
+    .s-recessed { background-color: var(--bg-recessed); border: 1px solid var(--border-subtle); }
+    .s-code     { background-color: var(--bg-code); border: 1px solid var(--border-subtle); color: var(--fg-code); }
+    .s-window   { background-color: var(--bg-surface); border: 1px solid var(--border-subtle); box-shadow: var(--shadow-window); }
+
+    .t-primary   { color: var(--fg-primary); }
+    .t-secondary { color: var(--fg-secondary); }
+    .t-muted     { color: var(--fg-muted); }
+    .t-accent    { color: var(--accent); }
+    .t-emerald   { color: var(--emerald); }
+    .t-danger    { color: var(--danger); }
+    .t-amber     { color: var(--amber); }
+
+    .b-subtle { border-color: var(--border-subtle); }
+    .b-strong { border-color: var(--border-strong); }
+
+    .hover\:s-elevated:hover { background-color: var(--bg-elevated); }
+    .hover\:t-primary:hover  { color: var(--fg-primary); }
+    .hover\:t-accent:hover   { color: var(--accent); }
+    .hover\:b-strong:hover   { border-color: var(--border-strong); }
+
+    .badge-accent  { background-color: var(--accent-soft);  color: var(--accent);  border: 1px solid var(--accent-border); }
+    .badge-emerald { background-color: var(--emerald-soft); color: var(--emerald); border: 1px solid var(--emerald-border); }
+    .badge-danger  { background-color: var(--danger-soft);  color: var(--danger);  border: 1px solid var(--danger-border); }
+    .badge-amber   { background-color: var(--amber-soft);   color: var(--amber);   border: 1px solid var(--amber-border); }
+
+    .btn-primary {
+      background-color: var(--accent);
+      color: #FFFFFF;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.22), 0 4px 14px -2px rgba(10, 132, 255, 0.35);
+      transition: background-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
     }
-    section[id] {
-      scroll-margin-top: 5.5rem;
+    .btn-primary:hover { background-color: var(--accent-hover); transform: translateY(-1px); }
+
+    .blueprint-grid {
+      background-image:
+        linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+      background-size: 56px 56px;
     }
+
     .active-doc-link {
-      color: #e11d48 !important;
-      background-color: rgba(255, 241, 242, 0.95) !important;
-      font-weight: 700 !important;
-      border-left: 3px solid #f43f5e !important;
-      padding-left: 0.625rem !important;
+      color: var(--accent) !important;
+      font-weight: 600;
+      border-left: 2px solid var(--accent);
+      background: var(--accent-soft);
     }
-    .dark .active-doc-link {
-      color: #fb7185 !important;
-      background-color: rgba(30, 41, 59, 0.95) !important;
-      border-left-color: #f43f5e !important;
-    }
+
+    section[id] { scroll-margin-top: 5.5rem; }
+
+    /* Custom scrollbar for sidebar TOC and code blocks */
+    ::-webkit-scrollbar { width: 7px; height: 7px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
   </style>
 </head>
+<body class="antialiased selection:bg-blue-600 selection:text-white">
 
-<body class="bg-[#FCFAF9] dark:bg-dark-bg text-slate-800 dark:text-slate-100 font-sans antialiased transition-colors duration-300 selection:bg-rose-500 selection:text-white">
+  <!-- Architectural Background Grid & Optical Spotlight -->
+  <div class="fixed inset-0 pointer-events-none z-0 overflow-hidden" aria-hidden="true">
+    <div class="blueprint-grid absolute inset-0"></div>
+    <div class="absolute -top-[280px] left-1/2 -translate-x-1/2 w-[980px] h-[500px] opacity-45"
+         style="background: radial-gradient(ellipse 65% 58% at 50% 44%, rgba(10, 132, 255, 0.18) 0%, rgba(10, 132, 255, 0.05) 54%, transparent 78%);"></div>
+  </div>
 
-  <!-- ==================== HEADER ==================== -->
-  <header class="fixed top-0 left-0 right-0 z-50 transition-all duration-300 glass-nav border-b border-slate-200/80 dark:border-slate-800/80">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-      
-      <!-- Brand Logo -->
-      <a href="/" class="flex items-center gap-3 group">
-        <img src="public/images/berrydb-logo.png" alt="BerryDB Logo" class="w-10 h-10 rounded-2xl shadow-glow-berry transition-transform group-hover:scale-105 duration-200 object-contain" />
-        <div class="flex flex-col">
-          <span class="font-display font-extrabold text-lg tracking-tight text-slate-900 dark:text-white leading-none flex items-center gap-1.5">
-            BerryDB
-            <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500/10 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 font-mono font-semibold border border-rose-500/20">Docs</span>
-          </span>
-          <span class="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Developer & User Manual</span>
-        </div>
-      </a>
-
-      <!-- Search Box in Header -->
-      <div class="hidden md:flex items-center relative max-w-xs w-full">
-        <i data-lucide="search" class="w-4 h-4 absolute left-3 text-slate-400 pointer-events-none"></i>
-        <input type="text" id="docSearch" placeholder="Search documentation (⌘K)..." class="w-full pl-9 pr-4 py-1.5 text-xs rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-rose-500 transition" />
+  <!-- ==================== STICKY HEADER ==================== -->
+  <header class="sticky top-0 z-40 border-b b-subtle backdrop-blur-xl transition-colors" style="background-color: var(--bg-nav);">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <a href="index.html" class="flex items-center gap-2.5">
+          <img src="public/images/berrydb-logo.png" alt="BerryDB" class="w-9 h-9 rounded-xl object-contain" />
+          <div class="flex items-center gap-2">
+            <span class="font-display font-bold text-lg tracking-tight t-primary">BerryDB</span>
+            <span class="px-2 py-0.5 rounded font-mono text-[10px] font-bold badge-accent">BerryDB v1.1.0</span>
+          </div>
+        </a>
+        <span class="hidden sm:inline-block t-muted">/</span>
+        <span class="hidden sm:inline-block font-mono text-xs font-semibold t-secondary">Technical Manual</span>
       </div>
 
-      <!-- Right Actions -->
-      <div class="flex items-center gap-2 sm:gap-3">
-        <a href="/" class="text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 transition hidden sm:inline">
-          Home
-        </a>
+      <div class="flex items-center gap-2 sm:gap-3 flex-1 justify-end max-w-2xl">
+        <div class="relative hidden md:block flex-1 max-w-xs">
+          <input id="docSearch" type="search" placeholder="Filter documentation sections..."
+            class="w-full rounded-lg pl-8 pr-12 py-1.5 text-xs s-card t-primary placeholder:t-muted focus:outline-none focus:ring-2 focus:ring-blue-500/40" />
+          <svg class="w-3.5 h-3.5 t-muted absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/></svg>
+          <kbd class="absolute right-2 top-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded s-recessed font-mono text-[10px] t-muted">⌘K</kbd>
+        </div>
 
-        <!-- BerryShot Cross Link -->
-        <a href="https://shot.berryhub.app" target="_blank" rel="noopener" class="text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 px-2.5 py-1.5 rounded-lg transition hidden md:flex items-center gap-1.5">
-          <span>🍓</span>
-          <span>BerryShot</span>
-        </a>
+        <nav class="hidden lg:flex items-center gap-4 text-[13px] font-medium t-secondary">
+          <a href="index.html" class="hover:t-primary transition">Home</a>
+          <a href="#coding-agents" class="hover:t-primary transition">MCP Spec</a>
+          <a href="#drivers" class="hover:t-primary transition">Drivers</a>
+        </nav>
 
-        <!-- BerryHub Cross Link -->
-        <a href="https://berryhub.app" target="_blank" rel="noopener" class="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 px-2.5 py-1.5 rounded-lg transition hidden md:flex items-center gap-1">
-          <i data-lucide="globe" class="w-3.5 h-3.5"></i>
-          <span>BerryHub</span>
-        </a>
-
-        <!-- Theme Toggle -->
-        <button id="themeToggleBtn" onclick="toggleTheme()" type="button" aria-label="Toggle Dark/Light Mode" class="w-9 h-9 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700/80 transition shadow-sm cursor-pointer">
-          <svg class="w-4 h-4 hidden dark:block text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path></svg>
-          <svg class="w-4 h-4 block dark:hidden text-slate-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
+        <button type="button" onclick="toggleTheme()" id="themeToggleBtn" aria-label="Toggle Dark and Light Mode"
+          class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-mono s-card t-primary hover:b-strong transition cursor-pointer">
+          <span id="themeIcon">◐</span>
+          <span id="themeLabel">Dark</span>
         </button>
 
-        <!-- Download CTA -->
-        <a href="https://download-db.berryhub.app/BerryDB-latest.dmg" class="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-berry-600 via-rose-500 to-berry-700 hover:from-berry-700 hover:to-rose-600 shadow-glow-berry transition">
-          <i data-lucide="download" class="w-4 h-4"></i>
-          <span class="hidden sm:inline">Get App</span>
-        </a>
-
-        <!-- Mobile Table of Contents Toggle -->
-        <button id="mobileTocBtn" aria-label="Open Table of Contents" class="lg:hidden w-9 h-9 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition">
-          <i data-lucide="list" class="w-5 h-5"></i>
+        <button type="button" id="mobileTocBtn" aria-label="Toggle Documentation Navigation"
+          class="lg:hidden inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold s-card t-primary cursor-pointer">
+          <span>Sections</span>
         </button>
-      </div>
 
-    </div>
-
-    <!-- Mobile Table of Contents Drawer -->
-    <div id="mobileTocDrawer" class="lg:hidden hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-dark-bg/95 backdrop-blur-xl px-4 py-5 max-h-[75vh] overflow-y-auto space-y-4 shadow-2xl">
-      <div class="flex items-center justify-between">
-        <span class="font-display font-bold text-xs uppercase tracking-wider text-slate-900 dark:text-white">BerryDB Documentation</span>
-        <button onclick="document.getElementById('mobileTocDrawer').classList.add('hidden')" class="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-white">Close</button>
-      </div>
-      <div class="space-y-3 text-xs">
-        <div>
-          <span class="font-bold text-slate-400 uppercase text-[10px] block mb-1">Getting Started</span>
-          <div class="space-y-1 pl-2">
-            <a href="#intro" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Overview & Architecture</a>
-            <a href="#workspace" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Workspace & Layout</a>
-            <a href="#installation" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Installation & Build</a>
-          </div>
-        </div>
-        <div>
-          <span class="font-bold text-slate-400 uppercase text-[10px] block mb-1">Core Features</span>
-          <div class="space-y-1 pl-2">
-            <a href="#datagrid" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Streaming DataGrid</a>
-            <a href="#ai-copilot" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">AI SQL Copilot</a>
-            <a href="#coding-agents" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Coding Agents (MCP)</a>
-            <a href="#connection-manager" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Connection Profiles & SSH</a>
-            <a href="#schema-designer" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Visual Schema Designer</a>
-            <a href="#explain-plan" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Visual EXPLAIN Plan</a>
-            <a href="#redis-inspector" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Redis Key-Value Browser</a>
-            <a href="#import-export" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Import & Export Wizard</a>
-            <a href="#query-history" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">History & Diagnostics</a>
-          </div>
-        </div>
-        <div>
-          <span class="font-bold text-slate-400 uppercase text-[10px] block mb-1">Reference & Security</span>
-          <div class="space-y-1 pl-2">
-            <a href="#drivers" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Database Drivers</a>
-            <a href="#shortcuts-ref" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">Keyboard Shortcuts</a>
-            <a href="#troubleshooting" class="mobile-doc-link block py-1 text-slate-700 dark:text-slate-300">FAQ & Troubleshooting</a>
-          </div>
-        </div>
+        <a href="https://download-db.berryhub.app/BerryDB-latest.dmg"
+          class="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold btn-primary">
+          Download DMG
+        </a>
       </div>
     </div>
 
+    <!-- Mobile Navigation Drawer -->
+    <div id="mobileTocDrawer" class="hidden lg:hidden border-t b-subtle s-card px-4 py-4 max-h-[72vh] overflow-y-auto">
+      <div class="mb-3">
+        <input type="search" id="mobileDocSearch" placeholder="Filter topics..."
+          class="w-full rounded-lg px-3 py-2 text-xs s-elevated t-primary placeholder:t-muted focus:outline-none" />
+      </div>
+      <div class="grid grid-cols-2 gap-1.5 text-xs">
+        <a href="#intro" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">Overview</a>
+        <a href="#workspace" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">Workspace</a>
+        <a href="#installation" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">Installation</a>
+        <a href="#datagrid" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">DataGrid Engine</a>
+        <a href="#ai-copilot" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">AI SQL Copilot</a>
+        <a href="#coding-agents" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-accent font-semibold">Coding Agents (MCP)</a>
+        <a href="#connection-manager" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">Connections &amp; SSH</a>
+        <a href="#schema-designer" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">Schema &amp; ER Graph</a>
+        <a href="#explain-plan" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">Visual EXPLAIN</a>
+        <a href="#redis-inspector" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">Redis &amp; Valkey</a>
+        <a href="#import-export" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">Import &amp; Export</a>
+        <a href="#query-history" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">Query History</a>
+        <a href="#drivers" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">Drivers &amp; Engines</a>
+        <a href="#shortcuts-ref" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">Keyboard Shortcuts</a>
+        <a href="#troubleshooting" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">Troubleshooting</a>
+        <a href="#support" class="mobile-doc-link px-2.5 py-1.5 rounded hover:s-elevated t-secondary">Support &amp; License</a>
+      </div>
     </div>
   </header>
 
+  <!-- ==================== DOCS SHELL ==================== -->
+  <div class="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+    <div class="flex flex-col lg:flex-row gap-10">
 
-  <!-- ==================== MAIN CONTENT WITH SIDEBAR ==================== -->
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-20">
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
-      
-      <!-- SIDEBAR NAVIGATION -->
-      <aside class="lg:col-span-3">
-        <div class="sticky top-24 max-h-[calc(100vh-7rem)] overflow-y-auto pr-2 pb-8 space-y-6 text-sm text-slate-600 dark:text-slate-400">
-          
+      <!-- Left Sidebar TOC -->
+      <aside class="hidden lg:block w-64 shrink-0">
+        <div class="sticky top-24 max-h-[calc(100vh-7rem)] overflow-y-auto pr-2 space-y-6">
           <div>
-            <h3 class="font-display font-bold text-xs uppercase tracking-wider text-slate-900 dark:text-white mb-2">Getting Started</h3>
-            <ul class="space-y-1">
-              <li><a href="#intro" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition text-emerald-600 dark:text-emerald-400 bg-emerald-50/50 dark:bg-slate-800/50">Overview & Architecture</a></li>
-              <li><a href="#workspace" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Workspace & Layout</a></li>
-              <li><a href="#installation" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Installation & Build</a></li>
+            <div class="font-mono text-[10px] font-bold uppercase tracking-widest t-muted px-3 mb-2">Getting Started</div>
+            <ul class="space-y-0.5 text-[13px]">
+              <li><a href="#intro" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">Overview &amp; Benchmarks</a></li>
+              <li><a href="#workspace" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">Workspace Anatomy</a></li>
+              <li><a href="#installation" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">Installation &amp; Source Build</a></li>
             </ul>
           </div>
 
           <div>
-            <h3 class="font-display font-bold text-xs uppercase tracking-wider text-slate-900 dark:text-white mb-2">Core Features</h3>
-            <ul class="space-y-1">
-              <li><a href="#datagrid" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Streaming DataGrid</a></li>
-              <li><a href="#ai-copilot" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">AI SQL Copilot</a></li>
-              <li><a href="#coding-agents" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Coding Agents (MCP)</a></li>
-              <li><a href="#connection-manager" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Connection & SSH Profiles</a></li>
-              <li><a href="#schema-designer" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Visual Schema & Table Editor</a></li>
-              <li><a href="#explain-plan" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Visual EXPLAIN Query Plan</a></li>
-              <li><a href="#redis-inspector" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Redis Key-Value Browser</a></li>
-              <li><a href="#import-export" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Import & Export Wizard</a></li>
-              <li><a href="#query-history" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Query History</a></li>
+            <div class="font-mono text-[10px] font-bold uppercase tracking-widest t-muted px-3 mb-2">Studio &amp; Engines</div>
+            <ul class="space-y-0.5 text-[13px]">
+              <li><a href="#datagrid" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">Streaming DataGrid</a></li>
+              <li><a href="#connection-manager" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">Connections, Keychain &amp; SSH</a></li>
+              <li><a href="#schema-designer" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">Schema Explorer &amp; ER Graph</a></li>
+              <li><a href="#explain-plan" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">Visual EXPLAIN ANALYZE</a></li>
+              <li><a href="#redis-inspector" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">Redis &amp; Valkey Inspector</a></li>
+              <li><a href="#import-export" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">Import &amp; Export Wizard</a></li>
+              <li><a href="#query-history" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">Query History &amp; Replay</a></li>
+              <li><a href="#drivers" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">9 Engines &amp; Native Drivers</a></li>
             </ul>
           </div>
 
           <div>
-            <h3 class="font-display font-bold text-xs uppercase tracking-wider text-slate-900 dark:text-white mb-2">Engines & Security</h3>
-            <ul class="space-y-1">
-              <li><a href="#drivers" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Database Driver Specs</a></li>
-              <li><a href="#connection-manager" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Keychain Security</a></li>
-              <li><a href="#shortcuts-ref" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Keyboard Shortcuts</a></li>
-              <li><a href="#troubleshooting" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">FAQ & Troubleshooting</a></li>
-              <li><a href="#support" class="doc-link block px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 dark:hover:bg-slate-800/80 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition">Community & Support</a></li>
+            <div class="font-mono text-[10px] font-bold uppercase tracking-widest t-muted px-3 mb-2">AI &amp; Model Context Protocol</div>
+            <ul class="space-y-0.5 text-[13px]">
+              <li><a href="#ai-copilot" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">AI SQL Copilot (Local &amp; Cloud)</a></li>
+              <li><a href="#coding-agents" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">Coding Agents &amp; MCP Live Reads</a></li>
             </ul>
           </div>
 
+          <div>
+            <div class="font-mono text-[10px] font-bold uppercase tracking-widest t-muted px-3 mb-2">Reference</div>
+            <ul class="space-y-0.5 text-[13px]">
+              <li><a href="#shortcuts-ref" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">Keyboard Shortcuts</a></li>
+              <li><a href="#troubleshooting" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">Troubleshooting</a></li>
+              <li><a href="#support" class="doc-link block px-3 py-1.5 rounded-r-lg t-secondary hover:t-primary hover:s-elevated transition">Support &amp; Open Source</a></li>
+            </ul>
+          </div>
         </div>
       </aside>
 
-      <!-- DOCUMENTATION ARTICLES -->
-      <main class="lg:col-span-9 space-y-16 text-left">
-        
-        <!-- SECTION 1: OVERVIEW -->
-        <section id="intro" class="space-y-4">
-          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 text-xs font-bold uppercase">
-            <span>Introduction</span>
+      <!-- Main Documentation Article -->
+      <main id="docsContent" class="flex-1 min-w-0 space-y-14">
+
+        <!-- 1. INTRO / OVERVIEW -->
+        <section id="intro" class="doc-section space-y-6">
+          <div class="inline-flex flex-wrap items-center gap-2 px-3 py-1 rounded-full font-mono text-xs font-semibold badge-accent">
+            <span>BerryDB v1.1.0 Documentation</span>
+            <span>·</span>
+            <span>Swift 6 + AppKit</span>
+            <span>·</span>
+            <span>Apache 2.0</span>
           </div>
-          <h1 class="font-display text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">
-            BerryDB Documentation
+
+          <h1 class="font-display text-3xl sm:text-5xl font-extrabold tracking-tight t-primary">
+            Architecture, Drivers &amp; MCP Reference
           </h1>
-          <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">
-            <strong>BerryDB</strong> is a native macOS database management client built with Swift 6 and AppKit. It does not bundle a browser engine, Node.js or a JVM.
+
+          <p class="text-base sm:text-lg t-secondary leading-relaxed max-w-3xl">
+            BerryDB is a native macOS database workbench and Model Context Protocol (<code class="font-mono text-sm t-accent">berrydb-mcp</code>) server compiled to Apple Silicon ARM64 with Swift 6 and AppKit. Rather than wrapping Chromium or a Java runtime, it uses <code class="font-mono text-xs s-code px-1.5 py-0.5 rounded">NSTableView</code> virtualized grids, macOS Keychain storage, Citadel pure-Swift SSH tunnels, Apple Intelligence or Cloud AI SQL assistance, and opt-in read-only MCP live queries across nine engines.
           </p>
 
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
-            <div class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 shadow-sm">
-              <h4 class="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2"><i data-lucide="zap" class="w-4 h-4 text-emerald-500"></i> Native Grid</h4>
-              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">AppKit NSTableView grid; rows stream in while the query runs.</p>
+          <div class="grid sm:grid-cols-4 gap-3">
+            <div class="s-card rounded-xl p-4">
+              <div class="font-mono text-[10px] uppercase tracking-wider t-muted">Cold Start (M1)</div>
+              <div class="font-mono text-xl font-bold t-primary mt-1">0.85s</div>
+              <div class="text-[11px] t-muted mt-0.5">macOS 26.6.2 benchmark</div>
             </div>
-            <div class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 shadow-sm">
-              <h4 class="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2"><i data-lucide="lock" class="w-4 h-4 text-blue-500"></i> macOS Keychain</h4>
-              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Keychain storage for database passwords, API keys and SSH key passphrases.</p>
+            <div class="s-card rounded-xl p-4">
+              <div class="font-mono text-[10px] uppercase tracking-wider t-muted">Engines Supported</div>
+              <div class="font-mono text-xl font-bold t-accent mt-1">9 Drivers</div>
+              <div class="text-[11px] t-muted mt-0.5">SQL, NoSQL, KV, Vector</div>
             </div>
-            <div class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 shadow-sm">
-              <h4 class="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2"><i data-lucide="sparkles" class="w-4 h-4 text-purple-500"></i> AI SQL Copilot</h4>
-              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Schema-aware natural language query generation, on Apple's on-device model or BerryDB's cloud AI service.</p>
+            <div class="s-card rounded-xl p-4">
+              <div class="font-mono text-[10px] uppercase tracking-wider t-muted">MCP Toolset</div>
+              <div class="font-mono text-xl font-bold t-emerald mt-1">8 Tools</div>
+              <div class="text-[11px] t-muted mt-0.5">6 cache + 2 opt-in reads</div>
+            </div>
+            <div class="s-card rounded-xl p-4">
+              <div class="font-mono text-[10px] uppercase tracking-wider t-muted">Grid Render Cap</div>
+              <div class="font-mono text-xl font-bold t-primary mt-1">1,000 Rows</div>
+              <div class="text-[11px] t-muted mt-0.5">Per query UI window</div>
             </div>
           </div>
+
+          <figure class="s-window rounded-2xl overflow-hidden">
+            <img src="public/images/Capture-1786694680.png" alt="BerryDB v1.1.0 Multi-Engine Native Workspace" class="w-full h-auto block" />
+            <figcaption class="px-5 py-3 border-t b-subtle s-elevated flex flex-wrap items-center justify-between gap-2 text-xs t-muted">
+              <span>Figure 1 — Native macOS three-pane workbench displaying multi-engine catalog navigation, SQL tab execution, and inline JSON inspector.</span>
+              <span class="font-mono t-accent">2762×1740 Retina</span>
+            </figcaption>
+          </figure>
         </section>
 
+        <hr class="b-subtle" />
 
-        <!-- SECTION 2: WORKSPACE & LAYOUT -->
-        <section id="workspace" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <i data-lucide="layout-dashboard" class="w-5 h-5 text-emerald-500"></i>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Workspace & Multi-tab Navigation</h2>
-          </div>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            BerryDB features an intuitive macOS layout with a collapsible connection sidebar, multi-tab SQL scratchpad, split-pane result grid, and interactive AI assistant sidebar.
+        <!-- 2. WORKSPACE ANATOMY -->
+        <section id="workspace" class="doc-section space-y-5">
+          <div class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Studio Layout</div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Workspace Anatomy &amp; Navigation</h2>
+          <p class="t-secondary leading-relaxed">
+            Every BerryDB window isolates connection pools, SSH tunnels, staged edits, and AI threads cleanly into three synchronized panes driven by standard AppKit split views and keyboard responders:
           </p>
 
-          <!-- Screenshot Illustration -->
-          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
-            <img src="public/images/Capture-1786694680.png" alt="BerryDB Main Workspace" class="w-full h-auto object-cover" />
-            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-              Figure 1: Main BerryDB Workspace with Sidebar Schema Catalog, Multi-tab Query Editor, and Inline Results Grid.
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="s-card rounded-xl p-5 space-y-2">
+              <h3 class="font-semibold text-sm t-primary flex items-center gap-2">
+                <span class="font-mono text-xs px-2 py-0.5 rounded badge-accent">01</span>
+                Left Catalog &amp; Environment Navigator
+              </h3>
+              <p class="text-xs t-secondary leading-relaxed">
+                Groups connections by environment tag (<span class="t-emerald font-mono">LOCAL</span>, <span class="t-amber font-mono">STAGING</span>, <span class="t-danger font-mono">PRODUCTION</span>), schemas, tables, views, collections, and vector indexes. Production tags trigger strict read-only guardrails across AI Copilot and MCP live reads.
+              </p>
+            </div>
+            <div class="s-card rounded-xl p-5 space-y-2">
+              <h3 class="font-semibold text-sm t-primary flex items-center gap-2">
+                <span class="font-mono text-xs px-2 py-0.5 rounded badge-accent">02</span>
+                Center SQL Editor &amp; Streaming Grid
+              </h3>
+              <p class="text-xs t-secondary leading-relaxed">
+                Multi-tab syntax-highlighted query workspace paired with a bottom streaming <code class="font-mono text-[11px] t-primary">NSTableView</code> split, inline diff staging bar, and Visual EXPLAIN viewer.
+              </p>
+            </div>
+            <div class="s-card rounded-xl p-5 space-y-2">
+              <h3 class="font-semibold text-sm t-primary flex items-center gap-2">
+                <span class="font-mono text-xs px-2 py-0.5 rounded badge-accent">03</span>
+                Right Row Inspector &amp; AI Copilot
+              </h3>
+              <p class="text-xs t-secondary leading-relaxed">
+                Switch between structured JSON/field inspection for the selected row and context-aware AI SQL generation running via Apple Intelligence or Cloud mode.
+              </p>
+            </div>
+            <div class="s-card rounded-xl p-5 space-y-2">
+              <h3 class="font-semibold text-sm t-primary flex items-center gap-2">
+                <span class="font-mono text-xs px-2 py-0.5 rounded badge-accent">04</span>
+                Universal Command Palette (<kbd class="font-mono">⌘K</kbd>)
+              </h3>
+              <p class="text-xs t-secondary leading-relaxed">
+                Fuzzy-jump directly to any cached table, saved query, recent statement, visual EXPLAIN run, or connection switch without lifting hands from the keyboard.
+              </p>
             </div>
           </div>
+
+          <figure class="s-window rounded-2xl overflow-hidden">
+            <img src="public/images/Screenshot-C676D002-6AEF-4B29-91FD-45B2D417D483.png" alt="BerryDB Command Palette Quick Jump" class="w-full h-auto block" />
+            <figcaption class="px-5 py-3 border-t b-subtle s-elevated text-xs t-muted">
+              Figure 2 — <kbd class="font-mono px-1.5 py-0.5 rounded s-recessed">⌘K</kbd> Command Palette indexing tables, recent queries, AI actions, and connection switches instantaneously.
+            </figcaption>
+          </figure>
         </section>
 
+        <hr class="b-subtle" />
 
-        <!-- SECTION 3: INSTALLATION -->
-        <section id="installation" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <i data-lucide="download" class="w-5 h-5 text-emerald-500"></i>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Installation & Building From Source</h2>
-          </div>
-
-          <h3 class="font-bold text-base text-slate-900 dark:text-white">Option 1: Official DMG Release (Recommended)</h3>
-          <p class="text-sm text-slate-600 dark:text-slate-300">
-            Download for Apple Silicon, macOS 15.0 Sequoia or later:
-          </p>
-          <div class="p-4 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between flex-wrap gap-4">
-            <span class="text-xs font-mono text-slate-800 dark:text-slate-200">https://download-db.berryhub.app/BerryDB-latest.dmg</span>
-            <a href="https://download-db.berryhub.app/BerryDB-latest.dmg" class="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition">Download .DMG</a>
-          </div>
-
-          <h3 class="font-bold text-base text-slate-900 dark:text-white pt-3">Option 2: Build From Source with Swift SPM & Makefile</h3>
-          <div class="rounded-xl bg-slate-950 p-4 border border-slate-800 text-xs font-mono text-slate-200 space-y-2 overflow-x-auto">
-            <p class="text-slate-500"># 1. Clone repository</p>
-            <p>git clone https://github.com/berry-apps/berrydb-desktop.git && cd berrydb-desktop</p>
-            <p class="text-slate-500 pt-2"># 2. Build and launch local development instance</p>
-            <p>make run</p>
-            <p class="text-slate-500 pt-2"># 3. Assemble release bundle into dist/BerryDB.app</p>
-            <p>make app</p>
-          </div>
-        </section>
-
-
-        <!-- SECTION 4: STREAMING DATAGRID -->
-        <section id="datagrid" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <i data-lucide="table-2" class="w-5 h-5 text-emerald-500"></i>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Streaming DataGrid</h2>
-          </div>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            The AppKit <code class="font-mono text-xs">NSTableView</code> DataGrid shows rows as they stream in and creates cell views only for the rows on screen. It supports inline cell editing, and table tabs sort and filter on the server (1,000 rows by default).
+        <!-- 3. INSTALLATION -->
+        <section id="installation" class="doc-section space-y-5">
+          <div class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Setup</div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Installation &amp; Source Build</h2>
+          <p class="t-secondary leading-relaxed">
+            BerryDB targets <strong>macOS 15.0 or later</strong> on Apple Silicon (<code class="font-mono text-xs s-code px-1.5 py-0.5 rounded">arm64</code>). Choose Homebrew Cask for automated upgrades, download the signed DMG directly, or build from the public Apache 2.0 repository.
           </p>
 
-          <!-- Screenshot Illustration -->
-          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
-            <img src="public/images/Screenshot-FDADEF7C-75A2-479E-832F-386FA3974B33.png" alt="Streaming DataGrid" class="w-full h-auto object-cover" />
-            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-              Figure 2: The DataGrid with inline editing, sticky column headers, and execution metric indicators.
+          <div class="grid md:grid-cols-2 gap-5">
+            <div class="s-card rounded-xl p-5 space-y-3">
+              <div class="flex items-center justify-between">
+                <h3 class="font-display font-bold text-base t-primary">Option 1 — Homebrew Cask (Recommended)</h3>
+                <span class="font-mono text-[10px] px-2 py-0.5 rounded badge-emerald">Fastest</span>
+              </div>
+              <p class="text-xs t-secondary">Installs both <code class="font-mono">BerryDB.app</code> into <code class="font-mono">/Applications</code> and registers the bundled <code class="font-mono">berrydb-mcp</code> binary.</p>
+              <div class="relative">
+                <pre class="s-code rounded-lg p-3.5 font-mono text-xs overflow-x-auto leading-relaxed"><code>brew install --cask berry-apps/tap/berrydb</code></pre>
+                <button type="button" onclick="copyCode(this)" data-copy="brew install --cask berry-apps/tap/berrydb"
+                  class="absolute top-2.5 right-2.5 px-2 py-1 rounded text-[10px] font-mono s-elevated t-muted hover:t-primary transition cursor-pointer">Copy</button>
+              </div>
+              <p class="text-[11px] t-muted">Or tap explicitly first:</p>
+              <pre class="s-code rounded-lg p-3 font-mono text-[11px] overflow-x-auto"><code>brew tap berry-apps/tap &amp;&amp; brew install --cask berrydb</code></pre>
             </div>
-          </div>
-        </section>
 
-
-        <!-- SECTION 5: AI SQL COPILOT -->
-        <section id="ai-copilot" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <i data-lucide="sparkles" class="w-5 h-5 text-purple-500"></i>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">AI SQL Copilot & Chat Assistant</h2>
-          </div>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Turn plain English prompts into SQL for PostgreSQL, MySQL, SQLite, and SQL Server. The assistant reads your schema, foreign key relationships, and data types. In cloud mode (free trial, then paid), your questions, the database type, your schema (table and column names) and the results of queries the assistant runs (up to 100 rows each) are sent to BerryDB's AI service; table sample rows are shared only if you turn that on.
-          </p>
-
-          <!-- Screenshot Illustration -->
-          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
-            <img src="public/images/Screenshot-9E1F8A3F-0E70-4F56-90AD-E3B6CC9DA071.png" alt="AI SQL Copilot" class="w-full h-auto object-cover" />
-            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-              Figure 3: AI SQL Copilot Assistant side panel generating complex multi-table JOINs and query fixes.
-            </div>
-          </div>
-        </section>
-
-
-        <!-- SECTION: CODING AGENTS (MCP) -->
-        <section id="coding-agents" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <i data-lucide="terminal" class="w-5 h-5 text-indigo-500"></i>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Coding Agents (MCP)</h2>
-          </div>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Claude Code, Codex and Antigravity can read the database schema BerryDB has already cached. They do it through <code class="font-mono text-xs">berrydb-mcp</code>, a small helper inside BerryDB.app that the agent starts itself and talks to over standard input and output (an MCP stdio server). The helper answers from the schema metadata BerryDB cached for the connections you add to an <strong>MCP project</strong>: tables, columns, keys, indexes, relationships and the schema graph. It opens BerryDB's local store read-only, never connects to a database and never reads connection passwords.
-          </p>
-
-          <!-- Stacked rows rather than a table: at phone width a two-column table squeezed the descriptions to a few words per line. -->
-          <div class="rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden divide-y divide-slate-200 dark:divide-slate-800 bg-white dark:bg-[#0E1424] text-xs sm:text-sm text-slate-700 dark:text-slate-300">
-            <div class="hidden sm:flex sm:gap-4 py-3 px-4 bg-slate-100 dark:bg-slate-900 font-bold text-slate-900 dark:text-white">
-              <span class="sm:w-52 sm:shrink-0">Tool</span>
-              <span>What it returns</span>
-            </div>
-            <div class="py-3 px-4 sm:flex sm:gap-4">
-              <code class="block sm:w-52 sm:shrink-0 font-mono text-xs text-indigo-600 dark:text-indigo-400">berrydb_status</code>
-              <p class="mt-1 sm:mt-0">Which project this session serves, or why none. Always available; agents are told to call it first.</p>
-            </div>
-            <div class="py-3 px-4 sm:flex sm:gap-4">
-              <code class="block sm:w-52 sm:shrink-0 font-mono text-xs text-indigo-600 dark:text-indigo-400">berrydb_list_connections</code>
-              <p class="mt-1 sm:mt-0">The project's connections: name, driver, whether it is marked as production, and when its cached schema last changed.</p>
-            </div>
-            <div class="py-3 px-4 sm:flex sm:gap-4">
-              <code class="block sm:w-52 sm:shrink-0 font-mono text-xs text-indigo-600 dark:text-indigo-400">berrydb_get_schema</code>
-              <p class="mt-1 sm:mt-0">Tables and views of one connection, up to 200 per call; full detail adds columns, indexes and foreign keys.</p>
-            </div>
-            <div class="py-3 px-4 sm:flex sm:gap-4">
-              <code class="block sm:w-52 sm:shrink-0 font-mono text-xs text-indigo-600 dark:text-indigo-400">berrydb_search_schema</code>
-              <p class="mt-1 sm:mt-0">Case-insensitive search over table, view, column and index names.</p>
-            </div>
-            <div class="py-3 px-4 sm:flex sm:gap-4">
-              <code class="block sm:w-52 sm:shrink-0 font-mono text-xs text-indigo-600 dark:text-indigo-400">berrydb_graph_query</code>
-              <p class="mt-1 sm:mt-0">Questions about the schema graph: a table's neighbors, the path between two tables, the blast radius of a change, circular dependencies, the most central tables.</p>
-            </div>
-            <div class="py-3 px-4 sm:flex sm:gap-4">
-              <code class="block sm:w-52 sm:shrink-0 font-mono text-xs text-indigo-600 dark:text-indigo-400">berrydb_get_graph_stats</code>
-              <p class="mt-1 sm:mt-0">Cached statistics (rows, size, scans) for every table, or for one table and its indexes.</p>
+            <div class="s-card rounded-xl p-5 space-y-3">
+              <div class="flex items-center justify-between">
+                <h3 class="font-display font-bold text-base t-primary">Option 2 — Pre-Built DMG Archive</h3>
+                <span class="font-mono text-[10px] px-2 py-0.5 rounded badge-accent">macOS 15.0+</span>
+              </div>
+              <p class="text-xs t-secondary">Direct disk image containing the Apple Silicon universal workbench bundle and standalone MCP executable.</p>
+              <a href="https://download-db.berryhub.app/BerryDB-latest.dmg"
+                class="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold btn-primary">
+                Download BerryDB-latest.dmg
+              </a>
+              <p class="text-[11px] t-muted pt-1">
+                Drag <strong>BerryDB.app</strong> into <code class="font-mono">/Applications</code>. If launching an unsigned local build triggers Gatekeeper quarantine, clear the extended attribute:
+              </p>
+              <pre class="s-code rounded-lg p-3 font-mono text-[11px] overflow-x-auto"><code>xattr -cr /Applications/BerryDB.app</code></pre>
             </div>
           </div>
 
-          <div class="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60">
-            <h4 class="font-bold text-sm text-amber-900 dark:text-amber-200 flex items-center gap-2"><i data-lucide="eye" class="w-4 h-4"></i> What leaves your Mac</h4>
-            <p class="text-xs sm:text-sm text-amber-900/90 dark:text-amber-100/90 mt-1 leading-relaxed">
-              Whatever a tool returns goes to the agent, and from there to that agent's model provider. Running the helper locally does not keep the schema on your Mac. Only add connections whose schema and table statistics you are willing to share with that provider.
+          <div class="s-card rounded-xl p-5 space-y-3">
+            <h3 class="font-display font-bold text-base t-primary">Option 3 — Build from Source (Swift 6 + Xcode 16+)</h3>
+            <p class="text-xs t-secondary leading-relaxed">
+              Source builds require FreeTDS headers via Homebrew for native SQL Server (<code class="font-mono">libsybdb</code>) linkage alongside Swift Package Manager dependencies.
+            </p>
+            <div class="relative">
+              <pre class="s-code rounded-lg p-4 font-mono text-xs overflow-x-auto leading-relaxed"><code>git clone https://github.com/berry-apps/berrydb-desktop.git
+cd berrydb-desktop
+brew install freetds
+cp .env.example .env
+make run    # Compile &amp; launch debug executable
+make app    # Assemble BerryDB.app bundle + berrydb-mcp helper</code></pre>
+              <button type="button" onclick="copyCode(this)" data-copy="git clone https://github.com/berry-apps/berrydb-desktop.git&#10;cd berrydb-desktop&#10;brew install freetds&#10;cp .env.example .env&#10;make run"
+                class="absolute top-2.5 right-2.5 px-2 py-1 rounded text-[10px] font-mono s-elevated t-muted hover:t-primary transition cursor-pointer">Copy</button>
+            </div>
+            <p class="text-[11px] t-muted">
+              Cold-start timing can be verified locally with <code class="font-mono text-primary">bash scripts/measure-performance.sh</code> (measured at <code class="font-mono">0.85s</code> on M1 Apple Silicon, macOS 26.6.2).
             </p>
           </div>
+        </section>
 
-          <h3 class="font-bold text-base text-slate-900 dark:text-white pt-3">Before you start</h3>
-          <ul class="list-disc pl-5 space-y-2 text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            <li><strong>Run BerryDB from the Applications folder.</strong> Every setup command points at the helper inside the app by its full path. When BerryDB runs from a read-only location such as the mounted disk image, Settings shows <em>“Move BerryDB to the Applications folder and open it from there to set up agents.”</em> instead of commands.</li>
-            <li><strong>Open each connection once in BerryDB.</strong> Connecting caches its schema, and <strong>Database → Refresh Schema</strong> updates the cache after the schema changes. Agents see the schema as of that moment, not the live database.</li>
-            <li><strong>Production connections are never cached.</strong> BerryDB does not cache the schema of a connection while it is marked as production (<strong>Production environment</strong> in the connection settings, the <span class="font-mono text-xs">PROD</span> badge in the sidebar), so agents see no schema for it. A schema cached before the label was set stays.</li>
-            <li><strong>SQL and DynamoDB only.</strong> PostgreSQL, MySQL/MariaDB, SQLite, SQL Server and DynamoDB connections are cached. MongoDB, Redis/Valkey, Elasticsearch and Qdrant connections are not, so agents see no schema for them.</li>
+        <hr class="b-subtle" />
+
+        <!-- 4. STREAMING DATAGRID -->
+        <section id="datagrid" class="doc-section space-y-5">
+          <div class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Grid &amp; Staging</div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Streaming DataGrid &amp; Staged Transactions</h2>
+          <p class="t-secondary leading-relaxed">
+            Result grids stream directly from wire decoders into an AppKit <code class="font-mono text-xs s-code px-1.5 py-0.5 rounded">NSTableView</code> capped at <strong>1,000 rows per interactive query</strong> to protect responsiveness. Double-click cells to stage inline modifications highlighted in cobalt and commit everything atomically inside an explicit reviewable transaction.
+          </p>
+          <ul class="grid sm:grid-cols-3 gap-3 text-xs t-secondary">
+            <li class="s-card rounded-xl p-4"><strong class="block t-primary mb-1">Pin Columns &amp; Quick Filter</strong>Lock key identifiers while scrolling wide analytical projections horizontally at 120Hz.</li>
+            <li class="s-card rounded-xl p-4"><strong class="block t-primary mb-1">JSON &amp; UUID Popovers</strong>Inspect nested <code class="font-mono">jsonb</code> documents, arrays, timestamps, and explicit <code class="font-mono">NULL</code> tokens cleanly.</li>
+            <li class="s-card rounded-xl p-4"><strong class="block t-primary mb-1">Atomic Staged Commits</strong>Preview exact generated <code class="font-mono">UPDATE</code>/<code class="font-mono">DELETE</code> SQL statements before pressing <kbd class="font-mono">⌘S</kbd>.</li>
           </ul>
+          <figure class="s-window rounded-2xl overflow-hidden">
+            <img src="public/images/Screenshot-FDADEF7C-75A2-479E-832F-386FA3974B33.png" alt="BerryDB Streaming DataGrid with Staged Edit Diff Bar" class="w-full h-auto block" />
+            <figcaption class="px-5 py-3 border-t b-subtle s-elevated text-xs t-muted">
+              Figure 3 — Virtualized DataGrid showing staged inline cell updates, explicit SQL diff preview bar, and side-panel JSON inspector.
+            </figcaption>
+          </figure>
+        </section>
 
-          <h3 class="font-bold text-base text-slate-900 dark:text-white pt-3">Set up a project</h3>
-          <ol class="list-decimal pl-5 space-y-2 text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            <li>Open <strong>Settings</strong> (<kbd class="kbd-tag px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 font-mono text-xs">⌘,</kbd>) and choose the <strong>AI Agents</strong> tab.</li>
-            <li>Click <strong>New Project…</strong>, give the project a name and turn on <strong>Enabled</strong>; new projects start disabled.</li>
-            <li>Under <strong>Workspace Folders</strong>, click <strong>Add Folder…</strong> and choose every folder whose code uses these connections. Subfolders and worktrees inside a folder are included. You can skip this if you name the project per repository (below).</li>
-            <li>Under <strong>Connections</strong>, turn on each connection agents may read.</li>
-            <li>Click <strong>Save</strong>.</li>
-          </ol>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Project names are matched ignoring letter case and surrounding spaces. Settings refuses a name another project already uses or one that has the form of a project ID, and two projects cannot share a workspace folder.
+        <hr class="b-subtle" />
+
+        <!-- 5. AI SQL COPILOT -->
+        <section id="ai-copilot" class="doc-section space-y-5">
+          <div class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Intelligent Assistance</div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">AI SQL Copilot — On-Device &amp; Cloud Modes</h2>
+          <p class="t-secondary leading-relaxed">
+            BerryDB separates prompt execution modes cleanly so teams can keep sensitive schema context strictly on the Mac or opt into hosted reasoning models when needed.
           </p>
 
-          <h3 class="font-bold text-base text-slate-900 dark:text-white pt-3">Choose how agents find the project</h3>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            The project's <strong>Agent Setup</strong> section shows ready-to-run entries with the helper's path and your project filled in. <strong>Copy them from there.</strong> The examples below assume BerryDB is in <code class="font-mono text-xs">/Applications</code> and a project named <code class="font-mono text-xs">Shop API</code>. Every entry is named <code class="font-mono text-xs">berrydb</code>. The per-repository and “always this project” entries appear once the project is saved: click <strong>Edit…</strong> next to it.
-          </p>
-
-          <div class="space-y-4">
-            <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 space-y-3">
-              <h4 class="font-bold text-sm text-slate-900 dark:text-white">1. One shared entry for every repository</h4>
-              <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                <strong>Use it when</strong> you work in several repositories and want each one to get its project from the folders registered in BerryDB. Works with Claude Code, Codex and Antigravity. Run one command once per agent:
-              </p>
-              <pre class="rounded-xl bg-slate-950 p-4 border border-slate-800 text-xs font-mono text-slate-200 overflow-x-auto"><span class="text-slate-500"># Claude Code</span>
-claude mcp add --scope user berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp'
-<span class="text-slate-500"># Codex</span>
-codex mcp add berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp'
-<span class="text-slate-500"># Antigravity</span>
-agy mcp add berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp'</pre>
-              <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                The helper takes the folder the agent works in (the workspace folder the agent reports, or else the folder it was started in) and matches it against every project's <strong>Workspace Folders</strong>; the most specific folder wins.
-              </p>
-            </div>
-
-            <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 space-y-3">
-              <h4 class="font-bold text-sm text-slate-900 dark:text-white">2. One repository, pinned by project name</h4>
-              <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                <strong>Use it when</strong> a repository should always use one project without registering its folder, or when you want to commit that choice so every clone, and every teammate whose project has the same name, gets it. The entry also records the helper's path, so it works for teammates who keep BerryDB in the same place.
-              </p>
-              <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">Claude Code: run it in the repository's top folder. It writes <code class="font-mono text-xs">.mcp.json</code> there, which can be committed.</p>
-              <pre class="rounded-xl bg-slate-950 p-4 border border-slate-800 text-xs font-mono text-slate-200 overflow-x-auto">claude mcp add --scope project berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp' --project 'Shop API'</pre>
-              <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">Codex: add it to <code class="font-mono text-xs">.codex/config.toml</code> in the repository.</p>
-              <pre class="rounded-xl bg-slate-950 p-4 border border-slate-800 text-xs font-mono text-slate-200 overflow-x-auto">[mcp_servers.berrydb]
-command = "/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp"
-args = ["--project", "Shop API"]</pre>
-              <ul class="list-disc pl-5 space-y-2 text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                <li><strong>Claude Code</strong> asks in an interactive session before it uses a server from <code class="font-mono text-xs">.mcp.json</code>. Once you approve it, Claude Code uses this entry in that repository instead of your user-level <code class="font-mono text-xs">berrydb</code> entry; until then it uses the user-level one (<a href="https://code.claude.com/docs/en/mcp#project-scope" target="_blank" rel="noopener" class="text-rose-600 dark:text-rose-400 hover:underline">project scope</a>, <a href="https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence" target="_blank" rel="noopener" class="text-rose-600 dark:text-rose-400 hover:underline">scope precedence</a>).</li>
-                <li><strong>Codex</strong> reads <code class="font-mono text-xs">.codex/config.toml</code> only in a trusted project, and there it replaces the user-level entry (observed with Codex CLI 0.157.1).</li>
-                <li><strong>Only open repositories you trust in non-interactive modes.</strong> <code class="font-mono text-xs">claude -p</code> runs, Agent SDK sessions and cloud sessions load a repository's <code class="font-mono text-xs">.mcp.json</code> without asking (<a href="https://code.claude.com/docs/en/mcp#project-scope" target="_blank" rel="noopener" class="text-rose-600 dark:text-rose-400 hover:underline">Claude Code docs</a>), and a repository you did not write can name one of your projects.</li>
-                <li><strong>Antigravity</strong> has no per-repository configuration: version 1.3.1 reads MCP servers only from its user configuration and plugins. Use option 1 or 3 there.</li>
-                <li>Renaming the project stops entries that name the old name from selecting it; Settings warns you when you rename.</li>
+          <div class="grid md:grid-cols-2 gap-5">
+            <div class="s-card rounded-xl p-5 space-y-3 border-l-4" style="border-left-color: var(--emerald);">
+              <div class="flex items-center justify-between">
+                <h3 class="font-display font-bold text-base t-primary">Where the AI Runs</h3>
+                <span class="font-mono text-[10px] px-2 py-0.5 rounded badge-emerald">macOS 26+ On-Device</span>
+              </div>
+              <ul class="space-y-2 text-xs t-secondary leading-relaxed">
+                <li><strong>Apple Intelligence (macOS 26+):</strong> Runs locally on Apple Silicon Foundation Models — <strong>its turns send nothing to BerryDB's service</strong> or external model hosts.</li>
+                <li><strong>Cloud Mode:</strong> Dispatches schema metadata and user prompts over TLS to the configured cloud provider for multi-table analytical queries.</li>
+                <li><strong>Cloud Switching Caveat:</strong> Switching an existing on-device conversation to Cloud mode warns explicitly before sharing prior local turn context with remote APIs.</li>
               </ul>
             </div>
 
-            <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 space-y-3">
-              <h4 class="font-bold text-sm text-slate-900 dark:text-white">3. Always this project</h4>
-              <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                <strong>Use it when</strong> you work on one project and want every agent session to use it, wherever the agent runs. The entries marked “always this project” are the option 1 commands followed by <code class="font-mono text-xs whitespace-nowrap">--project</code> and the project's ID, which the pane fills in. Such an entry serves this project in every folder, whatever workspace folders would select, except in a repository with its own entry. It is a user-level entry named <code class="font-mono text-xs">berrydb</code> too, so set up each agent with either option 1 or this one.
+            <div class="s-card rounded-xl p-5 space-y-3 border-l-4" style="border-left-color: var(--accent);">
+              <div class="flex items-center justify-between">
+                <h3 class="font-display font-bold text-base t-primary">What Runs Without Asking</h3>
+                <span class="font-mono text-[10px] px-2 py-0.5 rounded badge-accent">Separate RO Connection</span>
+              </div>
+              <ul class="space-y-2 text-xs t-secondary leading-relaxed">
+                <li><strong>Auto-Run Safe SELECTs:</strong> When enabled on PostgreSQL, MySQL/MariaDB, or SQLite, read queries execute over a <strong>separate read-only connection</strong> (<code class="font-mono">BEGIN READ ONLY</code> / <code class="font-mono">PRAGMA query_only</code>).</li>
+                <li><strong>SQL Server &amp; DynamoDB:</strong> Validated by BerryDB's client-side read-only statement check prior to dispatch.</li>
+                <li><strong>Approval Card &amp; Prod Lock:</strong> Any blocked or mutating statement (<code class="font-mono">INSERT</code>, <code class="font-mono">UPDATE</code>, <code class="font-mono">DELETE</code>, DDL) opens a human approval card. Auto-execution is <strong>disabled by default on production-labeled connections</strong>.</li>
+              </ul>
+            </div>
+          </div>
+
+          <figure class="s-window rounded-2xl overflow-hidden">
+            <img src="public/images/Screenshot-9E1F8A3F-0E70-4F56-90AD-E3B6CC9DA071.png" alt="Apple Intelligence On-Device SQL Copilot with Read-Only Connection Badge" class="w-full h-auto block" />
+            <figcaption class="px-5 py-3 border-t b-subtle s-elevated text-xs t-muted">
+              Figure 4 — AI SQL Copilot operating with the on-device Apple Intelligence runtime and isolated read-only execution indicator.
+            </figcaption>
+          </figure>
+        </section>
+
+        <hr class="b-subtle" />
+
+        <!-- 6. CODING AGENTS (MCP) -->
+        <section id="coding-agents" class="doc-section space-y-6">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Model Context Protocol (MCP)</span>
+            <span class="font-mono text-[10px] px-2 py-0.5 rounded badge-emerald">Updated for BerryDB v1.1.0</span>
+          </div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Coding Agents &amp; Guarded MCP Live Reads (<code class="font-mono text-xl sm:text-2xl t-accent">berrydb-mcp</code>)</h2>
+          <p class="t-secondary leading-relaxed">
+            BerryDB ships a standalone stdio MCP executable inside the application bundle at
+            <code class="font-mono text-xs s-code px-1.5 py-0.5 rounded">/Applications/BerryDB.app/Contents/MacOS/berrydb-mcp</code>.
+            External coding assistants — including <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Antigravity</strong>, and <strong>Cursor</strong> — operate in two distinct privilege tiers:
+          </p>
+
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="s-card rounded-xl p-5 space-y-2 border-t-2" style="border-top-color: var(--emerald);">
+              <div class="font-mono text-[11px] font-bold uppercase tracking-wider t-emerald">Tier 1 · Default (Offline)</div>
+              <h3 class="font-display font-bold text-base t-primary">Schema Cache Tools</h3>
+              <p class="text-xs t-secondary leading-relaxed">
+                With opt-in live reads disabled, <code class="font-mono">berrydb-mcp</code> opens BerryDB's local metadata cache read-only. Zero sockets connect to databases and zero credentials are touched in this mode.
+              </p>
+            </div>
+            <div class="s-card rounded-xl p-5 space-y-2 border-t-2" style="border-top-color: var(--accent);">
+              <div class="font-mono text-[11px] font-bold uppercase tracking-wider t-accent">Tier 2 · Per-Connection Opt-In</div>
+              <h3 class="font-display font-bold text-base t-primary">Guarded Live Reads (Settings → AI Agents)</h3>
+              <p class="text-xs t-secondary leading-relaxed">
+                Disabled by default. Once explicitly enabled for a vetted profile, agents gain read-only execution via <code class="font-mono">berrydb_execute_read_query</code> (PostgreSQL, MySQL/MariaDB, SQLite) and <code class="font-mono">berrydb_dynamodb_query</code> (DynamoDB).
               </p>
             </div>
           </div>
 
-          <h3 class="font-bold text-base text-slate-900 dark:text-white pt-3">First use: the Keychain prompt</h3>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            The first time an agent uses BerryDB with a project selected, macOS may ask whether <code class="font-mono text-xs">berrydb-mcp</code> may use a key that BerryDB keeps in your login keychain (<code class="font-mono text-xs">dev.berrydb.mcp.access-key</code>). <strong>Choose Always Allow.</strong> The key lets the helper check that the project's settings are the ones BerryDB saved; it is not a database password. Allowing it once lets that one request through, and macOS asks again on the next (<a href="https://support.apple.com/guide/keychain-access/if-youre-asked-for-access-to-your-keychain-kyca1243/mac" target="_blank" rel="noopener" class="text-rose-600 dark:text-rose-400 hover:underline">Apple's Keychain Access guide</a>). If you deny it, the helper still serves the schema, but <code class="font-mono text-xs">berrydb_status</code> reports <code class="font-mono text-xs">"integrity": "unavailable"</code>.
-          </p>
-
-          <h3 class="font-bold text-base text-slate-900 dark:text-white pt-3">Check that it works</h3>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Start a new agent session and ask the agent to call <code class="font-mono text-xs">berrydb_status</code>. A working setup answers with <code class="font-mono text-xs">"state": "selected"</code>, your project's name, and <code class="font-mono text-xs">selected_by</code>:
-          </p>
-          <ul class="list-disc pl-5 space-y-2 text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            <li><code class="font-mono text-xs">explicit</code>: the entry names the project with <code class="font-mono text-xs whitespace-nowrap">--project</code> (options 2 and 3).</li>
-            <li><code class="font-mono text-xs">roots</code>: a workspace folder the agent reported is inside one of the project's Workspace Folders.</li>
-            <li><code class="font-mono text-xs">working_directory</code>: the folder the agent started the helper in is inside one of them.</li>
-          </ul>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            <code class="font-mono text-xs">"integrity": "verified"</code> means the project's saved settings check out. <code class="font-mono text-xs">"unavailable"</code> means the key could not be read (see above) or the settings could not be verified; the schema is served either way. If Settings shows <em>“Not verified — save to confirm”</em> next to the project, open it, turn on <strong>Enabled</strong> and save. <code class="font-mono text-xs">live_reads</code> is always <code class="font-mono text-xs">not_available</code>.
-          </p>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            With <code class="font-mono text-xs">"state": "unconfigured"</code>, the agent sees only <code class="font-mono text-xs">berrydb_status</code>, and <code class="font-mono text-xs">reason</code> says why:
-          </p>
-          <div class="rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden divide-y divide-slate-200 dark:divide-slate-800 bg-white dark:bg-[#0E1424] text-xs sm:text-sm text-slate-700 dark:text-slate-300">
-            <div class="hidden md:grid md:grid-cols-12 md:gap-4 py-3 px-4 bg-slate-100 dark:bg-slate-900 font-bold text-slate-900 dark:text-white">
-              <span class="md:col-span-4">reason</span>
-              <span class="md:col-span-4">What it means</span>
-              <span class="md:col-span-4">What to do</span>
-            </div>
-            <div class="py-3 px-4 md:grid md:grid-cols-12 md:gap-4">
-              <code class="block md:col-span-4 font-mono text-xs text-indigo-600 dark:text-indigo-400">no_matching_project</code>
-              <p class="mt-1 md:mt-0 md:col-span-4">No project's Workspace Folders contain the agent's folder, or the selected project was deleted.</p>
-              <p class="mt-1 md:mt-0 md:col-span-4"><span class="font-semibold md:hidden">What to do: </span>Add the repository, or a folder above it, to the project's Workspace Folders, or name the project with <code class="font-mono text-xs whitespace-nowrap">--project</code>.</p>
-            </div>
-            <div class="py-3 px-4 md:grid md:grid-cols-12 md:gap-4">
-              <code class="block md:col-span-4 font-mono text-xs text-indigo-600 dark:text-indigo-400">ambiguous_projects</code>
-              <p class="mt-1 md:mt-0 md:col-span-4">The agent's folders match more than one project.</p>
-              <p class="mt-1 md:mt-0 md:col-span-4"><span class="font-semibold md:hidden">What to do: </span>Open one repository per agent session, or name the project with <code class="font-mono text-xs whitespace-nowrap">--project</code>.</p>
-            </div>
-            <div class="py-3 px-4 md:grid md:grid-cols-12 md:gap-4">
-              <code class="block md:col-span-4 font-mono text-xs text-indigo-600 dark:text-indigo-400">explicit_project_not_found</code>
-              <p class="mt-1 md:mt-0 md:col-span-4">The entry's <code class="font-mono text-xs whitespace-nowrap">--project</code> names a project ID or name that no project in your BerryDB has, for example after a rename, or in a repository whose entry names a project you do not have.</p>
-              <p class="mt-1 md:mt-0 md:col-span-4"><span class="font-semibold md:hidden">What to do: </span>Create or rename a project to match, or change the entry.</p>
-            </div>
-            <div class="py-3 px-4 md:grid md:grid-cols-12 md:gap-4">
-              <code class="block md:col-span-4 font-mono text-xs text-indigo-600 dark:text-indigo-400">project_disabled</code>
-              <p class="mt-1 md:mt-0 md:col-span-4">The project is turned off.</p>
-              <p class="mt-1 md:mt-0 md:col-span-4"><span class="font-semibold md:hidden">What to do: </span>Click <strong>Edit…</strong> on the project, turn on <strong>Enabled</strong> and save.</p>
-            </div>
-            <div class="py-3 px-4 md:grid md:grid-cols-12 md:gap-4">
-              <code class="block md:col-span-4 font-mono text-xs text-indigo-600 dark:text-indigo-400">integrity_unavailable</code>
-              <p class="mt-1 md:mt-0 md:col-span-4">The helper could not read BerryDB's store for that request.</p>
-              <p class="mt-1 md:mt-0 md:col-span-4"><span class="font-semibold md:hidden">What to do: </span>Ask the agent to call the tool again; every request reads the store afresh.</p>
-            </div>
-          </div>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            An agent can keep the tool list it loaded when its session started. If it does not see BerryDB's tools after you change a project in Settings, start a new agent session. A tool that answers <em>“No schema graph has been harvested for this connection.”</em> needs that connection opened in BerryDB first.
-          </p>
-
-          <h3 class="font-bold text-base text-slate-900 dark:text-white pt-3">Limits today</h3>
-          <ul class="list-disc pl-5 space-y-2 text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            <li><strong>Metadata only.</strong> Agents get no rows from your tables and cannot run queries through BerryDB.</li>
-            <li><strong>Cached, not live.</strong> The schema is the one BerryDB cached when it last connected to, or refreshed, each connection.</li>
-            <li><strong>Built from source?</strong> <code class="font-mono text-xs">make run</code> and <code class="font-mono text-xs">make app</code> package the helper into the app. A build that skips that packaging step shows <em>“The berrydb-mcp helper is not bundled in this build.”</em> in Agent Setup.</li>
-            <li><strong>Agents.</strong> The tools were checked with Claude Code 2.1.294, Codex CLI 0.157.1 and Antigravity 1.3.1. Other MCP hosts may work but are not tested.</li>
-          </ul>
-        </section>
-
-
-        <!-- SECTION 6: CONNECTION MANAGER & SSH -->
-        <section id="connection-manager" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <i data-lucide="shield-check" class="w-5 h-5 text-emerald-500"></i>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Connection Profiles & SSH Bastion Tunnels</h2>
-          </div>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Configure direct connections, TLS (with client certificates for PostgreSQL and MySQL), and SSH jump hosts with Ed25519, RSA or ECDSA keys to access private cloud VPC databases safely.
-          </p>
-
-          <!-- Screenshot Illustration -->
-          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
-            <img src="public/images/Screenshot-C676D002-6AEF-4B29-91FD-45B2D417D483.png" alt="Connection Profile Sheet" class="w-full h-auto object-cover" />
-            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-              Figure 4: Connection Profile Manager with Host, Port, Authentication, SSL/TLS, and SSH Tunnel tabs.
+          <!-- 8 Tools Table -->
+          <div class="space-y-3">
+            <h3 class="font-display text-lg font-bold t-primary">Complete MCP Tool Specification (8 Tools)</h3>
+            <div class="s-card rounded-xl overflow-hidden">
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs">
+                  <thead class="s-elevated border-b b-subtle font-mono text-[11px] uppercase tracking-wider t-muted">
+                    <tr>
+                      <th class="py-3 px-4">Tool Name</th>
+                      <th class="py-3 px-4">Mode</th>
+                      <th class="py-3 px-4">Purpose &amp; Execution Behavior</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y b-subtle t-secondary">
+                    <tr>
+                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_list_connections</td>
+                      <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-emerald">Cache</span></td>
+                      <td class="py-3 px-4">Returns configured profile IDs, engines, environment tags, opt-in state, and <code class="font-mono text-accent">live_read_until</code> expiry timestamp.</td>
+                    </tr>
+                    <tr>
+                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_list_tables</td>
+                      <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-emerald">Cache</span></td>
+                      <td class="py-3 px-4">Lists cached schemas, tables, views, or DynamoDB table descriptors for a connection ID.</td>
+                    </tr>
+                    <tr>
+                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_describe_table</td>
+                      <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-emerald">Cache</span></td>
+                      <td class="py-3 px-4">Inspects cached column definitions, types, nullability, defaults, primary keys, and indexes.</td>
+                    </tr>
+                    <tr>
+                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_search_schema</td>
+                      <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-emerald">Cache</span></td>
+                      <td class="py-3 px-4">Fuzzy searches table names and column identifiers across all locally indexed connections.</td>
+                    </tr>
+                    <tr>
+                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_get_relationships</td>
+                      <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-emerald">Cache</span></td>
+                      <td class="py-3 px-4">Traverses cached foreign-key constraints and entity edges to resolve join paths safely.</td>
+                    </tr>
+                    <tr>
+                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_get_database_summary</td>
+                      <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-emerald">Cache</span></td>
+                      <td class="py-3 px-4">Emits compact structural topology metrics sized specifically for coding agent context windows.</td>
+                    </tr>
+                    <tr style="background-color: var(--accent-soft);">
+                      <td class="py-3 px-4 font-mono font-semibold t-accent">berrydb_execute_read_query</td>
+                      <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-accent">Live Read</span></td>
+                      <td class="py-3 px-4">Runs a <strong>single read-only SQL statement</strong> wrapped in a server-enforced read-only transaction (<code class="font-mono">BEGIN TRANSACTION READ ONLY</code> / <code class="font-mono">SET TRANSACTION READ ONLY</code> / <code class="font-mono">PRAGMA query_only = ON</code>) on PostgreSQL, MySQL/MariaDB, or SQLite.</td>
+                    </tr>
+                    <tr style="background-color: var(--accent-soft);">
+                      <td class="py-3 px-4 font-mono font-semibold t-accent">berrydb_dynamodb_query</td>
+                      <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-accent">Live Read</span></td>
+                      <td class="py-3 px-4">Executes a single DynamoDB <code class="font-mono">Query</code> operation keyed by partition key (<code class="font-mono">KeyConditionExpression</code>). Full-table <code class="font-mono">Scan</code> calls are permanently rejected.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
-        </section>
 
+          <figure class="s-window rounded-2xl overflow-hidden">
+            <img src="public/images/Screenshot-MCP-Agents.png" alt="BerryDB Settings AI Agents Opt-In Live Reads and HMAC Audit Log" class="w-full h-auto block" />
+            <figcaption class="px-5 py-3 border-t b-subtle s-elevated text-xs t-muted">
+              Figure 5 — Settings → AI Agents panel showing per-connection Opt-In Live Reads toggles, TTL expiry (<code class="font-mono">live_read_until</code>), masked column filters, and HMAC-SHA256 Recent Activity trail.
+            </figcaption>
+          </figure>
 
-        <!-- SECTION 7: SCHEMA DESIGNER -->
-        <section id="schema-designer" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <i data-lucide="layers" class="w-5 h-5 text-blue-500"></i>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Visual Schema & Table Structure Designer</h2>
-          </div>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Inspect and alter columns, default constraints, primary keys, and B-Tree indexes visually without writing manual <code class="font-mono text-xs">ALTER TABLE</code> statements:
-          </p>
-
-          <!-- Screenshot Illustration -->
-          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
-            <img src="public/images/Screenshot-C07EBF19-E582-4E57-AC61-7B020C5921B5.png" alt="Table Schema Designer" class="w-full h-auto object-cover" />
-            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-              Figure 5: Table Schema Designer with column types, nullability, defaults, primary keys, and foreign key relations.
+          <!-- Engine Support Status -->
+          <div class="space-y-3">
+            <h3 class="font-display text-lg font-bold t-primary">Engine Availability Matrix (Schema Cache vs. Live Reads)</h3>
+            <div class="s-card rounded-xl overflow-hidden">
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs">
+                  <thead class="s-elevated border-b b-subtle font-mono text-[11px] uppercase tracking-wider t-muted">
+                    <tr>
+                      <th class="py-3 px-4">Engine</th>
+                      <th class="py-3 px-4">Schema Cache Tools</th>
+                      <th class="py-3 px-4">MCP Live Reads (Opt-In)</th>
+                      <th class="py-3 px-4">Isolation Mechanism / Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y b-subtle t-secondary">
+                    <tr>
+                      <td class="py-2.5 px-4 font-semibold t-primary">PostgreSQL / MySQL / MariaDB / SQLite</td>
+                      <td class="py-2.5 px-4 font-mono t-emerald">Available</td>
+                      <td class="py-2.5 px-4 font-mono t-accent">Available</td>
+                      <td class="py-2.5 px-4">Single statement inside engine read-only transaction via <code class="font-mono">berrydb_execute_read_query</code>.</td>
+                    </tr>
+                    <tr>
+                      <td class="py-2.5 px-4 font-semibold t-primary">AWS DynamoDB</td>
+                      <td class="py-2.5 px-4 font-mono t-emerald">Available</td>
+                      <td class="py-2.5 px-4 font-mono t-accent">Available</td>
+                      <td class="py-2.5 px-4">Partition-key <code class="font-mono">Query</code> only via direct IAM auth; SSH tunnel live reads unsupported.</td>
+                    </tr>
+                    <tr>
+                      <td class="py-2.5 px-4 font-semibold t-primary">Microsoft SQL Server</td>
+                      <td class="py-2.5 px-4 font-mono t-emerald">Available</td>
+                      <td class="py-2.5 px-4 font-mono t-muted">Excluded</td>
+                      <td class="py-2.5 px-4">Cached schema metadata available; MCP live reads excluded in this release.</td>
+                    </tr>
+                    <tr>
+                      <td class="py-2.5 px-4 font-semibold t-primary">MongoDB, Redis / Valkey, Elasticsearch, Qdrant</td>
+                      <td class="py-2.5 px-4 font-mono t-muted">Excluded</td>
+                      <td class="py-2.5 px-4 font-mono t-muted">Excluded</td>
+                      <td class="py-2.5 px-4">Operated interactively within BerryDB Studio; excluded from MCP cache and live reads.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
-        </section>
 
-
-        <!-- SECTION 8: VISUAL EXPLAIN PLAN -->
-        <section id="explain-plan" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <i data-lucide="git-branch" class="w-5 h-5 text-amber-500"></i>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Visual EXPLAIN Query Plan Profiler</h2>
-          </div>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Press <kbd class="kbd-tag px-2 py-1 rounded bg-slate-200 dark:bg-slate-800 font-mono text-xs">⌘E</kbd> to inspect the execution plan as an expandable tree of operator nodes:
-          </p>
-
-          <!-- Screenshot Illustration -->
-          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
-            <img src="public/images/Screenshot-47E670EA-CE85-45EA-A846-4B55A9AA58CD.png" alt="Visual EXPLAIN Plan" class="w-full h-auto object-cover" />
-            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-              Figure 6: EXPLAIN query plan shown as a tree.
-            </div>
-          </div>
-        </section>
-
-
-        <!-- SECTION 9: REDIS INSPECTOR -->
-        <section id="redis-inspector" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <i data-lucide="cpu" class="w-5 h-5 text-rose-500"></i>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Redis Key-Value & Cache Browser</h2>
-          </div>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Explore Redis databases (DB 0-15), search keys with wildcard patterns, inspect TTL values, and modify Strings, Hashes, Lists, Sets, Sorted Sets, and Streams directly:
-          </p>
-
-          <!-- Screenshot Illustration -->
-          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
-            <img src="public/images/Screenshot-35D4A78D-6AA1-4483-9815-EBE8AB262A26.png" alt="Redis Key Inspector" class="w-full h-auto object-cover" />
-            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-              Figure 7: Redis Key-Value Browser with live key filtering, TTL tracker, and data type inspector.
-            </div>
-          </div>
-        </section>
-
-
-        <!-- SECTION 10: IMPORT & EXPORT WIZARD -->
-        <section id="import-export" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <i data-lucide="arrow-up-down" class="w-5 h-5 text-cyan-500"></i>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Import & Export Wizard</h2>
-          </div>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Import CSV files (column mapping, batch size, one transaction) and SQL files; export CSV, TSV, JSON, NDJSON, or SQL INSERT statements:
-          </p>
-
-          <!-- Screenshot Illustration -->
-          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
-            <img src="public/images/Screenshot-150574A9-3368-4F2A-9B08-2717518D840B.png" alt="Import and Export Wizard" class="w-full h-auto object-cover" />
-            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-              Figure 8: Import / Export Wizard with format selections, header mapping, and chunked batch writes.
-            </div>
-          </div>
-        </section>
-
-
-        <!-- SECTION 11: HISTORY & AUDIT -->
-        <section id="query-history" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <i data-lucide="history" class="w-5 h-5 text-indigo-500"></i>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Query Replay, History & Diagnostics</h2>
-          </div>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Review past SQL statements with precise execution duration timestamps, rows affected, and one click to open a statement in a new SQL tab:
-          </p>
-
-          <!-- Screenshot Illustration -->
-          <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl my-4">
-            <img src="public/images/Screenshot-566C26C5-CC0E-4B6B-B400-A397634FC76E.png" alt="Query History and Audit Log" class="w-full h-auto object-cover" />
-            <div class="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500">
-              Figure 9: Query History and Execution Log with execution timing and status badges.
-            </div>
-          </div>
-        </section>
-
-
-        <!-- SECTION 12: DATABASE DRIVER SPECS -->
-        <section id="drivers" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <i data-lucide="database" class="w-5 h-5 text-emerald-500"></i>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Supported Database Drivers</h2>
-          </div>
-          <ul class="list-disc list-inside space-y-2 text-xs sm:text-sm text-slate-600 dark:text-slate-300">
-            <li><strong>PostgreSQL (tested on 16):</strong> JSONB, real socket cancellation (<code class="font-mono text-xs">pg_cancel_backend</code>).</li>
-            <li><strong>MySQL (tested on 8.4) & MariaDB:</strong> <code class="font-mono text-xs">caching_sha2_password</code> (with TLS on) and <code class="font-mono text-xs">mysql_native_password</code>.</li>
-            <li><strong>SQLite 3:</strong> Native C <code class="font-mono text-xs">libsqlite3</code> binding, Write-Ahead Logging (WAL), and zero setup file loading.</li>
-            <li><strong>Microsoft SQL Server:</strong> T-SQL execution, table alteration, and stored procedure support.</li>
-            <li><strong>Redis:</strong> Key browser, TTL, and Strings, Hashes, Lists, Sets, Sorted Sets and Streams.</li>
-            <li><strong>DuckDB &amp; ClickHouse:</strong> Planned, not yet implemented — contributions welcome.</li>
-          </ul>
-        </section>
-
-
-        <!-- SECTION 13: SHORTCUTS -->
-        <section id="shortcuts-ref" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <i data-lucide="command" class="w-5 h-5 text-emerald-500"></i>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Keyboard Shortcuts Reference</h2>
-          </div>
-
-          <div class="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
-            <table class="w-full text-left text-xs sm:text-sm">
-              <thead class="bg-slate-100 dark:bg-slate-900 font-bold text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-800">
-                <tr>
-                  <th class="py-3 px-4">Action</th>
-                  <th class="py-3 px-4">Keyboard Shortcut</th>
-                  <th class="py-3 px-4">Context</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-slate-200 dark:divide-slate-800 bg-white dark:bg-[#0E1424] text-slate-700 dark:text-slate-300">
-                <tr>
-                  <td class="py-3 px-4 font-medium">Execute Query</td>
-                  <td class="py-3 px-4 font-mono font-bold text-emerald-600 dark:text-emerald-400">⌘ R / ⌘ Enter</td>
-                  <td class="py-3 px-4 text-slate-500">SQL Editor</td>
-                </tr>
-                <tr>
-                  <td class="py-3 px-4 font-medium">Command Palette</td>
-                  <td class="py-3 px-4 font-mono font-bold text-emerald-600 dark:text-emerald-400">⌘ K</td>
-                  <td class="py-3 px-4 text-slate-500">Global</td>
-                </tr>
-                <tr>
-                  <td class="py-3 px-4 font-medium">Visual EXPLAIN Plan</td>
-                  <td class="py-3 px-4 font-mono font-bold text-emerald-600 dark:text-emerald-400">⌘ E</td>
-                  <td class="py-3 px-4 text-slate-500">SQL Editor</td>
-                </tr>
-                <tr>
-                  <td class="py-3 px-4 font-medium">Format SQL Statement</td>
-                  <td class="py-3 px-4 font-mono font-bold text-emerald-600 dark:text-emerald-400">⌃ ⌘ F</td>
-                  <td class="py-3 px-4 text-slate-500">SQL Editor</td>
-                </tr>
-                <tr>
-                  <td class="py-3 px-4 font-medium">New Query Tab</td>
-                  <td class="py-3 px-4 font-mono font-bold text-emerald-600 dark:text-emerald-400">⌘ T</td>
-                  <td class="py-3 px-4 text-slate-500">Workspace</td>
-                </tr>
-                <tr>
-                  <td class="py-3 px-4 font-medium">Go to Table</td>
-                  <td class="py-3 px-4 font-mono font-bold text-rose-600 dark:text-rose-400">⌘ P</td>
-                  <td class="py-3 px-4 text-slate-500">Workspace</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-
-        <!-- SECTION 14: FAQ -->
-        <section id="troubleshooting" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <i data-lucide="help-circle" class="w-5 h-5 text-emerald-500"></i>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Frequently Asked Questions</h2>
-          </div>
-
+          <!-- Guardrails -->
           <div class="space-y-4">
-            <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800">
-              <h4 class="font-bold text-sm text-slate-900 dark:text-white">What is BerryDB built with?</h4>
-              <p class="text-xs text-slate-600 dark:text-slate-400 mt-2 leading-relaxed">
-                BerryDB is a native macOS binary built with Swift 6 and AppKit. It does not bundle Chromium, Node.js, or a Java runtime.
-              </p>
+            <h3 class="font-display text-lg font-bold t-primary">Security Guardrails &amp; Operational Limits</h3>
+            <div class="grid md:grid-cols-2 gap-4 text-xs leading-relaxed">
+              <div class="s-card rounded-xl p-5 space-y-2">
+                <h4 class="font-semibold text-sm t-primary">1. Concurrency, Row &amp; Payload Budgets</h4>
+                <p class="t-secondary">
+                  Enforces a hard limit of <strong>4 concurrent reads</strong> per coding-agent session alongside strict row caps, response-byte limits, and query timeouts. Profiles tagged as production enforce tighter default timeouts and row ceilings automatically.
+                </p>
+              </div>
+              <div class="s-card rounded-xl p-5 space-y-2">
+                <h4 class="font-semibold text-sm t-primary">2. Least-Privilege Database User Checks</h4>
+                <p class="t-secondary">
+                  Before activating live reads, BerryDB probes effective role capabilities: writable credentials on non-production profiles require explicit warning acknowledgement, while writable credentials on <strong>production-labeled profiles are refused</strong> — attach a dedicated read-only role or read replica instead.
+                </p>
+              </div>
+              <div class="s-card rounded-xl p-5 space-y-2">
+                <h4 class="font-semibold text-sm t-primary">3. Time-Boxed Production Expiration (<code class="font-mono">live_read_until</code>)</h4>
+                <p class="t-secondary">
+                  Production-labeled connections never grant permanent MCP access. Operators select an automatic TTL of <strong>1h</strong>, <strong>8h</strong>, <strong>24h</strong> (default), or <strong>7d</strong>, stored and returned as <code class="font-mono">live_read_until</code> so agents observe exact revocation boundaries.
+                </p>
+              </div>
+              <div class="s-card rounded-xl p-5 space-y-2">
+                <h4 class="font-semibold text-sm t-primary">4. Best-Effort Column Hiding by Name</h4>
+                <p class="t-secondary">
+                  Per-connection column exclusion lists strip matching fields (e.g., <code class="font-mono">password_hash</code>, <code class="font-mono">ssn</code>, <code class="font-mono">secret_token</code>) before JSON serialization. Note that name filtering is best-effort: computed expressions or aliases can bypass column-name filters, so enforce column-level <code class="font-mono">REVOKE SELECT</code> or SQL views for strict compliance.
+                </p>
+              </div>
+              <div class="s-card rounded-xl p-5 space-y-2 border-l-4" style="border-left-color: var(--amber);">
+                <h4 class="font-semibold text-sm t-primary">5. MySQL &amp; MariaDB <code class="font-mono">FILE</code> Privilege Caveat</h4>
+                <p class="t-secondary">
+                  A MySQL <code class="font-mono">SET TRANSACTION READ ONLY</code> block prevents table writes, but accounts still holding server-wide <code class="font-mono">FILE</code> grants could attempt <code class="font-mono">LOAD_FILE()</code> reads if misconfigured. Revoke <code class="font-mono">FILE</code> from the MCP user and verify <code class="font-mono">secure_file_priv</code> on the server.
+                </p>
+              </div>
+              <div class="s-card rounded-xl p-5 space-y-2">
+                <h4 class="font-semibold text-sm t-primary">6. AWS DynamoDB IAM Policy Scope</h4>
+                <p class="t-secondary">
+                  Scope dedicated IAM credentials strictly to <code class="font-mono">dynamodb:ListTables</code> (<code class="font-mono">*</code>), <code class="font-mono">dynamodb:DescribeTable</code>, and <code class="font-mono">dynamodb:Query</code>. Never grant <code class="font-mono">dynamodb:Scan</code> or write actions. Direct VPC/IAM connectivity is required (SSH tunnels do not proxy DynamoDB live reads).
+                </p>
+              </div>
+              <div class="s-card rounded-xl p-5 space-y-2">
+                <h4 class="font-semibold text-sm t-primary">7. HMAC-SHA256 Signed Recent Activity</h4>
+                <p class="t-secondary">
+                  Every MCP invocation records connection ID, timestamp, tool name, duration, and status inside a rolling <strong>100-entry</strong> audit trail chained with a keyed <strong>HMAC-SHA256</strong> signature. Neither raw SQL text nor returned rows are written to disk logs.
+                </p>
+              </div>
+              <div class="s-card rounded-xl p-5 space-y-2 border-l-4" style="border-left-color: var(--danger);">
+                <h4 class="font-semibold text-sm t-primary">8. Where the Data Goes (Prompt Injection &amp; Egress)</h4>
+                <p class="t-secondary">
+                  Returned rows flow directly over stdio into the connected MCP client (<code class="font-mono">Claude Code</code>, <code class="font-mono">Codex</code>, <code class="font-mono">Antigravity</code>) and subsequently to whatever model provider that host uses. Database text from untrusted user submissions may contain indirect prompt-injection payloads; restrict live reads to vetted schemas.
+                </p>
+              </div>
             </div>
+          </div>
 
-            <div class="p-5 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800">
-              <h4 class="font-bold text-sm text-slate-900 dark:text-white">What does the AI assistant send, and where?</h4>
-              <p class="text-xs text-slate-600 dark:text-slate-400 mt-2 leading-relaxed">
-                In cloud mode (free trial, then paid), your questions, the database type, your schema (table and column names) and the results of queries the assistant runs (up to 100 rows each) are sent to BerryDB's AI service; table sample rows are shared only if you turn that on. On macOS 26 with Apple Intelligence you can switch to Apple's on-device model; its turns send nothing to BerryDB's service, so the assistant's search of earlier conversation does not cover them. If you switch back to cloud mode in the same conversation, the earlier messages go with your next question as context. AI is off by default on connections marked as production.
-              </p>
+          <!-- Client Setup Snippets -->
+          <div class="s-card rounded-xl p-5 space-y-4">
+            <h3 class="font-display font-bold text-base t-primary">Configuring External MCP Clients</h3>
+            <p class="text-xs t-secondary">Register the stdio binary inside Claude Code, Codex, or Antigravity client configuration:</p>
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="space-y-1.5">
+                <div class="font-mono text-[11px] font-semibold t-accent">JSON Client Configuration (Claude Desktop / Antigravity / Cursor)</div>
+                <div class="relative">
+                  <pre class="s-code rounded-lg p-3.5 font-mono text-[11px] overflow-x-auto leading-relaxed"><code>{
+  "mcpServers": {
+    "berrydb": {
+      "command": "/Applications/BerryDB.app/Contents/MacOS/berrydb-mcp"
+    }
+  }
+}</code></pre>
+                  <button type="button" onclick="copyCode(this)" data-copy='{"mcpServers":{"berrydb":{"command":"/Applications/BerryDB.app/Contents/MacOS/berrydb-mcp"}}}'
+                    class="absolute top-2 right-2 px-2 py-1 rounded text-[10px] font-mono s-elevated t-muted hover:t-primary transition cursor-pointer">Copy</button>
+                </div>
+              </div>
+              <div class="space-y-1.5">
+                <div class="font-mono text-[11px] font-semibold t-accent">Claude Code &amp; Codex CLI Registration</div>
+                <div class="relative">
+                  <pre class="s-code rounded-lg p-3.5 font-mono text-[11px] overflow-x-auto leading-relaxed"><code># Claude Code
+claude mcp add berrydb /Applications/BerryDB.app/Contents/MacOS/berrydb-mcp
+
+# Codex (~/.codex/config.toml)
+[mcp_servers.berrydb]
+command = "/Applications/BerryDB.app/Contents/MacOS/berrydb-mcp"</code></pre>
+                  <button type="button" onclick="copyCode(this)" data-copy="claude mcp add berrydb /Applications/BerryDB.app/Contents/MacOS/berrydb-mcp"
+                    class="absolute top-2 right-2 px-2 py-1 rounded text-[10px] font-mono s-elevated t-muted hover:t-primary transition cursor-pointer">Copy</button>
+                </div>
+              </div>
             </div>
           </div>
         </section>
 
+        <hr class="b-subtle" />
 
-        <!-- SECTION 15: COMMUNITY & SUPPORT -->
-        <section id="support" class="space-y-5 pt-8 border-t border-slate-200 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <svg class="w-5 h-5 stroke-current fill-none text-emerald-500" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="4"></circle><line x1="4.93" x2="9.17" y1="4.93" y2="9.17"></line><line x1="14.83" x2="19.07" y1="14.83" y2="19.07"></line><line x1="14.83" x2="19.07" y1="9.17" y2="4.93"></line><line x1="4.93" x2="9.17" y1="19.07" y2="14.83"></line></svg>
-            <h2 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Community, Feedback & Support</h2>
+        <!-- 7. CONNECTION MANAGER & SSH -->
+        <section id="connection-manager" class="doc-section space-y-5">
+          <div class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Security &amp; Networking</div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Connection Profiles, macOS Keychain &amp; Citadel SSH</h2>
+          <p class="t-secondary leading-relaxed">
+            Connection metadata persists locally while passwords, SSH passphrases, AWS IAM secrets, and API bearer tokens reside strictly in <strong>macOS Keychain</strong>. SSH tunneling runs in-process over pure Swift using <strong>Citadel</strong> — eliminating external SSH subprocess leakage or orphaned port forwards.
+          </p>
+          <div class="grid md:grid-cols-2 gap-5">
+            <figure class="s-window rounded-2xl overflow-hidden">
+              <img src="public/images/Screenshot-F9B778A3-D0F0-4ECB-8935-5B7511BB6991.png" alt="PostgreSQL Connection Profile Sheet with Environment Color Badge and TLS Options" class="w-full h-auto block" />
+              <figcaption class="px-4 py-3 border-t b-subtle s-elevated text-xs t-muted">
+                Figure 6 — Unified connection configuration dialog supporting TLS mode verification and environment badges.
+              </figcaption>
+            </figure>
+            <figure class="s-window rounded-2xl overflow-hidden">
+              <img src="public/images/Screenshot-CAE594E6-3EAE-4CB7-87FF-EA2A34FF278E.png" alt="Citadel Pure-Swift SSH Tunnel Configuration Sheet" class="w-full h-auto block" />
+              <figcaption class="px-4 py-3 border-t b-subtle s-elevated text-xs t-muted">
+                Figure 7 — Citadel SSH tunnel sheet supporting Ed25519 private keys, passphrase prompts, and SSH agent forwarding.
+              </figcaption>
+            </figure>
           </div>
-          <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Need assistance, have questions about database drivers, or want to contribute? Connect directly with the Berry Apps team:
+        </section>
+
+        <hr class="b-subtle" />
+
+        <!-- 8. SCHEMA EXPLORER & ER GRAPH -->
+        <section id="schema-designer" class="doc-section space-y-5">
+          <div class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Structural Topology</div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Schema &amp; Indexes Explorer + ER Blast Radius</h2>
+          <p class="t-secondary leading-relaxed">
+            Audit columns, nullable constraints, default expressions, partial/composite indexes, and foreign-key cascades in structured detail, or open the interactive <strong>ER Graph &amp; Blast Radius</strong> canvas before running breaking migrations.
+          </p>
+          <div class="grid md:grid-cols-2 gap-5">
+            <figure class="s-window rounded-2xl overflow-hidden">
+              <img src="public/images/Screenshot-C07EBF19-E582-4E57-AC61-7B020C5921B5.png" alt="Schema Columns Constraints and Indexes Inspector" class="w-full h-auto block" />
+              <figcaption class="px-4 py-3 border-t b-subtle s-elevated text-xs t-muted">
+                Figure 8 — Structured columns, B-tree / GIN index definitions, and DDL preview panel.
+              </figcaption>
+            </figure>
+            <figure class="s-window rounded-2xl overflow-hidden">
+              <img src="public/images/Screenshot-08DA90A1-82AD-4990-A954-11FD562D07D6.png" alt="Interactive Entity Relationship Graph and Blast Radius Trace" class="w-full h-auto block" />
+              <figcaption class="px-4 py-3 border-t b-subtle s-elevated text-xs t-muted">
+                Figure 9 — Visual ER Graph highlighting downstream foreign-key blast radius dependencies.
+              </figcaption>
+            </figure>
+          </div>
+        </section>
+
+        <hr class="b-subtle" />
+
+        <!-- 9. VISUAL EXPLAIN ANALYZE -->
+        <section id="explain-plan" class="doc-section space-y-5">
+          <div class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Query Telemetry</div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Visual EXPLAIN ANALYZE</h2>
+          <p class="t-secondary leading-relaxed">
+            Press <kbd class="font-mono text-xs px-1.5 py-0.5 rounded s-recessed">⇧⌘E</kbd> on PostgreSQL or MySQL/MariaDB statements to render an interactive execution plan tree highlighting sequential scans, hash join spills, buffer hits, and relative wall-clock cost percentages.
+          </p>
+          <figure class="s-window rounded-2xl overflow-hidden">
+            <img src="public/images/Screenshot-47E670EA-CE85-45EA-A846-4B55A9AA58CD.png" alt="BerryDB Visual EXPLAIN ANALYZE Execution Tree" class="w-full h-auto block" />
+            <figcaption class="px-5 py-3 border-t b-subtle s-elevated text-xs t-muted">
+              Figure 10 — Visual execution plan tree surfacing cost weights, buffer statistics, and index-scan timings per operator node.
+            </figcaption>
+          </figure>
+        </section>
+
+        <hr class="b-subtle" />
+
+        <!-- 10. REDIS & VALKEY INSPECTOR -->
+        <section id="redis-inspector" class="doc-section space-y-5">
+          <div class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Key-Value &amp; Cache</div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Redis &amp; Valkey Key-Space Inspector</h2>
+          <p class="t-secondary leading-relaxed">
+            Built directly on <code class="font-mono text-xs s-code px-1.5 py-0.5 rounded">valkey-swift</code>, the inspector traverses prefixed namespaces (<code class="font-mono">session:*</code>, <code class="font-mono">queue:*</code>), displays live TTL countdowns and memory estimates, and edits strings, hashes, lists, sets, and sorted sets natively.
+          </p>
+          <figure class="s-window rounded-2xl overflow-hidden">
+            <img src="public/images/Screenshot-35D4A78D-6AA1-4483-9815-EBE8AB262A26.png" alt="Redis and Valkey Key-Space Inspector" class="w-full h-auto block" />
+            <figcaption class="px-5 py-3 border-t b-subtle s-elevated text-xs t-muted">
+              Figure 11 — Key-space prefix grouping, TTL controls, and formatted JSON value inspector for Redis and Valkey clusters.
+            </figcaption>
+          </figure>
+        </section>
+
+        <hr class="b-subtle" />
+
+        <!-- 11. IMPORT & EXPORT -->
+        <section id="import-export" class="doc-section space-y-5">
+          <div class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Data Interchange</div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Batch Import &amp; Streaming Export Wizard</h2>
+          <p class="t-secondary leading-relaxed">
+            Import structured CSV files with header auto-mapping, delimiter configuration, null-string rules, and live row preview, or stream query outputs cleanly into CSV, JSON, and reproducible SQL <code class="font-mono text-xs">INSERT</code> scripts.
+          </p>
+          <figure class="s-window rounded-2xl overflow-hidden">
+            <img src="public/images/Screenshot-150574A9-3368-4F2A-9B08-2717518D840B.png" alt="BerryDB CSV Import and Export Preview Wizard" class="w-full h-auto block" />
+            <figcaption class="px-5 py-3 border-t b-subtle s-elevated text-xs t-muted">
+              Figure 12 — Batch Import &amp; Export Wizard validating delimiter parsing and column mappings with live CSV preview rows.
+            </figcaption>
+          </figure>
+        </section>
+
+        <hr class="b-subtle" />
+
+        <!-- 12. QUERY HISTORY -->
+        <section id="query-history" class="doc-section space-y-5">
+          <div class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Audit &amp; Reuse</div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Query History &amp; Statement Replay</h2>
+          <p class="t-secondary leading-relaxed">
+            Search executed statements by connection profile, execution duration, or row count, inspect execution outcomes, and reopen historical queries directly inside a fresh editor tab.
+          </p>
+          <figure class="s-window rounded-2xl overflow-hidden">
+            <img src="public/images/Screenshot-566C26C5-CC0E-4B6B-B400-A397634FC76E.png" alt="BerryDB Query History and Statement Replay Log" class="w-full h-auto block" />
+            <figcaption class="px-5 py-3 border-t b-subtle s-elevated text-xs t-muted">
+              Figure 13 — Filterable local Query History recording execution latency, row counts, status pills, and one-click tab replay.
+            </figcaption>
+          </figure>
+        </section>
+
+        <hr class="b-subtle" />
+
+        <!-- 13. DRIVERS & ENGINES -->
+        <section id="drivers" class="doc-section space-y-5">
+          <div class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Wire Protocols</div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Supported Engines &amp; Native Swift Drivers (9 Engines)</h2>
+          <p class="t-secondary leading-relaxed">
+            BerryDB links native Swift NIO clients, C system libraries, and signed REST transports directly into the arm64 binary — no JDBC bridge or Python sidecar required.
           </p>
 
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
-            <!-- Email -->
-            <a href="mailto:info@berryhub.app" class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 hover:border-emerald-500/60 shadow-sm transition group">
-              <div class="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-3 group-hover:scale-105 transition">
-                <svg class="w-5 h-5 stroke-current fill-none" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"></rect><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path></svg>
-              </div>
-              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Email Support</h4>
-              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">info@berryhub.app</p>
-            </a>
+          <div class="s-card rounded-xl overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs">
+                <thead class="s-elevated border-b b-subtle font-mono text-[11px] uppercase tracking-wider t-muted">
+                  <tr>
+                    <th class="py-3 px-4">Engine</th>
+                    <th class="py-3 px-4">Underlying Driver / Transport</th>
+                    <th class="py-3 px-4">Citadel SSH Tunnel</th>
+                    <th class="py-3 px-4">Verified Test Target</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y b-subtle t-secondary">
+                  <tr>
+                    <td class="py-2.5 px-4 font-semibold t-primary">PostgreSQL</td>
+                    <td class="py-2.5 px-4 font-mono">PostgresNIO</td>
+                    <td class="py-2.5 px-4 font-mono t-emerald">Supported</td>
+                    <td class="py-2.5 px-4 font-mono">PostgreSQL 16</td>
+                  </tr>
+                  <tr>
+                    <td class="py-2.5 px-4 font-semibold t-primary">MySQL &amp; MariaDB</td>
+                    <td class="py-2.5 px-4 font-mono">MySQLNIO</td>
+                    <td class="py-2.5 px-4 font-mono t-emerald">Supported</td>
+                    <td class="py-2.5 px-4 font-mono">MySQL 8.4</td>
+                  </tr>
+                  <tr>
+                    <td class="py-2.5 px-4 font-semibold t-primary">SQLite 3</td>
+                    <td class="py-2.5 px-4 font-mono">libsqlite3 (local filesystem)</td>
+                    <td class="py-2.5 px-4 font-mono t-muted">Local file</td>
+                    <td class="py-2.5 px-4 font-mono">SQLite 3</td>
+                  </tr>
+                  <tr>
+                    <td class="py-2.5 px-4 font-semibold t-primary">Microsoft SQL Server</td>
+                    <td class="py-2.5 px-4 font-mono">FreeTDS (libsybdb)</td>
+                    <td class="py-2.5 px-4 font-mono t-emerald">Supported</td>
+                    <td class="py-2.5 px-4 font-mono">SQL Server 2022</td>
+                  </tr>
+                  <tr>
+                    <td class="py-2.5 px-4 font-semibold t-primary">Redis &amp; Valkey</td>
+                    <td class="py-2.5 px-4 font-mono">valkey-swift</td>
+                    <td class="py-2.5 px-4 font-mono t-emerald">Supported</td>
+                    <td class="py-2.5 px-4 font-mono">Valkey / Redis</td>
+                  </tr>
+                  <tr>
+                    <td class="py-2.5 px-4 font-semibold t-primary">MongoDB</td>
+                    <td class="py-2.5 px-4 font-mono">MongoWireClient (SCRAM)</td>
+                    <td class="py-2.5 px-4 font-mono t-emerald">Supported</td>
+                    <td class="py-2.5 px-4 font-mono">MongoDB 7</td>
+                  </tr>
+                  <tr>
+                    <td class="py-2.5 px-4 font-semibold t-primary">AWS DynamoDB</td>
+                    <td class="py-2.5 px-4 font-mono">HTTPS + AWS SigV4 + PartiQL</td>
+                    <td class="py-2.5 px-4 font-mono t-muted">Direct IAM</td>
+                    <td class="py-2.5 px-4 font-mono">dynamodb-local 3.3</td>
+                  </tr>
+                  <tr>
+                    <td class="py-2.5 px-4 font-semibold t-primary">Elasticsearch</td>
+                    <td class="py-2.5 px-4 font-mono">REST JSON + API Key / Basic Auth</td>
+                    <td class="py-2.5 px-4 font-mono t-emerald">Supported</td>
+                    <td class="py-2.5 px-4 font-mono">Elasticsearch 9.5</td>
+                  </tr>
+                  <tr>
+                    <td class="py-2.5 px-4 font-semibold t-primary">Qdrant Vector DB</td>
+                    <td class="py-2.5 px-4 font-mono">REST HTTP + API Key</td>
+                    <td class="py-2.5 px-4 font-mono t-emerald">Supported</td>
+                    <td class="py-2.5 px-4 font-mono">Qdrant 1.10</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
 
-            <!-- Telegram -->
-            <a href="https://t.me/berryecosystem" target="_blank" rel="noopener" class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 hover:border-sky-500/60 shadow-sm transition group">
-              <div class="w-9 h-9 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-sky-500 flex items-center justify-center mb-3 group-hover:scale-105 transition">
-                <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/></svg>
-              </div>
-              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Telegram Community</h4>
-              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">@berryecosystem</p>
-            </a>
+          <p class="text-xs t-muted">
+            Analytical engines such as DuckDB and ClickHouse are tracked on the open-source roadmap via dedicated C-ABI / HTTP driver packages.
+          </p>
+        </section>
 
-            <!-- X (Twitter) -->
-            <a href="https://x.com/berryecosystem" target="_blank" rel="noopener" class="p-4 rounded-2xl bg-white dark:bg-[#0E1424] border border-slate-200 dark:border-slate-800 hover:border-slate-400 shadow-sm transition group">
-              <div class="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 flex items-center justify-center mb-3 group-hover:scale-105 transition">
-                <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
-              </div>
-              <h4 class="font-bold text-sm text-slate-900 dark:text-white">Follow on X</h4>
-              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">@berryecosystem</p>
+        <hr class="b-subtle" />
+
+        <!-- 14. KEYBOARD SHORTCUTS -->
+        <section id="shortcuts-ref" class="doc-section space-y-5">
+          <div class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Keyboard Discipline</div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Keyboard Shortcuts Reference</h2>
+          <div class="s-card rounded-xl overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs">
+                <thead class="s-elevated border-b b-subtle font-mono text-[11px] uppercase tracking-wider t-muted">
+                  <tr>
+                    <th class="py-3 px-4">Shortcut</th>
+                    <th class="py-3 px-4">Action</th>
+                    <th class="py-3 px-4">Scope</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y b-subtle t-secondary">
+                  <tr><td class="py-2.5 px-4 font-mono font-bold t-accent">⌘K</td><td class="py-2.5 px-4 t-primary font-medium">Open Universal Command Palette / Filter Docs</td><td class="py-2.5 px-4">Global</td></tr>
+                  <tr><td class="py-2.5 px-4 font-mono font-bold t-accent">⌘↵ / ⌘R</td><td class="py-2.5 px-4 t-primary font-medium">Execute Current SQL Statement or Buffer</td><td class="py-2.5 px-4">SQL Editor</td></tr>
+                  <tr><td class="py-2.5 px-4 font-mono font-bold t-accent">⇧⌘↵</td><td class="py-2.5 px-4 t-primary font-medium">Execute Highlighted Selection Only</td><td class="py-2.5 px-4">SQL Editor</td></tr>
+                  <tr><td class="py-2.5 px-4 font-mono font-bold t-accent">⇧⌘E</td><td class="py-2.5 px-4 t-primary font-medium">Run Visual EXPLAIN ANALYZE</td><td class="py-2.5 px-4">PostgreSQL / MySQL</td></tr>
+                  <tr><td class="py-2.5 px-4 font-mono font-bold t-accent">⌘S</td><td class="py-2.5 px-4 t-primary font-medium">Commit Staged Inline DataGrid Changes</td><td class="py-2.5 px-4">DataGrid</td></tr>
+                  <tr><td class="py-2.5 px-4 font-mono font-bold t-accent">⌘T</td><td class="py-2.5 px-4 t-primary font-medium">Open New Query Tab</td><td class="py-2.5 px-4">Workspace</td></tr>
+                  <tr><td class="py-2.5 px-4 font-mono font-bold t-accent">⌘W</td><td class="py-2.5 px-4 t-primary font-medium">Close Active Tab</td><td class="py-2.5 px-4">Workspace</td></tr>
+                  <tr><td class="py-2.5 px-4 font-mono font-bold t-accent">⌘,</td><td class="py-2.5 px-4 t-primary font-medium">Open Settings (General, Appearance &amp; AI Agents)</td><td class="py-2.5 px-4">Global</td></tr>
+                  <tr><td class="py-2.5 px-4 font-mono font-bold t-accent">⌘/</td><td class="py-2.5 px-4 t-primary font-medium">Toggle Line Comment (<code class="font-mono">--</code>)</td><td class="py-2.5 px-4">SQL Editor</td></tr>
+                  <tr><td class="py-2.5 px-4 font-mono font-bold t-accent">⌘\</td><td class="py-2.5 px-4 t-primary font-medium">Show / Hide Left Catalog Sidebar</td><td class="py-2.5 px-4">Workspace</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <hr class="b-subtle" />
+
+        <!-- 15. TROUBLESHOOTING -->
+        <section id="troubleshooting" class="doc-section space-y-5">
+          <div class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Diagnostics</div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Troubleshooting &amp; Environment Checks</h2>
+          <div class="space-y-3 text-xs leading-relaxed">
+            <div class="s-card rounded-xl p-5 space-y-1.5">
+              <h3 class="font-semibold text-sm t-primary">Gatekeeper warning on source-compiled or unsigned builds</h3>
+              <p class="t-secondary">If macOS flags a locally compiled bundle, remove the quarantine xattr via <code class="font-mono s-code px-1.5 py-0.5 rounded">xattr -cr /Applications/BerryDB.app</code> before first launch.</p>
+            </div>
+            <div class="s-card rounded-xl p-5 space-y-1.5">
+              <h3 class="font-semibold text-sm t-primary">FreeTDS headers missing during <code class="font-mono">make run</code></h3>
+              <p class="t-secondary">SQL Server support compiles against Homebrew <code class="font-mono">freetds</code>. Run <code class="font-mono s-code px-1.5 py-0.5 rounded">brew install freetds</code> and re-run <code class="font-mono">make run</code> on Apple Silicon (<code class="font-mono">/opt/homebrew</code>).</p>
+            </div>
+            <div class="s-card rounded-xl p-5 space-y-1.5">
+              <h3 class="font-semibold text-sm t-primary"><code class="font-mono">berrydb-mcp</code> returns <code class="font-mono">live_reads_disabled</code> or permission refused</h3>
+              <p class="t-secondary">Open <strong>Settings → AI Agents</strong> inside BerryDB, confirm the target profile has Opt-In Live Reads enabled, verify <code class="font-mono">live_read_until</code> has not expired, and ensure production-tagged profiles point to a read-only database user rather than a superuser/writer role.</p>
+            </div>
+            <div class="s-card rounded-xl p-5 space-y-1.5">
+              <h3 class="font-semibold text-sm t-primary">Apple Intelligence option unavailable in AI SQL Copilot</h3>
+              <p class="t-secondary">On-device execution requires <strong>macOS 26+</strong> on Apple Silicon with Apple Intelligence enabled in macOS System Settings. On macOS 15 or when Apple Intelligence is disabled, use Cloud mode explicitly.</p>
+            </div>
+          </div>
+        </section>
+
+        <hr class="b-subtle" />
+
+        <!-- 16. SUPPORT & LICENSE -->
+        <section id="support" class="doc-section space-y-5 pb-12">
+          <div class="font-mono text-xs font-bold uppercase tracking-widest t-accent">Community &amp; Governance</div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Support, Issues &amp; Apache 2.0 License</h2>
+          <p class="t-secondary leading-relaxed">
+            BerryDB is open-source software maintained under the Apache License, Version 2.0. Contributions, protocol test vectors, and security reports are tracked through the public project repositories.
+          </p>
+          <div class="grid sm:grid-cols-3 gap-4 text-xs">
+            <a href="https://github.com/berry-apps/berrydb-desktop" target="_blank" rel="noopener"
+              class="s-card rounded-xl p-5 hover:b-strong transition block space-y-1.5">
+              <div class="font-mono font-bold t-accent">Source Repository →</div>
+              <div class="font-semibold text-sm t-primary">berry-apps/berrydb-desktop</div>
+              <p class="t-muted">Inspect Swift 6 driver implementations, MCP tests, and release manifests.</p>
+            </a>
+            <a href="https://github.com/berry-apps/berrydb-desktop/issues" target="_blank" rel="noopener"
+              class="s-card rounded-xl p-5 hover:b-strong transition block space-y-1.5">
+              <div class="font-mono font-bold t-accent">Issue Tracker →</div>
+              <div class="font-semibold text-sm t-primary">Bug Reports &amp; Protocol Gaps</div>
+              <p class="t-muted">Include macOS release, engine type, and anonymized query shapes.</p>
+            </a>
+            <a href="https://github.com/berry-apps/berrydb-desktop/security/advisories" target="_blank" rel="noopener"
+              class="s-card rounded-xl p-5 hover:b-strong transition block space-y-1.5">
+              <div class="font-mono font-bold t-accent">Security Advisories →</div>
+              <div class="font-semibold text-sm t-primary">Responsible Disclosure</div>
+              <p class="t-muted">Report MCP guardrail or credential isolation findings privately via GitHub advisories.</p>
             </a>
           </div>
         </section>
 
       </main>
-
     </div>
   </div>
 
+  <!-- ==================== FOOTER ==================== -->
+  <footer class="relative z-10 border-t b-subtle s-card py-10 mt-8">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-xs t-muted">
+      <div class="flex items-center gap-3">
+        <img src="public/images/berrydb-logo.png" alt="BerryDB" class="w-7 h-7 rounded-lg object-contain" />
+        <div>
+          <span class="font-semibold t-primary">BerryDB</span>
+          <span class="mx-2">·</span>
+          <span>Apache 2.0 Open Source · Native macOS 15.0+ (arm64)</span>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-5 font-medium">
+        <a href="index.html" class="hover:t-primary transition">Home</a>
+        <a href="https://github.com/berry-apps/berrydb-desktop" target="_blank" rel="noopener" class="hover:t-primary transition">GitHub</a>
+        <a href="https://shot.berryhub.app" target="_blank" rel="noopener" class="hover:t-primary transition">BerryShot</a>
+        <a href="https://berryhub.app" target="_blank" rel="noopener" class="hover:t-primary transition">BerryHub Ecosystem</a>
+      </div>
+    </div>
+  </footer>
 
-  <!-- ==================== JAVASCRIPT LOGIC ==================== -->
+  <!-- ==================== DOCS INTERACTIVITY & THEME SYNC ==================== -->
   <script>
-    // Robust Dark / Light Theme Logic
-    const htmlEl = document.documentElement;
+    function syncThemeUI() {
+      const isDark = document.documentElement.classList.contains('dark');
+      const icon = document.getElementById('themeIcon');
+      const label = document.getElementById('themeLabel');
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (icon) icon.textContent = isDark ? '☀︎' : '☾';
+      if (label) label.textContent = isDark ? 'Light' : 'Dark';
+      if (meta) meta.setAttribute('content', isDark ? '#05070B' : '#F4F6FA');
+    }
 
     function applyTheme(theme) {
       if (theme === 'light') {
-        htmlEl.classList.remove('dark');
+        document.documentElement.classList.remove('dark');
         localStorage.setItem('berry_theme', 'light');
       } else {
-        htmlEl.classList.add('dark');
+        document.documentElement.classList.add('dark');
         localStorage.setItem('berry_theme', 'dark');
       }
+      syncThemeUI();
     }
 
-    window.toggleTheme = function() {
-      const isDark = htmlEl.classList.contains('dark');
-      applyTheme(isDark ? 'light' : 'dark');
-    };
-
-    const savedTheme = localStorage.getItem('berry_theme') || 'dark';
-    applyTheme(savedTheme);
-
-    const themeToggleBtn = document.getElementById('themeToggleBtn');
-    if (themeToggleBtn) {
-      themeToggleBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        window.toggleTheme();
-      });
+    function toggleTheme() {
+      const next = document.documentElement.classList.contains('dark') ? 'light' : 'dark';
+      applyTheme(next);
     }
 
-    // Safe Lucide Icons Initialization
-    function initIcons() {
-      if (window.lucide && typeof lucide.createIcons === 'function') {
-        lucide.createIcons();
+    function copyCode(btn) {
+      const text = btn.getAttribute('data-copy') || '';
+      if (!text) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() {
+          const prev = btn.textContent;
+          btn.textContent = 'Copied';
+          setTimeout(function() { btn.textContent = prev; }, 1600);
+        });
       }
     }
-    initIcons();
-    document.addEventListener('DOMContentLoaded', initIcons);
-    window.addEventListener('load', initIcons);
 
-    // Real-time Docs Search Filter
-    const docSearch = document.getElementById('docSearch');
-    if (docSearch) {
-      docSearch.addEventListener('input', (e) => {
-        const term = e.target.value.toLowerCase().trim();
-        const sections = document.querySelectorAll('main section');
-        sections.forEach(sec => {
-          if (!term) {
-            sec.style.display = 'block';
+    document.addEventListener('DOMContentLoaded', function() {
+      syncThemeUI();
+
+      // Mobile TOC drawer
+      const mobileBtn = document.getElementById('mobileTocBtn');
+      const mobileDrawer = document.getElementById('mobileTocDrawer');
+      if (mobileBtn && mobileDrawer) {
+        mobileBtn.addEventListener('click', function() {
+          mobileDrawer.classList.toggle('hidden');
+        });
+        mobileDrawer.querySelectorAll('.mobile-doc-link').forEach(function(link) {
+          link.addEventListener('click', function() {
+            mobileDrawer.classList.add('hidden');
+          });
+        });
+      }
+
+      // Filter documentation sections via desktop or mobile input
+      const desktopSearch = document.getElementById('docSearch');
+      const mobileSearch = document.getElementById('mobileDocSearch');
+      const sections = Array.from(document.querySelectorAll('.doc-section'));
+
+      function filterSections(query) {
+        const q = (query || '').trim().toLowerCase();
+        sections.forEach(function(sec) {
+          if (!q) {
+            sec.style.display = '';
             return;
           }
-          const text = sec.textContent.toLowerCase();
-          sec.style.display = text.includes(term) ? 'block' : 'none';
+          const matched = sec.textContent.toLowerCase().includes(q);
+          sec.style.display = matched ? '' : 'none';
         });
-      });
+      }
 
-      document.addEventListener('keydown', (e) => {
-        if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      if (desktopSearch) {
+        desktopSearch.addEventListener('input', function(e) {
+          if (mobileSearch) mobileSearch.value = e.target.value;
+          filterSections(e.target.value);
+        });
+      }
+      if (mobileSearch) {
+        mobileSearch.addEventListener('input', function(e) {
+          if (desktopSearch) desktopSearch.value = e.target.value;
+          filterSections(e.target.value);
+        });
+      }
+
+      // Keyboard shortcut: Cmd+K focuses search
+      document.addEventListener('keydown', function(e) {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
           e.preventDefault();
-          docSearch.focus();
-        }
-      });
-    }
-
-    // ScrollSpy for Active Sidebar Link
-    const docLinks = document.querySelectorAll('aside .doc-link');
-    const docSections = document.querySelectorAll('main section[id]');
-
-    function updateActiveSidebar() {
-      const scrollPosition = window.scrollY + 130;
-      let currentSectionId = '';
-
-      docSections.forEach((section) => {
-        const top = section.offsetTop;
-        const height = section.offsetHeight;
-        if (scrollPosition >= top && scrollPosition < top + height) {
-          currentSectionId = section.getAttribute('id');
-        }
-      });
-
-      if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight - 60) {
-        if (docSections.length > 0) {
-          currentSectionId = docSections[docSections.length - 1].getAttribute('id');
-        }
-      }
-
-      if (!currentSectionId && docSections.length > 0) {
-        currentSectionId = docSections[0].getAttribute('id');
-      }
-
-      if (currentSectionId) {
-        docLinks.forEach((link) => {
-          const href = link.getAttribute('href').replace('#', '');
-          if (href === currentSectionId) {
-            link.classList.add('active-doc-link');
-          } else {
-            link.classList.remove('active-doc-link');
+          if (desktopSearch && desktopSearch.offsetParent !== null) {
+            desktopSearch.focus();
+            desktopSearch.select();
+          } else if (mobileDrawer && mobileSearch) {
+            mobileDrawer.classList.remove('hidden');
+            mobileSearch.focus();
           }
-        });
+        }
+      });
+
+      // ScrollSpy active TOC highlight
+      const tocLinks = Array.from(document.querySelectorAll('aside .doc-link'));
+      const linkMap = new Map();
+      tocLinks.forEach(function(link) {
+        const href = link.getAttribute('href');
+        if (href && href.startsWith('#')) {
+          linkMap.set(href.slice(1), link);
+        }
+      });
+
+      if ('IntersectionObserver' in window && sections.length > 0) {
+        const observer = new IntersectionObserver(function(entries) {
+          entries.forEach(function(entry) {
+            if (entry.isIntersecting) {
+              tocLinks.forEach(function(l) { l.classList.remove('active-doc-link'); });
+              const active = linkMap.get(entry.target.id);
+              if (active) active.classList.add('active-doc-link');
+            }
+          });
+        }, { rootMargin: '-18% 0px -68% 0px', threshold: 0.01 });
+
+        sections.forEach(function(sec) { observer.observe(sec); });
       }
-    }
-
-    window.addEventListener('scroll', updateActiveSidebar, { passive: true });
-    window.addEventListener('load', updateActiveSidebar);
-    updateActiveSidebar();
-
-    // Mobile Table of Contents Toggle
-    const mobileTocBtn = document.getElementById('mobileTocBtn');
-    const mobileTocDrawer = document.getElementById('mobileTocDrawer');
-    if (mobileTocBtn && mobileTocDrawer) {
-      mobileTocBtn.addEventListener('click', () => {
-        mobileTocDrawer.classList.toggle('hidden');
-      });
-      document.querySelectorAll('.mobile-doc-link').forEach(l => {
-        l.addEventListener('click', () => {
-          mobileTocDrawer.classList.add('hidden');
-        });
-      });
-    }
+    });
   </script>
-
 </body>
 </html>
