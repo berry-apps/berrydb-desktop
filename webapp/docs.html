@@ -395,8 +395,8 @@
             </div>
             <div class="s-card rounded-xl p-4">
               <div class="font-mono text-[10px] uppercase tracking-wider t-muted">MCP Toolset</div>
-              <div class="font-mono text-xl font-bold t-emerald mt-1">8 Tools</div>
-              <div class="text-[11px] t-muted mt-0.5">6 cache + 2 opt-in reads</div>
+              <div class="font-mono text-xl font-bold t-emerald mt-1">9 Tools</div>
+              <div class="text-[11px] t-muted mt-0.5">7 cache + 2 opt-in reads</div>
             </div>
             <div class="s-card rounded-xl p-4">
               <div class="font-mono text-[10px] uppercase tracking-wider t-muted">Grid Render Cap</div>
@@ -545,7 +545,7 @@ make app    # Assemble BerryDB.app bundle + berrydb-mcp helper</code></pre>
             Result grids stream directly from wire decoders into an AppKit <code class="font-mono text-xs s-code px-1.5 py-0.5 rounded">NSTableView</code> capped at <strong>1,000 rows per interactive query</strong> to protect responsiveness. Double-click cells to stage inline modifications highlighted in cobalt and commit everything atomically inside an explicit reviewable transaction.
           </p>
           <ul class="grid sm:grid-cols-3 gap-3 text-xs t-secondary">
-            <li class="s-card rounded-xl p-4"><strong class="block t-primary mb-1">Pin Columns &amp; Quick Filter</strong>Lock key identifiers while scrolling wide analytical projections horizontally at 120Hz.</li>
+            <li class="s-card rounded-xl p-4"><strong class="block t-primary mb-1">Pin Columns &amp; Quick Filter</strong>Lock key identifiers while scrolling wide analytical projections horizontally.</li>
             <li class="s-card rounded-xl p-4"><strong class="block t-primary mb-1">JSON &amp; UUID Popovers</strong>Inspect nested <code class="font-mono">jsonb</code> documents, arrays, timestamps, and explicit <code class="font-mono">NULL</code> tokens cleanly.</li>
             <li class="s-card rounded-xl p-4"><strong class="block t-primary mb-1">Atomic Staged Commits</strong>Preview exact generated <code class="font-mono">UPDATE</code>/<code class="font-mono">DELETE</code> SQL statements before pressing <kbd class="font-mono">⌘S</kbd>.</li>
           </ul>
@@ -612,8 +612,8 @@ make app    # Assemble BerryDB.app bundle + berrydb-mcp helper</code></pre>
           <h2 class="font-display text-2xl sm:text-3xl font-bold t-primary">Coding Agents &amp; Guarded MCP Live Reads (<code class="font-mono text-xl sm:text-2xl t-accent">berrydb-mcp</code>)</h2>
           <p class="t-secondary leading-relaxed">
             BerryDB ships a standalone stdio MCP executable inside the application bundle at
-            <code class="font-mono text-xs s-code px-1.5 py-0.5 rounded">/Applications/BerryDB.app/Contents/MacOS/berrydb-mcp</code>.
-            External coding assistants — including <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Antigravity</strong>, and <strong>Cursor</strong> — operate in two distinct privilege tiers:
+            <code class="font-mono text-xs s-code px-1.5 py-0.5 rounded">/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp</code>.
+            External coding assistants — checked with <strong>Claude Code</strong>, <strong>Codex</strong>, and <strong>Antigravity</strong> — operate in two distinct privilege tiers:
           </p>
 
           <div class="grid md:grid-cols-2 gap-4">
@@ -633,9 +633,9 @@ make app    # Assemble BerryDB.app bundle + berrydb-mcp helper</code></pre>
             </div>
           </div>
 
-          <!-- 8 Tools Table -->
+          <!-- 9 Tools Table -->
           <div class="space-y-3">
-            <h3 class="font-display text-lg font-bold t-primary">Complete MCP Tool Specification (8 Tools)</h3>
+            <h3 class="font-display text-lg font-bold t-primary">Complete MCP Tool Specification (9 Tools)</h3>
             <div class="s-card rounded-xl overflow-hidden">
               <div class="overflow-x-auto">
                 <table class="w-full text-left text-xs">
@@ -648,44 +648,49 @@ make app    # Assemble BerryDB.app bundle + berrydb-mcp helper</code></pre>
                   </thead>
                   <tbody class="divide-y b-subtle t-secondary">
                     <tr>
+                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_status</td>
+                      <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-emerald">Cache</span></td>
+                      <td class="py-3 px-4">Always exposed first; reports whether a project is <code class="font-mono">selected</code> or <code class="font-mono">unconfigured</code>, the <code class="font-mono">selected_by</code> match source, and Keychain settings integrity status.</td>
+                    </tr>
+                    <tr>
                       <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_list_connections</td>
                       <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-emerald">Cache</span></td>
-                      <td class="py-3 px-4">Returns configured profile IDs, engines, environment tags, opt-in state, and <code class="font-mono text-accent">live_read_until</code> expiry timestamp.</td>
+                      <td class="py-3 px-4">Returns the project's connections: profile IDs, names, engine drivers, production flags, schema refresh timestamp, and <code class="font-mono text-accent">live_read_until</code> expiry timestamp when active.</td>
                     </tr>
                     <tr>
-                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_list_tables</td>
+                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_get_schema</td>
                       <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-emerald">Cache</span></td>
-                      <td class="py-3 px-4">Lists cached schemas, tables, views, or DynamoDB table descriptors for a connection ID.</td>
-                    </tr>
-                    <tr>
-                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_describe_table</td>
-                      <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-emerald">Cache</span></td>
-                      <td class="py-3 px-4">Inspects cached column definitions, types, nullability, defaults, primary keys, and indexes.</td>
+                      <td class="py-3 px-4">Lists cached tables and views of one connection (<code class="font-mono">overview</code> names or <code class="font-mono">full</code> columns, indexes, and foreign keys), paged up to 200 objects (~512 KB cap) per call.</td>
                     </tr>
                     <tr>
                       <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_search_schema</td>
                       <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-emerald">Cache</span></td>
-                      <td class="py-3 px-4">Fuzzy searches table names and column identifiers across all locally indexed connections.</td>
+                      <td class="py-3 px-4">Case-insensitive substring search across cached table, view, column, and index names within a connection.</td>
                     </tr>
                     <tr>
-                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_get_relationships</td>
+                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_graph_query</td>
                       <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-emerald">Cache</span></td>
-                      <td class="py-3 px-4">Traverses cached foreign-key constraints and entity edges to resolve join paths safely.</td>
+                      <td class="py-3 px-4">Runs cached dependency-graph queries: <code class="font-mono">neighbors</code>, <code class="font-mono">path</code>, <code class="font-mono">blast_radius</code>, <code class="font-mono">circular_dependencies</code>, or <code class="font-mono">top_centrality</code>.</td>
                     </tr>
                     <tr>
-                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_get_database_summary</td>
+                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_get_graph_stats</td>
                       <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-emerald">Cache</span></td>
-                      <td class="py-3 px-4">Emits compact structural topology metrics sized specifically for coding agent context windows.</td>
+                      <td class="py-3 px-4">Returns harvested row counts, storage size, and scan metrics for every table or for a single object and its indexes.</td>
+                    </tr>
+                    <tr>
+                      <td class="py-3 px-4 font-mono font-semibold t-primary">berrydb_get_schema_changes</td>
+                      <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-emerald">Cache</span></td>
+                      <td class="py-3 px-4">Chronologically lists recorded schema diffs (tables and views added, modified, or removed, plus foreign-key changes) cursor-paged via <code class="font-mono">since</code> / <code class="font-mono">next_since</code>.</td>
                     </tr>
                     <tr style="background-color: var(--accent-soft);">
                       <td class="py-3 px-4 font-mono font-semibold t-accent">berrydb_execute_read_query</td>
                       <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-accent">Live Read</span></td>
-                      <td class="py-3 px-4">Runs a <strong>single read-only SQL statement</strong> wrapped in a server-enforced read-only transaction (<code class="font-mono">BEGIN TRANSACTION READ ONLY</code> / <code class="font-mono">SET TRANSACTION READ ONLY</code> / <code class="font-mono">PRAGMA query_only = ON</code>) on PostgreSQL, MySQL/MariaDB, or SQLite.</td>
+                      <td class="py-3 px-4">Runs a <strong>single read-only SQL statement</strong> wrapped in a server-enforced read-only transaction (<code class="font-mono">BEGIN TRANSACTION READ ONLY</code> on PostgreSQL, <code class="font-mono">SET TRANSACTION READ ONLY</code> on MySQL/MariaDB, <code class="font-mono">PRAGMA query_only = ON</code> on SQLite) with positional parameters and explicit <code class="font-mono">row_limit</code> (max 100).</td>
                     </tr>
                     <tr style="background-color: var(--accent-soft);">
                       <td class="py-3 px-4 font-mono font-semibold t-accent">berrydb_dynamodb_query</td>
                       <td class="py-3 px-4 font-mono"><span class="px-2 py-0.5 rounded badge-accent">Live Read</span></td>
-                      <td class="py-3 px-4">Executes a single DynamoDB <code class="font-mono">Query</code> operation keyed by partition key (<code class="font-mono">KeyConditionExpression</code>). Full-table <code class="font-mono">Scan</code> calls are permanently rejected.</td>
+                      <td class="py-3 px-4">Executes a single DynamoDB <code class="font-mono">Query</code> operation keyed by one partition key value (with optional sort key condition and <code class="font-mono">cursor</code> pagination). Full-table <code class="font-mono">Scan</code> calls and filter expressions are rejected.</td>
                     </tr>
                   </tbody>
                 </table>
@@ -802,36 +807,44 @@ make app    # Assemble BerryDB.app bundle + berrydb-mcp helper</code></pre>
 
           <!-- Client Setup Snippets -->
           <div class="s-card rounded-xl p-5 space-y-4">
-            <h3 class="font-display font-bold text-base t-primary">Configuring External MCP Clients</h3>
-            <p class="text-xs t-secondary">Register the stdio binary inside Claude Code, Codex, or Antigravity client configuration:</p>
+            <h3 class="font-display font-bold text-base t-primary">Configuring Coding Agents &amp; Verifying <code class="font-mono text-sm t-accent">berrydb_status</code></h3>
+            <p class="text-xs t-secondary leading-relaxed">
+              Run BerryDB from <code class="font-mono">/Applications/BerryDB.app</code>, open each non-production connection once so its schema caches, configure a project in <strong>Settings (⌘,) → AI Agents</strong>, and copy one of the generated helper entries below (tools were verified with <strong>Claude Code</strong>, <strong>Codex</strong>, and <strong>Antigravity</strong>):
+            </p>
             <div class="grid md:grid-cols-2 gap-4">
               <div class="space-y-1.5">
-                <div class="font-mono text-[11px] font-semibold t-accent">JSON Client Configuration (Claude Desktop / Antigravity / Cursor)</div>
+                <div class="font-mono text-[11px] font-semibold t-accent">1. Shared User Registration (Workspace Folder Auto-Match)</div>
                 <div class="relative">
-                  <pre class="s-code rounded-lg p-3.5 font-mono text-[11px] overflow-x-auto leading-relaxed"><code>{
-  "mcpServers": {
-    "berrydb": {
-      "command": "/Applications/BerryDB.app/Contents/MacOS/berrydb-mcp"
-    }
-  }
-}</code></pre>
-                  <button type="button" onclick="copyCode(this)" data-copy='{"mcpServers":{"berrydb":{"command":"/Applications/BerryDB.app/Contents/MacOS/berrydb-mcp"}}}'
+                  <pre class="s-code rounded-lg p-3.5 font-mono text-[11px] overflow-x-auto leading-relaxed"><code># Claude Code
+claude mcp add --scope user berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp'
+
+# Codex
+codex mcp add berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp'
+
+# Antigravity
+agy mcp add berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp'</code></pre>
+                  <button type="button" onclick="copyCode(this)" data-copy="claude mcp add --scope user berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp'"
                     class="absolute top-2 right-2 px-2 py-1 rounded text-[10px] font-mono s-elevated t-muted hover:t-primary transition cursor-pointer">Copy</button>
                 </div>
               </div>
               <div class="space-y-1.5">
-                <div class="font-mono text-[11px] font-semibold t-accent">Claude Code &amp; Codex CLI Registration</div>
+                <div class="font-mono text-[11px] font-semibold t-accent">2. Per-Repository Pinned Project (<code class="font-mono">--project</code>)</div>
                 <div class="relative">
-                  <pre class="s-code rounded-lg p-3.5 font-mono text-[11px] overflow-x-auto leading-relaxed"><code># Claude Code
-claude mcp add berrydb /Applications/BerryDB.app/Contents/MacOS/berrydb-mcp
+                  <pre class="s-code rounded-lg p-3.5 font-mono text-[11px] overflow-x-auto leading-relaxed"><code># Claude Code (.mcp.json in repository root)
+claude mcp add --scope project berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp' --project 'Shop API'
 
-# Codex (~/.codex/config.toml)
+# Codex (.codex/config.toml)
 [mcp_servers.berrydb]
-command = "/Applications/BerryDB.app/Contents/MacOS/berrydb-mcp"</code></pre>
-                  <button type="button" onclick="copyCode(this)" data-copy="claude mcp add berrydb /Applications/BerryDB.app/Contents/MacOS/berrydb-mcp"
+command = "/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp"
+args = ["--project", "Shop API"]</code></pre>
+                  <button type="button" onclick="copyCode(this)" data-copy="claude mcp add --scope project berrydb -- '/Applications/BerryDB.app/Contents/Helpers/berrydb-mcp' --project 'Shop API'"
                     class="absolute top-2 right-2 px-2 py-1 rounded text-[10px] font-mono s-elevated t-muted hover:t-primary transition cursor-pointer">Copy</button>
                 </div>
               </div>
+            </div>
+            <div class="s-recessed rounded-xl p-4 text-xs t-secondary space-y-1.5 leading-relaxed">
+              <div><strong class="t-primary">First-run Keychain prompt:</strong> Choose <strong>Always Allow</strong> when macOS asks whether <code class="font-mono">berrydb-mcp</code> may read <code class="font-mono">dev.berrydb.mcp.access-key</code> (verifies project integrity) or a connection secret on the first live read (waits up to 15 seconds for confirmation).</div>
+              <div><strong class="t-primary">Verify with <code class="font-mono">berrydb_status</code>:</strong> A ready session returns <code class="font-mono">"state": "selected"</code> with <code class="font-mono">selected_by</code> (<code class="font-mono">explicit</code>, <code class="font-mono">roots</code>, or <code class="font-mono">working_directory</code>). An <code class="font-mono">"unconfigured"</code> response exposes only <code class="font-mono">berrydb_status</code> alongside a <code class="font-mono">reason</code> code (<code class="font-mono">no_matching_project</code>, <code class="font-mono">ambiguous_projects</code>, <code class="font-mono">explicit_project_not_found</code>, <code class="font-mono">project_disabled</code>, or <code class="font-mono">integrity_unavailable</code>).</div>
             </div>
           </div>
         </section>
@@ -855,7 +868,7 @@ command = "/Applications/BerryDB.app/Contents/MacOS/berrydb-mcp"</code></pre>
             <figure class="s-window rounded-2xl overflow-hidden">
               <img src="public/images/Screenshot-CAE594E6-3EAE-4CB7-87FF-EA2A34FF278E.png" alt="Citadel Pure-Swift SSH Tunnel Configuration Sheet" class="w-full h-auto block" />
               <figcaption class="px-4 py-3 border-t b-subtle s-elevated text-xs t-muted">
-                Figure 7 — Citadel SSH tunnel sheet supporting Ed25519 private keys, passphrase prompts, and SSH agent forwarding.
+                Figure 7 — Citadel SSH tunnel sheet supporting password authentication, Ed25519/RSA private key files, and Keychain passphrase prompts.
               </figcaption>
             </figure>
           </div>
