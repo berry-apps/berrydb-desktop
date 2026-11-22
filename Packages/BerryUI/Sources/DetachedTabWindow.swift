@@ -2,34 +2,31 @@ import BerryCore
 import BerryDriverKit
 import SwiftUI
 
-/// Bridge that lets detached-tab windows reach the main workspace's view model
-/// (D1). One workspace per app for now, so a single weak
-/// reference is enough; the window looks its tab up by id.
-@MainActor
-public final class DetachedWorkspace {
-    public static let shared = DetachedWorkspace()
-    public weak var viewModel: WorkspaceViewModel?
-    private init() {}
+public struct DetachedTabTarget: Codable, Hashable, Sendable {
+    let workspaceID: UUID
+    let tabID: String
 }
 
 /// One tab moved into its own independent window (D1). The content
 /// is backed by the SAME document/session as the main window — it's the tab
 /// relocated, not a copy. Closing the window closes the tab.
 public struct DetachedTabWindow: View {
-    public let tabID: String
+    public let target: DetachedTabTarget?
+    @State private var owner: WorkspaceViewModel?
 
-    public init(tabID: String) {
-        self.tabID = tabID
+    public init(target: DetachedTabTarget?) {
+        self.target = target
     }
 
     public var body: some View {
-        if let viewModel = DetachedWorkspace.shared.viewModel,
-           let tab = viewModel.tab(for: tabID) {
+        if let target, let viewModel = owner ?? WorkspaceViewModel.workspace(for: target),
+           let tab = viewModel.tab(for: target.tabID) {
             content(tab, viewModel: viewModel)
                 .navigationTitle(tab.title)
                 .frame(minWidth: 640, minHeight: 420)
+                .onAppear { owner = viewModel }
                 .onDisappear {
-                    viewModel.closeDetachedTab(tabID)
+                    viewModel.closeDetachedTab(target.tabID)
                 }
         } else {
             ContentUnavailableView(

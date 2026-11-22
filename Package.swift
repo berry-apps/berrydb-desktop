@@ -552,7 +552,7 @@ let package = Package(
             // status.
             dependencies: [
                 "BerryUI", "BerryCore", "BerryCredentials", "BerryStore", "BerryGraph", "BerryAI", "BerryLicense",
-                "BerryDriverKit", "BerryDriverSQLite",
+                "BerryDriverKit", "BerryDriverSQLite", "BerryDriverPostgres", "BerryDriverMySQL",
                 "BerryDataSourceKit", "BerryDriverMongo", "BerryDriverQdrant", "BerryDriverTestKit",
                 "BerryKeyValueKit", "BerryDriverRedis",
             ],

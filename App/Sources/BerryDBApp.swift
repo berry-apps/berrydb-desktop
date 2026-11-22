@@ -14,8 +14,8 @@ struct BerryDBApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
-            WorkspaceView(checkForUpdates: { appDelegate.updater.checkForUpdates() })
+        WindowGroup(id: "workspace", for: DatabaseWorkspaceTarget.self) { $target in
+            WorkspaceView(databaseTarget: target, checkForUpdates: { appDelegate.updater.checkForUpdates() })
                 .frame(minWidth: 900, minHeight: 560)
                 .onOpenURL { url in
                     if url.pathExtension.lowercased() == "sql" {
@@ -67,8 +67,8 @@ struct BerryDBApp: App {
 
  // A tab moved into its own window (D1) — same document and
         // session as the main workspace.
-        WindowGroup(id: "detached-tab", for: String.self) { $tabID in
-            DetachedTabWindow(tabID: tabID ?? "")
+        WindowGroup(id: "detached-tab", for: DetachedTabTarget.self) { $target in
+            DetachedTabWindow(target: target)
         }
         .windowToolbarStyle(.unifiedCompact)
         .defaultSize(width: 900, height: 620)

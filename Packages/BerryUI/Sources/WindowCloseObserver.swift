@@ -10,21 +10,25 @@ import SwiftUI
 /// model and the AI panel controller hold closures that capture each other,
 /// so neither is released when the window goes away.
 struct WindowCloseObserver: NSViewRepresentable {
+    var onWindowChange: @MainActor (NSWindow?) -> Void = { _ in }
     let onClose: @MainActor () -> Void
 
     func makeNSView(context: Context) -> ObserverView {
-        ObserverView(onClose: onClose)
+        ObserverView(onWindowChange: onWindowChange, onClose: onClose)
     }
 
     func updateNSView(_ view: ObserverView, context: Context) {
+        view.onWindowChange = onWindowChange
         view.onClose = onClose
     }
 
     final class ObserverView: NSView {
+        var onWindowChange: @MainActor (NSWindow?) -> Void
         var onClose: @MainActor () -> Void
         private weak var observedWindow: NSWindow?
 
-        init(onClose: @escaping @MainActor () -> Void) {
+        init(onWindowChange: @escaping @MainActor (NSWindow?) -> Void, onClose: @escaping @MainActor () -> Void) {
+            self.onWindowChange = onWindowChange
             self.onClose = onClose
             super.init(frame: .zero)
         }
@@ -45,6 +49,7 @@ struct WindowCloseObserver: NSViewRepresentable {
             let center = NotificationCenter.default
             if let observedWindow { center.removeObserver(self, name: NSWindow.willCloseNotification, object: observedWindow) }
             observedWindow = window
+            onWindowChange(window)
             guard let window else { return }
             center.addObserver(self, selector: #selector(windowWillClose(_:)), name: NSWindow.willCloseNotification, object: window)
         }

@@ -38,6 +38,7 @@ public struct WorkspaceView: View {
     /// dependency direction). Defaults to a no-op so existing/test call sites
     /// that construct `WorkspaceView()` without it keep compiling.
     private let checkForUpdates: () -> Void
+    private let databaseTarget: DatabaseWorkspaceTarget?
     private enum SidebarTab: String, CaseIterable, Identifiable {
         case connections
         case objects
@@ -114,7 +115,10 @@ public struct WorkspaceView: View {
  /// Opens detached-tab windows (D1).
     @Environment(\.openWindow) private var openWindow
 
-    public init(checkForUpdates: @escaping () -> Void = {}) {
+    public init(
+        databaseTarget: DatabaseWorkspaceTarget? = nil,
+        checkForUpdates: @escaping () -> Void = {}
+    ) {
         // License and AI panel share ONE LicenseManager so activation updates
         // both the toolbar badge and the AI entitlement/token together.
         let license = LicenseManager.makeDefault()
@@ -122,6 +126,7 @@ public struct WorkspaceView: View {
         _aiController = State(initialValue: AIPanelController(
             license: license, backendURL: LicenseManager.backendURL()
         ))
+        self.databaseTarget = databaseTarget
         self.checkForUpdates = checkForUpdates
     }
 
@@ -185,7 +190,14 @@ public struct WorkspaceView: View {
         .navigationTitle(viewModel.connectionTitle)
         // Each window owns its workspace; when the window closes, its schema
         // passes, drains and catalog connections stop with it.
-        .background(WindowCloseObserver { viewModel.closeWorkspace() })
+        .background(WindowCloseObserver(onWindowChange: registerWorkspaceWindow) {
+            viewModel.closeWorkspace()
+        })
+        .task {
+            guard let databaseTarget, viewModel.session == nil else { return }
+            await viewModel.connectDatabaseWorkspace(databaseTarget)
+            if viewModel.session != nil { sidebarTab = .objects }
+        }
         .toolbar { toolbarContent }
         .focusedSceneValue(\.workspaceMenu, menuActions)
         // History / Saved Queries / New Table / Import / Processes / Insights /
@@ -291,8 +303,11 @@ public struct WorkspaceView: View {
         ) {
             Button(L("Cancel"), role: .cancel) { viewModel.dismissHostKeyChange() }
             Button(L("Trust New Key & Reconnect"), role: .destructive) {
-                guard let profile = viewModel.admitTrustChangedHostKey() else { return }
-                Task { await viewModel.connect(profile: profile) }
+                guard let reconnect = viewModel.admitTrustChangedHostKey() else { return }
+                Task {
+                    await reconnect()
+                    if viewModel.session != nil { sidebarTab = .objects }
+                }
             }
         } message: {
             if let change = viewModel.hostKeyChange {
@@ -524,9 +539,6 @@ public struct WorkspaceView: View {
                 license.hasFeature(LicenseFeature.intelligence)
                     ? viewModel.graphExecutor(profileID: profileID) : nil
             }
-            // Detached-tab windows resolve their tab through this workspace
- // (D1).
-            DetachedWorkspace.shared.viewModel = viewModel
             syncIntelligenceEntitlement()
  // Apply the persisted data-deletion-warning switch.
             QueryService.confirmsDataDeletion = warnDataDeletion
@@ -649,14 +661,19 @@ public struct WorkspaceView: View {
             + L("New:") + " \(change.presented)"
     }
 
+    private var canOpenAI: Bool {
+        viewModel.databaseWorkspaceTarget == nil && (viewModel.session != nil || viewModel.dataSourceSession != nil)
+    }
+
     private func bindAI() {
+        if viewModel.databaseWorkspaceTarget != nil { showAIPanel = false }
         aiController.bind(
-            session: viewModel.session,
+            session: viewModel.databaseWorkspaceTarget == nil ? viewModel.session : nil,
             dataSourceSession: viewModel.dataSourceSession,
             collections: viewModel.collections,
             catalog: viewModel.catalog,
             objects: viewModel.objects,
-            profileID: viewModel.activeProfileID
+            profileID: viewModel.databaseWorkspaceTarget == nil ? viewModel.activeProfileID : nil
         )
     }
 
@@ -730,7 +747,7 @@ public struct WorkspaceView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(showAIPanel ? BerryTheme.accent : Color(nsColor: .controlColor))
-            .disabled(viewModel.session == nil && viewModel.dataSourceSession == nil)
+            .disabled(!canOpenAI)
             .help(showAIPanel ? L("Close AI Assistant") : L("AI Assistant"))
 
             // Insights / Graph Explorer / Time Machine / Backup: previously
@@ -869,7 +886,7 @@ public struct WorkspaceView: View {
             refreshSchema: { viewModel.refreshSchema() },
             showAbout: { showAbout = true },
             disconnect: { viewModel.disconnect() },
-            toggleAI: { showAIPanel.toggle() },
+            toggleAI: { if viewModel.databaseWorkspaceTarget == nil { showAIPanel.toggle() } },
             backup: { viewModel.openTool(.backup) },
             restoreDump: { showRestoreDumpSheet = true },
             goToTable: { showQuickOpen = true },
@@ -1053,6 +1070,22 @@ public struct WorkspaceView: View {
         }
     }
 
+    private func registerWorkspaceWindow(_ window: NSWindow?) {
+        viewModel.focusWindow = { [weak window] in
+            guard let window else { return false }
+            window.makeKeyAndOrderFront(nil)
+            return true
+        }
+    }
+
+    private func openDatabaseWorkspace(_ database: String) {
+        guard let profileID = viewModel.databaseWorkspaceSourceID else { return }
+        let target = DatabaseWorkspaceTarget(profileID: profileID, database: database)
+        if !WorkspaceViewModel.focusDatabaseWorkspace(target) {
+            openWindow(id: "workspace", value: target)
+        }
+    }
+
     private var objectList: some View {
         Group {
             if viewModel.session == nil && viewModel.dataSourceSession == nil && viewModel.keyValueSession == nil {
@@ -1078,6 +1111,15 @@ public struct WorkspaceView: View {
                 }
             } else {
                 VStack(spacing: 0) {
+                    if viewModel.supportsDatabaseWorkspaces,
+                       let sessionID = viewModel.session?.id {
+                        DatabaseWorkspaceMenu(
+                            currentDatabase: viewModel.currentDatabase,
+                            loadDatabases: { try await viewModel.availableDatabases() },
+                            openDatabase: openDatabaseWorkspace
+                        )
+                        .id(sessionID)
+                    }
                     if viewModel.session != nil {
                         objectTypeFilterBar
                         if !viewModel.objects.isEmpty {
@@ -2189,7 +2231,7 @@ public struct WorkspaceView: View {
             headerDivider
 
             headerButton(L("AI Assistant"), "sparkles",
-                         enabled: viewModel.session != nil || viewModel.dataSourceSession != nil,
+                         enabled: canOpenAI,
                          isActive: showAIPanel) { showAIPanel.toggle() }
 
             headerDivider
@@ -2425,8 +2467,8 @@ public struct WorkspaceView: View {
             // the main window (singleton chrome).
             if case .tool = tab {} else {
                 Button(L("Move to New Window")) {
-                    viewModel.detachTab(tab.id)
-                    openWindow(id: "detached-tab", value: tab.id)
+                    let target = viewModel.detachTab(tab.id)
+                    openWindow(id: "detached-tab", value: target)
                 }
                 Divider()
             }

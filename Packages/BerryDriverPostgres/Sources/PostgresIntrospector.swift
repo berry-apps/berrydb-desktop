@@ -19,7 +19,11 @@ public struct PostgresIntrospector: Introspector, CatalogReadScoping {
 
     public func databases() async throws -> [DatabaseInfo] {
         let rows = try await connection.queryAll(
-            "SELECT datname FROM pg_database WHERE NOT datistemplate ORDER BY datname"
+            """
+            SELECT datname FROM pg_database
+            WHERE NOT datistemplate AND datallowconn AND has_database_privilege(oid, 'CONNECT')
+            ORDER BY datname
+            """
         )
         return rows.compactMap {
             if case .text(let name) = $0[0] { DatabaseInfo(name: name) } else { nil }
