@@ -1340,6 +1340,10 @@ public final class BerryStore: Sendable {
         }
     }
 
+    public func connectionProfile(id: UUID) throws -> ConnectionProfile? {
+        try read { db in try ConnectionProfile.fetchOne(db, key: id) }
+    }
+
     public func save(_ profile: ConnectionProfile) throws {
         try write { db in
             try profile.save(db)

@@ -219,6 +219,40 @@ public final class WorkspaceViewModel {
     // MARK: Active session
 
     public private(set) var session: Session?
+    private(set) var databaseWorkspaceTarget: DatabaseWorkspaceTarget?
+    @ObservationIgnored var focusWindow: (() -> Bool)?
+    var databaseWorkspaceSourceID: UUID? { databaseWorkspaceTarget?.profileID ?? activeProfileID }
+
+    var supportsDatabaseWorkspaces: Bool {
+        guard databaseWorkspaceSourceID != nil, let session else { return false }
+        return session.capabilities.multipleDatabases
+            && (session.config.driver == .postgres || session.config.driver == .mysql)
+    }
+
+    var currentDatabase: String? {
+        guard let config = session?.config else { return nil }
+        if let database = config.database, !database.isEmpty { return database }
+        return config.driver == .postgres ? (config.username ?? "postgres") : nil
+    }
+
+    func availableDatabases() async throws -> [String] {
+        guard supportsDatabaseWorkspaces, let session else { return [] }
+        let connection = try await metadataConnections.connection(for: session)
+        return try await connection.introspector.databases().map(\.name)
+    }
+
+    static func focusDatabaseWorkspace(_ target: DatabaseWorkspaceTarget) -> Bool {
+        for workspace in openWorkspaces.allObjects
+        where workspace.databaseWorkspaceSourceID == target.profileID && workspace.currentDatabase == target.database {
+            if workspace.focusWindow?() == true { return true }
+        }
+        return false
+    }
+
+    static func workspace(for target: DetachedTabTarget) -> WorkspaceViewModel? {
+        openWorkspaces.allObjects.first { $0.workspaceID == target.workspaceID }
+    }
+
     public private(set) var activeProfileID: UUID?
     public private(set) var catalog: SchemaCatalog?
  /// Manual transaction control for the editor — reset per session
@@ -462,6 +496,7 @@ public final class WorkspaceViewModel {
     /// catalog and read-only connections. Weak, so a closed window's
     /// workspace is released.
     private static let openWorkspaces = NSHashTable<WorkspaceViewModel>.weakObjects()
+    private static let closedWorkspacesWithDetachedTabs = NSHashTable<WorkspaceViewModel>.weakObjects()
 
     public init() {
         (embeddingDrains, passGate) = Self.sharedGraphWork(forStorePath: try? BerryStore.defaultStoreURL().path)
@@ -560,8 +595,9 @@ public final class WorkspaceViewModel {
     /// Stops this workspace's graph work for good, when its window closes:
     /// its passes, statistics refresh and embedding drains stop, its catalog
     /// and read-only connections close, and the full graph it cached is
-    /// dropped whatever the graph views reported. The session itself is left
-    /// open; what the tracker recorded of its connection is forgotten, since
+    /// dropped whatever the graph views reported. A regular workspace leaves
+    /// its session open. A quick-opened database session closes once its
+    /// workspace and detached tabs are closed. What the tracker recorded of its connection is forgotten, since
     /// the tracker only decides whether a statement may go to a read-only
     /// connection, and once closed the pool opens none again, for any
     /// session, so a turn still running gets the card. Nothing else stops
@@ -578,10 +614,14 @@ public final class WorkspaceViewModel {
         embeddingDrains.cancelAll(ownedBy: workspaceID)
         storeMemory?.stop()
         Self.openWorkspaces.remove(self)
+        if hasDetachedTabs {
+            Self.closedWorkspacesWithDetachedTabs.add(self)
+        }
         let coordinator = harvestCoordinator
         let connections = metadataConnections
         let readOnly = readOnlyConnections
         let sessionID = session?.id
+        let databaseWorkspaceSessionID = databaseWorkspaceTarget != nil && !hasDetachedTabs ? sessionID : nil
         let hold = beforeClosingConnections
         let id = workspaceID
         let teardown = Task.detached {
@@ -589,6 +629,9 @@ public final class WorkspaceViewModel {
             await hold?()
             await connections.closeAll()
             await readOnly.closeAll()
+            if let databaseWorkspaceSessionID {
+                await ConnectionManager.shared.close(databaseWorkspaceSessionID)
+            }
             if let sessionID { SessionStateTracker.shared.forget(sessionID: sessionID) }
             await Self.teardownFinished(id)
         }
@@ -660,13 +703,19 @@ public final class WorkspaceViewModel {
     }
 
     public var connectionTitle: String {
-        if let session { return "\(session.displayName) — \(session.driverDisplayName)" }
+        if let session {
+            if let target = databaseWorkspaceTarget {
+                return "\(session.displayName) — \(target.database)"
+            }
+            return "\(session.displayName) — \(session.driverDisplayName)"
+        }
         if let dataSourceSession { return "\(dataSourceSession.displayName) — \(dataSourceSession.driverDisplayName)" }
         if let keyValueSession { return "\(keyValueSession.displayName) — \(keyValueSession.driverDisplayName)" }
         return "BerryDB"
     }
 
     public var isProductionSession: Bool {
+        if databaseWorkspaceTarget != nil { return session?.isProduction == true }
         guard let activeProfileID else { return false }
         return profiles.first { $0.id == activeProfileID }?.envColor == "production"
     }
@@ -888,8 +937,15 @@ public final class WorkspaceViewModel {
             try store?.deleteProfile(id: profile.id)
  // Never leave orphaned secrets behind.
             KeychainService.deleteSecrets(profileID: profile.id)
-            if activeProfileID == profile.id {
-                disconnect()
+            let workspaces = Self.openWorkspaces.allObjects + Self.closedWorkspacesWithDetachedTabs.allObjects
+            for workspace in workspaces {
+                if workspace.databaseWorkspaceSourceID == profile.id {
+                    workspace.disconnect()
+                }
+                if workspace.retryProfileID == profile.id {
+                    workspace.dismissHostKeyChange()
+                }
+                workspace.profiles.removeAll { $0.id == profile.id }
             }
             reloadProfiles()
         } catch {
@@ -1008,7 +1064,7 @@ public final class WorkspaceViewModel {
     /// `dataSourceSession`. Returns false (caller should not proceed) if a
     /// connection attempt is already in flight.
     public func beginConnect() -> Bool {
-        guard !isConnecting else { return false }
+        guard !isClosed, !isConnecting else { return false }
         isConnecting = true
         errorMessage = nil
         return true
@@ -1021,6 +1077,27 @@ public final class WorkspaceViewModel {
     /// package included) keeps working exactly as before, self-guarding via
     /// its own `beginConnect()` call.
     public func connect(profile: ConnectionProfile, alreadyBegun: Bool = false) async {
+        await connect(profile: profile, target: nil, alreadyBegun: alreadyBegun)
+    }
+
+    func connectDatabaseWorkspace(_ target: DatabaseWorkspaceTarget) async {
+        guard let profile = savedProfile(id: target.profileID),
+              profile.driver == .postgres || profile.driver == .mysql else {
+            errorMessage = L("The saved connection for this database is unavailable.")
+            return
+        }
+        await connect(profile: profile, target: target)
+    }
+
+    private func savedProfile(id: UUID) -> ConnectionProfile? {
+        try? store?.connectionProfile(id: id)
+    }
+
+    private func connect(
+        profile: ConnectionProfile,
+        target: DatabaseWorkspaceTarget?,
+        alreadyBegun: Bool = false
+    ) async {
         guard alreadyBegun || beginConnect() else { return }
         defer { isConnecting = false }
         if let driver = profile.driver, driver == .mongodb || driver == .qdrant || driver == .elasticsearch {
@@ -1045,17 +1122,26 @@ public final class WorkspaceViewModel {
                 KeychainService.readPassword(kind: .sshPassphrase, profileID: profile.id)
             )
         }.value
-        let config = profile.makeConfig(
+        var destination = profile
+        if let target {
+            guard savedProfile(id: target.profileID) != nil else {
+                errorMessage = L("The saved connection for this database is unavailable.")
+                return
+            }
+            destination.database = target.database
+        }
+        let config = destination.makeConfig(
             password: password,
             sshPassword: sshPassword,
             sshPassphrase: sshPassphrase
         )
         await open(
             config: config,
-            profileID: profile.id,
+            profileID: target?.workspaceProfileID ?? profile.id,
             isProduction: profile.envColor == "production",
             recordHistory: profile.historyEnabled,
-            alreadyBegun: true
+            alreadyBegun: true,
+            databaseTarget: target
         )
     }
 
@@ -1069,10 +1155,12 @@ public final class WorkspaceViewModel {
         profileID: UUID?,
         isProduction: Bool = false,
         recordHistory: Bool = true,
-        alreadyBegun: Bool = false
+        alreadyBegun: Bool = false,
+        databaseTarget: DatabaseWorkspaceTarget? = nil
     ) async {
-        guard alreadyBegun || beginConnect() else { return }
+        guard !isClosed, alreadyBegun || beginConnect() else { return }
         defer { isConnecting = false }
+        var openedSession: Session?
         do {
             if let old = session {
                 stopGraphWork(sessionID: old.id, profileID: activeProfileID)
@@ -1095,11 +1183,20 @@ public final class WorkspaceViewModel {
                 config, profileID: profileID, isProduction: isProduction,
                 recordHistory: recordHistory
             )
+            guard !isClosed else {
+                await ConnectionManager.shared.close(newSession.id)
+                return
+            }
+            openedSession = newSession
+            if let databaseTarget, savedProfile(id: databaseTarget.profileID) == nil {
+                throw DriverError.connectionFailed(L("The saved connection for this database is unavailable."))
+            }
+            databaseWorkspaceTarget = databaseTarget
             session = newSession
-            graphSession = newSession
+            graphSession = databaseTarget == nil ? newSession : nil
             if let profileID { leftGraphProfiles.remove(profileID) }
             activeProfileID = profileID
-            catalog = SchemaCatalog(session: newSession, snapshotSink: snapshotSink)
+            catalog = SchemaCatalog(session: newSession, snapshotSink: databaseTarget == nil ? snapshotSink : nil)
             transaction = TransactionController()
             tabs = []
             groups = []
@@ -1110,7 +1207,12 @@ public final class WorkspaceViewModel {
             restoreEditorSessions(profileID: profileID)
             try await refreshObjects()
         } catch {
+            if let openedSession {
+                stopGraphWork(sessionID: openedSession.id, profileID: profileID)
+                await ConnectionManager.shared.close(openedSession.id)
+            }
             session = nil
+            databaseWorkspaceTarget = nil
             activeProfileID = nil
             catalog = nil
             objects = []
@@ -1120,9 +1222,10 @@ public final class WorkspaceViewModel {
             // new key and reconnect. Only saved profiles use SSH, so profileID
             // is present.
             if case let DriverError.sshHostKeyChanged(host, port, stored, presented) = error,
-               let profileID {
+               let sourceID = databaseTarget?.profileID ?? profileID {
                 hostKeyChange = HostKeyChange(host: host, port: port, stored: stored, presented: presented)
-                retryProfileID = profileID
+                retryProfileID = sourceID
+                retryDatabaseTarget = databaseTarget
             }
         }
     }
@@ -1139,6 +1242,7 @@ public final class WorkspaceViewModel {
     /// Non-nil after a connect refused by a changed host key — drives the alert.
     public private(set) var hostKeyChange: HostKeyChange?
     private var retryProfileID: UUID?
+    private var retryDatabaseTarget: DatabaseWorkspaceTarget?
 
     /// Non-nil after a context-menu Truncate/Drop (`runDestructiveStatements`)
     /// fails — drives a one-off alert. Separate from `errorMessage` (a whole
@@ -1163,30 +1267,25 @@ public final class WorkspaceViewModel {
     /// Non-nil when an SQL file open attempt throws an error.
     public var fileOpenError: String?
 
-    /// Synchronous prefix of `trustChangedHostKeyAndReconnect()` — trusts the
-    /// key and dismisses the alert (`hostKeyChange = nil`) directly on the
-    /// button tap's call stack, before any `Task`, so the alert closes
-    /// instantly instead of sitting there until that Task's MainActor turn.
-    /// Returns the profile to reconnect to, or nil if there's nothing
-    /// pending (defensive — the alert wouldn't be showing otherwise).
-    public func admitTrustChangedHostKey() -> ConnectionProfile? {
+    /// Clears the alert before the asynchronous reconnect begins.
+    func admitTrustChangedHostKey() -> (@MainActor () async -> Void)? {
         guard let change = hostKeyChange, let profileID = retryProfileID,
               let profile = profiles.first(where: { $0.id == profileID }) else { return nil }
+        let target = retryDatabaseTarget
         SSHTrust.trustHostKey(host: change.host, port: change.port, fingerprint: change.presented)
-        hostKeyChange = nil
-        retryProfileID = nil
-        return profile
+        dismissHostKeyChange()
+        return { await self.connect(profile: profile, target: target) }
     }
 
-    /// Trusts the newly-presented host key and reconnects (user-confirmed).
+    /// Trusts the newly-presented host key and reconnects after confirmation.
     public func trustChangedHostKeyAndReconnect() async {
-        guard let profile = admitTrustChangedHostKey() else { return }
-        await connect(profile: profile)
+        await admitTrustChangedHostKey()?()
     }
 
     public func dismissHostKeyChange() {
         hostKeyChange = nil
         retryProfileID = nil
+        retryDatabaseTarget = nil
     }
 
     public func testConnection(_ config: ConnectionConfig) async -> ConnectionTestReport {
@@ -1325,6 +1424,8 @@ public final class WorkspaceViewModel {
             }
         }
         session = nil
+        databaseWorkspaceTarget = nil
+        Self.closedWorkspacesWithDetachedTabs.remove(self)
         dataSourceSession = nil
         keyValueSession = nil
         activeProfileID = nil
@@ -1357,7 +1458,9 @@ public final class WorkspaceViewModel {
     /// workspace changed the schema.
     public func refreshObjects(harvestReason: HarvestReason = .userAction) async throws {
         guard let catalog else { return }
-        objects = try await catalog.objects(forceRefresh: true)
+        let refreshedObjects = try await catalog.objects(forceRefresh: true)
+        guard self.catalog === catalog else { return }
+        objects = refreshedObjects
         // Never blocks or fails the refresh.
         Task { await harvestGraphNow(reason: harvestReason) }
  // Daily Review digest — same off-UI-path pattern; only does
@@ -1376,7 +1479,8 @@ public final class WorkspaceViewModel {
     /// cut short by a closed connection or by quitting resumes only here, and,
     /// after a user action, a statistics refresh.
     public func harvestGraphNow(reason: HarvestReason = .userAction) async {
-        guard intelligenceEntitled, !isClosed, let session, !session.isProduction, let profileID = activeProfileID,
+        guard databaseWorkspaceTarget == nil, intelligenceEntitled, !isClosed,
+              let session, !session.isProduction, let profileID = activeProfileID,
               let harvestCoordinator else { return }
         let outcome = await harvestCoordinator.request(reason, for: profileID)
         // The session or the window may have closed while the pass ran; its
@@ -1533,7 +1637,8 @@ public final class WorkspaceViewModel {
     /// open and a profile refreshes, never while closed). Best-effort, never
     /// surfaces an error to the session.
     public func maybeGenerateDailyReview() async {
-        guard intelligenceEntitled, let profileID = activeProfileID, let store else { return } // Q15 tier gate
+        guard databaseWorkspaceTarget == nil, intelligenceEntitled,
+              let profileID = activeProfileID, let store else { return }
         let last = try? store.latestDailyReview(profileID: profileID)
         guard DailyReviewBuilder.isDue(lastGeneratedAt: last?.generatedAt, now: Date()) else { return }
         let summary = DailyReviewBuilder.summarize(await analyzeInsights())
@@ -2196,15 +2301,18 @@ public final class WorkspaceViewModel {
     /// Tabs currently living in their own window — still in `tabs` (their
     /// documents stay alive) but in no pane.
     public private(set) var detachedTabIDs: Set<String> = []
+    private var hasDetachedTabs: Bool { tabs.contains { detachedTabIDs.contains($0.id) } }
 
     /// Move a tab out of its pane into an independent window. The caller opens
     /// the window; the document keeps running against the shared session.
-    public func detachTab(_ tabID: String) {
+    @discardableResult
+    public func detachTab(_ tabID: String) -> DetachedTabTarget {
         for gi in groups.indices {
             removeTab(tabID, fromGroupAt: gi)
         }
         pruneEmptyGroups()
         detachedTabIDs.insert(tabID)
+        return DetachedTabTarget(workspaceID: workspaceID, tabID: tabID)
     }
 
     /// The detached window closed → the tab is gone for real (same as closing
@@ -2213,6 +2321,15 @@ public final class WorkspaceViewModel {
         guard detachedTabIDs.remove(tabID) != nil else { return }
         if !groups.contains(where: { $0.tabIDs.contains(tabID) }) {
             disposeTab(tabID)
+        }
+        if isClosed, !hasDetachedTabs {
+            Self.closedWorkspacesWithDetachedTabs.remove(self)
+        }
+        if isClosed, databaseWorkspaceTarget != nil, !hasDetachedTabs, let session {
+            Task {
+                await ConnectionManager.shared.close(session.id)
+                SessionStateTracker.shared.forget(sessionID: session.id)
+            }
         }
     }
 
@@ -2497,12 +2614,12 @@ public final class WorkspaceViewModel {
     public private(set) var savedQueries: [SavedQuery] = []
 
     public func refreshSavedQueries() {
-        savedQueries = (try? store?.savedQueries(profileID: activeProfileID)) ?? []
+        savedQueries = loadSavedQueries()
     }
 
     /// Snippets visible from the active connection: profile-scoped + global.
     public func loadSavedQueries() -> [SavedQuery] {
-        (try? store?.savedQueries(profileID: activeProfileID)) ?? []
+        (try? store?.savedQueries(profileID: databaseWorkspaceSourceID)) ?? []
     }
 
     /// Persists a snippet. `global == true` makes it usable from any
@@ -2510,7 +2627,7 @@ public final class WorkspaceViewModel {
     public func saveSavedQuery(name: String, sql: String, folder: String?, global: Bool) {
         let trimmedFolder = folder?.trimmingCharacters(in: .whitespacesAndNewlines)
         let query = SavedQuery(
-            profileID: global ? nil : activeProfileID,
+            profileID: global ? nil : databaseWorkspaceSourceID,
             name: name,
             sql: sql,
             folder: (trimmedFolder?.isEmpty ?? true) ? nil : trimmedFolder
@@ -2536,11 +2653,11 @@ public final class WorkspaceViewModel {
         guard case .editor(let document) = activeTab,
               !document.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let name = document.title
-        let existing = (try? store?.savedQueries(profileID: activeProfileID))?
+        let existing = loadSavedQueries()
             .first { $0.name == name }
         let query = SavedQuery(
             id: existing?.id ?? UUID(),
-            profileID: existing?.profileID ?? activeProfileID,
+            profileID: existing?.profileID ?? databaseWorkspaceSourceID,
             name: name,
             sql: document.text,
             folder: existing?.folder,
@@ -2592,10 +2709,10 @@ public final class WorkspaceViewModel {
               !state.rawJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         if updateLinkedSavedQuery() { return }
         let name = state.title
-        let existing = (try? store?.savedQueries(profileID: activeProfileID))?.first { $0.name == name }
+        let existing = loadSavedQueries().first { $0.name == name }
         let query = SavedQuery(
             id: existing?.id ?? UUID(),
-            profileID: existing?.profileID ?? activeProfileID,
+            profileID: existing?.profileID ?? databaseWorkspaceSourceID,
             name: name, sql: state.rawJSON, folder: existing?.folder,
             createdAt: existing?.createdAt ?? Date(), updatedAt: Date()
         )
@@ -2608,10 +2725,10 @@ public final class WorkspaceViewModel {
               !state.rawJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         if updateLinkedSavedQuery() { return }
         let name = state.title
-        let existing = (try? store?.savedQueries(profileID: activeProfileID))?.first { $0.name == name }
+        let existing = loadSavedQueries().first { $0.name == name }
         let query = SavedQuery(
             id: existing?.id ?? UUID(),
-            profileID: existing?.profileID ?? activeProfileID,
+            profileID: existing?.profileID ?? databaseWorkspaceSourceID,
             name: name, sql: state.rawJSON, folder: existing?.folder,
             createdAt: existing?.createdAt ?? Date(), updatedAt: Date()
         )
@@ -3184,7 +3301,7 @@ public final class WorkspaceViewModel {
             return false
         }
         guard let linkedID = linked.savedQueryID,
-              var query = (try? store?.savedQueries(profileID: activeProfileID))?
+              var query = loadSavedQueries()
                   .first(where: { $0.id == linkedID })
         else { return false }
         query.sql = linked.text
@@ -3200,7 +3317,7 @@ public final class WorkspaceViewModel {
     /// persistence is out of scope here, so renaming just updates the
     /// in-memory tab title.
     public func renameSavedQuery(id: UUID, to name: String) {
-        guard var query = (try? store?.savedQueries(profileID: activeProfileID))?
+        guard var query = loadSavedQueries()
             .first(where: { $0.id == id }) else { return }
         query.name = name
         query.updatedAt = Date()
@@ -3315,6 +3432,7 @@ public final class WorkspaceViewModel {
             await old.tunnel?.close()
         }
         session = nil
+        databaseWorkspaceTarget = nil
         dataSourceSession = nil
         keyValueSession = nil
         activeProfileID = nil
@@ -3419,6 +3537,7 @@ public final class WorkspaceViewModel {
             await old.tunnel?.close()
         }
         session = nil
+        databaseWorkspaceTarget = nil
         dataSourceSession = nil
         keyValueSession = nil
         activeProfileID = nil
