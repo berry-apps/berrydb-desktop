@@ -26,6 +26,16 @@ struct DatabaseWorkspaceTests {
         #expect(source.workspaceProfileID != other.workspaceProfileID)
     }
 
+    @Test func onlyAnExplicitOpenAuthorizesOneInitialConnection() throws {
+        let target = DatabaseWorkspaceTarget(profileID: UUID(), database: "target")
+        let restored = try JSONDecoder().decode(DatabaseWorkspaceTarget.self, from: JSONEncoder().encode(target))
+
+        #expect(!restored.consumeInitialConnectionAuthorization())
+        target.authorizeInitialConnection()
+        #expect(target.consumeInitialConnectionAuthorization())
+        #expect(!restored.consumeInitialConnectionAuthorization())
+    }
+
     @Test(.enabled(if: TestServer.postgres != nil && ProcessInfo.processInfo.environment["BERRYDB_TEST_POSTGRES_SWITCH_DATABASE"] != nil))
     func postgresKeepsQueriesInTheirWorkspace() async throws {
         DriverRegistry.register(PostgresDriver.self)
@@ -33,7 +43,8 @@ struct DatabaseWorkspaceTests {
             driver: .postgres,
             server: #require(TestServer.postgres),
             destination: #require(ProcessInfo.processInfo.environment["BERRYDB_TEST_POSTGRES_SWITCH_DATABASE"]),
-            sql: "SELECT current_database()"
+            sql: "SELECT current_database()",
+            deleteFromTarget: false
         )
     }
 
@@ -44,11 +55,14 @@ struct DatabaseWorkspaceTests {
             driver: .mysql,
             server: #require(TestServer.mysql),
             destination: #require(ProcessInfo.processInfo.environment["BERRYDB_TEST_MYSQL_SWITCH_DATABASE"]),
-            sql: "SELECT DATABASE()"
+            sql: "SELECT DATABASE()",
+            deleteFromTarget: true
         )
     }
 
-    private func exerciseSwitch(driver: DriverID, server: TestServer, destination: String, sql: String) async throws {
+    private func exerciseSwitch(
+        driver: DriverID, server: TestServer, destination: String, sql: String, deleteFromTarget: Bool
+    ) async throws {
         let sourceDatabase = try #require(server.database)
         #expect(sourceDatabase != destination)
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -87,6 +101,7 @@ struct DatabaseWorkspaceTests {
             return
         }
         source.persistEditor(original)
+        source.saveSavedQuery(name: "From source", sql: "SELECT 1", folder: nil, global: false)
 
         let selection = DatabaseWorkspaceTarget(profileID: profile.id, database: destination)
         await target.connectDatabaseWorkspace(selection)
@@ -96,6 +111,8 @@ struct DatabaseWorkspaceTests {
         #expect(!targetSession.recordHistory)
         #expect(target.currentDatabase == destination)
         #expect(target.tabs.isEmpty)
+        let sourceQueries = target.loadSavedQueries()
+        #expect(sourceQueries.map(\.name) == ["From source"])
         target.focusWindow = { true }
         #expect(WorkspaceViewModel.focusDatabaseWorkspace(selection))
         #expect(try store.allProfiles().map(\.database) == [sourceDatabase])
@@ -111,6 +128,17 @@ struct DatabaseWorkspaceTests {
         try await assertDatabase(destination, in: selected)
         try await assertDatabase(sourceDatabase, in: original)
 
+        target.saveSavedQuery(name: "From target", sql: sql, folder: nil, global: false)
+        let sharedQuery = try #require(source.loadSavedQueries().first { $0.name == "From target" })
+        #expect(sharedQuery.profileID == profile.id)
+        selected.text = "SELECT 2"
+        let updated = target.updateLinkedSavedQuery()
+        #expect(updated)
+        target.renameSavedQuery(id: sharedQuery.id, to: "Shared query")
+        let updatedSharedQuery = source.loadSavedQueries().first { $0.id == sharedQuery.id }
+        #expect(updatedSharedQuery?.name == "Shared query")
+        #expect(updatedSharedQuery?.sql == "SELECT 2")
+
         let detached = source.detachTab("editor:\(original.id.uuidString)")
         #expect(WorkspaceViewModel.workspace(for: detached) === source)
 
@@ -124,6 +152,20 @@ struct DatabaseWorkspaceTests {
         #expect(target.session?.id == targetSession.id)
         original.run(.all, on: sourceSession)
         try await assertDatabase(sourceDatabase, in: original)
+
+        if deleteFromTarget {
+            target.delete(profile: profile)
+        } else {
+            target.detachTab("editor:\(selected.id.uuidString)")
+            target.closeWorkspace()
+            source.delete(profile: profile)
+        }
+        let disconnected = source.session == nil && target.session == nil
+        #expect(disconnected)
+        await reopened.connectDatabaseWorkspace(selection)
+        let reopenedAfterDeletion = reopened.session != nil
+        #expect(!reopenedAfterDeletion)
+        #expect(try store.allProfiles().isEmpty)
     }
 
     private func assertDatabase(_ database: String, in document: EditorDocument) async throws {

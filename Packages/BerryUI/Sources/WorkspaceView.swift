@@ -187,16 +187,15 @@ public struct WorkspaceView: View {
         // Also drives AppKit's native tab-strip label (View > Show Tab Bar) —
         // NSWindow.title is the only source that UI reads. An empty title
         // here previously left native tabs blank.
-        .navigationTitle(viewModel.connectionTitle)
+        .navigationTitle(disconnectedDatabaseTarget?.database ?? viewModel.connectionTitle)
         // Each window owns its workspace; when the window closes, its schema
         // passes, drains and catalog connections stop with it.
         .background(WindowCloseObserver(onWindowChange: registerWorkspaceWindow) {
             viewModel.closeWorkspace()
         })
         .task {
-            guard let databaseTarget, viewModel.session == nil else { return }
-            await viewModel.connectDatabaseWorkspace(databaseTarget)
-            if viewModel.session != nil { sidebarTab = .objects }
+            guard let databaseTarget, databaseTarget.consumeInitialConnectionAuthorization() else { return }
+            await connectDatabaseWorkspace(databaseTarget)
         }
         .toolbar { toolbarContent }
         .focusedSceneValue(\.workspaceMenu, menuActions)
@@ -665,6 +664,11 @@ public struct WorkspaceView: View {
         viewModel.databaseWorkspaceTarget == nil && (viewModel.session != nil || viewModel.dataSourceSession != nil)
     }
 
+    private var aiWorkspaceHelp: String? {
+        guard viewModel.databaseWorkspaceTarget != nil else { return nil }
+        return L("AI Assistant is available in the saved connection’s main workspace.")
+    }
+
     private func bindAI() {
         if viewModel.databaseWorkspaceTarget != nil { showAIPanel = false }
         aiController.bind(
@@ -748,7 +752,7 @@ public struct WorkspaceView: View {
             .buttonStyle(.borderedProminent)
             .tint(showAIPanel ? BerryTheme.accent : Color(nsColor: .controlColor))
             .disabled(!canOpenAI)
-            .help(showAIPanel ? L("Close AI Assistant") : L("AI Assistant"))
+            .help(aiWorkspaceHelp ?? (showAIPanel ? L("Close AI Assistant") : L("AI Assistant")))
 
             // Insights / Graph Explorer / Time Machine / Backup: previously
             // menu-bar-only entry points, added here in the AI icon cluster
@@ -1082,8 +1086,20 @@ public struct WorkspaceView: View {
         guard let profileID = viewModel.databaseWorkspaceSourceID else { return }
         let target = DatabaseWorkspaceTarget(profileID: profileID, database: database)
         if !WorkspaceViewModel.focusDatabaseWorkspace(target) {
+            target.authorizeInitialConnection()
             openWindow(id: "workspace", value: target)
         }
+    }
+
+    private var disconnectedDatabaseTarget: DatabaseWorkspaceTarget? {
+        guard viewModel.session == nil, viewModel.dataSourceSession == nil,
+              viewModel.keyValueSession == nil else { return nil }
+        return databaseTarget
+    }
+
+    private func connectDatabaseWorkspace(_ target: DatabaseWorkspaceTarget) async {
+        await viewModel.connectDatabaseWorkspace(target)
+        if viewModel.session != nil { sidebarTab = .objects }
     }
 
     private var objectList: some View {
@@ -1640,7 +1656,7 @@ public struct WorkspaceView: View {
     }
 
     private func profileRow(_ profile: ConnectionProfile, group: WorkspaceViewModel.ConnectionGroup, index: Int) -> some View {
-        let isSelected = viewModel.activeProfileID == profile.id
+        let isSelected = viewModel.databaseWorkspaceSourceID == profile.id
         return HStack(spacing: 6) {
             Image(systemName: profile.driver == .sqlite ? "internaldrive" : "cylinder.split.1x2")
                 .foregroundStyle(isSelected ? .green : .secondary)
@@ -2114,14 +2130,25 @@ public struct WorkspaceView: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        if let error = viewModel.errorMessage {
+        if viewModel.isConnecting {
+            ProgressView(L("Connecting…"))
+        } else if let target = disconnectedDatabaseTarget {
+            ContentUnavailableView {
+                Label(target.database, systemImage: "cylinder")
+            } description: {
+                if let error = viewModel.errorMessage { Text(error) }
+            } actions: {
+                Button(L("Connect")) {
+                    Task { await connectDatabaseWorkspace(target) }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        } else if let error = viewModel.errorMessage {
             ContentUnavailableView(
                 L("Connection Error"),
                 systemImage: "exclamationmark.triangle",
                 description: Text(error)
             )
-        } else if viewModel.isConnecting {
-            ProgressView(L("Connecting…"))
         } else if let keyValueSession = viewModel.keyValueSession {
             // Redis has no tabs/collections — shown directly as the main
  // content, bypassing paneContainer entirely.
@@ -2232,7 +2259,7 @@ public struct WorkspaceView: View {
 
             headerButton(L("AI Assistant"), "sparkles",
                          enabled: canOpenAI,
-                         isActive: showAIPanel) { showAIPanel.toggle() }
+                         isActive: showAIPanel, help: aiWorkspaceHelp) { showAIPanel.toggle() }
 
             headerDivider
             Button {
@@ -2264,6 +2291,7 @@ public struct WorkspaceView: View {
         _ systemImage: String,
         enabled: Bool,
         isActive: Bool = false,
+        help: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -2272,7 +2300,7 @@ public struct WorkspaceView: View {
         .labelStyle(IconOrTitledLabelStyle(showsTitle: showButtonLabels))
         .buttonStyle(IconButtonStyle(showsLabel: showButtonLabels, isActive: isActive))
         .disabled(!enabled)
-        .help(title)
+        .help(help ?? title)
         .accessibilityLabel(title)
     }
 
